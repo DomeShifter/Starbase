@@ -159,5 +159,8 @@ pub fn logo(size: f32) -> Option<Image<'static>> {
 /// The StarDrive logo (app/icons/stardrive.svg; app/stardrive.svg is the same, as the home screen's tab icon) at `size` px, in colour.
 pub fn drive_logo(size: f32) -> Option<Image<'static>> {
     let (_, bytes) = ICONS.iter().find(|(n, _)| *n == "stardrive")?;
-    Some(Image::new(ImageSource::Bytes { uri: "bytes://starsheets/stardrive_logo.svg".into(), bytes: (*bytes).into() }).fit_to_exact_size(vec2(size, size)))
+    Some(
+        Image::new(ImageSource::Bytes { uri: "bytes://starsheets/stardrive_logo.svg".into(), bytes: (*bytes).into() })
+            .fit_to_exact_size(vec2(size, size)),
+    )
 }
