@@ -219,9 +219,13 @@ impl Share {
         let owner = self.you == "owner";
         let mut close = false;
         let mut save = false;
-        let modal = egui::Modal::new(egui::Id::unique("stardocs_share")).frame(
-            egui::Frame::popup(&ctx.global_style()).fill(Color32::WHITE).corner_radius(8.0).inner_margin(24.0),
-        );
+        // Anchored by its top edge, not its centre: adding a person makes the dialog taller, and
+        // centred it would jump up by half a row each time.
+        let id = egui::Id::unique("stardocs_share");
+        let top = (ctx.content_rect().height() * 0.12).clamp(24.0, 120.0);
+        let modal = egui::Modal::new(id)
+            .area(egui::Modal::default_area(id).anchor(egui::Align2::CENTER_TOP, vec2(0.0, top)))
+            .frame(egui::Frame::popup(&ctx.global_style()).fill(Color32::WHITE).corner_radius(8.0).inner_margin(24.0));
         let shown = modal.show(ctx, |ui| {
             ui.set_width(520.0);
             ui.label(RichText::new(format!("Share \"{}\"", self.name)).size(22.0).color(TEXT));
@@ -297,8 +301,11 @@ impl Share {
             ui.horizontal(|ui| {
                 let mut url = self.link_url();
                 let width = ui.available_width() - 110.0;
-                ui.add(egui::TextEdit::singleline(&mut url).desired_width(width).margin(vec2(8.0, 6.0)));
-                if ui.add(button(if self.copied { "Copied" } else { "Copy link" }, Color32::WHITE, BLUE)).clicked() {
+                // The button takes the text box's height, so the two line up.
+                let h = ui.add(egui::TextEdit::singleline(&mut url).desired_width(width).margin(vec2(8.0, 6.0))).rect.height();
+                let copy =
+                    button(if self.copied { "Copied" } else { "Copy link" }, Color32::WHITE, BLUE).corner_radius(h / 2.0).min_size(vec2(84.0, h));
+                if ui.add(copy).clicked() {
                     self.copied = copy_text(&url);
                     self.copy_failed = !self.copied;
                 }
