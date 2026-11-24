@@ -4,7 +4,7 @@ Thank you for being here. StarSheets is a small project, and every bug report, i
 
 ## Reporting a bug or suggesting an idea
 
-Please [open an issue](../../issues/new/choose). For a bug, the most useful things are: what you
+Please [open an issue](https://github.com/DomeShifter/Starbase/issues/new/choose). For a bug, the most useful things are: what you
 did, what you expected, what happened instead, and your browser or system. A small .xlsx file or a
 screenshot helps a lot. If the same thing works differently in Google Sheets, that's worth saying:
 matching Google Sheets is the goal.

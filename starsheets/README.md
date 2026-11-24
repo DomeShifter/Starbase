@@ -15,7 +15,7 @@ the things Google Sheets users reach for.
 
 > **Status: early preview.** It's usable and I use it myself, but there are rough edges and
 > missing pieces. Please don't trust it with anything you can't afford to lose yet, and do
-> [tell me what breaks](../../issues/new/choose).
+> [tell me what breaks](https://github.com/DomeShifter/Starbase/issues/new/choose).
 
 ## What you get
 

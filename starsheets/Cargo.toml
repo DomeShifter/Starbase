@@ -10,7 +10,7 @@ version = "0.4.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
-repository = "https://github.com/DomeShifter/StarSheets"
+repository = "https://github.com/DomeShifter/Starbase"
 
 [workspace.dependencies]
 gridcraft-engine = { path = "upstream/gridcraft/crates/engine" }

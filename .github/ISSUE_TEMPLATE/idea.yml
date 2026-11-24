@@ -1,5 +1,5 @@
 name: Idea or missing feature
-description: Something you'd like StarSheets to do
+description: Something you'd like Starbase (StarSheets, StarDocs, the home screen) to do
 labels: ["idea"]
 body:
   - type: textarea

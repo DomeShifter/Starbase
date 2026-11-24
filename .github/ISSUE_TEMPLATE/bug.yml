@@ -1,5 +1,5 @@
 name: Something doesn't work
-description: Report a bug or something that behaves differently from Google Sheets
+description: Report a bug, or something that behaves differently from Google Sheets or Google Docs
 labels: ["bug"]
 body:
   - type: textarea
