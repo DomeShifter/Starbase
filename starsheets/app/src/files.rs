@@ -68,8 +68,9 @@ enum Reply {
         folder: String,
         modified: i64,
     },
-    /// How the server describes where files are kept.
-    Info(String, bool),
+    /// How the server describes where files are kept, whether sign-in is needed, and who is
+    /// signed in ("" with sign-in off).
+    Info(String, bool, String),
     Renamed(String),
     Navigate(String),
     /// An import saved to the server, to open in a new tab.
@@ -106,6 +107,13 @@ pub struct Files {
     /// Save the open workbook now even with nothing in it (Share on a new, empty spreadsheet:
     /// sharing needs the file on the server, as in Sheets, where it exists from the start).
     save_now: bool,
+    /// Who is signed in ("" with sign-in off), once /api/info has answered: the sheet each
+    /// person was last on is remembered per file and person.
+    user: Option<String>,
+    /// A file just opened: switch to the sheet this person was last on (document uid).
+    restore: Option<u64>,
+    /// The sheet last remembered: (document uid, sheet name, the file's sheet id).
+    remembered: Option<(u64, String, u32)>,
 }
 
 /// Asks [`Files`] to save the open workbook at once, empty or not (`ctx.data`, unit value).
@@ -143,7 +151,8 @@ impl Files {
             send(Method::Get, "api/info".into(), None, None, self.inbox.clone(), ctx.clone(), |_, _, body| {
                 let v: Json = serde_json::from_slice(&body).unwrap_or_default();
                 let locked = v["auth"].as_bool().unwrap_or(false) && !v["signed_in"].as_bool().unwrap_or(true);
-                Reply::Info(v["location"].as_str().unwrap_or("the server").to_string(), locked)
+                let user = v["user"]["username"].as_str().unwrap_or("").to_string();
+                Reply::Info(v["location"].as_str().unwrap_or("the server").to_string(), locked, user)
             });
             if let Some(id) = query_file() {
                 self.status = "Opening…".into();
@@ -199,6 +208,7 @@ impl Files {
         }
         self.autosave(app, ctx);
         self.rename_if_needed(app, ctx);
+        self.last_sheet(app);
         let live = app.session.active().and_then(|d| crate::live::status_for(d.uid));
         let unsaved = match &live {
             Some(l) => l.unsaved,
@@ -229,6 +239,35 @@ impl Files {
             m.insert_temp(egui::Id::unique(STATUS_TIP), tip);
             m.insert_temp(egui::Id::unique(LAST_EDIT), last_edit);
         });
+    }
+
+    /// Reopens a file on the sheet this person was last on in it (as Sheets does), and
+    /// remembers in the browser which sheet that is whenever it changes. The file itself opens
+    /// on the sheet of whoever changed it last.
+    fn last_sheet(&mut self, app: &mut SheetApp) {
+        let (Some(user), Some(link)) = (&self.user, &self.link) else { return };
+        let Some(d) = app.session.active().filter(|d| d.uid == link.doc) else { return };
+        let key = format!("starsheets_sheet_{}_{user}", link.id);
+        let storage = web_sys::window().and_then(|w| w.local_storage().ok().flatten());
+        if self.restore.take() == Some(link.doc)
+            && let Some(v) = storage.as_ref().and_then(|s| s.get_item(&key).ok().flatten()).and_then(|t| serde_json::from_str::<Json>(&t).ok())
+        {
+            let file_id = v["id"].as_u64().and_then(|i| u32::try_from(i).ok()).unwrap_or(0);
+            let at = starsheets_sync::pick_sheet(&d.wb, file_id, v["name"].as_str().unwrap_or(""));
+            if at != d.wb.active_sheet() {
+                let _ = app.run("sheet.activate", json!({ "sheet": at }));
+                app.after_engine();
+            }
+        }
+        let Some(d) = app.session.active().filter(|d| d.uid == link.doc) else { return };
+        let Some(sh) = d.wb.sheet(d.wb.active_sheet()) else { return };
+        let now = (d.uid, sh.name.clone(), sh.file_id);
+        if self.remembered.as_ref() != Some(&now) {
+            if let Some(s) = &storage {
+                let _ = s.set_item(&key, &json!({ "id": now.2, "name": now.1 }).to_string());
+            }
+            self.remembered = Some(now);
+        }
     }
 
     fn request(&mut self, app: &mut SheetApp, ctx: &egui::Context, req: &str) {
@@ -363,8 +402,9 @@ impl Files {
                 self.browser.loading = false;
             }
             Reply::Refresh => self.refresh(ctx),
-            Reply::Info(location, locked) => {
+            Reply::Info(location, locked, user) => {
                 self.location = location;
+                self.user = Some(user);
                 // Signing in is account.rs's (it asks /api/info itself).
                 let _ = locked;
             }
@@ -407,6 +447,7 @@ impl Files {
                             d.saved = d.wb.clone();
                         }
                         self.link = Some(Link { doc, id, name, version, folder, saved: modified });
+                        self.restore = Some(doc);
                         app.after_engine();
                     }
                     Err(e) => self.error = Some(gridcraft_ui_egui::clean_error(&e)),
