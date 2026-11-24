@@ -36,6 +36,9 @@ mod share;
 #[cfg(target_arch = "wasm32")]
 mod shell;
 #[cfg(target_arch = "wasm32")]
+#[expect(dead_code, reason = "drawn from shell.rs once it is wired in; remove this line then")]
+mod shortcuts;
+#[cfg(target_arch = "wasm32")]
 mod web;
 
 #[cfg(target_arch = "wasm32")]
