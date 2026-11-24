@@ -101,6 +101,10 @@ struct State {
     /// When the next preview picture is due (after a save), and when the last one was sent (ms).
     thumb_due: Option<f64>,
     thumb_last: f64,
+    /// The signed-in person may only view this document: nothing is saved, and the editor is put
+    /// in read-only mode once (`view_applied`).
+    view_only: bool,
+    view_applied: bool,
 }
 
 #[derive(Clone)]
@@ -159,6 +163,27 @@ impl Link {
         });
     }
 
+    /// Asks the server what the signed-in person may do with this document (its sharing reply's
+    /// `you`: owner, edit or view).
+    fn ask_role(&self, id: &str) {
+        let link = self.clone();
+        let url = api(&format!("api/files/{id}/sharing"));
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Ok((200, _, body)) = fetch("GET", &url, None, None).await {
+                let v: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+                if v["you"].as_str() == Some("view") {
+                    link.state.borrow_mut().view_only = true;
+                    link.ctx.request_repaint();
+                }
+            }
+        });
+    }
+
+    /// Whether the signed-in person may only view this document.
+    pub fn view_only(&self) -> bool {
+        self.state.borrow().view_only
+    }
+
     /// The signed-in person's name, once, when the server has said it (see [`Self::ask_who`]).
     pub fn take_author(&self) -> Option<String> {
         self.state.borrow_mut().author.take()
@@ -213,6 +238,7 @@ impl Link {
                     }
                     set_title(&name);
                     inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
+                    link.ask_role(&id);
                 }
                 Ok((401, ..)) => go_home(""),
                 Ok((code, _, body)) => link.fail(&format!("Couldn't open the document ({})", reason(code, &body))),
@@ -303,6 +329,24 @@ impl Link {
         if let Some((name, bytes)) = again {
             self.save(&name, bytes);
         }
+        let apply_view = {
+            let mut s = self.state.borrow_mut();
+            let apply = s.view_only && !s.view_applied;
+            if apply {
+                s.view_applied = true;
+            }
+            s.view_only.then_some(apply)
+        };
+        if let Some(apply) = apply_view {
+            if apply {
+                // WordCraft's own Restrict Editing (read only): typing and formatting are refused.
+                crate::shell::run(app, "review.restrict", serde_json::json!({ "mode": "readOnly" }));
+            }
+            // Nothing a viewer does is saved (the server would refuse it).
+            app.session.dirty = false;
+            self.state.borrow_mut().dirty_since = None;
+            return;
+        }
         self.maybe_thumb(app, ctx, t);
         let since = {
             let mut s = self.state.borrow_mut();
@@ -391,6 +435,10 @@ impl Link {
     }
 
     fn save(&self, name: &str, bytes: Vec<u8>) {
+        if self.view_only() {
+            self.news("You can view this document but not change it, so nothing is saved.".to_string());
+            return;
+        }
         {
             let mut s = self.state.borrow_mut();
             s.saved = Saved::Saving;
@@ -455,6 +503,11 @@ impl Link {
                 }
             }
             Ok((401, ..)) => "Not saved: you're signed out. Sign in on the home screen in another tab".to_string(),
+            // Not allowed: trying again can't help, so it isn't retried.
+            Ok((403, _, body)) => {
+                self.fail(&format!("Not saved ({}).", reason(403, &body)));
+                return Ok(());
+            }
             Ok((code, _, body)) => format!("Not saved ({})", reason(code, &body)),
             Err(e) => format!("Not saved: couldn't reach the server ({e})"),
         };

@@ -439,6 +439,10 @@ impl Shell {
                 let label = if self.share.waiting() { "Saving…" } else { "Share" };
                 let share = Button::new(RichText::new(label).size(14.0).color(TEXT)).fill(SHARE).corner_radius(18.0).min_size(vec2(84.0, 36.0));
                 match link {
+                    // Opening failed (or hasn't finished): nothing to share yet.
+                    Some(link) if link.id().is_some() && link.name().is_empty() && !self.share.waiting() => {
+                        ui.add_enabled(false, share).on_disabled_hover_text("The document isn't open");
+                    }
                     Some(link) => {
                         if ui.add(share).on_hover_text("Share this document with people on this server").clicked() {
                             self.share.ask(app, link, ui.ctx());
@@ -487,6 +491,7 @@ impl Shell {
         }
         if let Some(link) = link {
             let (text, colour) = match link.saved() {
+                _ if link.view_only() => ("View only".to_string(), TEXT_DIM),
                 Saved::Nothing => (String::new(), TEXT_DIM),
                 Saved::Saving => ("Saving…".to_string(), TEXT_DIM),
                 Saved::Done => ("Saved to Starbase".to_string(), TEXT_DIM),

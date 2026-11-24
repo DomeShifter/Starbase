@@ -126,13 +126,13 @@ impl Share {
             self.pending = true;
             link.save_now(app);
         } else {
-            self.start(app, link, ctx);
+            self.start(link, ctx);
         }
     }
 
-    fn start(&mut self, app: &WordApp, link: &Link, ctx: &egui::Context) {
+    fn start(&mut self, link: &Link, ctx: &egui::Context) {
         let Some(id) = link.id() else { return };
-        let name = Some(link.name()).filter(|n| !n.is_empty()).unwrap_or_else(|| app.title_stem());
+        let name = Some(link.name()).filter(|n| !n.is_empty()).unwrap_or_else(|| "Untitled document".to_string());
         let name = name.rsplit_once('.').map_or(name.as_str(), |(s, _)| s).to_string();
         *self = Share { inbox: self.inbox.clone(), open: true, id: id.clone(), name, ..Share::default() };
         call(&self.inbox, ctx, "GET", api(&format!("api/files/{id}/sharing")), None, |v| Reply::Loaded {
@@ -150,7 +150,7 @@ impl Share {
             && link.id().is_some()
         {
             self.pending = false;
-            self.start(app, link, ctx);
+            self.start(link, ctx);
         }
         let replies: Vec<Reply> = std::mem::take(&mut *self.inbox.borrow_mut());
         for r in replies {
@@ -212,6 +212,11 @@ impl Share {
             }
             // Add people: everyone with an account here who isn't on the list yet.
             let others: Vec<Person> = self.users.iter().filter(|u| !self.people.iter().any(|p| p.username == u.username)).cloned().collect();
+            if owner && others.is_empty() {
+                // Kept in place (not hidden) so the dialog doesn't jump when the last person is added.
+                heading(ui, "Add people");
+                note(ui, "Everyone with an account on this server is on the list below.");
+            }
             if owner && !others.is_empty() {
                 heading(ui, "Add people");
                 ui.horizontal(|ui| {
@@ -220,7 +225,9 @@ impl Share {
                     self.add = self.add.min(refs.len() - 1);
                     pick(ui, "stardocs_share_add", 250.0, &mut self.add, &refs);
                     pick(ui, "stardocs_share_add_role", 100.0, &mut self.add_role, &ROLES[..2]);
-                    if ui.add(button("Add", Color32::WHITE, BLUE)).clicked()
+                    let h = ui.spacing().interact_size.y;
+                    let add = egui::Button::new(RichText::new("Add").size(14.0).color(BLUE)).fill(Color32::WHITE).corner_radius(h / 2.0).min_size(vec2(64.0, h));
+                    if ui.add(add).clicked()
                         && let Some(u) = others.get(self.add)
                     {
                         self.people.push(Person { role: if self.add_role == 1 { "edit".into() } else { "view".into() }, ..u.clone() });
@@ -262,7 +269,8 @@ impl Share {
             ui.add_space(12.0);
             ui.horizontal(|ui| {
                 let mut url = self.link_url();
-                ui.add(egui::TextEdit::singleline(&mut url).desired_width(360.0).margin(vec2(8.0, 6.0)));
+                let width = ui.available_width() - 110.0;
+                ui.add(egui::TextEdit::singleline(&mut url).desired_width(width).margin(vec2(8.0, 6.0)));
                 if ui.add(button(if self.copied { "Copied" } else { "Copy link" }, Color32::WHITE, BLUE)).clicked() {
                     if let Some(w) = web_sys::window() {
                         let _ = w.navigator().clipboard().write_text(&url);
@@ -270,6 +278,9 @@ impl Share {
                     self.copied = true;
                 }
             });
+            if self.copied {
+                note(ui, "Link copied. Anyone you send it to signs in here first.");
+            }
             if let Some(e) = &self.error {
                 ui.add_space(6.0);
                 ui.label(RichText::new(e).size(12.0).color(ERROR));
