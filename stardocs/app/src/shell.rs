@@ -276,24 +276,45 @@ struct Flags {
 
 const FLAGS_KEY: &str = "stardocs.flags";
 
-impl Flags {
+/// Where the flags are kept: the browser's `localStorage`, or a per-thread map in native tests.
+#[cfg(target_arch = "wasm32")]
+mod store {
     fn storage() -> Option<web_sys::Storage> {
         web_sys::window()?.local_storage().ok()?
     }
+    pub fn get(key: &str) -> Option<String> {
+        storage()?.get_item(key).ok().flatten()
+    }
+    pub fn set(key: &str, value: &str) {
+        if let Some(s) = storage() {
+            let _ = s.set_item(key, value);
+        }
+    }
+}
+#[cfg(not(target_arch = "wasm32"))]
+mod store {
+    use std::{cell::RefCell, collections::HashMap};
+    thread_local!(static MAP: RefCell<HashMap<String, String>> = RefCell::default());
+    pub fn get(key: &str) -> Option<String> {
+        MAP.with(|m| m.borrow().get(key).cloned())
+    }
+    pub fn set(key: &str, value: &str) {
+        MAP.with(|m| m.borrow_mut().insert(key.into(), value.into()));
+    }
+}
 
+impl Flags {
     /// Fills in the stored settings the first time; afterwards writes them back when they change.
     fn sync(&mut self, before: Flags) {
         if !self.loaded {
             self.loaded = true;
-            if let Some(v) = Self::storage().and_then(|s| s.get_item(FLAGS_KEY).ok().flatten()) {
+            if let Some(v) = store::get(FLAGS_KEY) {
                 self.words = v.contains("words");
                 self.compact = v.contains("compact");
             }
-        } else if (self.words, self.compact) != (before.words, before.compact)
-            && let Some(s) = Self::storage()
-        {
+        } else if (self.words, self.compact) != (before.words, before.compact) {
             let v = [("words", self.words), ("compact", self.compact)].iter().filter(|(_, on)| *on).map(|(k, _)| *k).collect::<Vec<_>>().join(",");
-            let _ = s.set_item(FLAGS_KEY, &v);
+            store::set(FLAGS_KEY, &v);
         }
     }
 }
@@ -1034,6 +1055,7 @@ fn table_grid(app: &mut WordApp, ui: &mut Ui) {
     let id = ui.scope_id().with("stardocs_table_grid");
     let side = N as f32 * (CELL + GAP);
     let (rect, resp) = ui.allocate_exact_size(vec2(side, side), egui::Sense::click());
+    named(ui, &resp, "Table size");
     // The size under the pointer, kept while the pointer is outside so the label doesn't flicker.
     let mut pick: (usize, usize) = ui.data(|d| d.get_temp(id)).unwrap_or((1, 1));
     if let Some(p) = resp.hover_pos() {
@@ -1084,7 +1106,9 @@ fn icon_button(ui: &mut Ui, name: &str, on: bool) -> egui::Response {
 }
 
 fn tool(app: &mut WordApp, ui: &mut Ui, icon: &str, tip: &str, id: &str, p: Value, on: bool) {
-    if icon_button(ui, icon, on).on_hover_text(tip).clicked() {
+    let r = icon_button(ui, icon, on);
+    named(ui, &r, tip);
+    if r.on_hover_text(tip).clicked() {
         run(app, id, p);
     }
 }
@@ -1095,7 +1119,14 @@ fn icon_menu(ui: &mut Ui, icon: &str, tip: &str, add: impl FnOnce(&mut Ui)) {
         Some(img) => ui.menu_image_button(img, add).response,
         None => ui.menu_button(icon, add).response,
     };
+    named(ui, &r, tip);
     r.on_hover_text(tip);
+}
+
+/// Names a picture-only control for screen readers (and the window's tests) by its tooltip.
+fn named(ui: &Ui, r: &egui::Response, name: &str) {
+    let enabled = ui.is_enabled();
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, name));
 }
 
 /// A toolbar box of a fixed `width` showing `text` (cut short with "…" when too long) that

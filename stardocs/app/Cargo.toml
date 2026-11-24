@@ -31,6 +31,11 @@ kurbo = { workspace = true }
 # SVG loader for the toolbar icons (resvg).
 egui_extras = { workspace = true, features = ["svg"] }
 
+# Native tests of the window (src/shell_tests.rs): egui_kittest's accessibility tree, no GPU.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+egui_kittest = { workspace = true }
+egui = { workspace = true, features = ["default_fonts"] }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # `wgpu` pulls egui-wgpu's defaults: WebGPU plus the WebGL2 fallback.
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit"] }
