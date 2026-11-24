@@ -57,6 +57,5 @@ pub fn icon(name: &str) -> Option<Image<'static>> {
 /// StarDocs' own logo (app/icons/stardocs_logo.svg, square), `height` pixels tall and as wide.
 pub fn logo(height: f32) -> Image<'static> {
     let bytes: &'static [u8] = include_bytes!("../icons/stardocs_logo.svg");
-    Image::new(ImageSource::Bytes { uri: "bytes://stardocs/stardocs_logo.svg".into(), bytes: bytes.into() })
-        .fit_to_exact_size(vec2(height, height))
+    Image::new(ImageSource::Bytes { uri: "bytes://stardocs/stardocs_logo.svg".into(), bytes: bytes.into() }).fit_to_exact_size(vec2(height, height))
 }
