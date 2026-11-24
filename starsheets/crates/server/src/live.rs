@@ -141,7 +141,7 @@ impl Rooms {
 
 pub async fn ws(State(app): State<Shared>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
     if !crate::signed_in(&app, &headers) {
-        return crate::error(401, "please sign in").into_response();
+        return crate::please_sign_in(&app, &headers).into_response();
     }
     let user = crate::current_user(&app, &headers);
     // A tab's biggest message is a change sent whole; packed it stays well under MAX_FRAME (and

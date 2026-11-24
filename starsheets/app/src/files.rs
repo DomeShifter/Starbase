@@ -988,12 +988,51 @@ pub(crate) async fn get_bytes(url: &str) -> Result<(u16, web_sys::Headers, Vec<u
     fetch(Method::Get, url, None, None).await
 }
 
+thread_local! {
+    /// Requests that change something (saves, uploads, renames…) still on their way: leaving the
+    /// page now (to renew the sign-in) could lose them.
+    static WRITES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Whether a request that changes something is still on its way.
+pub(crate) fn writes_in_flight() -> bool {
+    WRITES.with(|w| w.get() > 0)
+}
+
+/// Counts a writing request while it lasts.
+struct Writing;
+
+impl Writing {
+    fn new() -> Writing {
+        WRITES.with(|w| w.set(w.get() + 1));
+        Writing
+    }
+}
+
+impl Drop for Writing {
+    fn drop(&mut self) {
+        WRITES.with(|w| w.set(w.get().saturating_sub(1)));
+    }
+}
+
 pub(crate) async fn fetch(
     method: Method,
     url: &str,
     body: Option<Vec<u8>>,
     if_match: Option<String>,
 ) -> Result<(u16, web_sys::Headers, Vec<u8>), String> {
+    let _writing = (!matches!(method, Method::Get)).then(Writing::new);
+    let (status, headers, bytes) = fetch_inner(method, url, body, if_match).await?;
+    // A session made through single sign-on has ended: the server says it can be renewed at the
+    // provider without asking, and account.rs does that at a quiet moment instead of showing the
+    // sign-in box.
+    if status == 401 && serde_json::from_slice::<Json>(&bytes).is_ok_and(|v| v["renew"].as_bool() == Some(true)) {
+        crate::account::renewal_needed();
+    }
+    Ok((status, headers, bytes))
+}
+
+async fn fetch_inner(method: Method, url: &str, body: Option<Vec<u8>>, if_match: Option<String>) -> Result<(u16, web_sys::Headers, Vec<u8>), String> {
     let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
     let init = web_sys::RequestInit::new();
     init.set_method(match method {

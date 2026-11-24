@@ -21,16 +21,23 @@ StarSheets keep working alongside, unless you turn that off.
   service user called `ann`: they get `ann2`.
 - **Linking.** Someone who already has a StarSheets account (the owner too) can link it: sign
   in with the password, then your avatar › Your name and colour, type your password and press
-  the SSO button. An account with no password (made through your service) can link a different
-  sign-in only within 10 minutes of a sign-in where the service asked who they are again
-  (`api/oidc/login?fresh=1`, which asks for `prompt=login` and `max_age=0`; renewing a session
-  without asking never counts).
+  the SSO button.
+- **An account made through your service** has no password, so it can't simply be unlinked
+  (it couldn't sign in at all then). In Your name and colour it has "Confirm who you are": the
+  service asks them to sign in again (`api/oidc/login?fresh=1`: `prompt=login`, `max_age=0`),
+  and for the next 10 minutes they can **Set a password** (after which Unlink works, and the
+  password signs in too) or **Link another sign-in**. Renewing a session without asking never
+  counts as confirming.
 - A new password removes the link (whoever links an account must know its current password),
   unless it was changed while signed in through your service. A password the owner sets in
-  People removes it too. The owner sees in People whom each account is linked to, with
-  "Remove link". Removing a link ends the sessions made through it at once.
+  People removes it too. The owner sees in People whom each account is linked to ("ann@example.com
+  at Keycloak": what the service called them at their last sign-in, and the service's name,
+  `STARSHEETS_OIDC_LABEL` or its address; the service's own ids show on hover), with "Remove
+  link" (not for an account with no password). Removing a link ends the sessions made through it
+  at once. With `STARSHEETS_OIDC_ONLY` only owners can unlink.
 - **Owners.** Nobody becomes owner just by signing in. With `STARSHEETS_OIDC_OWNER_GROUP`
-  set, members of that group are owners and people who leave it stop being owners (checked at
+  set, members of that group are owners (they still need an account: see New accounts) and
+  people who leave it stop being owners (checked at
   every sign-in; their other sessions end then; the last owner always stays one). The group
   only takes away what it gave: an owner made with the setup code stays owner whatever group
   the sign-in they link is in, so linking can't lock them out. On a new server you still make
@@ -38,8 +45,13 @@ StarSheets keep working alongside, unless you turn that off.
   is set: then a member of it can set the server up by signing in.
 - **Sessions.** Signing in through your service lasts 12 hours
   (`STARSHEETS_OIDC_SESSION_HOURS`), not 30 days like a password sign-in. Then the app goes
-  back to your service without asking anything: someone still signed in there carries on;
-  someone removed there, or out of the allowed group, gets the sign-in box. So a change at your
+  back to your service without asking anything (`prompt=none`): someone still signed in there
+  carries on; someone removed there, or out of the allowed group, gets the sign-in box. A page
+  left open does this too: about 10 minutes before the end (or when a request finds the
+  session ended), at a quiet moment (nothing waiting to be saved, no cell being typed in, no
+  dialog open, a few seconds without input), and comes back to the same file. If changes can't
+  be saved for a minute because the session has ended, the sign-in box shows instead. Your
+  service must not stop at a consent page each time (see Authelia below). So a change at your
   service reaches StarSheets within that time, and at once for anyone who signs in again (taken
   out of the allowed group: their sessions through your service end; out of the owner group:
   all their other sessions end).
@@ -56,6 +68,7 @@ StarSheets keep working alongside, unless you turn that off.
 | `STARSHEETS_OIDC_REDIRECT_URL` | The address people open StarSheets at, then `api/oidc/callback`, e.g. `https://sheets.example.com/api/oidc/callback`. Register the same address at the service |
 | `STARSHEETS_OIDC_SCOPES` | Default `openid profile email groups` |
 | `STARSHEETS_OIDC_BUTTON_LABEL` | Default `Sign in with SSO` |
+| `STARSHEETS_OIDC_LABEL` | Your service's name as people know it (e.g. `Keycloak`), shown in People. Default: the issuer's host |
 | `STARSHEETS_OIDC_AUTO_CREATE` | `on` or `off`. Unset: on with an allowed group, else only while sign-up is on with no code |
 | `STARSHEETS_OIDC_SESSION_HOURS` | How long a sign-in through your service lasts before it is renewed there (default 12, 1 to 720) |
 | `STARSHEETS_OIDC_GROUPS_CLAIM` | Where the service lists someone's groups (default `groups`) |
@@ -96,7 +109,8 @@ be marked as a certificate authority. The usual one-liner `openssl req -x509 …
 *is* marked so (`CA:TRUE`): StarSheets refuses it even when trusted (the log says
 `CaUsedAsEndEntity`), while browsers and curl accept it. Any of these works:
 
-- Authelia's own command (the easiest):
+- Authelia's own command (the easiest; it writes `public.crt` and `private.pem`, so use
+  `public.crt` where `auth.crt` is below):
   `authelia crypto certificate rsa generate --common-name auth.example.com --sans auth.example.com`
 - openssl with `-addext basicConstraints=critical,CA:FALSE` added, for example
   `openssl req -x509 -newkey rsa:2048 -nodes -days 825 -keyout auth.key -out auth.crt -subj /CN=auth.example.com -addext subjectAltName=DNS:auth.example.com -addext basicConstraints=critical,CA:FALSE`
@@ -129,7 +143,15 @@ identity_providers:
         response_types: [code]
         grant_types: [authorization_code]
         token_endpoint_auth_method: client_secret_basic
+        consent_mode: implicit
 ```
+
+`consent_mode: implicit` matters: without it Authelia shows its consent page ("Consent Request:
+ACCEPT / DENY") at the first sign-in and again every time StarSheets renews a session
+(`STARSHEETS_OIDC_SESSION_HOURS`), even for a renewal that asks for no page (`prompt=none`).
+Then renewing stops on that page instead of carrying on unnoticed. If you'd rather people agree
+once, use `consent_mode: pre-configured` with `pre_configured_consent_duration` (for example
+`1y`).
 
 ```
 STARSHEETS_OIDC_ISSUER=https://auth.example.com
@@ -154,7 +176,9 @@ through single sign-on has no password: the owner sets one first in People).
 
 Applications › Providers › Create › **OAuth2/OpenID Provider**: client type *Confidential*,
 redirect URI `https://sheets.example.com/api/oidc/callback` (strict), a signing key chosen
-(RS256), scopes `openid`, `email`, `profile`. Then an Application using it, slug `starsheets`.
+(RS256), scopes `openid`, `email`, `profile`, and as Authorization flow
+`default-provider-authorization-implicit-consent` (the explicit one shows a consent page, which
+renewing a session can't get past). Then an Application using it, slug `starsheets`.
 Authentik sends groups in the `profile` scope as `groups`.
 
 ```
@@ -173,7 +197,8 @@ Note the `/` at the end of the issuer: Authentik's issuer has it, and it must ma
 In your realm: Clients › Create client › OpenID Connect, client id `starsheets`; *Client
 authentication* on, *Standard flow* only; Valid redirect URIs
 `https://sheets.example.com/api/oidc/callback`; Valid post logout redirect URIs
-`https://sheets.example.com/`; Advanced › PKCE method `S256`. Groups: Client scopes › Create
+`https://sheets.example.com/`; Advanced › PKCE method `S256`; leave *Consent required* (Login
+settings) off, its default, or renewing a session stops at a consent page. Groups: Client scopes › Create
 `groups` with a **Group Membership** mapper (token claim name `groups`, added to the ID token
 and userinfo; "Full group path" on or off, both work), then add it to the client as a Default
 scope.

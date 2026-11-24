@@ -41,3 +41,12 @@ js:starsheets.wait(starsheets.state()).then(s => (s = JSON.parse(s).ok, s.cell.v
 
 Expected output: two `js: "{\"ok\":…}"` lines, then `js: "PASS"`. An answer like
 `{"err":"unknown command: home.bould"}` names what went wrong.
+
+## Single sign-on sessions without waiting
+
+`STARSHEETS_OIDC_SESSION_HOURS` is at least 1, so to test renewal (docs/oidc.md, Sessions) edit
+the server's `.starsheets/sessions.json` instead (with `jq`, while it runs; each session is keyed
+by a hash of its cookie). Its `expires` (seconds since 1970) set to now − 1 ends a session: the
+open page's next request answers 401 with `"renew": true` and the page renews at a quiet moment.
+Set to now + 60 before loading the page, the page renews within a minute without any request
+failing. Moving `made` back 11 minutes makes a fresh sign-in too old to set a password or link.

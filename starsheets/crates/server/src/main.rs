@@ -155,6 +155,14 @@ fn signed_in(app: &App, headers: &HeaderMap) -> bool {
     !app.auth || current_user(app, headers).is_some()
 }
 
+/// The answer to a request that needs sign-in. `renew`: the session was made through single
+/// sign-on and has ended, so the app renews it at the provider without asking (docs/oidc.md)
+/// rather than showing the sign-in box.
+fn please_sign_in(app: &App, headers: &HeaderMap) -> Response<Body> {
+    let renew = app.oidc.is_some() && cookie_token(headers).is_some_and(|t| auth::session_renewable(&app.store, &t));
+    send_json(&json!({ "error": "please sign in", "renew": renew }), 401)
+}
+
 /// What the request says about who sent it: their address (for the try limits) and whether
 /// it came over HTTPS (the sign-in cookie is then Secure). See guard.rs.
 #[derive(Clone, Copy, Debug, Default)]
@@ -305,7 +313,10 @@ async fn accounts(
                 let fresh = cookie_token(headers)
                     .and_then(|t| auth::fresh_sso_session_made(&app.store, &t))
                     .is_some_and(|made| store::now() - made < LINK_FRESH_SECS);
-                json!({ "label": o.cfg.label, "only": o.cfg.only, "owner_group": o.cfg.owner_group.is_some(), "linked": linked, "password": password, "renew": renew, "fresh": fresh })
+                // Seconds until this session (made through single sign-on) ends: the app renews it
+                // at the provider shortly before, at a quiet moment, so nothing is interrupted.
+                let expires_in = cookie_token(headers).and_then(|t| auth::sso_session_expires(&app.store, &t)).map(|e| (e - store::now()).max(0.0).floor());
+                json!({ "label": o.cfg.label, "only": o.cfg.only, "owner_group": o.cfg.owner_group.is_some(), "linked": linked, "password": password, "renew": renew, "fresh": fresh, "expires_in": expires_in })
             });
             let only = app.oidc.as_ref().is_some_and(|o| o.cfg.only);
             let signup = on && !setup && s.on && !only;
@@ -473,16 +484,32 @@ async fn accounts(
         }
         (["oidc", ..], _) => sso(app, &path, m, q, headers, &json, ask).await,
         (["me"], "POST") => {
-            let Some(me) = me else { return Some(error(401, "please sign in")) };
+            let Some(me) = me else { return Some(please_sign_in(app, headers)) };
             let mut new_hash = None;
             if let Some(new_password) = opt_field(&json, "password") {
                 let user_key = format!("login-user:{}", me.username);
                 if !LIMITS.can(&user_key, guard::LOGIN_USER) {
                     return Some(too_many());
                 }
-                let (current, who) = (field(&json, "current_password"), me.username.clone());
-                let stored = blocking(app, move |app| auth::login_hash(&app.store, &who).map(|(_, h)| h)).await.flatten();
-                if !slow(move || auth::verify(&current, stored.as_deref())).await.unwrap_or(false) {
+                let (current, who, token) = (field(&json, "current_password"), me.username.clone(), cookie_token(headers).unwrap_or_default());
+                let found = blocking(app, move |app| {
+                    let stored = auth::login_hash(&app.store, &who).map(|(_, h)| h).filter(|h| !h.is_empty());
+                    let fresh = auth::fresh_sso_session_made(&app.store, &token).is_some_and(|made| store::now() - made < LINK_FRESH_SECS);
+                    (stored, fresh)
+                })
+                .await;
+                let Some((stored, fresh)) = found else { return Some(error(500, "server error")) };
+                if stored.is_none() {
+                    // An account made through single sign-on has no password: setting its first
+                    // one needs a fresh sign-in at the provider (as linking another sign-in does),
+                    // so a stolen session can't add a password that outlives it.
+                    if !fresh {
+                        return Some(error(
+                            403,
+                            "To set a password, first confirm who you are at the sign-in service (Your name and colour › Confirm who you are), then set it within 10 minutes.",
+                        ));
+                    }
+                } else if !slow(move || auth::verify(&current, stored.as_deref())).await.unwrap_or(false) {
                     LIMITS.take(&user_key, guard::LOGIN_USER);
                     return Some(wrong(400, "Your current password isn't right.").await);
                 }
@@ -522,17 +549,25 @@ async fn accounts(
         }
         (["users"], "GET") => {
             if !signed_in(app, headers) {
-                return Some(error(401, "please sign in"));
+                return Some(please_sign_in(app, headers));
             }
             // The owner also sees whom each account is linked to at the identity provider.
+            // The provider by name (STARSHEETS_OIDC_LABEL, else its host) and what it calls the
+            // person (email, else username, as at their last sign-in); the raw ids for a tooltip.
             let owner = me.as_ref().is_some_and(|u| u.owner);
+            let (issuer, provider) = app.oidc.as_ref().map(|o| (o.cfg.issuer.clone(), o.cfg.provider.clone())).unwrap_or_default();
             let list = blocking(app, move |app| {
                 auth::users(&app.store)
                     .iter()
                     .map(|u| {
                         let mut v = u.json();
-                        if owner && let Some((iss, sub)) = auth::link_of(&app.store, &u.username) {
-                            v["sso"] = json!({ "issuer": iss, "subject": sub });
+                        if owner && let Some(l) = auth::link_of(&app.store, &u.username) {
+                            let name = if l.iss == issuer { provider.clone() } else { oidc::host_of(&l.iss) };
+                            let known = if l.email.is_empty() { l.username.clone() } else { l.email.clone() };
+                            v["sso"] = json!({ "issuer": l.iss, "subject": l.sub, "provider": name, "who": known });
+                        }
+                        if owner {
+                            v["password"] = json!(auth::has_password(&app.store, &u.username));
                         }
                         v
                     })
@@ -547,7 +582,16 @@ async fn accounts(
                 return Some(error(403, "Only the owner can do that."));
             }
             let who = q.get("username").cloned().unwrap_or_default();
-            match blocking(app, move |app| auth::unlink(&app.store, &who)).await {
+            let r = blocking(app, move |app| {
+                if auth::users(&app.store).iter().any(|u| u.username == who) && !auth::has_password(&app.store, &who) {
+                    return Err(format!(
+                        "{who} has no password, so they sign in only through single sign-on: removing the link would lock them out. They can set a password themselves first (Your name and colour › Set a password), then the link can go."
+                    ));
+                }
+                auth::unlink(&app.store, &who)
+            })
+            .await;
+            match r {
                 Some(Ok(())) => send_json(&json!({ "ok": true }), 200),
                 Some(Err(why)) => error(400, &why),
                 None => error(500, "server error"),
@@ -652,7 +696,7 @@ async fn sso(app: &Shared, path: &[&str], m: &str, q: &HashMap<String, String>, 
         // (?fresh=1) through single sign-on in the last LINK_FRESH_SECS. Answers where to send
         // the browser.
         (["oidc", "link"], "POST") => {
-            let Some(me) = me else { return error(401, "please sign in") };
+            let Some(me) = me else { return please_sign_in(app, headers) };
             let next = json.get("next").and_then(Value::as_str).and_then(oidc::safe_next).unwrap_or_else(|| o.cfg.base_path());
             let user_key = format!("login-user:{}", me.username);
             if !LIMITS.can(&user_key, guard::LOGIN_USER) || !LIMITS.take(&ip_key("oidc", ask.ip), guard::OIDC_IP) {
@@ -737,12 +781,19 @@ async fn sso(app: &Shared, path: &[&str], m: &str, q: &HashMap<String, String>, 
                 }
                 Err(_) => return back(&home, "failed"),
             };
-            let (next, link, fresh) = (pending.start.next.clone(), pending.start.link.clone(), pending.start.fresh);
+            let (next, link, fresh, renewed) =
+                (pending.start.next.clone(), pending.start.link.clone(), pending.start.fresh, pending.start.renew.clone());
             let cfg = o.cfg.clone();
             let r = blocking(app, move |app| {
                 let user = oidc::account(&app.store, &cfg, &who, link.as_deref())?;
                 let sso = auth::SsoSession { id_token: &id_token, secs: cfg.session_hours * 3600, fresh };
-                auth::new_session_with(&app.store, &user.username, Some(sso)).map_err(|_| "failed")
+                let token = auth::new_session_with(&app.store, &user.username, Some(sso)).map_err(|_| "failed")?;
+                // Renewed before it ended (the app does that at a quiet moment): the new session
+                // replaces it.
+                if let Some(t) = renewed {
+                    auth::end_session(&app.store, &t);
+                }
+                Ok(token)
             })
             .await;
             match r {
@@ -756,7 +807,12 @@ async fn sso(app: &Shared, path: &[&str], m: &str, q: &HashMap<String, String>, 
             }
         }
         (["oidc", "unlink"], "POST") => {
-            let Some(me) = me else { return error(401, "please sign in") };
+            let Some(me) = me else { return please_sign_in(app, headers) };
+            // With STARSHEETS_OIDC_ONLY only owners may use passwords: anyone else unlinked
+            // couldn't sign in at all.
+            if o.cfg.only && !me.owner {
+                return error(400, "This server signs people in through single sign-on only, so your account must stay linked.");
+            }
             match blocking(app, move |app| auth::unlink(&app.store, &me.username)).await {
                 Some(Ok(())) => send_json(&json!({ "ok": true }), 200),
                 Some(Err(why)) => error(400, &why),
@@ -1525,7 +1581,7 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
     // setup requests come before sign-in, with small bodies.
     let early = before_sign_in(&p);
     if !early && !signed_in(&app, &headers) {
-        return error(401, "please sign in");
+        return please_sign_in(&app, &headers);
     }
     let body: Bytes = if !early && takes_a_file(&m, &p) {
         let Ok(_turn) = BIG_AT_ONCE.acquire().await else { return error(503, "server busy") };
@@ -1547,7 +1603,7 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
         return storage(&app, &m, me, &body, &q, ask).await;
     }
     if !signed_in(&app, &headers) {
-        return error(401, "please sign in");
+        return please_sign_in(&app, &headers);
     }
     let me = current_user(&app, &headers);
     if p.first().map(String::as_str) == Some("backup") && p.len() <= 2 {

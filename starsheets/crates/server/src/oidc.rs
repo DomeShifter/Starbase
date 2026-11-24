@@ -74,6 +74,9 @@ pub struct Config {
     pub redirect: String,
     pub scopes: Vec<String>,
     pub label: String,
+    /// The provider's name as people know it (STARSHEETS_OIDC_LABEL, else the issuer's host),
+    /// shown in People.
+    pub provider: String,
     /// STARSHEETS_OIDC_AUTO_CREATE when set. Unset: on with STARSHEETS_OIDC_ALLOWED_GROUP,
     /// else it follows the server's sign-up setting (see `makes_accounts`).
     pub auto_create: Option<bool>,
@@ -144,6 +147,7 @@ impl Config {
             None => SESSION_HOURS,
         };
         let auto_create = v("AUTO_CREATE").map(|_| yes("AUTO_CREATE", false));
+        let provider: String = v("LABEL").unwrap_or_else(|| host_of(&issuer)).chars().filter(|c| !c.is_control()).take(60).collect();
         Ok(Some(Config {
             issuer,
             client_id,
@@ -151,6 +155,7 @@ impl Config {
             redirect,
             scopes,
             label,
+            provider,
             auto_create,
             groups_claim: v("GROUPS_CLAIM").unwrap_or_else(|| "groups".into()),
             owner_group: v("OWNER_GROUP"),
@@ -198,6 +203,11 @@ impl Config {
     pub fn https(&self) -> bool {
         self.redirect.starts_with("https://")
     }
+}
+
+/// The host of a web address (its whole text when it has none).
+pub fn host_of(url: &str) -> String {
+    Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_string)).unwrap_or_else(|| url.to_string())
 }
 
 /// A page to go back to after signing in: only a path on this server (never `//host` or
@@ -333,6 +343,8 @@ pub struct Identity {
     /// What they are called at the provider (preferred_username, else the start of their email).
     pub username: String,
     pub name: String,
+    /// Their email at the provider ("" when it gives none). Only shown, never used to match.
+    pub email: String,
     pub groups: Vec<String>,
 }
 
@@ -554,7 +566,8 @@ impl Oidc {
             Some(g) => groups(Some(g)),
             None => groups(from_id.get(claim)),
         };
-        Ok((Identity { issuer, subject: subject.to_string(), username, name, groups }, raw))
+        let email = email.unwrap_or_default();
+        Ok((Identity { issuer, subject: subject.to_string(), username, name, email, groups }, raw))
     }
 
     /// Where to send the browser to sign out at the provider too, when it has an address for
@@ -614,6 +627,8 @@ pub fn account(store: &Store, cfg: &Config, who: &Identity, link: Option<&str>) 
         let _ = crate::spaces::ensure_space(store, &u.username);
         u
     };
+    // What the provider calls them, for People (never used to find the account).
+    let _ = auth::note_link_names(store, &user.username, &who.issuer, &who.subject, &who.email, &who.username);
     if cfg.owner_group.is_none() {
         return Ok(user);
     }

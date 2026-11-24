@@ -305,11 +305,48 @@ pub fn is_linked(store: &Store, username: &str) -> bool {
     link_of(store, username).is_some()
 }
 
-/// The provider's sign-in `username` is linked to: (issuer, subject).
-pub fn link_of(store: &Store, username: &str) -> Option<(String, String)> {
+/// A single sign-on link: the provider's sign-in (issuer and subject, what the account is found
+/// by) and, only to show the owner in People, what the provider called the person at their last
+/// sign-in.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Link {
+    pub iss: String,
+    pub sub: String,
+    pub email: String,
+    pub username: String,
+}
+
+/// The provider's sign-in `username` is linked to.
+pub fn link_of(store: &Store, username: &str) -> Option<Link> {
     let users = load(store);
     let l = users.iter().find(|u| u.get("username").and_then(Value::as_str) == Some(username))?.get("oidc")?.as_array()?.first()?.clone();
-    Some((l.get("iss")?.as_str()?.to_string(), l.get("sub")?.as_str()?.to_string()))
+    let s = |k: &str| l.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    Some(Link { iss: l.get("iss")?.as_str()?.to_string(), sub: l.get("sub")?.as_str()?.to_string(), email: s("email"), username: s("username") })
+}
+
+/// Keeps what the provider calls the person (email, preferred username) on the link `username`
+/// signed in with, for People. Never used to find an account. Saved only when it changed.
+pub fn note_link_names(store: &Store, username: &str, iss: &str, sub: &str, email: &str, at_provider: &str) -> Result<(), String> {
+    let clean = |s: &str| s.trim().chars().filter(|c| !c.is_control()).take(200).collect::<String>();
+    let (email, at_provider) = (clean(email), clean(at_provider));
+    let mut users = load(store);
+    let Some(l) = users
+        .iter_mut()
+        .find(|u| u.get("username").and_then(Value::as_str) == Some(username))
+        .and_then(|u| u.get_mut("oidc"))
+        .and_then(Value::as_array_mut)
+        .and_then(|links| {
+            links.iter_mut().find(|l| l.get("iss").and_then(Value::as_str) == Some(iss) && l.get("sub").and_then(Value::as_str) == Some(sub))
+        })
+    else {
+        return Ok(());
+    };
+    if l.get("email").and_then(Value::as_str) == Some(email.as_str()) && l.get("username").and_then(Value::as_str) == Some(at_provider.as_str()) {
+        return Ok(());
+    }
+    l["email"] = json!(email);
+    l["username"] = json!(at_provider);
+    save(store, &users).map_err(|e| e.to_string())
 }
 
 /// Whether `username` has a password (accounts made through single sign-on have none).
@@ -341,13 +378,16 @@ pub fn link(store: &Store, username: &str, iss: &str, sub: &str) -> Result<User,
     Ok(user)
 }
 
+/// Why an account with no password keeps its link (it couldn't sign in at all without it).
+pub const NO_PASSWORD_UNLINK: &str = "This account has no password, so it signs in only through single sign-on: removing the link would lock it out. Set a password first (your avatar › Your name and colour › Set a password), then remove the link.";
+
 /// Removes `username`'s single sign-on link. An account with no password keeps its link: it
 /// couldn't sign in at all otherwise.
 pub fn unlink(store: &Store, username: &str) -> Result<(), String> {
     let mut users = load(store);
     let u = users.iter_mut().find(|u| u.get("username").and_then(Value::as_str) == Some(username)).ok_or("No such person.")?;
     if u.get("hash").and_then(Value::as_str).is_none_or(str::is_empty) {
-        return Err("This account has no password, so it can only sign in through single sign-on. Ask the owner to set a password first.".into());
+        return Err(NO_PASSWORD_UNLINK.into());
     }
     u.remove("oidc");
     save(store, &users).map_err(|e| e.to_string())?;
@@ -487,6 +527,15 @@ pub fn sso_session_made(store: &Store, token: &str) -> Option<f64> {
     let s = sessions.get(&token_hash(token))?;
     let valid = s.get("expires").and_then(Value::as_f64).unwrap_or(0.0) > now();
     (valid && s.get("sso").and_then(Value::as_bool) == Some(true)).then(|| s.get("made").and_then(Value::as_f64).unwrap_or(0.0))
+}
+
+/// A session made through single sign-on, still valid: when it ends (the app renews it at the
+/// provider shortly before).
+pub fn sso_session_expires(store: &Store, token: &str) -> Option<f64> {
+    let sessions = store.load_json(&sessions_path(store));
+    let s = sessions.get(&token_hash(token))?;
+    let expires = s.get("expires").and_then(Value::as_f64).unwrap_or(0.0);
+    (expires > now() && s.get("sso").and_then(Value::as_bool) == Some(true)).then_some(expires)
 }
 
 /// A session made through a fresh single sign-on (the provider asked who it was again), still

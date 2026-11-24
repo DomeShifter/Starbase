@@ -131,7 +131,8 @@ async fn userinfo(State(f): State<F>, headers: HeaderMap) -> axum::response::Res
     let bearer = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).unwrap_or("");
     match f.tokens.lock().unwrap().get(bearer) {
         Some(p) => {
-            axum::Json(json!({ "sub": p.sub, "preferred_username": p.username, "name": format!("{} (full name)", p.username), "groups": p.groups }))
+            let email = format!("{}@example.org", p.username.to_lowercase().replace(' ', "."));
+            axum::Json(json!({ "sub": p.sub, "preferred_username": p.username, "name": format!("{} (full name)", p.username), "email": email, "groups": p.groups }))
                 .into_response()
         }
         None => axum::response::Response::builder().status(401).body(Body::empty()).unwrap(),
@@ -172,6 +173,7 @@ fn config(issuer: &str) -> Config {
         redirect: format!("https://sheets.example.com/{CALLBACK}"),
         scopes: vec!["openid".into(), "profile".into(), "groups".into()],
         label: "Sign in with Example".into(),
+        provider: "Example ID".into(),
         auto_create: Some(true),
         groups_claim: "groups".into(),
         owner_group: None,
@@ -700,6 +702,10 @@ fn settings_groups_and_pages() {
         ("openid profile email groups".into(), "Sign in with SSO", None, false, 60, 12)
     );
     assert!(c.warnings().is_empty());
+    assert_eq!(c.provider, "auth.example.com", "the provider's name: its host unless STARSHEETS_OIDC_LABEL says");
+    let mut named = base.to_vec();
+    named.push(("LABEL", "Keycloak"));
+    assert_eq!(env(&named).unwrap().unwrap().provider, "Keycloak");
     let mut on = base.to_vec();
     on.push(("AUTO_CREATE", "on"));
     let c = env(&on).unwrap().unwrap();
@@ -805,4 +811,114 @@ fn certificate_problems_in_plain_words() {
     assert!(certificate_hint("invalid peer certificate: Other(OtherError(CaUsedAsEndEntity))").contains("CA:FALSE"));
     assert!(certificate_hint("invalid peer certificate: UnknownIssuer").contains("SSL_CERT_FILE"));
     assert_eq!(certificate_hint("Connection refused"), "");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_open_page_learns_when_to_renew() {
+    let f = provider().await;
+    let app = server(config(&f.issuer));
+    auth::add(&app.store, "boss", "Boss", "bosspassword").unwrap();
+    let ann = person("sub-ann", "ann", &[]);
+    let s = session(&sign_in(&app, &f, &ann).await);
+    // The page is told when the session ends, so it can renew shortly before.
+    let left = me(&app, &s).await["sso"]["expires_in"].as_f64().unwrap();
+    assert!((43000.0..=43200.0).contains(&left), "twelve hours: {left}");
+    let boss = send(&app, "POST", "/api/login", "", json!({"username": "boss", "password": "bosspassword"})).await.cookie(crate::COOKIE).unwrap();
+    assert!(me(&app, &boss).await["sso"]["expires_in"].is_null(), "a password session isn't renewed");
+    // Ended while the page is open: requests answer 401 with renew, so the app renews without
+    // asking; never for a password session or no session.
+    age_sessions(&app, 0.0, true);
+    for path in ["/api/files", "/api/users"] {
+        let g = send(&app, "GET", path, &s, Value::Null).await;
+        assert_eq!((g.status, g.json["renew"].as_bool()), (401, Some(true)), "{path}");
+        assert_eq!(send(&app, "GET", path, &boss, Value::Null).await.json["renew"], false, "{path}");
+        assert_eq!(send(&app, "GET", path, "", Value::Null).await.json["renew"], false, "{path}");
+    }
+    // Renewed before it ends: the new session replaces the old one at once.
+    let s = session(&sign_in(&app, &f, &ann).await);
+    let s2 = session(&trip(&app, &f, "/api/oidc/login?silent=1&next=/", &s, &ann, None).await);
+    assert_eq!(me(&app, &s2).await["user"]["username"], "ann");
+    let old = me(&app, &s).await;
+    assert_eq!((old["signed_in"].as_bool(), old["sso"]["renew"].as_bool()), (Some(false), Some(false)), "the old session is gone");
+    // A renewal before the end that the provider can't do silently leaves the session as it is.
+    let g = send(&app, "GET", "/api/oidc/login?silent=1&next=/x", &s2, Value::Null).await;
+    let q: HashMap<String, String> = Url::parse(&g.location).unwrap().query_pairs().into_owned().collect();
+    let back = format!("/api/oidc/callback?error=login_required&state={}", q["state"]);
+    let g = send(&app, "GET", &back, &format!("{}; {s2}", g.cookie(HOST_COOKIE).unwrap()), Value::Null).await;
+    assert_eq!(g.location, "/x?sso=renew");
+    assert_eq!(me(&app, &s2).await["signed_in"], true);
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_account_made_through_single_sign_on_sets_a_password_then_unlinks() {
+    let f = provider().await;
+    let app = server(config(&f.issuer));
+    auth::add(&app.store, "boss", "Boss", "bosspassword").unwrap();
+    let boss = send(&app, "POST", "/api/login", "", json!({"username": "boss", "password": "bosspassword"})).await.cookie(crate::COOKIE).unwrap();
+    let ann = person("sub-ann", "ann", &[]);
+    let s = session(&sign_in(&app, &f, &ann).await);
+    let info = me(&app, &s).await;
+    assert_eq!((info["sso"]["linked"].as_bool(), info["sso"]["password"].as_bool()), (Some(true), Some(false)));
+    // No password: unlinking is refused with what to do instead, for the person and the owner.
+    let g = send(&app, "POST", "/api/oidc/unlink", &s, Value::Null).await;
+    assert_eq!(g.status, 400);
+    assert!(g.json["error"].as_str().unwrap().contains("Set a password first"), "{:?}", g.json);
+    let g = send(&app, "DELETE", "/api/users/sso?username=ann", &boss, Value::Null).await;
+    assert_eq!(g.status, 400);
+    assert!(g.json["error"].as_str().unwrap().contains("ann has no password"), "{:?}", g.json);
+    let list = send(&app, "GET", "/api/users", &boss, Value::Null).await.json;
+    assert_eq!(list.as_array().unwrap().iter().find(|u| u["username"] == "ann").unwrap()["password"], false);
+    // Setting the first password needs a fresh sign-in at the provider.
+    let g = send(&app, "POST", "/api/me", &s, json!({"password": "a long password"})).await;
+    assert_eq!(g.status, 403, "{:?}", g.json);
+    let s = session(&trip(&app, &f, "/api/oidc/login?fresh=1", "", &ann, None).await);
+    assert_eq!(send(&app, "POST", "/api/me", &s, json!({"password": "short"})).await.status, 400, "still a good password");
+    let g = send(&app, "POST", "/api/me", &s, json!({"password": "a long password"})).await;
+    assert_eq!(g.status, 200, "{:?}", g.json);
+    assert!(auth::has_password(&app.store, "ann") && auth::is_linked(&app.store, "ann"), "set through single sign-on: the link stays");
+    let s = g.cookie(crate::COOKIE).unwrap();
+    // Now the link can go, and the password signs in.
+    assert_eq!(send(&app, "POST", "/api/oidc/unlink", &s, Value::Null).await.status, 200);
+    assert!(!auth::is_linked(&app.store, "ann"));
+    assert_eq!(send(&app, "POST", "/api/login", "", json!({"username": "ann", "password": "a long password"})).await.status, 200);
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn only_single_sign_on_keeps_everyone_but_owners_linked() {
+    let f = provider().await;
+    let mut cfg = config(&f.issuer);
+    cfg.only = true;
+    let app = server(cfg);
+    auth::add(&app.store, "boss", "Boss", "bosspassword").unwrap();
+    auth::add(&app.store, "ann", "Ann", "annpassword").unwrap();
+    auth::link(&app.store, "ann", &f.issuer, "sub-ann").unwrap();
+    let s = session(&sign_in(&app, &f, &person("sub-ann", "ann", &[])).await);
+    assert_eq!(send(&app, "POST", "/api/oidc/unlink", &s, Value::Null).await.status, 400);
+    assert!(auth::is_linked(&app.store, "ann"));
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn people_shows_the_provider_and_what_it_calls_each_person() {
+    let f = provider().await;
+    let app = server(config(&f.issuer));
+    auth::add(&app.store, "boss", "Boss", "bosspassword").unwrap();
+    let boss = send(&app, "POST", "/api/login", "", json!({"username": "boss", "password": "bosspassword"})).await.cookie(crate::COOKIE).unwrap();
+    sign_in(&app, &f, &person("sub-ann", "ann", &[])).await;
+    let sso_of = |list: &Value, who: &str| list.as_array().unwrap().iter().find(|u| u["username"] == who).unwrap()["sso"].clone();
+    let sso = sso_of(&send(&app, "GET", "/api/users", &boss, Value::Null).await.json, "ann");
+    assert_eq!((sso["provider"].as_str(), sso["who"].as_str()), (Some("Example ID"), Some("ann@example.org")));
+    assert_eq!((sso["issuer"].as_str(), sso["subject"].as_str()), (Some(f.issuer.as_str()), Some("sub-ann")), "the raw ids, for a tooltip");
+    // Kept up to date at each sign-in (the account is still found by issuer + subject only).
+    sign_in(&app, &f, &person("sub-ann", "annie", &[])).await;
+    assert_eq!(sso_of(&send(&app, "GET", "/api/users", &boss, Value::Null).await.json, "ann")["who"], "annie@example.org");
+    assert_eq!(auth::users(&app.store).len(), 2);
+    // Linked from a password account: noted too.
+    auth::add(&app.store, "bob", "Bob", "bobpassword").unwrap();
+    let bob = send(&app, "POST", "/api/login", "", json!({"username": "bob", "password": "bobpassword"})).await.cookie(crate::COOKIE).unwrap();
+    link_trip(&app, &f, &bob, "bobpassword", &person("sub-bob", "Bob B", &[])).await;
+    assert_eq!(sso_of(&send(&app, "GET", "/api/users", &boss, Value::Null).await.json, "bob")["who"], "bob.b@example.org");
+    let _ = std::fs::remove_dir_all(&app.store.root);
 }
