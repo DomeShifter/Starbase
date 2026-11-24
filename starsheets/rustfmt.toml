@@ -1,0 +1,3 @@
+# Same as GridCraft's, so code moves between the two without reformatting.
+max_width = 150
+use_small_heuristics = "Max"

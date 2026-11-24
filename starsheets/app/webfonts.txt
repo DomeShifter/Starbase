@@ -1,0 +1,32 @@
+# Fonts offered in the font menu besides the bundled Roboto. A web page can't use the fonts
+# installed on the computer, so each is a free font from Google Fonts (OFL or Apache licence),
+# downloaded at build time by scripts/fetch-fonts.py and fetched by the app the first time a
+# sheet uses it. Menu name | Google Fonts family (a free look-alike for Microsoft's fonts:
+# Arimo, Tinos, Cousine, Carlito and Caladea have the same letter widths as the originals).
+Arial|Arimo
+Calibri|Carlito
+Cambria|Caladea
+Comic Sans MS|Comic Neue
+Courier New|Cousine
+Georgia|Gelasio
+Impact|Anton
+Times New Roman|Tinos
+Trebuchet MS|Fira Sans
+Verdana|Noto Sans
+Caveat|Caveat
+Comfortaa|Comfortaa
+EB Garamond|EB Garamond
+Lato|Lato
+Lexend|Lexend
+Lobster|Lobster
+Lora|Lora
+Merriweather|Merriweather
+Montserrat|Montserrat
+Nunito|Nunito
+Open Sans|Open Sans
+Oswald|Oswald
+Pacifico|Pacifico
+Playfair Display|Playfair Display
+Roboto Mono|Roboto Mono
+Roboto Serif|Roboto Serif
+Spectral|Spectral

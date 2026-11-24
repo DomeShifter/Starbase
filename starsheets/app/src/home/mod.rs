@@ -1,0 +1,837 @@
+//! The home screen (StarSheets opened without a file), like Google Sheets' and Drive's: a folder
+//! tree on the left (My files, Shared with me, Recent, Starred, Bin, and for the server's owner
+//! Everyone's files), and the folders and spreadsheets of the chosen place on the right, as cards
+//! with a preview picture or as a list. Everything is organised here: new spreadsheets and
+//! folders, uploading (the New button, or dropping files on the page), opening, renaming, starring,
+//! sharing (files and folders), copying, moving (drag onto a folder, the tree or the path; or cut
+//! and paste) and the bin. Moving something into another person's folder makes it theirs, so the
+//! app asks first.
+//!
+//! Server: crates/server (GET /api/files lists what you may see, with owner, role, stars and when
+//! you opened each file; /api/files/ID/thumb is the preview picture).
+
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
+
+use egui::{Align2, Color32, FontId, Key, Rect, RichText, Sense, Stroke, Ui, vec2};
+use serde_json::Value as Json;
+
+use crate::files::{Method, enc, fetch};
+use crate::house;
+use crate::theme;
+
+mod actions;
+mod bin;
+mod input;
+mod items;
+mod sidebar;
+
+const LEFT: f32 = 256.0;
+const TOP: f32 = 64.0;
+const CARD_W: f32 = 216.0;
+const CARD_H: f32 = 196.0;
+const PIC_H: f32 = 144.0;
+const CHIP_H: f32 = 48.0;
+const ROW: f32 = 40.0;
+const GREEN: Color32 = house::GREEN;
+/// Preview pictures fetched at once.
+const THUMBS_AT_ONCE: usize = 4;
+
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub enum Item {
+    File(String),
+    Folder(String),
+}
+
+#[derive(Clone, Debug, Default)]
+struct FileRow {
+    id: String,
+    name: String,
+    folder: String,
+    modified: i64,
+    size: u64,
+    version: String,
+    owner: String,
+    role: String,
+    starred: bool,
+    shared: bool,
+    opened: Option<i64>,
+    /// Who saved the last change (username), when known.
+    changed_by: String,
+}
+
+#[derive(Clone, Debug, Default)]
+struct FolderRow {
+    path: String,
+    owner: String,
+    role: String,
+    starred: bool,
+    shared: bool,
+    /// The colour you gave it (house::FOLDER_COLOURS), if any.
+    colour: Option<Color32>,
+}
+
+#[derive(Clone, Debug)]
+struct BinRow {
+    name: String,
+    original: String,
+    deleted: i64,
+    folder: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+struct Person {
+    name: String,
+}
+
+/// Where the right-hand side is.
+#[derive(Clone, PartialEq, Debug)]
+enum View {
+    /// A folder in my own space (the path includes the space).
+    Mine(String),
+    /// Shared with me: the tops (None) or inside a shared folder.
+    Shared(Option<String>),
+    Recent,
+    Starred,
+    Bin,
+    /// The server owner's view of every folder ("" = everyone's folders).
+    Everyone(String),
+}
+
+enum Reply {
+    Listed(Json),
+    Bin(Vec<BinRow>),
+    Refresh,
+    NewFolder(String),
+    Thumb(String, String, Option<egui::ColorImage>),
+    Download(String, Vec<u8>),
+    /// Who has access to the item in Details.
+    Access(Item, Json),
+    Error(String),
+}
+
+enum Thumb {
+    Loading,
+    Ready(egui::TextureHandle),
+    None,
+}
+
+/// The Move to… picker: what's being moved, the folder picked, and which tree rows are open.
+struct MoveTo {
+    items: Vec<Item>,
+    target: Option<String>,
+    expanded: HashSet<String>,
+}
+
+/// A move that hands things to someone else, waiting for "Move" in the question.
+struct PendingMove {
+    items: Vec<Item>,
+    to: String,
+    owner: String,
+}
+
+#[derive(Default)]
+pub struct Home {
+    /// Shown instead of a spreadsheet (the page was opened without ?file=, ?new or ?folder=).
+    pub active: bool,
+    booted: bool,
+    inbox: Rc<RefCell<Vec<Reply>>>,
+    loading: bool,
+    files: Vec<FileRow>,
+    folders: Vec<FolderRow>,
+    bin: Vec<BinRow>,
+    /// My own folder ("" without accounts), whether I'm the server's owner, the tops of "Shared
+    /// with me", and everyone's names.
+    space: String,
+    admin: bool,
+    accounts: bool,
+    shared_folders: Vec<String>,
+    shared_files: Vec<String>,
+    people: HashMap<String, Person>,
+    view: Option<View>,
+    /// Where you were before (Back) and where Back came from (Forward).
+    back: Vec<View>,
+    forward: Vec<View>,
+    expanded: HashSet<String>,
+    list: bool,
+    /// Sort: by (0 name, 1 date modified, 2 size), Z–A / newest / largest first, and whether
+    /// folders are mixed in with files instead of kept at the top.
+    sort_by: u8,
+    descending: bool,
+    mixed: bool,
+    /// Details: the item shown, and who has access to it (from the server) once known.
+    details: Option<(Item, Option<Json>)>,
+    search: String,
+    selected: Vec<Item>,
+    anchor: Option<Item>,
+    clipboard: Option<(Vec<Item>, bool)>,
+    renaming: Option<(Item, String, bool)>,
+    /// A folder just made with New folder: shown first until it has been named (then the list
+    /// sorts it), as in Drive.
+    just_made: Option<String>,
+    dragging: Option<Vec<Item>>,
+    confirm_purge: Option<Option<String>>,
+    pending_move: Option<PendingMove>,
+    /// Move to…: the folder picker, open for these items.
+    move_to: Option<MoveTo>,
+    thumbs: HashMap<String, (String, Thumb)>,
+    fetching: usize,
+    error: Option<String>,
+    /// A folder to open once the list arrives (?dir= in the address).
+    open_dir: Option<String>,
+}
+
+fn name_of(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+fn parent_of(path: &str) -> &str {
+    path.rsplit_once('/').map_or("", |(p, _)| p)
+}
+
+fn space_of(path: &str) -> &str {
+    path.split('/').next().unwrap_or("")
+}
+
+fn under(path: &str, top: &str) -> bool {
+    path == top || path.starts_with(&format!("{top}/"))
+}
+
+fn query(name: &str) -> Option<String> {
+    let search = web_sys::window()?.location().search().ok()?;
+    web_sys::UrlSearchParams::new_with_str(&search).ok()?.get(name)
+}
+
+/// Whether this page should be the home screen: no file, new spreadsheet or folder asked for.
+pub fn wanted() -> bool {
+    query("file").is_none() && query("new").is_none() && query("folder").is_none()
+}
+
+fn page(path_and_query: &str) -> String {
+    let path = web_sys::window().and_then(|w| w.location().pathname().ok()).unwrap_or_else(|| "/".into());
+    format!("{path}{path_and_query}")
+}
+
+fn go(url: &str) {
+    if let Some(w) = web_sys::window() {
+        let _ = w.location().set_href(url);
+    }
+}
+
+fn new_tab(url: &str) {
+    if let Some(w) = web_sys::window() {
+        let _ = w.open_with_url_and_target(url, "_blank");
+    }
+}
+
+fn call(
+    inbox: &Rc<RefCell<Vec<Reply>>>,
+    ctx: &egui::Context,
+    method: Method,
+    url: String,
+    body: Option<Vec<u8>>,
+    then: impl FnOnce(Vec<u8>) -> Reply + 'static,
+) {
+    let (inbox, ctx) = (inbox.clone(), ctx.clone());
+    wasm_bindgen_futures::spawn_local(async move {
+        let reply = match fetch(method, &url, body, None).await {
+            Ok((s, _, bytes)) if s < 400 => then(bytes),
+            Ok((401, _, _)) => {
+                crate::account::ask_sign_in();
+                Reply::Error(String::new())
+            }
+            Ok((s, _, bytes)) => {
+                let v: Json = serde_json::from_slice(&bytes).unwrap_or_default();
+                Reply::Error(v["error"].as_str().map_or(format!("The server said {s}."), str::to_string))
+            }
+            Err(e) => Reply::Error(e),
+        };
+        inbox.borrow_mut().push(reply);
+        ctx.request_repaint();
+    });
+}
+
+fn refresh_after(_: Vec<u8>) -> Reply {
+    Reply::Refresh
+}
+
+fn decode_png(bytes: &[u8]) -> Option<egui::ColorImage> {
+    let mut dec = png::Decoder::new(std::io::Cursor::new(bytes));
+    dec.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = dec.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut buf).ok()?;
+    let px = &buf[..info.buffer_size()];
+    let size = [info.width as usize, info.height as usize];
+    match info.color_type {
+        png::ColorType::Rgb => Some(egui::ColorImage::from_rgb(size, px)),
+        png::ColorType::Rgba => Some(egui::ColorImage::from_rgba_unmultiplied(size, px)),
+        _ => None,
+    }
+}
+
+fn ago(unix: i64) -> String {
+    crate::files::date_text(unix)
+}
+
+impl Home {
+    pub fn new() -> Home {
+        Home { active: wanted(), ..Default::default() }
+    }
+
+    fn refresh(&mut self, ctx: &egui::Context) {
+        self.loading = true;
+        call(&self.inbox, ctx, Method::Get, "api/files".into(), None, |b| Reply::Listed(serde_json::from_slice(&b).unwrap_or_default()));
+        if self.view == Some(View::Bin) {
+            self.load_bin(ctx);
+        }
+    }
+
+    fn load_bin(&mut self, ctx: &egui::Context) {
+        call(&self.inbox, ctx, Method::Get, "api/bin".into(), None, |b| {
+            let v: Json = serde_json::from_slice(&b).unwrap_or_default();
+            Reply::Bin(
+                v.as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|x| BinRow {
+                        name: x["name"].as_str().unwrap_or("").into(),
+                        original: x["original"].as_str().unwrap_or("").into(),
+                        deleted: x["deleted"].as_i64().unwrap_or(0),
+                        folder: x["folder"].as_bool().unwrap_or(false),
+                    })
+                    .collect(),
+            )
+        });
+    }
+
+    fn take_list(&mut self, v: Json) {
+        self.loading = false;
+        let s = |x: &Json, k: &str| x[k].as_str().unwrap_or("").to_string();
+        self.accounts = v.get("space").is_some();
+        self.space = s(&v, "space");
+        self.admin = v["admin"].as_bool().unwrap_or(!self.accounts);
+        self.files = v["files"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|f| FileRow {
+                id: s(f, "id"),
+                name: s(f, "name"),
+                folder: s(f, "folder"),
+                modified: f["modified"].as_i64().unwrap_or(0),
+                size: f["size"].as_u64().unwrap_or(0),
+                version: s(f, "version"),
+                owner: s(f, "owner"),
+                role: f["role"].as_str().unwrap_or("owner").into(),
+                starred: f["starred"].as_bool().unwrap_or(false),
+                shared: f["shared"].as_bool().unwrap_or(false),
+                opened: f["opened"].as_i64(),
+                changed_by: s(f, "changed_by"),
+            })
+            .collect();
+        let info = v["folder_info"].as_object().cloned().unwrap_or_default();
+        self.folders = v["folders"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|f| f.as_str())
+            .map(|p| {
+                let i = info.get(p).cloned().unwrap_or_default();
+                FolderRow {
+                    path: p.into(),
+                    owner: s(&i, "owner"),
+                    role: i["role"].as_str().unwrap_or("owner").into(),
+                    starred: i["starred"].as_bool().unwrap_or(false),
+                    shared: i["shared"].as_bool().unwrap_or(false),
+                    colour: house::folder_colour(i["colour"].as_str().unwrap_or("")),
+                }
+            })
+            .collect();
+        let list = |k: &str| v["shared"][k].as_array().into_iter().flatten().filter_map(|x| x.as_str().map(str::to_string)).collect::<Vec<_>>();
+        self.shared_folders = list("folders");
+        self.shared_files = list("files");
+        self.people = v["people"].as_array().into_iter().flatten().map(|p| (s(p, "username"), Person { name: s(p, "name") })).collect();
+        if self.view.is_none() {
+            self.view = Some(View::Mine(self.space.clone()));
+            self.expanded.insert(format!("mine:{}", self.space));
+        }
+        if let Some(dir) = self.open_dir.take() {
+            self.go_folder(&dir);
+        }
+        // Forget pictures of files that went away. A document's picture is sent by StarDocs just
+        // after it saves, so one not there yet is asked for again at the next listing.
+        let ids: HashSet<&String> = self.files.iter().map(|f| &f.id).collect();
+        let docs: HashSet<&String> = self.files.iter().filter(|f| crate::files::is_doc(&f.name)).map(|f| &f.id).collect();
+        self.thumbs.retain(|k, (_, t)| ids.contains(k) && !(docs.contains(k) && matches!(t, Thumb::None)));
+    }
+
+    fn person(&self, username: &str) -> String {
+        if username == self.space && self.accounts {
+            return "me".into();
+        }
+        self.people.get(username).map_or_else(|| username.to_string(), |p| p.name.clone())
+    }
+
+    fn folder(&self, path: &str) -> Option<&FolderRow> {
+        self.folders.iter().find(|f| f.path == path)
+    }
+
+    fn file(&self, id: &str) -> Option<&FileRow> {
+        self.files.iter().find(|f| f.id == id)
+    }
+
+    /// Goes somewhere, remembering where you were for Back.
+    fn navigate(&mut self, v: View) {
+        if self.view.as_ref() == Some(&v) {
+            return;
+        }
+        if let Some(old) = self.view.take() {
+            self.back.push(old);
+        }
+        self.forward.clear();
+        self.view = Some(v);
+        self.selected.clear();
+        self.search.clear();
+        self.renaming = None;
+        self.just_made = None;
+    }
+
+    fn go_back(&mut self) {
+        if let Some(v) = self.back.pop() {
+            if let Some(old) = self.view.take() {
+                self.forward.push(old);
+            }
+            self.view = Some(v);
+            self.selected.clear();
+        }
+    }
+
+    fn go_forward(&mut self) {
+        if let Some(v) = self.forward.pop() {
+            if let Some(old) = self.view.take() {
+                self.back.push(old);
+            }
+            self.view = Some(v);
+            self.selected.clear();
+        }
+    }
+
+    /// The folder above this one, if there is one to go up to.
+    fn up_view(&self) -> Option<View> {
+        match self.view.clone()? {
+            View::Mine(p) if p != self.space => Some(View::Mine(parent_of(&p).to_string())),
+            View::Shared(Some(p)) if self.shared_folders.contains(&p) => Some(View::Shared(None)),
+            View::Shared(Some(p)) => Some(View::Shared(Some(parent_of(&p).to_string()))),
+            View::Everyone(p) if !p.is_empty() => Some(View::Everyone(parent_of(&p).to_string())),
+            _ => None,
+        }
+    }
+
+    fn go_up(&mut self) {
+        if let Some(v) = self.up_view() {
+            self.navigate(v);
+        }
+    }
+
+    /// Shows a folder in the right place: mine, shared with me, or (the server's owner) anyone's.
+    fn go_folder(&mut self, path: &str) {
+        let v = if !self.accounts || under(path, &self.space) {
+            View::Mine(path.to_string())
+        } else if self.shared_folders.iter().any(|top| under(path, top)) {
+            View::Shared(Some(path.to_string()))
+        } else if self.admin {
+            View::Everyone(path.to_string())
+        } else {
+            View::Shared(None)
+        };
+        self.navigate(v);
+    }
+
+    /// The folder new things go into from here (None: nowhere here, e.g. Recent).
+    fn here(&self) -> Option<String> {
+        match self.view.as_ref()? {
+            View::Mine(p) => Some(p.clone()),
+            View::Shared(Some(p)) => self.folder(p).filter(|f| f.role != "view").map(|_| p.clone()),
+            View::Everyone(p) if !p.is_empty() => Some(p.clone()),
+            _ => None,
+        }
+    }
+
+    // ------------------------------------------------------------ what's shown
+
+    /// The folders and files of the current place (or the search results).
+    fn contents(&self) -> (Vec<FolderRow>, Vec<FileRow>) {
+        let q = self.search.trim().to_lowercase();
+        if !q.is_empty() {
+            let folders = self
+                .folders
+                .iter()
+                .filter(|f| name_of(&f.path).to_lowercase().contains(&q) && f.path != self.space && f.path.contains('/'))
+                .cloned()
+                .collect();
+            let files = self.files.iter().filter(|f| f.name.to_lowercase().contains(&q)).cloned().collect();
+            return self.sorted(folders, files);
+        }
+        let (folders, files): (Vec<FolderRow>, Vec<FileRow>) = match self.view.clone() {
+            Some(View::Mine(p) | View::Shared(Some(p)) | View::Everyone(p)) => (
+                self.folders.iter().filter(|f| parent_of(&f.path) == p && !f.path.is_empty() && f.path != p).cloned().collect(),
+                self.files.iter().filter(|f| f.folder == p).cloned().collect(),
+            ),
+            Some(View::Shared(None)) => (
+                self.folders.iter().filter(|f| self.shared_folders.contains(&f.path)).cloned().collect(),
+                self.files.iter().filter(|f| self.shared_files.contains(&f.id)).cloned().collect(),
+            ),
+            Some(View::Starred) => {
+                (self.folders.iter().filter(|f| f.starred).cloned().collect(), self.files.iter().filter(|f| f.starred).cloned().collect())
+            }
+            Some(View::Recent) => {
+                let mut files: Vec<FileRow> = self.files.iter().filter(|f| f.opened.is_some()).cloned().collect();
+                files.sort_by_key(|f| std::cmp::Reverse(f.opened));
+                files.truncate(60);
+                return (Vec::new(), files);
+            }
+            Some(View::Bin) | None => (Vec::new(), Vec::new()),
+        };
+        self.sorted(folders, files)
+    }
+
+    /// Newest change and total size of everything in a folder (for sorting folders by date/size).
+    fn folder_stats(&self, path: &str) -> (i64, u64) {
+        let inside = self.files.iter().filter(|f| under(&f.folder, path));
+        inside.fold((0, 0), |(t, s), f| (t.max(f.modified), s + f.size))
+    }
+
+    /// What an item sorts by (name, date or size), as a comparable key.
+    fn sort_key(&self, item: &Item) -> (i64, u64, String) {
+        let (name, date, size) = match item {
+            Item::Folder(p) => {
+                let (d, s) = self.folder_stats(p);
+                (self.folder_label(p), d, s)
+            }
+            Item::File(id) => self.file(id).map_or((String::new(), 0, 0), |f| (f.name.clone(), f.modified, f.size)),
+        };
+        match self.sort_by {
+            1 => (date, 0, name.to_lowercase()),
+            2 => (0, size, name.to_lowercase()),
+            _ => (0, 0, name.to_lowercase()),
+        }
+    }
+
+    fn sort_items(&self, items: &mut [Item]) {
+        items.sort_by_cached_key(|i| self.sort_key(i));
+        if self.descending {
+            items.reverse();
+        }
+        // A folder just made stays first until it is named (to-do 3 row 15).
+        if let Some(p) = &self.just_made
+            && let Some(k) = items.iter().position(|i| matches!(i, Item::Folder(f) if f == p))
+        {
+            items[..=k].rotate_right(1);
+        }
+    }
+
+    fn sorted(&self, folders: Vec<FolderRow>, files: Vec<FileRow>) -> (Vec<FolderRow>, Vec<FileRow>) {
+        let mut fo: Vec<Item> = folders.iter().map(|f| Item::Folder(f.path.clone())).collect();
+        let mut fi: Vec<Item> = files.iter().map(|f| Item::File(f.id.clone())).collect();
+        self.sort_items(&mut fo);
+        self.sort_items(&mut fi);
+        let fo = fo.iter().filter_map(|i| if let Item::Folder(p) = i { folders.iter().find(|f| f.path == *p).cloned() } else { None }).collect();
+        let fi = fi.iter().filter_map(|i| if let Item::File(id) = i { files.iter().find(|f| f.id == *id).cloned() } else { None }).collect();
+        (fo, fi)
+    }
+
+    /// Everything shown, in the order shown: folders first (the default) or mixed in by the sort.
+    fn shown(&self, folders: &[FolderRow], files: &[FileRow]) -> Vec<Item> {
+        let mut items: Vec<Item> =
+            folders.iter().map(|f| Item::Folder(f.path.clone())).chain(files.iter().map(|f| Item::File(f.id.clone()))).collect();
+        if self.mixed && self.view != Some(View::Recent) {
+            self.sort_items(&mut items);
+        }
+        items
+    }
+
+    fn save_sort(&self) {
+        store("starsheets_home_sort", &format!("{}{}{}", self.sort_by, u8::from(self.descending), u8::from(self.mixed)));
+    }
+
+    /// The Sort menu: Sort by, Sort direction, Folders at top.
+    fn sort_menu(&mut self, ui: &mut Ui) {
+        let label = RichText::new("Sort").size(house::BODY).color(theme::TEXT);
+        let b = match crate::icons::icon("sort") {
+            Some(img) => egui::Button::image_and_text(img.fit_to_exact_size(vec2(20.0, 20.0)), label),
+            None => egui::Button::new(label),
+        };
+        let r = ui.add(b.fill(Color32::WHITE).stroke(Stroke::new(1.0, theme::BOX)).corner_radius(16).min_size(vec2(88.0, 32.0)));
+        egui::Popup::menu(&r).show(|ui| {
+            house::menu(ui, 240.0);
+            let tick = |on: bool| Some(if on { "check" } else { "" });
+            house::menu_inset(ui, |ui| house::caps(ui, "Sort by"));
+            for (i, l) in ["Name", "Date modified", "Size"].iter().enumerate() {
+                if house::menu_row(ui, tick(self.sort_by == i as u8), l, "", true) {
+                    // Dates and sizes read best newest / largest first.
+                    if self.sort_by != i as u8 {
+                        self.descending = i != 0;
+                    }
+                    self.sort_by = i as u8;
+                    self.save_sort();
+                }
+            }
+            house::menu_sep(ui);
+            house::menu_inset(ui, |ui| house::caps(ui, "Sort direction"));
+            let (up, down) = match self.sort_by {
+                1 => ("Oldest first", "Newest first"),
+                2 => ("Smallest first", "Largest first"),
+                _ => ("A–Z", "Z–A"),
+            };
+            if house::menu_row(ui, tick(!self.descending), up, "", true) {
+                self.descending = false;
+                self.save_sort();
+            }
+            if house::menu_row(ui, tick(self.descending), down, "", true) {
+                self.descending = true;
+                self.save_sort();
+            }
+            house::menu_sep(ui);
+            let box_icon = if self.mixed { "check_box_outline_blank" } else { "check_box" };
+            if house::menu_row(ui, Some(box_icon), "Folders at top", "", true) {
+                self.mixed = !self.mixed;
+                self.save_sort();
+            }
+        });
+    }
+
+    fn title(&self) -> Vec<(String, Option<View>)> {
+        type Parts = Vec<(String, Option<View>)>;
+        let mut parts: Parts = Vec::new();
+        fn walk(parts: &mut Parts, top: &str, label: String, path: &str, make: &dyn Fn(String) -> View) {
+            parts.push((label, Some(make(top.to_string()))));
+            let mut acc = top.to_string();
+            for p in path.strip_prefix(top).unwrap_or("").split('/').filter(|p| !p.is_empty()) {
+                acc = format!("{acc}/{p}");
+                parts.push((p.to_string(), Some(make(acc.clone()))));
+            }
+        }
+        match self.view.clone() {
+            Some(View::Mine(p)) => {
+                walk(&mut parts, &self.space.clone(), if self.accounts { "My files".into() } else { "All files".into() }, &p, &View::Mine)
+            }
+            Some(View::Shared(None)) => parts.push(("Shared with me".into(), Some(View::Shared(None)))),
+            Some(View::Shared(Some(p))) => {
+                parts.push(("Shared with me".into(), Some(View::Shared(None))));
+                if let Some(top) = self.shared_folders.iter().find(|t| under(&p, t)).cloned() {
+                    walk(&mut parts, &top, name_of(&top).to_string(), &p, &|x| View::Shared(Some(x)));
+                }
+            }
+            Some(View::Everyone(p)) => {
+                parts.push(("Everyone's files".into(), Some(View::Everyone(String::new()))));
+                if !p.is_empty() {
+                    let top = space_of(&p).to_string();
+                    let label = self.person(&top);
+                    walk(&mut parts, &top, if label == "me" { "My files".into() } else { label }, &p, &View::Everyone);
+                }
+            }
+            Some(View::Recent) => parts.push(("Recent".into(), None)),
+            Some(View::Starred) => parts.push(("Starred".into(), None)),
+            Some(View::Bin) => parts.push(("Bin".into(), None)),
+            None => {}
+        }
+        parts
+    }
+
+    // ------------------------------------------------------------ each frame
+
+    pub fn logic(&mut self, ctx: &egui::Context) {
+        if !self.booted {
+            self.booted = true;
+            self.list = stored("starsheets_home_list") == Some("1".into());
+            if let Some(s) = stored("starsheets_home_sort").filter(|s| s.len() == 3) {
+                let b = s.as_bytes();
+                self.sort_by = (b[0] - b'0').min(2);
+                self.descending = b[1] == b'1';
+                self.mixed = b[2] == b'1';
+            }
+            self.open_dir = query("dir").filter(|d| !d.is_empty());
+            self.refresh(ctx);
+        }
+        let replies: Vec<Reply> = std::mem::take(&mut *self.inbox.borrow_mut());
+        for r in replies {
+            match r {
+                Reply::Listed(v) => self.take_list(v),
+                Reply::Bin(b) => {
+                    self.bin = b;
+                    self.loading = false;
+                }
+                Reply::Refresh => self.refresh(ctx),
+                Reply::NewFolder(path) => {
+                    self.refresh(ctx);
+                    self.selected = vec![Item::Folder(path.clone())];
+                    self.renaming = Some((Item::Folder(path.clone()), name_of(&path).to_string(), true));
+                    self.just_made = Some(path);
+                }
+                Reply::Thumb(id, version, img) => {
+                    self.fetching = self.fetching.saturating_sub(1);
+                    let t = match img {
+                        Some(img) => Thumb::Ready(ctx.load_texture(format!("thumb-{id}"), img, egui::TextureOptions::LINEAR)),
+                        None => Thumb::None,
+                    };
+                    self.thumbs.insert(id, (version, t));
+                }
+                Reply::Access(item, v) => {
+                    if let Some((i, a)) = self.details.as_mut()
+                        && *i == item
+                    {
+                        *a = Some(v);
+                    }
+                }
+                Reply::Download(name, bytes) => {
+                    if let Err(e) = crate::web::download_file(&name, &bytes) {
+                        self.error = Some(e);
+                    }
+                }
+                Reply::Error(e) => {
+                    self.loading = false;
+                    if !e.is_empty() {
+                        self.error = Some(e);
+                    }
+                    self.refresh(ctx);
+                }
+            }
+        }
+    }
+
+    /// Files dropped on the page or picked with Upload: saved into the folder shown.
+    pub fn upload(&mut self, ctx: &egui::Context, name: String, bytes: Vec<u8>) {
+        let folder = self.here().unwrap_or_else(|| self.space.clone());
+        call(&self.inbox, ctx, Method::Post, format!("api/files?name={}&folder={}", enc(&name), enc(&folder)), Some(bytes), refresh_after);
+    }
+
+    fn want_thumb(&mut self, ctx: &egui::Context, f: &FileRow) {
+        if self.thumbs.get(&f.id).is_some_and(|(v, _)| *v == f.version) || self.fetching >= THUMBS_AT_ONCE {
+            return;
+        }
+        // Keep showing the old picture while the new one comes.
+        if let Some((v, _)) = self.thumbs.get_mut(&f.id) {
+            *v = f.version.clone();
+        } else {
+            self.thumbs.insert(f.id.clone(), (f.version.clone(), Thumb::Loading));
+        }
+        self.fetching += 1;
+        let (id, version) = (f.id.clone(), f.version.clone());
+        let (inbox, ctx) = (self.inbox.clone(), ctx.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            let img = match fetch(Method::Get, &format!("api/files/{id}/thumb"), None, None).await {
+                Ok((200, _, bytes)) => decode_png(&bytes),
+                _ => None,
+            };
+            inbox.borrow_mut().push(Reply::Thumb(id, version, img));
+            ctx.request_repaint();
+        });
+    }
+
+    // ------------------------------------------------------------ drawing
+
+    pub fn ui(&mut self, ui: &mut Ui) {
+        let ctx = ui.ctx().clone();
+        ui.painter().rect_filled(ui.max_rect(), 0, theme::PAGE);
+        egui::Panel::top("home_top")
+            .show_separator_line(false)
+            .exact_size(TOP)
+            .frame(egui::Frame::NONE.fill(theme::PAGE).inner_margin(egui::Margin::symmetric(16, 0)))
+            .show(ui, |ui| self.top_ui(ui));
+        egui::Panel::left("home_left")
+            .show_separator_line(false)
+            .exact_size(LEFT)
+            .resizable(false)
+            .frame(egui::Frame::NONE.fill(theme::PAGE).inner_margin(egui::Margin { left: 12, right: 12, top: 8, bottom: 8 }))
+            .show(ui, |ui| self.left_ui(ui));
+        egui::CentralPanel::default()
+            .frame(
+                egui::Frame::NONE
+                    .fill(Color32::WHITE)
+                    .corner_radius(egui::CornerRadius { nw: 16, ..Default::default() })
+                    .inner_margin(egui::Margin { left: 24, right: 16, top: 16, bottom: 0 }),
+            )
+            .show(ui, |ui| self.main_ui(ui));
+        self.drag_ui(&ctx);
+        self.move_to_ui(&ctx);
+        self.details_ui(&ctx);
+        self.pending_move_ui(&ctx);
+        self.keys(&ctx);
+    }
+
+    fn top_ui(&mut self, ui: &mut Ui) {
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            if let Some(img) = crate::icons::logo(36.0) {
+                ui.add(img);
+            }
+            ui.add_space(house::S);
+            ui.label(RichText::new("StarSheets").size(22.0).color(theme::TEXT));
+            ui.add_space(LEFT - 190.0);
+            let search = house::field(&mut self.search, house::SEARCH_TEXT)
+                .id(egui::Id::unique("home_search"))
+                .hint_text(RichText::new("Search in StarSheets").size(house::SEARCH_TEXT))
+                .frame(egui::Frame::NONE)
+                .margin(vec2(0.0, 0.0))
+                .min_size(vec2(0.0, 24.0))
+                .desired_width((ui.available_width() - 140.0).clamp(200.0, 700.0));
+            let w = (ui.available_width() - 100.0).clamp(220.0, 740.0);
+            ui.allocate_ui_with_layout(vec2(w, 48.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                // One rounded box: the field itself draws no frame of its own.
+                egui::Frame::NONE.fill(theme::TOOLBAR).corner_radius(24).inner_margin(egui::Margin::symmetric(20, 12)).show(ui, |ui| {
+                    if let Some(img) = crate::icons::icon("search") {
+                        ui.add(img.fit_to_exact_size(vec2(20.0, 20.0)));
+                    }
+                    ui.add_space(house::S);
+                    ui.add(search);
+                });
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                crate::account::me_ui(ui);
+            });
+        });
+    }
+}
+
+/// A folder's icon: filled in its colour if it has one, else the grey outline (with people on it
+/// when it's shared).
+fn folder_icon(ui: &Ui, f: &FolderRow, rect: Rect) {
+    let img = match f.colour {
+        Some(c) => crate::icons::icon("folder_fill").map(|i| i.tint(c)),
+        None => crate::icons::icon(if f.shared { "folder_shared" } else { "folder" }),
+    };
+    if let Some(img) = img {
+        img.paint_at(ui, rect);
+    }
+}
+
+/// A per-browser convenience (grid or list); missing storage just means the default.
+fn stored(key: &str) -> Option<String> {
+    web_sys::window()?.local_storage().ok()??.get_item(key).ok()?
+}
+
+fn store(key: &str, value: &str) {
+    if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
+        let _ = s.set_item(key, value);
+    }
+}
+
+impl Home {
+    /// How a folder is called on screen: someone's own folder by their name.
+    fn folder_label(&self, path: &str) -> String {
+        if self.accounts && !path.contains('/') {
+            let p = self.person(path);
+            return if p == "me" { "My files".into() } else { p };
+        }
+        name_of(path).to_string()
+    }
+}
+
+fn size_text(n: u64) -> String {
+    match n {
+        0..=1023 => format!("{n} B"),
+        1024..=1_048_575 => format!("{:.0} KB", n as f64 / 1024.0),
+        _ => format!("{:.1} MB", n as f64 / 1_048_576.0),
+    }
+}

@@ -1,0 +1,3 @@
+# Formatting-only commits: `git blame --ignore-revs-file .git-blame-ignore-revs` (GitHub uses it).
+# cargo fmt with rustfmt.toml (2026-11-24)
+b73d8039b86404e377869e48e0a8b256f5c91cfb

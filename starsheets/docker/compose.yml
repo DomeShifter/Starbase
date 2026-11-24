@@ -1,0 +1,24 @@
+# StarSheets with Docker Compose: `docker compose up -d`, then open http://localhost:8080
+# Your spreadsheets are kept as ordinary .xlsx files in ./spreadsheets.
+services:
+  starsheets:
+    image: ghcr.io/domeshifter/starsheets:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./spreadsheets:/data
+      # Backups (avatar › Backups…): best on another disk or share than the files themselves.
+      # - /mnt/backup-disk/starbase:/backups
+    environment:
+      # The first visit makes the owner's account with a setup code. By default a random one is
+      # printed in the log on first start (docker compose logs starsheets). To choose your own,
+      # set a long one (12 characters or more) here; the server won't start with a short one.
+      # STARSHEETS_PASSWORD: "a-long-code-only-you-know"
+      # Reached through HTTPS from outside? See docs/deploy.md, "Security settings".
+      # STARSHEETS_PUBLIC_URL: "https://sheets.example.com"
+      # How the app describes where files are kept.
+      LOCATION: "the server"
+    # A cap, so one enormous file can't push the whole machine into swap (no swap for it either).
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    restart: unless-stopped

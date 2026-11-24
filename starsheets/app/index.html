@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StarSheets</title>
+  <link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link data-trunk rel="copy-file" href="favicon.svg" />
+  <link data-trunk rel="copy-file" href="favicon.ico" />
+  <link data-trunk rel="copy-file" href="apple-touch-icon.png" />
+  <link data-trunk rel="copy-dir" href="webfonts" />
+  <link data-trunk rel="copy-dir" href="dictionary" />
+  <link data-trunk rel="rust" data-bin="starsheets" data-wasm-opt="z" data-weak-refs />
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #f9fbfd; }
+    #starsheets_canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+    #starsheets_loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      color: #444746; font: 14px system-ui, sans-serif; pointer-events: none; }
+    /* Sign-in box (account.rs): a real HTML form, not drawn on the canvas, so password managers
+       (Keeper, Bitwarden, the browser's own) can see and fill it. House style (docs/house-style.md). */
+    @font-face { font-family: "SS Roboto"; src: url("Roboto-Regular.ttf"); }
+    #ss_signin_back { position: absolute; inset: 0; background: rgba(0,0,0,.39); display: none; align-items: center; justify-content: center; }
+    #ss_signin { width: 360px; padding: 24px; background: #fff; border-radius: 8px; box-shadow: 0 4px 24px rgba(0,0,0,.24);
+      font: 14px "SS Roboto", Roboto, system-ui, sans-serif; color: #1F1F1F; display: flex; flex-direction: column; gap: 8px; }
+    #ss_signin h1 { font-size: 22px; font-weight: 400; margin: 0 0 8px; }
+    #ss_signin input { height: 36px; box-sizing: border-box; padding: 0 12px; border: 1px solid #747775; border-radius: 4px;
+      font: inherit; color: inherit; background: #fff; outline: none; }
+    #ss_signin input:hover { border-color: #1F1F1F; }
+    #ss_signin input:focus { border-color: #1A73E8; box-shadow: inset 0 0 0 1px #1A73E8; }
+    #ss_signin .ss_note { font-size: 12px; color: #444746; }
+    #ss_signin .ss_error { font-size: 12px; color: #B3261E; }
+    #ss_signin .ss_error:empty { display: none; }
+    #ss_signin .ss_link { align-self: flex-start; border: 0; background: none; padding: 0; font: inherit; color: #146C2E; cursor: pointer; }
+    #ss_signin .ss_actions { display: flex; justify-content: flex-end; margin-top: 16px; }
+    #ss_signin .ss_primary { min-width: 88px; height: 36px; padding: 0 24px; border: 0; border-radius: 18px; background: #146C2E;
+      color: #fff; font: inherit; cursor: pointer; }
+    #ss_signin .ss_primary:disabled { opacity: .6; cursor: default; }
+  </style>
+  <link data-trunk rel="copy-file" href="fonts/Roboto-Regular.ttf" />
+</head>
+<body>
+  <canvas id="starsheets_canvas"></canvas>
+  <div id="starsheets_loading">Loading StarSheets&hellip;</div>
+  <div id="ss_signin_back">
+    <form id="ss_signin" method="post" action="api/login" autocomplete="on">
+      <h1>Sign in to StarSheets</h1>
+      <input id="ss_username" name="username" type="text" autocomplete="username" placeholder="Username" autocapitalize="none" spellcheck="false" required>
+      <input id="ss_password" name="password" type="password" autocomplete="current-password" placeholder="Password" required>
+      <div class="ss_error" id="ss_signin_error"></div>
+      <div class="ss_note">Forgotten your password? The person who runs this server can set a new one.</div>
+      <button type="button" class="ss_link" id="ss_signup_link">New here? Create an account</button>
+      <div class="ss_actions"><button type="submit" class="ss_primary" id="ss_signin_go">Sign in</button></div>
+    </form>
+  </div>
+  <script>
+    // Double-click to edit a cell (web.rs): the browser's own double-click follows the computer's
+    // double-click speed and touchpad taps, which a fixed timer in the app didn't (to-do row 64).
+    window.__ssDbl = null;
+    document.getElementById('starsheets_canvas').addEventListener('dblclick', function (e) {
+      if (e.button === 0) window.__ssDbl = [e.clientX, e.clientY];
+    });
+    // Insert › Image (images.rs): the browser's file chooser, straight away.
+    window.__ssPickedImage = null; window.__ssPickingImage = false;
+    window.__ssPickImage = function (placement) {
+      var input = document.createElement('input');
+      input.type = 'file';
+      input.accept = placement === 'cell' ? 'image/png,image/jpeg' : 'image/*';
+      input.style.display = 'none';
+      document.body.appendChild(input);
+      window.__ssPickingImage = true;
+      input.addEventListener('change', function () {
+        var f = input.files && input.files[0];
+        input.remove();
+        if (!f) { window.__ssPickingImage = false; return; }
+        var r = new FileReader();
+        r.onload = function () {
+          var url = String(r.result), comma = url.indexOf(',');
+          window.__ssPickedImage = [url.slice(comma + 1), f.type || 'image/png', placement];
+          window.__ssPickingImage = false;
+        };
+        r.readAsDataURL(f);
+      });
+      input.addEventListener('cancel', function () { input.remove(); window.__ssPickingImage = false; });
+      input.click();
+    };
+    // Sign-in box: account.rs calls __ssSignIn(true, signupAllowed) to show it and
+    // __ssSignIn(false) to hide it; "Create an account" sets __ssWantSignUp for the app.
+    // Signing in reloads the page (as the app's own sign-in did).
+    (function () {
+      var back = document.getElementById('ss_signin_back'), form = document.getElementById('ss_signin');
+      var err = document.getElementById('ss_signin_error'), go = document.getElementById('ss_signin_go');
+      var link = document.getElementById('ss_signup_link');
+      window.__ssWantSignUp = false;
+      window.__ssSignIn = function (show, signup) {
+        back.style.display = show ? 'flex' : 'none';
+        link.style.display = signup ? '' : 'none';
+        if (show) { err.textContent = ''; setTimeout(function () { document.getElementById('ss_username').focus(); }, 0); }
+      };
+      link.addEventListener('click', function () { window.__ssWantSignUp = true; ssWake(); });
+      form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        go.disabled = true; err.textContent = '';
+        fetch('api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+          body: JSON.stringify({ username: form.username.value, password: form.password.value }) })
+          .then(function (r) { return r.json().catch(function () { return {}; }).then(function (v) { return [r.status, v]; }); })
+          .then(function (sv) {
+            if (sv[0] < 400) { location.reload(); return; }
+            go.disabled = false;
+            err.textContent = sv[1].error || ('The server said ' + sv[0] + '.');
+            form.password.select();
+          })
+          .catch(function () { go.disabled = false; err.textContent = 'Could not reach the server.'; });
+      });
+    })();
+    // Copying on plain http: the browser hides navigator.clipboard outside HTTPS, so eframe and
+    // GridCraft can't copy. A page may still fill the clipboard during the browser's own copy/cut
+    // event (Ctrl+C / Ctrl+X), and eframe runs the app inside that event, so the app hands its
+    // text to window.__ssCopy, which puts it in the event. Outside a copy event (a menu click) it
+    // tries document.execCommand('copy'), which browsers allow only shortly after a click or key.
+    // Leaving while a change isn't saved yet: the browser asks first (files.rs sets the flag).
+    window.__ssUnsaved = false;
+    // Closing the tab with a change not yet saved: ask the app to save now (and keep the browser's
+    // "Leave page?" question so there is time). Hiding the tab saves at once too.
+    window.__ssFlushNow = false;
+    window.addEventListener('beforeunload', (e) => { if (window.__ssUnsaved) { window.__ssFlushNow = true; e.preventDefault(); e.returnValue = ''; } });
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && window.__ssUnsaved) window.__ssFlushNow = true; });
+    window.__ssCopyEvent = null;
+    for (const t of ['copy', 'cut']) {
+      window.addEventListener(t, (e) => {
+        window.__ssCopyEvent = e;
+        setTimeout(() => { window.__ssCopyEvent = null; }, 0);
+      }, true);
+    }
+    window.__ssCopy = function (text, html) {
+      const fill = (e) => {
+        e.clipboardData.setData('text/plain', text);
+        if (html) e.clipboardData.setData('text/html', html);
+        e.preventDefault();
+      };
+      const now = window.__ssCopyEvent;
+      if (now && now.clipboardData) { fill(now); return true; }
+      // Our own copy event must not reach eframe (it would run the app again).
+      const once = (e) => { fill(e); e.stopImmediatePropagation(); };
+      window.addEventListener('copy', once, true);
+      let ok = false;
+      try { ok = document.execCommand('copy'); } catch (_) {}
+      window.removeEventListener('copy', once, true);
+      return ok;
+    };
+    // Sheets shortcuts that Firefox/Chrome also use (Ctrl+D bookmark, Ctrl+B sidebar, Ctrl+U
+    // source…): stop the browser's action; StarSheets still gets the key.
+    // Ctrl+Shift+R is left to the browser (hard reload; owner's choice over Sheets' align right).
+    // Copy/cut/paste and tab/window keys (C X V W T N Tab) are left alone.
+    (function () {
+      var plain = "bdfghikoprsuyz", shifted = "acdeflvz1234567";
+      window.addEventListener("keydown", function (e) {
+        if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+        if (e.target && e.target.closest && e.target.closest('#ss_signin')) return;
+        var k = (e.key || "").toLowerCase();
+        if (e.shiftKey && e.code && /^Digit[1-7]$/.test(e.code)) k = e.code.slice(5);
+        if (k.length === 1 && (e.shiftKey ? shifted : plain).indexOf(k) >= 0) e.preventDefault();
+      }, true);
+    })();
+    // Ctrl/Alt+Shift+digit shortcuts (Alt+Shift+5 strikethrough, Ctrl+Shift+5 percent, the
+    // border keys): the browser names the key after the symbol Shift makes ("%", "£", "&"), which
+    // the app's toolkit doesn't know, so the press was dropped and only the symbol was typed
+    // (to-do row 67). Hand the app the plain digit with the same modifiers instead.
+    window.addEventListener('keydown', function (e) {
+      if (!e.isTrusted || !e.shiftKey || !(e.ctrlKey || e.metaKey || e.altKey)) return;
+      var m = /^Digit([0-9])$/.exec(e.code || '');
+      if (!m || e.key === m[1]) return;
+      if (e.target && e.target.closest && e.target.closest('#ss_signin')) return;
+      e.preventDefault(); e.stopImmediatePropagation();
+      var o = { key: m[1], code: e.code, shiftKey: true, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, bubbles: true, cancelable: true };
+      var t = document.activeElement || document;
+      t.dispatchEvent(new KeyboardEvent('keydown', o));
+      t.dispatchEvent(new KeyboardEvent('keyup', o));
+    }, true);
+    // Home screen (home.rs): the mouse's back and forward buttons go back and forward through the
+    // folders you visited (like a browser, but inside StarSheets) instead of leaving the page.
+    // While the home screen is up (__ssHomeActive) the browser's own handling is stopped and the
+    // presses are counted for the app. A history entry catches browsers that still go back: that
+    // becomes Back in StarSheets too, unless there's nowhere to go back to (__ssAtTop), where
+    // Back leaves as usual.
+    // Wakes the app to act on something it reads each frame (web.rs install_wake).
+    function ssWake() { if (window.__ssWake) window.__ssWake(); else window.dispatchEvent(new Event('resize')); }
+    (function () {
+      window.__ssHomeUp = 0; window.__ssHomeFwd = 0; window.__ssAtTop = true; window.__ssHomeActive = false;
+      var lastPress = 0, guarded = false;
+      function guard() { if (!guarded) { history.pushState({ ssGuard: 1 }, ''); guarded = true; } }
+      ['mousedown', 'mouseup', 'pointerdown', 'pointerup', 'auxclick'].forEach(function (t) {
+        window.addEventListener(t, function (e) {
+          if (!window.__ssHomeActive || (e.button !== 3 && e.button !== 4)) return;
+          e.preventDefault();
+          if (t === 'mouseup') { lastPress = Date.now(); if (e.button === 3) window.__ssHomeUp++; else window.__ssHomeFwd++; ssWake(); }
+        }, true);
+      });
+      window.addEventListener('popstate', function () {
+        if (!window.__ssHomeActive || !guarded) return;
+        guarded = false;
+        if (Date.now() - lastPress < 600) { guard(); return; }
+        if (window.__ssAtTop) { history.back(); return; }
+        window.__ssHomeUp++; guard();
+        ssWake();
+      });
+      setInterval(function () { if (window.__ssHomeActive && !window.__ssAtTop) guard(); }, 300);
+    })();
+  </script>
+</body>
+</html>

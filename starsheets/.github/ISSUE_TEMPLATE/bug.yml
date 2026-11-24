@@ -1,0 +1,18 @@
+name: Something doesn't work
+description: Report a bug or something that behaves differently from Google Sheets
+labels: ["bug"]
+body:
+  - type: textarea
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: How to see it
+      description: Steps, a formula, a small file or a screenshot all help.
+  - type: input
+    attributes:
+      label: Version and where you use it
+      description: e.g. 0.1.0, Docker, Firefox 145 on Windows

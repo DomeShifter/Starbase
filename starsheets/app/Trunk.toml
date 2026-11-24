@@ -1,0 +1,6 @@
+# Build with: trunk build --release   (from app/, after scripts/fetch-upstream.sh)
+[build]
+target = "index.html"
+dist = "../dist"
+public_url = "./"
+filehash = true

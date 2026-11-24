@@ -1,0 +1,7 @@
+/upstream/
+/target/
+/dist/
+/app/webfonts/
+.DS_Store
+/app/dictionary/
+*.cj

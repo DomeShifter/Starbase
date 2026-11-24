@@ -1,0 +1,13 @@
+name: Idea or missing feature
+description: Something you'd like StarSheets to do
+labels: ["idea"]
+body:
+  - type: textarea
+    attributes:
+      label: What would you like?
+      description: If Google Sheets does it, how does it look there?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Why it would help you
