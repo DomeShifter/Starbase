@@ -19,6 +19,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 #[cfg(any(target_arch = "wasm32", test))]
+mod looks;
+#[cfg(any(target_arch = "wasm32", test))]
 mod prefs;
 #[cfg(any(target_arch = "wasm32", test))]
 mod save_fallback;
