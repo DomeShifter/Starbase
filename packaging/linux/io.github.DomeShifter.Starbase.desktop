@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=StarDrive
+GenericName=Office Files
+Comment=Browse, open and share your spreadsheets and documents
+Exec=starsheets --home
+TryExec=starsheets
+Icon=io.github.DomeShifter.Starbase
+Terminal=false
+StartupNotify=true
+StartupWMClass=io.github.DomeShifter.Starbase
+Categories=Office;
+Keywords=starbase;drive;files;folders;documents;spreadsheets;office;
