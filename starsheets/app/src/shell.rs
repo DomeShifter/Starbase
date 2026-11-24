@@ -526,6 +526,21 @@ struct Current {
     font: String,
     size: f32,
     zoom: u16,
+    bold: bool,
+    italic: bool,
+    strike: bool,
+}
+
+impl Current {
+    /// Whether the toolbar button that runs `id` is on for the active cell.
+    fn on(&self, id: &str) -> bool {
+        match id {
+            "home.bold" => self.bold,
+            "home.italic" => self.italic,
+            "home.strikethrough" => self.strike,
+            _ => false,
+        }
+    }
 }
 
 fn current(app: &SheetApp) -> Current {
@@ -536,8 +551,15 @@ fn current(app: &SheetApp) -> Current {
     });
     let zoom = d.and_then(|d| d.wb.active().map(|sh| sh.zoom)).unwrap_or(100);
     match style {
-        Some(st) => Current { font: st.font.name.clone(), size: st.font.size, zoom },
-        None => Current { font: "Arial".into(), size: 10.0, zoom },
+        Some(st) => Current {
+            font: st.font.name.clone(),
+            size: st.font.size,
+            zoom,
+            bold: st.font.bold,
+            italic: st.font.italic,
+            strike: st.font.strike,
+        },
+        None => Current { font: "Arial".into(), size: 10.0, zoom, bold: false, italic: false, strike: false },
     }
 }
 
@@ -551,12 +573,12 @@ fn params(text: &str) -> serde_json::Value {
 }
 
 /// Sheets-style flat buttons for the menu bar and toolbar: no border or fill at rest, a soft
-/// rounded grey on hover and while a menu is open (egui's default draws a box round each one).
+/// rounded grey on hover (#DDE3EA), darker while pressed or while its menu is open (#C9D3DF),
+/// the same as Starbase Docs. (A button drawn with `.frame(false)` would get no fill at all.)
 fn flat(ui: &mut Ui) {
+    use theme::{HOVER, PRESSED};
     let w = &mut ui.style_mut().visuals.widgets;
-    for (state, fill) in
-        [(&mut w.inactive, egui::Color32::TRANSPARENT), (&mut w.hovered, theme::HOVER), (&mut w.active, theme::PRESSED), (&mut w.open, theme::HOVER)]
-    {
+    for (state, fill) in [(&mut w.inactive, egui::Color32::TRANSPARENT), (&mut w.hovered, HOVER), (&mut w.active, PRESSED), (&mut w.open, PRESSED)] {
         state.bg_stroke = Stroke::NONE;
         state.weak_bg_fill = fill;
         state.corner_radius = egui::CornerRadius::same(4);
@@ -565,11 +587,19 @@ fn flat(ui: &mut Ui) {
 }
 
 fn icon_or_text(ui: &mut Ui, name: &str, tip: &str) -> egui::Response {
-    match icons::icon(name) {
-        Some(img) => ui.add(Button::image(img).frame(false).min_size(vec2(28.0, 28.0))),
-        None => ui.add(Button::new(RichText::new(name).size(14.0).color(theme::TEXT_DIM)).frame(false).min_size(vec2(28.0, 28.0))),
-    }
-    .on_hover_text(tip)
+    tool_button(ui, name, tip, false)
+}
+
+/// A toolbar button (inside [`flat`]): grey on hover and press; light blue (#D3E3FD) when `on`
+/// (Bold on a bold cell), as in Google Sheets and Starbase Docs.
+fn tool_button(ui: &mut Ui, name: &str, tip: &str, on: bool) -> egui::Response {
+    let b = match icons::icon(name) {
+        Some(img) => Button::image(img),
+        None => Button::new(RichText::new(name).size(14.0).color(theme::TEXT_DIM)),
+    };
+    // A set fill replaces the hover and pressed fills too: only a button that is on has one.
+    let b = if on { b.fill(theme::ON) } else { b };
+    ui.add(b.min_size(vec2(28.0, 28.0))).on_hover_text(tip)
 }
 
 impl Shell {
@@ -610,7 +640,7 @@ impl Shell {
                 for tool in TOOLBAR {
                     match tool {
                         Btn(icon, tip, id, p) => {
-                            if icon_or_text(ui, icon, tip).clicked() {
+                            if tool_button(ui, icon, tip, cur.on(id)).clicked() {
                                 if *id == "panel:chart" {
                                     ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(crate::chartpanel::REQUEST), true));
                                 } else {
@@ -620,7 +650,7 @@ impl Shell {
                         }
                         Txt(text, tip, id, p) => {
                             let b =
-                                ui.add(Button::new(RichText::new(*text).size(15.0).color(theme::TEXT_DIM)).frame(false).min_size(vec2(28.0, 28.0)));
+                                ui.add(Button::new(RichText::new(*text).size(15.0).color(theme::TEXT_DIM)).min_size(vec2(28.0, 28.0)));
                             if b.on_hover_text(*tip).clicked() {
                                 app.run_or_alert(id, params(p));
                             }
@@ -1504,9 +1534,13 @@ fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[Item]) {
                 }
             }
             Sub(label, sub) => {
-                let b = menu_row(label, "", with_icons)
-                    .min_size(vec2(width, 32.0))
-                    .right_text(egui::containers::menu::SubMenuButton::arrow_atom(Some(MENU_GREY)));
+                // Google's submenu arrow: `arrow_right` the size of the icons (a picture, so the
+                // entry is still named just by its wording), as in Starbase Docs.
+                let b = menu_row(label, "", with_icons).min_size(vec2(width, 32.0));
+                let b = match icons::icon("arrow_right") {
+                    Some(arrow) => b.right_text(arrow),
+                    None => b.right_text(egui::containers::menu::SubMenuButton::arrow_atom(Some(MENU_GREY))),
+                };
                 egui::containers::menu::SubMenuButton::from_button(b).ui(ui, |ui| menu_items(app, ui, sub));
             }
             Sep => menu_sep_width(ui, width),

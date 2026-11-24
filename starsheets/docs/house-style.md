@@ -60,6 +60,7 @@ Everything sits on a 4 px scale.
 - **Main button:** green (#146C2E) pill with white text. Only one per dialog, at the far right.
 - **Other buttons:** white pill, grey outline, green text, to the left of the main one, 8 px apart.
 - **Buttons inside a list** ("Restore"): green text, no outline.
+- **Blue (#0B57D0) instead of green** in the Share dialog and on the Starbase Drive home screen (`house::BLUE` with `primary_in`, `secondary_in`, `actions_in`): Google uses blue there, and Starbase Docs' share dialog does too.
 
 ## Text fields and search bars
 

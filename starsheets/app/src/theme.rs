@@ -40,6 +40,8 @@ pub const MENU_HOVER: Color32 = rgb(0xF1F3F4);
 pub const DIVIDER: Color32 = rgb(0xDADCE0);
 /// Pressed buttons.
 pub const PRESSED: Color32 = rgb(0xC9D3DF);
+/// A toolbar button that is on (Bold on a bold cell): Google's light blue, as in Starbase Docs.
+pub const ON: Color32 = rgb(0xD3E3FD);
 /// The thin box round the font size.
 pub const BOX: Color32 = rgb(0x747775);
 /// The active sheet tab's background.
