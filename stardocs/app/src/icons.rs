@@ -34,6 +34,14 @@ static ICONS: &[(&str, &[u8])] = icons!(
     "add",
     "remove",
     "arrow_drop_down",
+    "format_paint",
+    "edit",
+    "rate_review",
+    "visibility",
+    "comment",
+    "keyboard_arrow_up",
+    "keyboard_arrow_down",
+    "check",
 );
 
 /// The icon called `name` at 18 px, or none for an unknown name.

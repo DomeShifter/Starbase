@@ -18,13 +18,17 @@ pub const DIVIDER: Color32 = Color32::from_rgb(0xC7, 0xC7, 0xC7);
 pub const ON: Color32 = Color32::from_rgb(0xD3, 0xE3, 0xFD);
 pub const SHARE: Color32 = Color32::from_rgb(0xC2, 0xE7, 0xFF);
 
-/// A menu entry: a command (label, id, params as JSON text, shortcut shown), a sub-menu, or a line.
+/// A menu entry: a command (label, id, params as JSON text, shortcut shown), a sub-menu, a line,
+/// an on/off setting with a tick (label, command id, what it reads, shortcut shown; see
+/// [`is_on`]), or Docs' grid for picking a table's size.
 pub enum Item {
     Cmd(&'static str, &'static str, &'static str, &'static str),
     Sub(&'static str, &'static [Item]),
     Sep,
+    Toggle(&'static str, &'static str, &'static str, &'static str),
+    TableGrid,
 }
-use Item::{Cmd, Sep, Sub};
+use Item::{Cmd, Sep, Sub, TableGrid, Toggle};
 
 const NO: &str = "{}";
 
@@ -63,9 +67,21 @@ pub const MENUS: &[(&str, &[Item])] = &[
     (
         "View",
         &[
+            Sub(
+                "Mode",
+                &[
+                    Cmd("Editing: edit the document directly", "stardocs.editing", NO, ""),
+                    Cmd("Suggesting: edits become suggestions", "stardocs.suggesting", NO, ""),
+                ],
+            ),
+            Sep,
             Cmd("Print layout", "view.printLayout", NO, ""),
-            Cmd("Show ruler", "view.ruler", NO, ""),
-            Cmd("Show non-printing characters", "view.marks", NO, "Ctrl+Shift+P"),
+            Toggle("Show ruler", "view.ruler", "ruler", ""),
+            Toggle("Show outline", "view.navigationPane", "navPane", "Ctrl+Alt+H"),
+            Toggle("Show comments", "view.commentsPane", "commentsPane", ""),
+            Toggle("Show word count", "stardocs.words", "stardocs.words", ""),
+            Toggle("Show non-printing characters", "view.marks", "marks", "Ctrl+Shift+P"),
+            Toggle("Show the menus", "stardocs.compact", "stardocs.menus", "Ctrl+Shift+F"),
             Sep,
             Cmd("Zoom in", "view.zoomIn", NO, ""),
             Cmd("Zoom out", "view.zoomOut", NO, ""),
@@ -78,7 +94,8 @@ pub const MENUS: &[(&str, &[Item])] = &[
         "Insert",
         &[
             Cmd("Image", "insert.picture", NO, ""),
-            Cmd("Table", "ui.dialog:insertTable", NO, ""),
+            Sub("Table", &[TableGrid, Sep, Cmd("Table options", "ui.dialog:insertTable", NO, "")]),
+            Cmd("Date", "insert.dateTime", r#"{"format":"d MMMM yyyy"}"#, ""),
             Sep,
             Cmd("Link", "ui.dialog:link", NO, "Ctrl+K"),
             Cmd("Comment", "review.newComment", NO, "Ctrl+Alt+M"),
@@ -105,6 +122,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
                     Cmd("Italic", "format.italic", NO, "Ctrl+I"),
                     Cmd("Underline", "format.underline", NO, "Ctrl+U"),
                     Cmd("Strikethrough", "format.strikethrough", NO, "Alt+Shift+5"),
+                    Cmd("Small caps", "format.smallCaps", NO, ""),
                     Cmd("Superscript", "format.superscript", NO, "Ctrl+."),
                     Cmd("Subscript", "format.subscript", NO, "Ctrl+,"),
                 ],
@@ -160,14 +178,22 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Cmd("Spelling and grammar", "review.spelling", NO, ""),
             Cmd("Word count", "ui.dialog:wordCount", NO, "Ctrl+Shift+C"),
             Sep,
-            Cmd("Suggesting (track changes)", "review.trackChanges", NO, ""),
+            Toggle("Suggesting (track changes)", "review.trackChanges", "trackChanges", ""),
             Cmd("Accept all suggestions", "review.acceptAll", NO, ""),
             Cmd("Reject all suggestions", "review.rejectAll", NO, ""),
             Sep,
             Cmd("Read aloud", "review.readAloud", NO, ""),
         ],
     ),
-    ("Help", &[Cmd("Search the menus", "tools.search", NO, "Alt+/"), Cmd("About StarDocs", "ui.dialog:about", NO, "")]),
+    (
+        "Help",
+        &[
+            Cmd("Search the menus", "tools.search", NO, "Alt+/"),
+            Cmd("Keyboard shortcuts", "stardocs.shortcuts", NO, "Ctrl+/"),
+            Sep,
+            Cmd("About StarDocs", "ui.dialog:about", NO, ""),
+        ],
+    ),
 ];
 
 const STYLES: &[(&str, &str)] = &[
@@ -203,6 +229,46 @@ pub struct Shell {
     /// The title being typed over (server documents: the file's name).
     renaming: Option<String>,
     share: crate::share::Share,
+    flags: Flags,
+    /// The colour being mixed in the text colour menu's Custom picker.
+    custom: Option<Color32>,
+}
+
+/// StarDocs' own on/off settings, kept in the browser between visits ([`FLAGS_KEY`]).
+#[derive(Clone, Copy, PartialEq, Default)]
+struct Flags {
+    /// The live word count box at the bottom left.
+    words: bool,
+    /// Compact mode: the title row and menus hidden, only the toolbar shown (Docs' Ctrl+Shift+F).
+    compact: bool,
+    /// The keyboard shortcuts list is open.
+    shortcuts: bool,
+    /// Read from storage yet.
+    loaded: bool,
+}
+
+const FLAGS_KEY: &str = "stardocs.flags";
+
+impl Flags {
+    fn storage() -> Option<web_sys::Storage> {
+        web_sys::window()?.local_storage().ok()?
+    }
+
+    /// Fills in the stored settings the first time; afterwards writes them back when they change.
+    fn sync(&mut self, before: Flags) {
+        if !self.loaded {
+            self.loaded = true;
+            if let Some(v) = Self::storage().and_then(|s| s.get_item(FLAGS_KEY).ok().flatten()) {
+                self.words = v.contains("words");
+                self.compact = v.contains("compact");
+            }
+        } else if (self.words, self.compact) != (before.words, before.compact)
+            && let Some(s) = Self::storage()
+        {
+            let v = [("words", self.words), ("compact", self.compact)].iter().filter(|(_, on)| *on).map(|(k, _)| *k).collect::<Vec<_>>().join(",");
+            let _ = s.set_item(FLAGS_KEY, &v);
+        }
+    }
 }
 
 use crate::server::{Link, Saved};
@@ -210,9 +276,32 @@ use crate::server::{Link, Saved};
 /// Asks the title row to start renaming (File › Rename), for the next frame.
 const RENAME: &str = "stardocs_rename";
 
+/// Whether a ticked menu item is on: StarDocs' own settings (`stardocs.*`), suggesting
+/// (`trackChanges`, kept in the document), or a field of WordCraft's `view.state`.
+fn is_on(app: &mut WordApp, flags: &Flags, key: &str) -> bool {
+    match key {
+        "stardocs.words" => flags.words,
+        "stardocs.menus" => !flags.compact,
+        "trackChanges" => app.session.doc.settings.track_changes,
+        _ => app.run("view.state", json!({})).ok().and_then(|v| v.get(key).and_then(Value::as_bool)).unwrap_or(false),
+    }
+}
+
+/// Editing or suggesting: Docs' mode switch, which is WordCraft's track changes.
+fn set_suggesting(app: &mut WordApp, on: bool) {
+    if app.session.doc.settings.track_changes != on {
+        run(app, "review.trackChanges", json!({ "value": on }));
+    }
+}
+
 /// Menu commands: a few mean something else when the Starbase server keeps the document.
-fn run_menu(app: &mut WordApp, ui: &Ui, link: Option<&Link>, id: &str, p: Value) {
+fn run_menu(app: &mut WordApp, ui: &Ui, flags: &mut Flags, link: Option<&Link>, id: &str, p: Value) {
     match (id, link) {
+        ("stardocs.words", _) => flags.words = !flags.words,
+        ("stardocs.compact", _) => flags.compact = !flags.compact,
+        ("stardocs.shortcuts", _) => flags.shortcuts = true,
+        ("stardocs.editing", _) => set_suggesting(app, false),
+        ("stardocs.suggesting", _) => set_suggesting(app, true),
         ("stardocs.download", Some(link)) => {
             link.download_next();
             run(app, "file.save", json!({}));
@@ -311,132 +400,248 @@ fn current(app: &mut WordApp) -> Current {
 impl Shell {
     /// Draws the title row, menus and toolbar above the page. Call before `WordApp::ui`.
     pub fn ui(&mut self, app: &mut WordApp, ui: &mut Ui, link: Option<&Link>) {
+        let before = self.flags;
+        self.flags.sync(before);
+        self.keys(app, ui.ctx());
         egui::Panel::top("stardocs_head")
             .frame(egui::Frame::NONE.fill(PAGE).inner_margin(egui::Margin { left: 12, right: 16, top: 8, bottom: 6 }))
             .show(ui, |ui| {
                 self.share.logic(link, ui.ctx());
-                self.title_and_menus(app, ui, link);
-                ui.add_space(6.0);
+                if !self.flags.compact {
+                    self.title_and_menus(app, ui, link);
+                    ui.add_space(6.0);
+                }
                 // A view-only document: the toolbar is shown greyed, like Google Docs' viewer.
                 let editable = !link.is_some_and(Link::view_only);
-                ui.add_enabled_ui(editable, |ui| self.toolbar(app, ui));
+                self.toolbar(app, ui, editable);
             });
         self.share.ui(ui.ctx());
+        self.flags.sync(before);
     }
 
-    fn toolbar(&mut self, app: &mut WordApp, ui: &mut Ui) {
+    /// StarDocs' own shortcuts, taken before WordCraft sees the keys.
+    fn keys(&mut self, app: &mut WordApp, ctx: &egui::Context) {
+        use egui::{Key, KeyboardShortcut, Modifiers};
+        let ctrl_shift = Modifiers::COMMAND | Modifiers::SHIFT;
+        let ctrl_alt = Modifiers::COMMAND | Modifiers::ALT;
+        let (menus, outline, help) = ctx.input_mut(|i| {
+            (
+                i.consume_shortcut(&KeyboardShortcut::new(ctrl_shift, Key::F)),
+                i.consume_shortcut(&KeyboardShortcut::new(ctrl_alt, Key::H)),
+                i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::Slash)),
+            )
+        });
+        if menus {
+            self.flags.compact = !self.flags.compact;
+        }
+        if outline {
+            run(app, "view.navigationPane", json!({}));
+        }
+        if help {
+            self.flags.shortcuts = true;
+        }
+    }
+
+    fn toolbar(&mut self, app: &mut WordApp, ui: &mut Ui, editable: bool) {
         let cur = current(app);
+        let flags = &mut self.flags;
+        let custom = &mut self.custom;
         egui::Frame::NONE.fill(TOOLBAR).corner_radius(24.0).inner_margin(egui::Margin::symmetric(10, 4)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 flat(ui);
                 ui.spacing_mut().item_spacing.x = 2.0;
-                tool(app, ui, "undo", "Undo (Ctrl+Z)", "edit.undo", json!({}), false);
-                tool(app, ui, "redo", "Redo (Ctrl+Y)", "edit.redo", json!({}), false);
-                tool(app, ui, "print", "Print (Ctrl+P)", "file.print", json!({}), false);
-                tool(app, ui, "spellcheck", "Spelling and grammar", "review.spelling", json!({}), false);
-                bar(ui);
-                let zoom = format!("{}%", (cur.zoom * 100.0).round());
-                drop_menu(ui, &zoom, 64.0, false, |ui| {
-                    for z in ZOOMS {
-                        if ui.button(format!("{z}%")).clicked() {
-                            run(app, "view.zoom", json!({ "value": z }));
+                ui.add_enabled_ui(editable, |ui| {
+                    tool(app, ui, "undo", "Undo (Ctrl+Z)", "edit.undo", json!({}), false);
+                    tool(app, ui, "redo", "Redo (Ctrl+Y)", "edit.redo", json!({}), false);
+                    tool(app, ui, "print", "Print (Ctrl+P)", "file.print", json!({}), false);
+                    tool(app, ui, "spellcheck", "Spelling and grammar", "review.spelling", json!({}), false);
+                    let painting = app.session.painter.is_some();
+                    tool(
+                        app,
+                        ui,
+                        "format_paint",
+                        "Paint format: copy this text's look, then select where it goes",
+                        "edit.formatPainter",
+                        json!({}),
+                        painting,
+                    );
+                    bar(ui);
+                    let zoom = format!("{}%", (cur.zoom * 100.0).round());
+                    drop_menu(ui, &zoom, 64.0, false, |ui| {
+                        for z in ZOOMS {
+                            if ui.button(format!("{z}%")).clicked() {
+                                run(app, "view.zoom", json!({ "value": z }));
+                                ui.close();
+                            }
+                        }
+                        if ui.button("Fit").clicked() {
+                            run(app, "view.zoom", json!({ "value": "pageWidth" }));
                             ui.close();
                         }
-                    }
-                    if ui.button("Fit").clicked() {
-                        run(app, "view.zoom", json!({ "value": "pageWidth" }));
-                        ui.close();
-                    }
-                });
-                bar(ui);
-                drop_menu(ui, &cur.style, 116.0, false, |ui| {
-                    for (label, name) in STYLES {
-                        let size = match *name {
-                            "Title" => 22.0,
-                            "Heading 1" => 18.0,
-                            "Heading 2" | "Subtitle" => 16.0,
-                            "Heading 3" => 14.0,
-                            _ => 13.0,
-                        };
-                        if ui.button(RichText::new(*label).size(size)).clicked() {
-                            run(app, "para.style", json!({ "style": name }));
-                            ui.close();
-                        }
-                    }
-                });
-                bar(ui);
-                let fonts = self.fonts.get_or_insert_with(|| font_names(app)).clone();
-                let font = drop_menu(ui, &cur.font, 116.0, false, |ui| {
-                    egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
-                        for f in &fonts {
-                            if ui.button(f).clicked() {
-                                run(app, "format.font", json!({ "name": f }));
+                    });
+                    bar(ui);
+                    drop_menu(ui, &cur.style, 116.0, false, |ui| {
+                        for (label, name) in STYLES {
+                            let size = match *name {
+                                "Title" => 22.0,
+                                "Heading 1" => 18.0,
+                                "Heading 2" | "Subtitle" => 16.0,
+                                "Heading 3" => 14.0,
+                                _ => 13.0,
+                            };
+                            if ui.button(RichText::new(*label).size(size)).clicked() {
+                                run(app, "para.style", json!({ "style": name }));
                                 ui.close();
                             }
                         }
                     });
-                });
-                match &cur.shown_as {
-                    Some(face) => font.on_hover_text(format!("Font: {} (not installed, shown as {face})", cur.font)),
-                    None => font.on_hover_text("Font"),
-                };
-                bar(ui);
-                tool(app, ui, "remove", "Decrease font size", "format.shrinkFont1", json!({}), false);
-                let size = if cur.size > 0.0 { format!("{}", cur.size) } else { String::new() };
-                drop_menu(ui, &size, 40.0, true, |ui| {
-                    for s in SIZES {
-                        if ui.button(format!("{s}")).clicked() {
-                            run(app, "format.size", json!({ "size": s }));
+                    bar(ui);
+                    let fonts = self.fonts.get_or_insert_with(|| font_names(app)).clone();
+                    let font = drop_menu(ui, &cur.font, 116.0, false, |ui| {
+                        egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+                            for f in &fonts {
+                                if ui.button(f).clicked() {
+                                    run(app, "format.font", json!({ "name": f }));
+                                    ui.close();
+                                }
+                            }
+                        });
+                    });
+                    match &cur.shown_as {
+                        Some(face) => font.on_hover_text(format!("Font: {} (not installed, shown as {face})", cur.font)),
+                        None => font.on_hover_text("Font"),
+                    };
+                    bar(ui);
+                    tool(app, ui, "remove", "Decrease font size", "format.shrinkFont1", json!({}), false);
+                    let size = if cur.size > 0.0 { format!("{}", cur.size) } else { String::new() };
+                    drop_menu(ui, &size, 40.0, true, |ui| {
+                        for s in SIZES {
+                            if ui.button(format!("{s}")).clicked() {
+                                run(app, "format.size", json!({ "size": s }));
+                                ui.close();
+                            }
+                        }
+                    });
+                    tool(app, ui, "add", "Increase font size", "format.growFont1", json!({}), false);
+                    bar(ui);
+                    tool(app, ui, "format_bold", "Bold (Ctrl+B)", "format.bold", json!({}), cur.bold);
+                    tool(app, ui, "format_italic", "Italic (Ctrl+I)", "format.italic", json!({}), cur.italic);
+                    tool(app, ui, "format_underlined", "Underline (Ctrl+U)", "format.underline", json!({}), cur.underline);
+                    icon_menu(ui, "format_color_text", "Text colour", |ui| {
+                        palette(ui, COLOURS.iter().map(|c| (*c, *c)), |c| run(app, "format.color", json!({ "color": c })));
+                        ui.horizontal(|ui| {
+                            if ui.button("Automatic").clicked() {
+                                run(app, "format.color", json!({ "color": "auto" }));
+                                ui.close();
+                            }
+                            if custom.is_none() && ui.button("Custom…").clicked() {
+                                *custom = Some(Color32::from_rgb(0x0B, 0x57, 0xD0));
+                            }
+                        });
+                        // Docs' custom colour: pick any colour, then OK.
+                        if let Some(mut c) = *custom {
+                            ui.separator();
+                            egui::widgets::color_picker::color_picker_color32(ui, &mut c, egui::widgets::color_picker::Alpha::Opaque);
+                            *custom = Some(c);
+                            ui.horizontal(|ui| {
+                                if ui.button("OK").clicked() {
+                                    let hex = format!("{:02X}{:02X}{:02X}", c.r(), c.g(), c.b());
+                                    run(app, "format.color", json!({ "color": hex }));
+                                    *custom = None;
+                                    ui.close();
+                                }
+                                if ui.button("Cancel").clicked() {
+                                    *custom = None;
+                                }
+                            });
+                        }
+                    });
+                    icon_menu(ui, "ink_highlighter", "Highlight colour", |ui| {
+                        palette(ui, HIGHLIGHTS.iter().copied(), |c| run(app, "format.highlight", json!({ "color": c })));
+                        if ui.button("None").clicked() {
+                            run(app, "format.highlight", json!({ "color": "none" }));
                             ui.close();
                         }
-                    }
-                });
-                tool(app, ui, "add", "Increase font size", "format.growFont1", json!({}), false);
-                bar(ui);
-                tool(app, ui, "format_bold", "Bold (Ctrl+B)", "format.bold", json!({}), cur.bold);
-                tool(app, ui, "format_italic", "Italic (Ctrl+I)", "format.italic", json!({}), cur.italic);
-                tool(app, ui, "format_underlined", "Underline (Ctrl+U)", "format.underline", json!({}), cur.underline);
-                icon_menu(ui, "format_color_text", "Text colour", |ui| {
-                    palette(ui, COLOURS.iter().map(|c| (*c, *c)), |c| run(app, "format.color", json!({ "color": c })));
-                    if ui.button("Automatic").clicked() {
-                        run(app, "format.color", json!({ "color": "auto" }));
-                        ui.close();
-                    }
-                });
-                icon_menu(ui, "ink_highlighter", "Highlight colour", |ui| {
-                    palette(ui, HIGHLIGHTS.iter().copied(), |c| run(app, "format.highlight", json!({ "color": c })));
-                    if ui.button("None").clicked() {
-                        run(app, "format.highlight", json!({ "color": "none" }));
-                        ui.close();
-                    }
-                });
-                bar(ui);
-                tool(app, ui, "link", "Insert link (Ctrl+K)", "ui.dialog:link", json!({}), false);
-                tool(app, ui, "add_comment", "Add comment (Ctrl+Alt+M)", "review.newComment", json!({}), false);
-                tool(app, ui, "image", "Insert image", "insert.picture", json!({}), false);
-                bar(ui);
-                tool(app, ui, "format_align_left", "Left align (Ctrl+Shift+L)", "para.alignLeft", json!({}), false);
-                tool(app, ui, "format_align_center", "Centre align (Ctrl+Shift+E)", "para.alignCenter", json!({}), false);
-                tool(app, ui, "format_align_right", "Right align (Ctrl+Shift+R)", "para.alignRight", json!({}), false);
-                tool(app, ui, "format_align_justify", "Justify (Ctrl+Shift+J)", "para.justify", json!({}), false);
-                icon_menu(ui, "format_line_spacing", "Line and paragraph spacing", |ui| {
-                    for (label, v) in [("Single", 1.0), ("1.15", 1.15), ("1.5", 1.5), ("Double", 2.0)] {
-                        if ui.button(label).clicked() {
-                            run(app, "para.lineSpacing", json!({ "value": v }));
-                            ui.close();
+                    });
+                    bar(ui);
+                    tool(app, ui, "link", "Insert link (Ctrl+K)", "ui.dialog:link", json!({}), false);
+                    tool(app, ui, "add_comment", "Add comment (Ctrl+Alt+M)", "review.newComment", json!({}), false);
+                    tool(app, ui, "image", "Insert image", "insert.picture", json!({}), false);
+                    bar(ui);
+                    tool(app, ui, "format_align_left", "Left align (Ctrl+Shift+L)", "para.alignLeft", json!({}), false);
+                    tool(app, ui, "format_align_center", "Centre align (Ctrl+Shift+E)", "para.alignCenter", json!({}), false);
+                    tool(app, ui, "format_align_right", "Right align (Ctrl+Shift+R)", "para.alignRight", json!({}), false);
+                    tool(app, ui, "format_align_justify", "Justify (Ctrl+Shift+J)", "para.justify", json!({}), false);
+                    icon_menu(ui, "format_line_spacing", "Line and paragraph spacing", |ui| {
+                        for (label, v) in [("Single", 1.0), ("1.15", 1.15), ("1.5", 1.5), ("Double", 2.0)] {
+                            if ui.button(label).clicked() {
+                                run(app, "para.lineSpacing", json!({ "value": v }));
+                                ui.close();
+                            }
                         }
-                    }
+                    });
+                    bar(ui);
+                    tool(app, ui, "format_list_bulleted", "Bulleted list (Ctrl+Shift+8)", "para.bullets", json!({}), false);
+                    tool(app, ui, "format_list_numbered", "Numbered list (Ctrl+Shift+7)", "para.numbering", json!({}), false);
+                    tool(app, ui, "format_indent_decrease", "Decrease indent (Ctrl+[)", "para.outdent", json!({}), false);
+                    tool(app, ui, "format_indent_increase", "Increase indent (Ctrl+])", "para.indent", json!({}), false);
+                    tool(app, ui, "format_clear", "Clear formatting (Ctrl+\\)", "format.clear", json!({}), false);
                 });
-                bar(ui);
-                tool(app, ui, "format_list_bulleted", "Bulleted list (Ctrl+Shift+8)", "para.bullets", json!({}), false);
-                tool(app, ui, "format_list_numbered", "Numbered list (Ctrl+Shift+7)", "para.numbering", json!({}), false);
-                tool(app, ui, "format_indent_decrease", "Decrease indent (Ctrl+[)", "para.outdent", json!({}), false);
-                tool(app, ui, "format_indent_increase", "Increase indent (Ctrl+])", "para.indent", json!({}), false);
-                tool(app, ui, "format_clear", "Clear formatting (Ctrl+\\)", "format.clear", json!({}), false);
+                // The right end: the mode switch and the compact-mode arrow (Docs' "Hide the menus").
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let (icon, tip) = if flags.compact {
+                        ("keyboard_arrow_down", "Show the menus (Ctrl+Shift+F)")
+                    } else {
+                        ("keyboard_arrow_up", "Hide the menus (Ctrl+Shift+F)")
+                    };
+                    if icon_button(ui, icon, false).on_hover_text(tip).clicked() {
+                        flags.compact = !flags.compact;
+                    }
+                    mode_switch(app, ui, editable);
+                });
             });
         });
     }
+}
+
+/// Docs' mode box at the right of the toolbar: Editing or Suggesting (WordCraft's track
+/// changes), or a fixed "Viewing" for a view-only document.
+fn mode_switch(app: &mut WordApp, ui: &mut Ui, editable: bool) {
+    let suggesting = app.session.doc.settings.track_changes;
+    let (icon, label) = match (editable, suggesting) {
+        (false, _) => ("visibility", "Viewing"),
+        (true, true) => ("rate_review", "Suggesting"),
+        (true, false) => ("edit", "Editing"),
+    };
+    let text = RichText::new(label).size(14.0).color(TEXT_DIM);
+    let button = match icons::icon(icon) {
+        Some(img) => Button::image_and_text(img, text),
+        None => Button::new(text),
+    };
+    if !editable {
+        ui.add_enabled(false, button).on_disabled_hover_text("You can view this document but not change it");
+        return;
+    }
+    let r = ui.add(button.corner_radius(4.0).min_size(vec2(116.0, 28.0)));
+    let tip = if suggesting { "Suggesting: your edits show as suggestions others can accept" } else { "Editing: you change the document directly" };
+    let r = r.on_hover_text(tip);
+    egui::Popup::menu(&r).show(|ui| {
+        ui.set_min_width(300.0);
+        for (on, icon, title, about) in
+            [(false, "edit", "Editing", "Edit the document directly"), (true, "rate_review", "Suggesting", "Edits become suggestions")]
+        {
+            let text = RichText::new(format!("{title}\n{about}")).size(14.0).color(TEXT);
+            let item = match icons::icon(icon) {
+                Some(img) => Button::image_and_text(img, text),
+                None => Button::new(text),
+            };
+            if ui.add(item.selected(on == suggesting).min_size(vec2(300.0, 44.0))).clicked() {
+                set_suggesting(app, on);
+                ui.close();
+            }
+        }
+    });
 }
 
 fn font_names(app: &mut WordApp) -> Vec<String> {
@@ -478,7 +683,7 @@ impl Shell {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     ui.spacing_mut().button_padding = vec2(7.0, 2.0);
                     for (title, items) in MENUS {
-                        ui.menu_button(RichText::new(*title).size(14.0).color(TEXT), |ui| menu_items(app, ui, items, link));
+                        ui.menu_button(RichText::new(*title).size(14.0).color(TEXT), |ui| menu_items(app, ui, &mut self.flags, items, link));
                     }
                 });
             });
@@ -499,6 +704,13 @@ impl Shell {
                         ui.add_enabled(false, share)
                             .on_disabled_hover_text("Sharing needs a Starbase server: open the document from the home screen");
                     }
+                }
+                // Docs' comment history button: opens WordCraft's comments panel.
+                ui.add_space(8.0);
+                flat(ui);
+                let open = is_on(app, &self.flags, "commentsPane");
+                if icon_button(ui, "comment", open).on_hover_text("Show all comments").clicked() {
+                    run(app, "view.commentsPane", json!({}));
                 }
             });
         });
@@ -558,7 +770,7 @@ impl Shell {
     }
 }
 
-fn menu_items(app: &mut WordApp, ui: &mut Ui, items: &[Item], link: Option<&Link>) {
+fn menu_items(app: &mut WordApp, ui: &mut Ui, flags: &mut Flags, items: &[Item], link: Option<&Link>) {
     ui.set_min_width(260.0);
     for item in items {
         match item {
@@ -567,17 +779,65 @@ fn menu_items(app: &mut WordApp, ui: &mut Ui, items: &[Item], link: Option<&Link
                     .right_text(RichText::new(*keys).size(13.0).color(TEXT_DIM))
                     .min_size(vec2(260.0, 30.0));
                 if ui.add(b).clicked() {
-                    run_menu(app, ui, link, id, params(p));
+                    run_menu(app, ui, flags, link, id, params(p));
                     ui.close();
                 }
             }
+            Toggle(label, id, key, keys) => {
+                // A tick in the margin when it is on, as Docs' View menu shows.
+                let on = is_on(app, flags, key);
+                let tick = if on { icons::icon("check") } else { None };
+                let text = RichText::new(*label).size(14.0).color(TEXT);
+                let b = match tick {
+                    Some(img) => Button::image_and_text(img, text),
+                    None => Button::new(RichText::new(format!("      {label}")).size(14.0).color(TEXT)),
+                };
+                if ui.add(b.right_text(RichText::new(*keys).size(13.0).color(TEXT_DIM)).min_size(vec2(260.0, 30.0))).clicked() {
+                    run_menu(app, ui, flags, link, id, json!({}));
+                    ui.close();
+                }
+            }
+            TableGrid => table_grid(app, ui),
             Sub(label, sub) => {
-                ui.menu_button(RichText::new(*label).size(14.0).color(TEXT), |ui| menu_items(app, ui, sub, link));
+                ui.menu_button(RichText::new(*label).size(14.0).color(TEXT), |ui| menu_items(app, ui, flags, sub, link));
             }
             Sep => {
                 ui.separator();
             }
         }
+    }
+}
+
+/// Docs' Insert › Table grid: hover to choose rows × columns (up to 10 × 10), click to insert.
+fn table_grid(app: &mut WordApp, ui: &mut Ui) {
+    const N: usize = 10;
+    const CELL: f32 = 18.0;
+    const GAP: f32 = 3.0;
+    let id = ui.scope_id().with("stardocs_table_grid");
+    let side = N as f32 * (CELL + GAP);
+    let (rect, resp) = ui.allocate_exact_size(vec2(side, side), egui::Sense::click());
+    // The size under the pointer, kept while the pointer is outside so the label doesn't flicker.
+    let mut pick: (usize, usize) = ui.data(|d| d.get_temp(id)).unwrap_or((1, 1));
+    if let Some(p) = resp.hover_pos() {
+        let col = (((p.x - rect.left()) / (CELL + GAP)) as usize).min(N - 1) + 1;
+        let row = (((p.y - rect.top()) / (CELL + GAP)) as usize).min(N - 1) + 1;
+        pick = (row, col);
+        ui.data_mut(|d| d.insert_temp(id, pick));
+    }
+    let painter = ui.painter();
+    for r in 0..N {
+        for c in 0..N {
+            let min = rect.min + vec2(c as f32 * (CELL + GAP), r as f32 * (CELL + GAP));
+            let cell = egui::Rect::from_min_size(min, vec2(CELL, CELL));
+            let lit = r < pick.0 && c < pick.1;
+            painter.rect_filled(cell, 2.0, if lit { ON } else { Color32::WHITE });
+            painter.rect_stroke(cell, 2.0, Stroke::new(1.0, if lit { BLUE } else { DIVIDER }), egui::StrokeKind::Inside);
+        }
+    }
+    ui.label(RichText::new(format!("{} × {}", pick.1, pick.0)).size(13.0).color(TEXT_DIM));
+    if resp.clicked() {
+        run(app, "insert.table", json!({ "rows": pick.0, "cols": pick.1 }));
+        ui.close();
     }
 }
 
