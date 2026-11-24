@@ -596,7 +596,7 @@ impl Shell {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 flat(ui);
-                ui.spacing_mut().item_spacing.x = 2.0;
+                tight(ui);
                 // As many groups as fit, in order; the rest go into the ⋮ menu (as Docs does),
                 // leaving room for the mode box and arrow at the right end.
                 // The right end's width as drawn last frame (a guess before the first).
@@ -634,6 +634,7 @@ impl Shell {
                             for g in &GROUPS[shown..] {
                                 ui.horizontal(|ui| {
                                     flat(ui);
+                                    tight(ui);
                                     tools.draw(ui, *g);
                                 });
                             }
@@ -708,7 +709,7 @@ enum Group {
     Lists,
 }
 const GROUPS: [Group; 9] = [Group::History, Group::Zoom, Group::Style, Group::Font, Group::Size, Group::Text, Group::Insert, Group::Align, Group::Lists];
-pub const GUESSED_WIDTHS: [f32; 9] = [160.0, 75.0, 127.0, 127.0, 113.0, 160.0, 100.0, 160.0, 150.0];
+pub const GUESSED_WIDTHS: [f32; 9] = [151.0, 79.0, 117.0, 109.0, 99.0, 151.0, 95.0, 151.0, 140.0];
 /// Room kept for the mode box and the compact-mode arrow, and for the ⋮ button.
 const RIGHT_END: f32 = 170.0;
 const MORE: f32 = 34.0;
@@ -736,7 +737,7 @@ impl Tools<'_> {
             }
             Group::Zoom => {
                 let zoom = format!("{}%", (cur.zoom * 100.0).round());
-                drop_menu(ui, &zoom, 64.0, false, |ui| {
+                drop_menu(ui, &zoom, 66.0, |ui| {
                     for z in ZOOMS {
                         if ui.button(format!("{z}%")).clicked() {
                             run(app, "view.zoom", json!({ "value": z }));
@@ -750,7 +751,7 @@ impl Tools<'_> {
                 });
             }
             Group::Style => {
-                drop_menu(ui, &cur.style, 116.0, false, |ui| {
+                drop_menu(ui, &cur.style, 104.0, |ui| {
                     ui.set_min_width(180.0);
                     for (label, name) in STYLES {
                         let size = match *name {
@@ -769,7 +770,7 @@ impl Tools<'_> {
             }
             Group::Font => {
                 let fonts = self.fonts;
-                let font = drop_menu(ui, &cur.font, 116.0, false, |ui| {
+                let font = drop_menu(ui, &cur.font, 96.0, |ui| {
                     ui.set_min_width(200.0);
                     egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
                         for f in fonts {
@@ -787,15 +788,7 @@ impl Tools<'_> {
             }
             Group::Size => {
                 tool(app, ui, "remove", "Decrease font size", "format.shrinkFont1", json!({}), false);
-                let size = if cur.size > 0.0 { format!("{}", cur.size) } else { String::new() };
-                drop_menu(ui, &size, 40.0, true, |ui| {
-                    for s in SIZES {
-                        if ui.button(format!("{s}")).clicked() {
-                            run(app, "format.size", json!({ "size": s }));
-                            ui.close();
-                        }
-                    }
-                });
+                size_box(app, ui, cur.size);
                 tool(app, ui, "add", "Increase font size", "format.growFont1", json!({}), false);
             }
             Group::Text => {
@@ -1093,6 +1086,14 @@ fn table_grid(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
+/// Docs' toolbar spacing: icon buttons 26 px wide (an 18 px icon and 4 px each side) with 2 px
+/// between them, so the whole toolbar fits a 1400 px window.
+fn tight(ui: &mut Ui) {
+    let s = ui.spacing_mut();
+    s.item_spacing.x = 2.0;
+    s.button_padding = vec2(4.0, 2.0);
+}
+
 /// Toolbar buttons are flat until hovered, as in Docs.
 fn flat(ui: &mut Ui) {
     let w = &mut ui.visuals_mut().widgets;
@@ -1114,7 +1115,7 @@ fn icon_button(ui: &mut Ui, name: &str, on: bool) -> egui::Response {
         Some(img) => Button::image(img),
         None => Button::new(name),
     };
-    ui.add(b.fill(if on { ON } else { Color32::TRANSPARENT }).corner_radius(4.0).min_size(vec2(28.0, 28.0)))
+    ui.add(b.fill(if on { ON } else { Color32::TRANSPARENT }).corner_radius(4.0).min_size(vec2(26.0, 28.0)))
 }
 
 fn tool(app: &mut WordApp, ui: &mut Ui, icon: &str, tip: &str, id: &str, p: Value, on: bool) {
@@ -1141,10 +1142,9 @@ fn named(ui: &Ui, r: &egui::Response, name: &str) {
     r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, name));
 }
 
-/// A toolbar box of a fixed `width` showing `text` (cut short with "…" when too long) that
-/// opens a menu, as Docs' zoom, style, font and size boxes do. `boxed` draws the size box's
-/// border; the others have a ▾ instead.
-fn drop_menu(ui: &mut Ui, text: &str, width: f32, boxed: bool, add: impl FnOnce(&mut Ui)) -> egui::Response {
+/// A toolbar box of a fixed `width` showing `text` (cut short with "…" when too long) and a ▾
+/// that opens a menu, as Docs' zoom, style and font boxes do.
+fn drop_menu(ui: &mut Ui, text: &str, width: f32, add: impl FnOnce(&mut Ui)) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 28.0), egui::Sense::click());
     if ui.is_rect_visible(rect) {
         let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
@@ -1152,25 +1152,80 @@ fn drop_menu(ui: &mut Ui, text: &str, width: f32, boxed: bool, add: impl FnOnce(
         if resp.hovered() || open {
             p.rect_filled(rect, 4.0, ui.visuals().widgets.hovered.weak_bg_fill);
         }
-        if boxed {
-            p.rect_stroke(rect.shrink(1.0), 4.0, Stroke::new(1.0, TEXT_DIM), egui::StrokeKind::Inside);
-        }
-        let arrow = if boxed { 0.0 } else { 14.0 };
-        let room = rect.width() - 12.0 - arrow;
+        let room = rect.width() - 12.0 - 14.0;
         let galley = egui::WidgetText::from(RichText::new(text).size(14.0).color(TEXT_DIM)).into_galley(
             ui,
             Some(egui::TextWrapMode::Truncate),
             room,
             egui::TextStyle::Button,
         );
-        let x = if boxed { rect.center().x - galley.size().x / 2.0 } else { rect.left() + 6.0 };
-        p.galley(egui::pos2(x, rect.center().y - galley.size().y / 2.0), galley, TEXT_DIM);
-        if !boxed {
-            p.text(egui::pos2(rect.right() - 6.0, rect.center().y), egui::Align2::RIGHT_CENTER, "▾", egui::FontId::proportional(13.0), TEXT_DIM);
-        }
+        p.galley(egui::pos2(rect.left() + 6.0, rect.center().y - galley.size().y / 2.0), galley, TEXT_DIM);
+        p.text(egui::pos2(rect.right() - 6.0, rect.center().y), egui::Align2::RIGHT_CENTER, "▾", egui::FontId::proportional(13.0), TEXT_DIM);
     }
     egui::Popup::menu(&resp).show(add);
     resp
+}
+
+/// Docs' font size box: type a size (1 to 400) and press Enter, or pick one from the list that
+/// opens under it. Shows the selection's size; blank when it mixes sizes. Escape leaves it as
+/// it was. After Enter the keyboard goes back to the page.
+fn size_box(app: &mut WordApp, ui: &mut Ui, size: f64) {
+    let id = ui.scope_id().with("stardocs_size_box");
+    let list = id.with("list");
+    let shown = if size > 0.0 { format!("{size}") } else { String::new() };
+    let focused = ui.memory(|m| m.has_focus(id));
+    let mut text = if focused { ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| shown.clone()) } else { shown.clone() };
+    let edit = egui::TextEdit::singleline(&mut text)
+        .id(id)
+        .desired_width(30.0)
+        .char_limit(5)
+        .align(egui::Align2::CENTER_CENTER)
+        .font(egui::FontId::proportional(14.0))
+        .text_color(TEXT_DIM)
+        .margin(vec2(4.0, 5.0))
+        .background_color(Color32::TRANSPARENT);
+    let r = ui.scope(|ui| {
+        let w = &mut ui.visuals_mut().widgets;
+        for s in [&mut w.inactive, &mut w.hovered] {
+            s.bg_stroke = Stroke::new(1.0, TEXT_DIM);
+        }
+        ui.add(edit)
+    }).inner;
+    let enabled = ui.is_enabled();
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, enabled, "Font size"));
+    if r.gained_focus() {
+        // A click selects the number, so typing replaces it, and opens the list.
+        if let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), id) {
+            st.cursor.set_char_range(Some(egui::text::CCursorRange::select_all_str(&text)));
+            st.store(ui.ctx(), id);
+        }
+        egui::Popup::open_id(ui.ctx(), list);
+    }
+    if r.has_focus() {
+        ui.data_mut(|d| d.insert_temp(id, text.clone()));
+    }
+    if r.lost_focus() {
+        ui.data_mut(|d| d.remove::<String>(id));
+        let (enter, escape) = ui.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
+        if enter || escape {
+            egui::Popup::close_id(ui.ctx(), list);
+        }
+        let typed = text.trim().parse::<f64>().ok().filter(|v| (1.0..=400.0).contains(v));
+        match typed {
+            Some(v) if !escape && v != size => run(app, "format.size", json!({ "size": v })),
+            _ if enter || escape => app.canvas.want_focus = true,
+            _ => {}
+        }
+    }
+    egui::Popup::from_response(&r).id(list).open_memory(None).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        ui.set_min_width(60.0);
+        for s in SIZES {
+            if ui.button(format!("{s}")).clicked() {
+                run(app, "format.size", json!({ "size": s }));
+                ui.close();
+            }
+        }
+    });
 }
 
 fn palette<'a>(ui: &mut Ui, colours: impl Iterator<Item = (&'a str, &'a str)>, mut pick: impl FnMut(&str)) {
