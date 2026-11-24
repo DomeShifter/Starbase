@@ -210,9 +210,12 @@ fn refuse(code: u16, msg: &str) -> Response<Body> {
 }
 
 /// Runs around every request (main.rs: router()).
-pub async fn middleware(req: Request, next: Next) -> Response<Body> {
+pub async fn middleware(mut req: Request, next: Next) -> Response<Body> {
     let cfg = config();
     let peer = peer(req.extensions());
+    if secure(peer, req.headers(), cfg) {
+        drop_plain_cookies(req.headers_mut());
+    }
     let mut resp = match check(req.method(), req.uri(), req.headers(), peer, cfg) {
         Err((code, msg)) => refuse(code, msg),
         Ok(()) => match tokio::time::timeout(QUEUE_WAIT, AT_ONCE.acquire()).await {
@@ -241,6 +244,9 @@ pub const LOGIN_USER: Bucket = Bucket { burst: 10.0, every: Duration::from_secs(
 pub const SIGNUP_IP: Bucket = Bucket { burst: 5.0, every: Duration::from_secs(120) };
 /// Setup-code tries from one address.
 pub const SETUP_IP: Bucket = Bucket { burst: 10.0, every: Duration::from_secs(10) };
+/// Single sign-ons started from one address: at most 50 in ten minutes (10 + 600 s / 15 s), no
+/// more than oidc.rs keeps waiting for one address.
+pub const OIDC_IP: Bucket = Bucket { burst: 10.0, every: Duration::from_secs(15) };
 
 #[derive(Default)]
 pub struct Limiter {
@@ -289,6 +295,40 @@ pub fn ip_prefix(ip: IpAddr) -> String {
             let net = std::net::Ipv6Addr::from(u128::from(a) & (u128::MAX << 64));
             format!("{net}/64")
         }
+    }
+}
+
+/// The network an address is in, for limits on a whole network: an IPv6 /48 (what one site is
+/// usually given), an IPv4 address itself.
+pub fn ip_network(ip: IpAddr) -> String {
+    match ip.to_canonical() {
+        IpAddr::V4(a) => a.to_string(),
+        IpAddr::V6(a) => {
+            let net = std::net::Ipv6Addr::from(u128::from(a) & (u128::MAX << 80));
+            format!("{net}/48")
+        }
+    }
+}
+
+/// Over HTTPS, the cookies without the `__Host-` prefix are dropped before anything reads
+/// them: a site on a sibling or parent domain can set those (never the prefixed ones), and
+/// could otherwise plant a session or a sign-in of its own (session fixation, login CSRF).
+pub fn drop_plain_cookies(headers: &mut HeaderMap) {
+    let plain = [crate::COOKIE, crate::oidc::COOKIE];
+    let kept: Vec<String> = headers
+        .get_all(header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(';'))
+        .map(str::trim)
+        .filter(|c| !c.is_empty() && !plain.contains(&c.split('=').next().unwrap_or("").trim()))
+        .map(str::to_string)
+        .collect();
+    headers.remove(header::COOKIE);
+    if let Ok(v) = HeaderValue::from_str(&kept.join("; "))
+        && !kept.is_empty()
+    {
+        headers.insert(header::COOKIE, v);
     }
 }
 
@@ -407,5 +447,21 @@ mod tests {
         let b1 = Bucket { burst: 2.0, every: Duration::from_secs(3600) };
         assert!(l.take(&ip_key("t", a), b1) && l.take(&ip_key("t", ip("2001:db8:1:2::77")), b1));
         assert!(!l.take(&ip_key("t", ip("2001:db8:1:2::78")), b1));
+        assert_eq!(ip_network(ip("2001:db8:1:2::1").unwrap()), ip_network(ip("2001:db8:1:ffff::1").unwrap()));
+        assert_ne!(ip_network(ip("2001:db8:1:2::1").unwrap()), ip_network(ip("2001:db8:2::1").unwrap()));
+        assert_eq!(ip_network(ip("2001:db8:1:2::1").unwrap()), "2001:db8:1::/48");
+    }
+
+    #[test]
+    fn plain_cookies_are_dropped_over_https() {
+        let mut h = headers(&[("cookie", "starsheets_session=planted; theme=dark"), ("cookie", "__Host-starsheets_session=real; starsheets_oidc=x")]);
+        drop_plain_cookies(&mut h);
+        assert_eq!(h.get_all(header::COOKIE).iter().count(), 1);
+        assert_eq!(h.get(header::COOKIE).unwrap(), "theme=dark; __Host-starsheets_session=real");
+        let mut h = headers(&[("cookie", "starsheets_session=planted")]);
+        drop_plain_cookies(&mut h);
+        assert!(h.get(header::COOKIE).is_none());
+        // The single sign-on start: at most as many from one address as are kept waiting.
+        assert!(OIDC_IP.burst + 600.0 / OIDC_IP.every.as_secs_f64() <= 50.0);
     }
 }

@@ -55,8 +55,9 @@ const WRONG_WAIT: Duration = Duration::from_millis(1500);
 #[cfg(test)]
 const WRONG_WAIT: Duration = Duration::from_millis(10);
 /// The session cookie over plain HTTP (a home network), and over HTTPS: the `__Host-` prefix
-/// means only this exact site can set it (not a sibling subdomain). A cookie under the old name
-/// is still read, and moved to the new name on the next request over HTTPS (handle()).
+/// means only this exact site can set it (not a sibling or parent domain). Over HTTPS the plain
+/// name isn't read at all (guard::drop_plain_cookies), so a session from before the prefix
+/// means signing in once more.
 const COOKIE: &str = "starsheets_session";
 const HOST_COOKIE: &str = "__Host-starsheets_session";
 /// Linking an account that has no password needs a single sign-on sign-in this recent.
@@ -299,7 +300,12 @@ async fn accounts(
                 // A session made through single sign-on that has ended: the app renews it at the
                 // provider without asking.
                 let renew = me.is_none() && cookie_token(headers).is_some_and(|t| auth::session_renewable(&app.store, &t));
-                json!({ "label": o.cfg.label, "only": o.cfg.only, "owner_group": o.cfg.owner_group.is_some(), "linked": linked, "password": password, "renew": renew })
+                // Signed in through single sign-on just now, with the provider asking who it was
+                // (an account with no password may then link another sign-in).
+                let fresh = cookie_token(headers)
+                    .and_then(|t| auth::fresh_sso_session_made(&app.store, &t))
+                    .is_some_and(|made| store::now() - made < LINK_FRESH_SECS);
+                json!({ "label": o.cfg.label, "only": o.cfg.only, "owner_group": o.cfg.owner_group.is_some(), "linked": linked, "password": password, "renew": renew, "fresh": fresh })
             });
             let only = app.oidc.as_ref().is_some_and(|o| o.cfg.only);
             let signup = on && !setup && s.on && !only;
@@ -610,18 +616,29 @@ async fn sso(app: &Shared, path: &[&str], m: &str, q: &HashMap<String, String>, 
     let me = current_user(app, headers);
     let Some(o) = app.oidc.clone().filter(|_| app.auth) else { return error(404, "Single sign-on isn't set up on this server.") };
     let secure = ask.secure || o.cfg.https();
-    let from = ask.ip.map_or_else(|| "?".to_string(), guard::ip_prefix);
+    let who = |next: String| oidc::Start {
+        next,
+        from: ask.ip.map_or_else(|| "?".to_string(), guard::ip_prefix),
+        net: ask.ip.map_or_else(|| "?".to_string(), guard::ip_network),
+        ..Default::default()
+    };
     let back = |next: &str, what: &str| see_other(&oidc::with_param(next, "sso", what), &[oidc_cookie("", 0, secure)]);
     match (path, m) {
-        // ?silent=1: renewing an ended session without asking (oidc.rs).
+        // ?silent=1: renewing an ended session without asking; ?fresh=1: the provider asks who
+        // it is again (oidc.rs, Start).
         (["oidc", "login"], "GET") => {
             let next = q.get("next").and_then(|n| oidc::safe_next(n)).unwrap_or_else(|| o.cfg.base_path());
-            if !LIMITS.take(&ip_key("oidc", ask.ip), guard::LOGIN_IP) {
+            if !LIMITS.take(&ip_key("oidc", ask.ip), guard::OIDC_IP) {
                 return back(&next, "busy");
             }
-            let silent = q.get("silent").is_some_and(|v| v == "1");
-            let (o2, next2) = (o.clone(), next.clone());
-            match tokio::task::spawn_blocking(move || o2.start(next2, None, silent, from)).await {
+            let mut start = who(next.clone());
+            start.silent = q.get("silent").is_some_and(|v| v == "1");
+            start.fresh = !start.silent && q.get("fresh").is_some_and(|v| v == "1");
+            // The session being renewed: this request is a same-site navigation, so its cookie
+            // comes along (the provider's redirect back won't bring it).
+            start.renew = cookie_token(headers).filter(|_| start.silent);
+            let o2 = o.clone();
+            match tokio::task::spawn_blocking(move || o2.start(start)).await {
                 Ok(Ok((url, binding))) => see_other(&url, &[oidc_cookie(&binding, oidc::PENDING_FOR.as_secs(), secure)]),
                 Ok(Err(why)) => {
                     eprintln!("Single sign-on: {why}");
@@ -631,19 +648,20 @@ async fn sso(app: &Shared, path: &[&str], m: &str, q: &HashMap<String, String>, 
             }
         }
         // Linking the signed-in account: a POST (so guard.rs's cross-site checks apply) with the
-        // account's current password, or, for an account with no password, a sign-in through
-        // single sign-on in the last LINK_FRESH_SECS. Answers where to send the browser.
+        // account's current password, or, for an account with no password, a fresh sign-in
+        // (?fresh=1) through single sign-on in the last LINK_FRESH_SECS. Answers where to send
+        // the browser.
         (["oidc", "link"], "POST") => {
             let Some(me) = me else { return error(401, "please sign in") };
             let next = json.get("next").and_then(Value::as_str).and_then(oidc::safe_next).unwrap_or_else(|| o.cfg.base_path());
             let user_key = format!("login-user:{}", me.username);
-            if !LIMITS.can(&user_key, guard::LOGIN_USER) || !LIMITS.take(&ip_key("oidc", ask.ip), guard::LOGIN_IP) {
+            if !LIMITS.can(&user_key, guard::LOGIN_USER) || !LIMITS.take(&ip_key("oidc", ask.ip), guard::OIDC_IP) {
                 return too_many();
             }
-            let (who, token) = (me.username.clone(), cookie_token(headers).unwrap_or_default());
+            let (name, token) = (me.username.clone(), cookie_token(headers).unwrap_or_default());
             let found = blocking(app, move |app| {
-                let hash = auth::login_hash(&app.store, &who).map(|(_, h)| h).filter(|h| !h.is_empty());
-                let fresh = auth::sso_session_made(&app.store, &token).is_some_and(|made| store::now() - made < LINK_FRESH_SECS);
+                let hash = auth::login_hash(&app.store, &name).map(|(_, h)| h).filter(|h| !h.is_empty());
+                let fresh = auth::fresh_sso_session_made(&app.store, &token).is_some_and(|made| store::now() - made < LINK_FRESH_SECS);
                 (hash, fresh)
             })
             .await;
@@ -657,12 +675,14 @@ async fn sso(app: &Shared, path: &[&str], m: &str, q: &HashMap<String, String>, 
                     }
                 }
                 None if !fresh => {
-                    return error(403, "To link a different sign-in, sign out, sign in again with single sign-on, then link within 10 minutes.");
+                    return error(403, "To link a different sign-in, first confirm who you are at the sign-in service, then link within 10 minutes.");
                 }
                 None => {}
             }
-            let (o2, next2) = (o.clone(), next.clone());
-            match tokio::task::spawn_blocking(move || o2.start(next2, Some(me.username), false, from)).await {
+            let mut start = who(next);
+            start.link = Some(me.username);
+            let o2 = o.clone();
+            match tokio::task::spawn_blocking(move || o2.start(start)).await {
                 Ok(Ok((url, binding))) => json_with_cookies(json!({ "url": url }), &[oidc_cookie(&binding, oidc::PENDING_FOR.as_secs(), secure)]),
                 Ok(Err(why)) => {
                     eprintln!("Single sign-on: {why}");
@@ -673,27 +693,34 @@ async fn sso(app: &Shared, path: &[&str], m: &str, q: &HashMap<String, String>, 
         }
         (["oidc", "callback"], "GET") => {
             let home = o.cfg.base_path();
-            if !LIMITS.take(&ip_key("oidc", ask.ip), guard::LOGIN_IP) {
+            if !LIMITS.take(&ip_key("oidc-back", ask.ip), guard::LOGIN_IP) {
                 return back(&home, "busy");
             }
             let state = q.get("state").cloned().unwrap_or_default();
-            let binding = named_cookie(headers, oidc::HOST_COOKIE).or_else(|| named_cookie(headers, oidc::COOKIE)).unwrap_or_default();
+            // Over HTTPS only the __Host- cookie: a sibling site can set the plain one.
+            let binding = named_cookie(headers, if secure { oidc::HOST_COOKIE } else { oidc::COOKIE }).unwrap_or_default();
             let Some(pending) = o.take(&state, &binding) else { return back(&home, "expired") };
-            if let Some(e) = q.get("error") {
-                if pending.silent {
-                    // The provider needs to ask something (signed out there, say): the ended
-                    // session goes, and the sign-in box is shown without an error.
-                    if let Some(t) = cookie_token(headers) {
-                        blocking(app, move |app| {
-                            if auth::session_user(&app.store, &t).is_none() {
-                                auth::end_session(&app.store, &t);
-                            }
-                        })
-                        .await;
+            // Renewing: the ended session goes, whatever the provider answers (a new one is
+            // made if it says yes).
+            if let Some(t) = pending.start.renew.clone() {
+                blocking(app, move |app| {
+                    if auth::session_user(&app.store, &t).is_none() {
+                        auth::end_session(&app.store, &t);
                     }
-                    return back(&pending.next, "renew");
-                }
-                return back(&pending.next, if e == "access_denied" { "denied" } else { "failed" });
+                })
+                .await;
+            }
+            if let Some(e) = q.get("error") {
+                // Renewing and the provider needs to ask something (signed out there, say): the
+                // sign-in box is shown.
+                let what = if pending.start.silent {
+                    "renew"
+                } else if e == "access_denied" {
+                    "denied"
+                } else {
+                    "failed"
+                };
+                return back(&pending.start.next, what);
             }
             let code = q.get("code").cloned().unwrap_or_default();
             let o2 = o.clone();
@@ -706,15 +733,16 @@ async fn sso(app: &Shared, path: &[&str], m: &str, q: &HashMap<String, String>, 
                 Ok((Ok((who, id_token)), pending)) => (who, id_token, pending),
                 Ok((Err(why), pending)) => {
                     eprintln!("Single sign-on failed: {why}");
-                    return back(&pending.next, "failed");
+                    return back(&pending.start.next, "failed");
                 }
                 Err(_) => return back(&home, "failed"),
             };
-            let (next, link) = (pending.next.clone(), pending.link.clone());
+            let (next, link, fresh) = (pending.start.next.clone(), pending.start.link.clone(), pending.start.fresh);
             let cfg = o.cfg.clone();
             let r = blocking(app, move |app| {
                 let user = oidc::account(&app.store, &cfg, &who, link.as_deref())?;
-                auth::new_session_with(&app.store, &user.username, Some((&id_token, cfg.session_hours * 3600))).map_err(|_| "failed")
+                let sso = auth::SsoSession { id_token: &id_token, secs: cfg.session_hours * 3600, fresh };
+                auth::new_session_with(&app.store, &user.username, Some(sso)).map_err(|_| "failed")
             })
             .await;
             match r {
@@ -1466,28 +1494,8 @@ async fn read_body(body: Body, headers: &HeaderMap, limit: u64, wait: Duration) 
     }
 }
 
-/// Every request but the live WebSocket. Over HTTPS, a session cookie still under the old name
-/// (from before the `__Host-` prefix) is moved to the new name.
+/// Every request but the live WebSocket.
 async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
-    let secure = guard::secure(guard::peer(req.extensions()), req.headers(), guard::config());
-    let old = if secure && app.auth && named_cookie(req.headers(), HOST_COOKIE).is_none() { named_cookie(req.headers(), COOKIE) } else { None };
-    let mut resp = handle_request(app.clone(), req).await;
-    if let Some(t) = old
-        && !resp.headers().contains_key(header::SET_COOKIE)
-    {
-        let t2 = t.clone();
-        if blocking(&app, move |a| auth::session_user(&a.store, &t2).is_some()).await == Some(true) {
-            for c in session_cookies(&t, auth::SESSION_DAYS * 86400, true) {
-                if let Ok(v) = header::HeaderValue::from_str(&c) {
-                    resp.headers_mut().append(header::SET_COOKIE, v);
-                }
-            }
-        }
-    }
-    resp
-}
-
-async fn handle_request(app: Shared, req: Request) -> Response<Body> {
     let (parts, body) = req.into_parts();
     let (method, uri, headers) = (parts.method, parts.uri, parts.headers);
     let peer = guard::peer(&parts.extensions);

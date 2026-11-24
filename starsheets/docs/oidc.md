@@ -22,11 +22,13 @@ StarSheets keep working alongside, unless you turn that off.
 - **Linking.** Someone who already has a StarSheets account (the owner too) can link it: sign
   in with the password, then your avatar › Your name and colour, type your password and press
   the SSO button. An account with no password (made through your service) can link a different
-  sign-in only within 10 minutes of signing in through the service.
+  sign-in only within 10 minutes of a sign-in where the service asked who they are again
+  (`api/oidc/login?fresh=1`, which asks for `prompt=login` and `max_age=0`; renewing a session
+  without asking never counts).
 - A new password removes the link (whoever links an account must know its current password),
   unless it was changed while signed in through your service. A password the owner sets in
   People removes it too. The owner sees in People whom each account is linked to, with
-  "Remove link".
+  "Remove link". Removing a link ends the sessions made through it at once.
 - **Owners.** Nobody becomes owner just by signing in. With `STARSHEETS_OIDC_OWNER_GROUP`
   set, members of that group are owners and people who leave it stop being owners (checked at
   every sign-in; their other sessions end then; the last owner always stays one). The group
@@ -69,8 +71,14 @@ Things to know:
 - Both addresses must be `https://` (StarSheets refuses to start otherwise). Plain `http://`
   works only for `localhost`, `127.0.0.1` and `::1`, for trying things out.
 - Over HTTPS the cookies are called `__Host-starsheets_session` and `__Host-starsheets_oidc`,
-  which another site on a sibling address (`other.example.com`) can't set. A session cookie from
-  an older version is moved to the new name by itself.
+  which another site on a sibling or parent address (`other.example.com`, `example.com`) can't
+  set. The plain names aren't read over HTTPS at all, so after updating from 0.4 people sign in
+  once more. Behind a proxy, StarSheets knows a request came over HTTPS only from
+  `STARSHEETS_TRUSTED_PROXY` (or `STARSHEETS_SECURE_COOKIE=on`): set one of them.
+- If you tried a pre-release build of single sign-on (never in a release): owners the owner
+  group made then stay owners after leaving the group (fix by hand: `"owner": false` for them
+  in `.starsheets/users.json`, with the server stopped), and sessions made then last 30 days
+  (deleting `.starsheets/sessions.json` signs everyone out).
 - StarSheets checks the service's certificate against the computer's (or container's) own list:
   see "Your own certificate" below.
 - The server reads the service's settings at start (a problem shows in its log straight away),

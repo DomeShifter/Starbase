@@ -12,6 +12,11 @@ new features and the last one for fixes.
   sign-in, owners from a group, passwords still available. Set up with `STARSHEETS_OIDC_*`
   (docs/oidc.md).
 
+### Changed
+- Over HTTPS the sign-in cookie is now `__Host-starsheets_session`, which a site on a sibling
+  or parent domain can't set, and the old name is no longer read there: after updating,
+  everyone reached over HTTPS signs in once more.
+
 ### Fixed
 - Menu Paste (Edit › Paste, or right-click › Paste) pastes what you last copied in StarSheets,
   including text copied from inside a cell; Edit › Copy and Cut also reach the clipboard now.

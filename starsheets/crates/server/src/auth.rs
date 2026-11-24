@@ -350,7 +350,10 @@ pub fn unlink(store: &Store, username: &str) -> Result<(), String> {
         return Err("This account has no password, so it can only sign in through single sign-on. Ask the owner to set a password first.".into());
     }
     u.remove("oidc");
-    save(store, &users).map_err(|e| e.to_string())
+    save(store, &users).map_err(|e| e.to_string())?;
+    // Sessions made through that sign-in end now, not when they run out.
+    end_sso_sessions(store, username);
+    Ok(())
 }
 
 /// Makes `username` an owner or not because of STARSHEETS_OIDC_OWNER_GROUP. Only takes away
@@ -446,10 +449,19 @@ fn kept_until(v: &Value) -> f64 {
     f("expires").max(f("renew_until"))
 }
 
-/// A new sign-in. Through single sign-on (`sso`: the provider's ID token, for signing out
-/// there too, and how long the session lasts in seconds) it is marked as such: it lasts that
-/// long, then can be renewed at the provider (without a password) until SESSION_DAYS are up.
-pub fn new_session_with(store: &Store, username: &str, sso: Option<(&str, u64)>) -> std::io::Result<String> {
+/// A session made through single sign-on.
+pub struct SsoSession<'a> {
+    /// The provider's ID token, for signing out there too.
+    pub id_token: &'a str,
+    /// How long it lasts, in seconds.
+    pub secs: u64,
+    /// The provider checked who it was just now (oidc::Start::fresh).
+    pub fresh: bool,
+}
+
+/// A new sign-in. Through single sign-on it is marked as such: it lasts `secs`, then can be
+/// renewed at the provider (without a password) until SESSION_DAYS are up.
+pub fn new_session_with(store: &Store, username: &str, sso: Option<SsoSession>) -> std::io::Result<String> {
     let token = random_hex(32);
     let t = now();
     let mut sessions = store.load_json(&sessions_path(store));
@@ -457,10 +469,11 @@ pub fn new_session_with(store: &Store, username: &str, sso: Option<(&str, u64)>)
     sessions.retain(|_, v| kept_until(v) > t);
     let days = (SESSION_DAYS * 86400) as f64;
     let mut s = json!({ "user": username, "expires": t + days, "made": t });
-    if let Some((id, secs)) = sso {
-        s["id_token"] = json!(id);
+    if let Some(sso) = sso {
+        s["id_token"] = json!(sso.id_token);
         s["sso"] = json!(true);
-        s["expires"] = json!(t + (secs as f64).min(days));
+        s["fresh"] = json!(sso.fresh);
+        s["expires"] = json!(t + (sso.secs as f64).min(days));
         s["renew_until"] = json!(t + days);
     }
     sessions.insert(token_hash(&token), s);
@@ -474,6 +487,14 @@ pub fn sso_session_made(store: &Store, token: &str) -> Option<f64> {
     let s = sessions.get(&token_hash(token))?;
     let valid = s.get("expires").and_then(Value::as_f64).unwrap_or(0.0) > now();
     (valid && s.get("sso").and_then(Value::as_bool) == Some(true)).then(|| s.get("made").and_then(Value::as_f64).unwrap_or(0.0))
+}
+
+/// A session made through a fresh single sign-on (the provider asked who it was again), still
+/// valid: when it was made.
+pub fn fresh_sso_session_made(store: &Store, token: &str) -> Option<f64> {
+    let sessions = store.load_json(&sessions_path(store));
+    let fresh = sessions.get(&token_hash(token))?.get("fresh").and_then(Value::as_bool) == Some(true);
+    if fresh { sso_session_made(store, token) } else { None }
 }
 
 /// Whether a session made through single sign-on has ended (STARSHEETS_OIDC_SESSION_HOURS) but

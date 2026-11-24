@@ -39,8 +39,15 @@ pub const PENDING_FOR: Duration = Duration::from_secs(600);
 /// nobody can fill the list and stop everyone else from signing in.
 const MAX_PENDING: usize = 10_000;
 /// Sign-ins waiting at once from one address (an IPv6 /64 counts as one, guard::ip_prefix); a
-/// new one past this pushes out that address's oldest.
+/// new one past this pushes out that address's oldest. guard::OIDC_IP lets one address start at
+/// most this many in PENDING_FOR.
 const MAX_PENDING_PER_ADDRESS: usize = 50;
+/// Sign-ins waiting at once from one network (an IPv6 /48, guard::ip_network), so one network
+/// can't push everyone else's out.
+const MAX_PENDING_PER_NETWORK: usize = 500;
+/// A sign-in asked to be fresh (`Start::fresh`) must have happened at the provider this
+/// recently.
+const FRESH_SECS: i64 = 600;
 /// How long the provider's settings and keys are kept before they are read again.
 const REFRESH: Duration = Duration::from_secs(3600);
 /// Starting a sign-in reads them again when older than this, so a provider that has gone down
@@ -329,12 +336,9 @@ pub struct Identity {
     pub groups: Vec<String>,
 }
 
-/// A sign-in waiting at the provider.
-pub struct Pending {
-    binding: String,
-    nonce: String,
-    verifier: String,
-    made: Instant,
+/// What kind of sign-in to start.
+#[derive(Clone, Debug, Default)]
+pub struct Start {
     /// Where to go afterwards.
     pub next: String,
     /// Linking an account that is already signed in (its username), rather than signing in.
@@ -342,8 +346,26 @@ pub struct Pending {
     /// Renewing an ended session without asking (`prompt=none`): if the provider needs to ask
     /// something, the sign-in box is shown instead of an error.
     pub silent: bool,
-    /// Who started it (guard::ip_prefix), for the per-address limit.
-    from: String,
+    /// The provider must check who it is again now (`prompt=login`, `max_age=0`, and the ID
+    /// token's `auth_time` checked): needed before an account with no password links another
+    /// sign-in.
+    pub fresh: bool,
+    /// The ended session being renewed (its cookie value), removed whatever the answer: the
+    /// provider's redirect back doesn't bring the session cookie (SameSite=Strict).
+    pub renew: Option<String>,
+    /// Who started it (guard::ip_prefix) and their network (guard::ip_network), for the
+    /// limits on waiting sign-ins.
+    pub from: String,
+    pub net: String,
+}
+
+/// A sign-in waiting at the provider.
+pub struct Pending {
+    binding: String,
+    nonce: String,
+    verifier: String,
+    made: Instant,
+    pub start: Start,
 }
 
 /// Single sign-on for one server: its settings, the sign-ins under way and the provider's
@@ -401,7 +423,7 @@ impl Oidc {
 
     /// Starts a sign-in: (the provider's address to send the browser to, the cookie value that
     /// ties it to this browser). Blocking.
-    pub fn start(&self, next: String, link: Option<String>, silent: bool, from: String) -> Result<(String, String), String> {
+    pub fn start(&self, start: Start) -> Result<(String, String), String> {
         let meta = self.provider_within(REFRESH_AT_START)?;
         let client = client!(self, meta);
         let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
@@ -410,41 +432,33 @@ impl Oidc {
         for s in self.cfg.scopes.iter().filter(|s| *s != "openid") {
             req = req.add_scope(Scope::new(s.clone()));
         }
-        if silent {
+        if start.silent {
             req = req.add_prompt(CoreAuthPrompt::None);
+        } else if start.fresh {
+            req = req.add_prompt(CoreAuthPrompt::Login).add_extra_param("max_age", "0");
         }
         let (url, state, nonce) = req.url();
         let binding = random_hex(32);
-        let p = Pending {
-            binding: binding.clone(),
-            nonce: nonce.secret().clone(),
-            verifier: verifier.secret().clone(),
-            made: Instant::now(),
-            next,
-            link,
-            silent,
-            from,
-        };
+        let p = Pending { binding: binding.clone(), nonce: nonce.secret().clone(), verifier: verifier.secret().clone(), made: Instant::now(), start };
         self.keep(state.secret().clone(), p);
         Ok((url.to_string(), binding))
     }
 
     /// Keeps a started sign-in. A full list never refuses: the oldest from the same address
-    /// goes first (past MAX_PENDING_PER_ADDRESS), then the oldest of all (past MAX_PENDING).
+    /// goes first (past MAX_PENDING_PER_ADDRESS), then from the same network (past
+    /// MAX_PENDING_PER_NETWORK), then the oldest of all (past MAX_PENDING).
     fn keep(&self, state: String, p: Pending) {
         let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
         pending.retain(|_, p| p.made.elapsed() < PENDING_FOR);
-        let oldest = |pending: &HashMap<String, Pending>, from: Option<&str>| {
-            pending.iter().filter(|(_, q)| from.is_none_or(|f| q.from == f)).min_by_key(|(_, q)| q.made).map(|(k, _)| k.clone())
-        };
-        while pending.values().filter(|q| q.from == p.from).count() >= MAX_PENDING_PER_ADDRESS {
-            let Some(k) = oldest(&pending, Some(&p.from)) else { break };
-            pending.remove(&k);
+        fn trim(pending: &mut HashMap<String, Pending>, max: usize, of: impl Fn(&Pending) -> bool) {
+            while pending.values().filter(|q| of(q)).count() >= max {
+                let Some(k) = pending.iter().filter(|(_, q)| of(q)).min_by_key(|(_, q)| q.made).map(|(k, _)| k.clone()) else { break };
+                pending.remove(&k);
+            }
         }
-        while pending.len() >= MAX_PENDING {
-            let Some(k) = oldest(&pending, None) else { break };
-            pending.remove(&k);
-        }
+        trim(&mut pending, MAX_PENDING_PER_ADDRESS, |q| q.start.from == p.start.from);
+        trim(&mut pending, MAX_PENDING_PER_NETWORK, |q| q.start.net == p.start.net);
+        trim(&mut pending, MAX_PENDING, |_| true);
         pending.insert(state, p);
     }
 
@@ -495,6 +509,15 @@ impl Oidc {
         let verifier = client.id_token_verifier().set_time_fn(move || chrono::Utc::now() - skew);
         let claims =
             id_token.claims(&verifier, &Nonce::new(p.nonce.clone())).map_err(|e| format!("the ID token didn't pass the checks: {}", why(&e)))?;
+        if p.start.fresh {
+            // Asked for a fresh sign-in: the provider must say when it checked who this is.
+            let at = claims
+                .auth_time()
+                .ok_or("the identity provider didn't say when the person signed in (auth_time), so a fresh sign-in can't be confirmed")?;
+            if (chrono::Utc::now() - at).num_seconds() > FRESH_SECS + self.cfg.skew as i64 {
+                return Err("the identity provider didn't ask the person to sign in again (auth_time is too old)".into());
+            }
+        }
         if let Some(expected) = claims.access_token_hash() {
             let alg = id_token.signing_alg().map_err(|e| why(&e))?;
             let key = id_token.signing_key(&verifier).map_err(|e| why(&e))?;

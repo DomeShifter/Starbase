@@ -46,6 +46,8 @@ struct Fake {
     tokens: Mutex<HashMap<String, Person>>,
     /// Signs ID tokens for another client (a token meant for someone else).
     wrong_audience: Mutex<bool>,
+    /// How long ago the person signed in at the provider (the ID token's auth_time), seconds.
+    auth_ago: Mutex<i64>,
 }
 
 type F = Arc<Fake>;
@@ -110,7 +112,8 @@ async fn token(State(f): State<F>, headers: HeaderMap, body: String) -> axum::re
         StandardClaims::new(SubjectIdentifier::new(who.sub.clone())).set_preferred_username(Some(EndUserUsername::new(who.username.clone()))),
         Extra { claims: extra },
     )
-    .set_nonce(Some(Nonce::new(nonce)));
+    .set_nonce(Some(Nonce::new(nonce)))
+    .set_auth_time(Some(now - chrono::Duration::seconds(*f.auth_ago.lock().unwrap())));
     let access = AccessToken::new(random_hex(16));
     let id = IdToken::<Extra, CoreGenderClaim, CoreJweContentEncryptionAlgorithm, CoreJwsSigningAlgorithm>::new(
         claims,
@@ -149,6 +152,7 @@ async fn provider() -> F {
         codes: Mutex::default(),
         tokens: Mutex::default(),
         wrong_audience: Mutex::new(false),
+        auth_ago: Mutex::new(0),
     });
     let router = Router::new()
         .route("/.well-known/openid-configuration", get(discovery))
@@ -371,6 +375,11 @@ async fn state_nonce_and_audience_are_checked() {
     assert_eq!(other.location, "/?sso=expired", "another browser's cookie");
     let other = send(&app, "GET", &callback, "", Value::Null).await;
     assert_eq!(other.location, "/?sso=expired", "no cookie");
+    // Over HTTPS the plain cookie (which a sibling site can set) isn't read, even with the
+    // right value.
+    let planted = pending.replacen(HOST_COOKIE, COOKIE, 1);
+    let other = send(&app, "GET", &callback, &planted, Value::Null).await;
+    assert_eq!(other.location, "/?sso=expired", "a plain binding cookie over HTTPS");
     // Someone who only saw `state` can't cancel the sign-in: the right browser still finishes it.
     let g = send(&app, "GET", &callback, &pending, Value::Null).await;
     assert_eq!(g.location, "/", "{:?}", g.cookies);
@@ -457,7 +466,10 @@ async fn a_new_password_removes_the_link_and_the_owner_sees_and_removes_links() 
     let list = send(&app, "GET", "/api/users", &ann, Value::Null).await.json;
     assert!(list.as_array().unwrap().iter().all(|u| u.get("sso").is_none()));
     assert_eq!(send(&app, "DELETE", "/api/users/sso?username=ann", &ann, Value::Null).await.status, 403);
+    let through_sso = session(&sign_in(&app, &f, &person("sub-ann", "ann", &[])).await);
     assert_eq!(send(&app, "DELETE", "/api/users/sso?username=ann", &boss, Value::Null).await.status, 200);
+    assert_eq!(me(&app, &through_sso).await["signed_in"], false, "sessions through the removed link end");
+    assert_eq!(me(&app, &ann).await["signed_in"], true, "the password session stays");
     assert!(!auth::is_linked(&app.store, "ann"));
     // Changing the password in a password session removes the link.
     link_trip(&app, &f, &ann, "annpassword", &person("sub-ann", "ann", &[])).await;
@@ -481,14 +493,29 @@ async fn an_account_with_no_password_links_only_after_a_fresh_sign_in() {
     let f = provider().await;
     let app = server(config(&f.issuer));
     auth::add(&app.store, "boss", "Boss", "bosspassword").unwrap();
-    let s = session(&sign_in(&app, &f, &person("sub-ann", "ann", &[])).await);
-    // Just signed in through single sign-on: may link (to another sign-in at the provider).
+    let ann = person("sub-ann", "ann", &[]);
+    // An ordinary sign-in (the provider may not have asked anything) isn't enough ...
+    let s = session(&sign_in(&app, &f, &ann).await);
+    assert_eq!(send(&app, "POST", "/api/oidc/link", &s, json!({})).await.status, 403);
+    // ... nor a renewal without asking.
+    let s = session(&trip(&app, &f, "/api/oidc/login?silent=1", "", &ann, None).await);
+    assert_eq!(send(&app, "POST", "/api/oidc/link", &s, json!({})).await.status, 403);
+    // A fresh one is: the provider is asked to check again (prompt=login, max_age=0).
+    let g = send(&app, "GET", "/api/oidc/login?fresh=1", "", Value::Null).await;
+    let q: HashMap<String, String> = Url::parse(&g.location).unwrap().query_pairs().into_owned().collect();
+    assert_eq!((q.get("prompt").map(String::as_str), q.get("max_age").map(String::as_str)), (Some("login"), Some("0")));
+    let s = session(&trip(&app, &f, "/api/oidc/login?fresh=1", "", &ann, None).await);
+    assert_eq!(me(&app, &s).await["sso"]["fresh"], true);
     let g = send(&app, "POST", "/api/oidc/link", &s, json!({})).await;
     assert_eq!(g.status, 200, "{:?}", g.json);
-    // A sign-in from long ago may not.
+    // A provider that didn't really ask again (an old auth_time): the sign-in fails.
+    *f.auth_ago.lock().unwrap() = 3600;
+    let g = trip(&app, &f, "/api/oidc/login?fresh=1", "", &ann, None).await;
+    assert!(g.location.ends_with("sso=failed"), "{}", g.location);
+    *f.auth_ago.lock().unwrap() = 0;
+    // A fresh sign-in from long ago may not link either.
     age_sessions(&app, 3600.0, false);
-    let g = send(&app, "POST", "/api/oidc/link", &s, json!({})).await;
-    assert_eq!(g.status, 403, "{:?}", g.json);
+    assert_eq!(send(&app, "POST", "/api/oidc/link", &s, json!({})).await.status, 403);
     let _ = std::fs::remove_dir_all(&app.store.root);
 }
 
@@ -522,20 +549,25 @@ async fn single_sign_on_sessions_are_short_and_renewed_at_the_provider() {
     let info = me(&app, &s).await;
     assert_eq!((info["signed_in"].as_bool(), info["sso"]["renew"].as_bool()), (Some(false), Some(true)));
     assert_eq!(me(&app, "").await["sso"]["renew"], false);
-    // Renewing: prompt=none at the provider; when it needs to ask, the old session goes.
+    // Renewing: prompt=none at the provider; when it needs to ask, the old session goes (the
+    // provider's redirect back doesn't bring the session cookie: SameSite=Strict).
     let g = send(&app, "GET", "/api/oidc/login?silent=1&next=/x", &s, Value::Null).await;
     let q: HashMap<String, String> = Url::parse(&g.location).unwrap().query_pairs().into_owned().collect();
     assert_eq!(q.get("prompt").map(String::as_str), Some("none"));
     let back = format!("/api/oidc/callback?error=login_required&state={}", q["state"]);
-    let g = send(&app, "GET", &back, &format!("{}; {s}", g.cookie(HOST_COOKIE).unwrap()), Value::Null).await;
+    let g = send(&app, "GET", &back, &g.cookie(HOST_COOKIE).unwrap(), Value::Null).await;
     assert_eq!(g.location, "/x?sso=renew");
     assert_eq!(me(&app, &s).await["sso"]["renew"], false, "the ended session is gone");
+    assert_eq!(app.store.load_json(&path).len(), 0);
     // A normal sign-in has no prompt=none.
     let g = send(&app, "GET", "/api/oidc/login", "", Value::Null).await;
     assert!(!g.location.contains("prompt="), "{}", g.location);
-    // A renewed session works again.
-    let s = session(&trip(&app, &f, "/api/oidc/login?silent=1", "", &person("sub-ann", "ann", &[]), None).await);
-    assert_eq!(me(&app, &s).await["user"]["username"], "ann");
+    // A renewed session works again, and replaces the ended one.
+    let s = session(&sign_in(&app, &f, &person("sub-ann", "ann", &[])).await);
+    age_sessions(&app, 0.0, true);
+    let s2 = session(&trip(&app, &f, "/api/oidc/login?silent=1", &s, &person("sub-ann", "ann", &[]), None).await);
+    assert_eq!(me(&app, &s2).await["user"]["username"], "ann");
+    assert_eq!(app.store.load_json(&path).len(), 1, "the ended session was removed");
     // Password sessions keep their 30 days.
     let g = send(&app, "POST", "/api/login", "", json!({"username": "boss", "password": "bosspassword"})).await;
     assert_eq!(g.status, 200);
@@ -590,16 +622,14 @@ async fn new_accounts_follow_the_sign_up_setting_unless_set() {
 #[test]
 fn waiting_sign_ins_push_out_the_oldest_never_refuse() {
     let o = Oidc::new(config("https://auth.example.com"));
-    let pending = |from: &str| Pending {
+    let pending_in = |from: &str, net: &str| Pending {
         binding: "b".into(),
         nonce: "n".into(),
         verifier: "v".into(),
         made: Instant::now(),
-        next: "/".into(),
-        link: None,
-        silent: false,
-        from: from.into(),
+        start: Start { next: "/".into(), from: from.into(), net: net.into(), ..Default::default() },
     };
+    let pending = |from: &str| pending_in(from, from);
     // One address (an IPv6 /64) can keep at most MAX_PENDING_PER_ADDRESS: its oldest go.
     for i in 0..MAX_PENDING_PER_ADDRESS + 5 {
         o.keep(format!("a{i}"), pending("2001:db8::/64"));
@@ -608,6 +638,11 @@ fn waiting_sign_ins_push_out_the_oldest_never_refuse() {
     let w = o.waiting();
     assert_eq!(w.len(), MAX_PENDING_PER_ADDRESS);
     assert!(!w.contains(&"a0".to_string()) && w.contains(&format!("a{}", MAX_PENDING_PER_ADDRESS + 4)));
+    // One network (an IPv6 /48) at most MAX_PENDING_PER_NETWORK, however many /64s it uses.
+    for i in 0..MAX_PENDING_PER_NETWORK + 20 {
+        o.keep(format!("n{i}"), pending_in(&format!("2001:db8:5:{i:x}::/64"), "2001:db8:5::/48"));
+    }
+    assert_eq!(o.waiting().iter().filter(|k| k.starts_with('n')).count(), MAX_PENDING_PER_NETWORK);
     // Everyone together: the oldest of all go, and a new sign-in is always kept.
     for i in 0..MAX_PENDING {
         o.keep(format!("b{i}"), pending(&format!("10.0.{}.{}", i / 256, i % 256)));
@@ -757,11 +792,12 @@ async fn a_provider_gone_down_is_noticed_when_a_sign_in_starts() {
     // Settings read a moment ago are used as they are ...
     *down.provider.lock().unwrap() = Some((Instant::now(), meta.clone()));
     let d = down.clone();
-    assert!(tokio::task::spawn_blocking(move || d.start("/".into(), None, false, "x".into())).await.unwrap().is_ok());
+    let start = || Start { next: "/".into(), from: "x".into(), net: "x".into(), ..Default::default() };
+    assert!(tokio::task::spawn_blocking(move || d.start(start())).await.unwrap().is_ok());
     // ... older ones are read again, and a provider that doesn't answer is reported.
     *down.provider.lock().unwrap() = Some((Instant::now() - Duration::from_secs(40), meta));
     let d = down.clone();
-    assert!(tokio::task::spawn_blocking(move || d.start("/".into(), None, false, "x".into())).await.unwrap().is_err());
+    assert!(tokio::task::spawn_blocking(move || d.start(start())).await.unwrap().is_err());
 }
 
 #[test]
