@@ -33,7 +33,10 @@ pub fn start() {
         // own stays the normal app with downloads. `data-host="page"` on the canvas opts a page
         // in instead: it runs WordCraft in its own document and talks over DOM `CustomEvent`s
         // on the canvas (`host`). The host guards leaving the page, so this one doesn't.
-        let bridge = crate::host::Bridge::detect(&canvas);
+        // Opened from the Starbase home screen (`?file=` / `?new=`): the server keeps the file
+        // (server.rs) and no host page is involved.
+        let from_server = query_param("file").is_some() || query_param("new").is_some();
+        let bridge = if from_server { None } else { crate::host::Bridge::detect(&canvas) };
         let app_bridge = bridge.clone();
         let dirty = Rc::new(Cell::new(false));
         let saves = AsyncSaves::default();
@@ -72,7 +75,11 @@ pub fn start() {
                     let mut session = Session::new(doc);
                     session.system_region = region;
                     let messages = Rc::new(RefCell::new(Vec::new()));
+                    let link = crate::server::Link::detect(cc.egui_ctx.clone());
                     let mut services = services(inbox.clone(), cc.egui_ctx.clone(), dirty, saves.clone(), messages.clone());
+                    if let Some(link) = &link {
+                        link.connect(&mut services);
+                    }
                     if let Some(bridge) = &app_bridge {
                         bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
                     }
@@ -106,7 +113,10 @@ pub fn start() {
                         crate::host::Bridge::set_author(&mut app, &author);
                         prefs.keep_own_author(&app.session.author, &own);
                     }
-                    Ok(Box::new(WebShell { app, inbox, messages, prefs, shell: crate::shell::Shell::default() }))
+                    if let Some(link) = &link {
+                        link.open(inbox.clone());
+                    }
+                    Ok(Box::new(WebShell { app, inbox, messages, prefs, shell: crate::shell::Shell::default(), link }))
                 }),
             )
             .await;
@@ -142,6 +152,8 @@ struct WebShell {
     messages: Rc<RefCell<Vec<String>>>,
     prefs: crate::prefs::PrefsSync,
     shell: crate::shell::Shell,
+    /// The Starbase server keeping this document, when opened from the home screen.
+    link: Option<crate::server::Link>,
 }
 
 fn local_storage() -> Option<web_sys::Storage> {
@@ -163,6 +175,9 @@ impl eframe::App for WebShell {
             self.app.status(msg);
         }
         self.app.logic(ctx);
+        if let Some(link) = &self.link {
+            link.tick(&mut self.app, ctx);
+        }
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#2132).
         if let Some(json) = self.prefs.changed(&self.app) {
             match local_storage() {
@@ -204,7 +219,7 @@ impl eframe::App for WebShell {
                 });
             }
         }
-        self.shell.ui(&mut self.app, ui);
+        self.shell.ui(&mut self.app, ui, self.link.as_ref());
         self.app.ui(ui);
     }
 }

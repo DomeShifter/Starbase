@@ -40,11 +40,11 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Sub(
                 "Download",
                 &[
-                    Cmd("Microsoft Word (.docx)", "file.save", NO, ""),
+                    Cmd("Microsoft Word (.docx)", "stardocs.download", NO, ""),
                     Cmd("PDF document (.pdf)", "file.exportPdf", NO, ""),
                 ],
             ),
-            Cmd("Rename", "ui.dialog:renameDocument", NO, ""),
+            Cmd("Rename", "stardocs.rename", NO, ""),
             Sep,
             Cmd("Page setup", "ui.dialog:pageSetup", NO, ""),
             Cmd("Print", "file.print", NO, "Ctrl+P"),
@@ -198,6 +198,31 @@ const HIGHLIGHTS: &[(&str, &str)] =
 #[derive(Default)]
 pub struct Shell {
     fonts: Option<Vec<String>>,
+    /// The title being typed over (server documents: the file's name).
+    renaming: Option<String>,
+}
+
+use crate::server::{Link, Saved};
+
+/// Asks the title row to start renaming (File › Rename), for the next frame.
+const RENAME: &str = "stardocs_rename";
+
+/// Menu commands: a few mean something else when the Starbase server keeps the document.
+fn run_menu(app: &mut WordApp, ui: &Ui, link: Option<&Link>, id: &str, p: Value) {
+    match (id, link) {
+        ("stardocs.download", Some(link)) => {
+            link.download_next();
+            run(app, "file.save", json!({}));
+        }
+        ("stardocs.download", None) => run(app, "file.save", json!({})),
+        ("stardocs.rename", Some(_)) => {
+            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(RENAME), true));
+        }
+        ("stardocs.rename", None) => run(app, "ui.dialog:renameDocument", json!({})),
+        ("file.new", Some(link)) => link.new_document(),
+        ("file.open", Some(link)) => link.home(),
+        _ => run(app, id, p),
+    }
 }
 
 fn params(text: &str) -> Value {
@@ -243,9 +268,9 @@ fn current(app: &mut WordApp) -> Current {
 
 impl Shell {
     /// Draws the title row, menus and toolbar above the page. Call before `WordApp::ui`.
-    pub fn ui(&mut self, app: &mut WordApp, ui: &mut Ui) {
+    pub fn ui(&mut self, app: &mut WordApp, ui: &mut Ui, link: Option<&Link>) {
         egui::Panel::top("stardocs_head").frame(egui::Frame::NONE.fill(PAGE).inner_margin(egui::Margin { left: 12, right: 16, top: 8, bottom: 6 })).show(ui, |ui| {
-            title_and_menus(app, ui);
+            self.title_and_menus(app, ui, link);
             ui.add_space(6.0);
             self.toolbar(app, ui);
         });
@@ -374,42 +399,102 @@ fn font_names(app: &mut WordApp) -> Vec<String> {
     out
 }
 
-fn title_and_menus(app: &mut WordApp, ui: &mut Ui) {
-    ui.horizontal(|ui| {
-        let logo = ui.add(egui::Label::new(RichText::new("📄").size(30.0).color(BLUE)).sense(egui::Sense::click()));
-        logo.on_hover_text("StarDocs");
-        ui.vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 0.0;
-            ui.label(RichText::new(app.title_stem()).size(18.0).color(TEXT));
-            ui.horizontal(|ui| {
-                flat(ui);
-                ui.spacing_mut().item_spacing.x = 0.0;
-                ui.spacing_mut().button_padding = vec2(7.0, 2.0);
-                for (title, items) in MENUS {
-                    ui.menu_button(RichText::new(*title).size(14.0).color(TEXT), |ui| menu_items(app, ui, items));
+impl Shell {
+    fn title_and_menus(&mut self, app: &mut WordApp, ui: &mut Ui, link: Option<&Link>) {
+        ui.horizontal(|ui| {
+            let logo = ui.add(egui::Label::new(RichText::new("📄").size(30.0).color(BLUE)).sense(egui::Sense::click()));
+            if let Some(link) = link {
+                if logo.on_hover_text("Starbase home").clicked() {
+                    link.home();
                 }
+            } else {
+                logo.on_hover_text("StarDocs");
+            }
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                ui.horizontal(|ui| self.title(app, ui, link));
+                ui.horizontal(|ui| {
+                    flat(ui);
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.spacing_mut().button_padding = vec2(7.0, 2.0);
+                    for (title, items) in MENUS {
+                        ui.menu_button(RichText::new(*title).size(14.0).color(TEXT), |ui| menu_items(app, ui, items, link));
+                    }
+                });
+            });
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let share = Button::new(RichText::new("Share").size(14.0).color(TEXT)).fill(SHARE).corner_radius(18.0).min_size(vec2(84.0, 36.0));
+                ui.add_enabled(false, share).on_disabled_hover_text("Sharing a document comes next; share its folder from the home screen meanwhile");
             });
         });
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let share = Button::new(RichText::new("Share").size(14.0).color(TEXT)).fill(SHARE).corner_radius(18.0).min_size(vec2(84.0, 36.0));
-            ui.add_enabled(false, share).on_disabled_hover_text("Sharing comes with the Starbase server");
-        });
-    });
+    }
+
+    /// The document's name (click to rename a server document) and, beside it, how saving is going.
+    fn title(&mut self, app: &mut WordApp, ui: &mut Ui, link: Option<&Link>) {
+        let server_name = link.map(Link::name).filter(|n| !n.is_empty());
+        let stem = match &server_name {
+            Some(n) => n.rsplit_once('.').map_or(n.as_str(), |(s, _)| s).to_string(),
+            None if link.is_some() => "Untitled document".to_string(),
+            None => app.title_stem(),
+        };
+        let asked = ui.ctx().data_mut(|d| d.remove_temp::<bool>(egui::Id::unique(RENAME))).unwrap_or(false);
+        if asked && server_name.is_some() {
+            self.renaming = Some(stem.clone());
+        }
+        if let (Some(text), Some(link)) = (&mut self.renaming, link) {
+            let edit = ui.add(egui::TextEdit::singleline(text).font(egui::FontId::proportional(18.0)).desired_width(320.0));
+            if asked {
+                edit.request_focus();
+            }
+            let done = edit.lost_focus();
+            let cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            if done || cancel {
+                let new = text.trim().to_string();
+                if !cancel && !new.is_empty() && new != stem {
+                    link.rename(&new);
+                }
+                self.renaming = None;
+            }
+        } else {
+            let label = ui.add(egui::Label::new(RichText::new(&stem).size(18.0).color(TEXT)).sense(egui::Sense::click()));
+            if server_name.is_some() && label.on_hover_text("Rename").clicked() {
+                self.renaming = Some(stem.clone());
+                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(RENAME), true));
+            }
+        }
+        if let Some(link) = link {
+            let (text, colour) = match link.saved() {
+                Saved::Nothing => (String::new(), TEXT_DIM),
+                Saved::Saving => ("Saving…".to_string(), TEXT_DIM),
+                Saved::Done => ("Saved to Starbase".to_string(), TEXT_DIM),
+                Saved::Failed(why) => (why, Color32::from_rgb(0xb3, 0x26, 0x1e)),
+            };
+            if !text.is_empty() {
+                ui.add_space(10.0);
+                ui.label(RichText::new(text).size(13.0).color(colour));
+            }
+            if let Some(notice) = link.notice() {
+                ui.add_space(10.0);
+                ui.label(RichText::new(notice).size(13.0).color(Color32::from_rgb(0x8a, 0x5a, 0x00)));
+                ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
+            }
+        }
+    }
 }
 
-fn menu_items(app: &mut WordApp, ui: &mut Ui, items: &[Item]) {
+fn menu_items(app: &mut WordApp, ui: &mut Ui, items: &[Item], link: Option<&Link>) {
     ui.set_min_width(260.0);
     for item in items {
         match item {
             Cmd(label, id, p, keys) => {
                 let b = Button::new(RichText::new(*label).size(14.0).color(TEXT)).right_text(RichText::new(*keys).size(13.0).color(TEXT_DIM)).min_size(vec2(260.0, 30.0));
                 if ui.add(b).clicked() {
-                    run(app, id, params(p));
+                    run_menu(app, ui, link, id, params(p));
                     ui.close();
                 }
             }
             Sub(label, sub) => {
-                ui.menu_button(RichText::new(*label).size(14.0).color(TEXT), |ui| menu_items(app, ui, sub));
+                ui.menu_button(RichText::new(*label).size(14.0).color(TEXT), |ui| menu_items(app, ui, sub, link));
             }
             Sep => {
                 ui.separator();
