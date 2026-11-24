@@ -27,22 +27,30 @@ mod save_fallback;
 mod api;
 #[cfg(target_arch = "wasm32")]
 mod host;
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 mod icons;
 #[cfg(target_arch = "wasm32")]
 mod server;
 #[cfg(target_arch = "wasm32")]
 mod share;
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 mod shell;
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 mod shortcuts;
 #[cfg(target_arch = "wasm32")]
 mod testhook;
 #[cfg(target_arch = "wasm32")]
 mod web;
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", test))]
 mod wordcount;
+
+// Native tests of the window (shell_tests.rs): stand-ins for the browser-only server and Share.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod native_stubs;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+use native_stubs::{server, share};
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod shell_tests;
 
 #[cfg(target_arch = "wasm32")]
 fn main() {
