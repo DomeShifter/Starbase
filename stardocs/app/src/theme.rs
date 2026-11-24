@@ -4,9 +4,115 @@
 //! dark under our light Docs header. Until StarDocs has a dark mode designed as a whole, the
 //! interface theme is pinned to Light: at startup (before the first frame, so nothing flashes
 //! dark) and on every frame (a stored or chosen "dark" doesn't come back).
+//!
+//! Google's colours that WordCraft's own drawing doesn't take as settings are put in after each
+//! frame is laid out ([`install`]): the page surround and the tooltips.
 
+use std::sync::Arc;
+
+use egui::{Color32, CornerRadius, Order, Stroke, vec2};
 use wordcraft_ui_egui::WordApp;
 use wordcraft_ui_egui::theme::{Appearance, Tokens};
+
+/// Google Docs' page surround (and the strip behind the rulers): the top bar's near-white.
+pub const SURROUND: Color32 = Color32::from_rgb(0xF9, 0xFB, 0xFD);
+/// A hovered toolbar button: #444746 at about 8 % over the toolbar pill (the same as StarSheets).
+pub const HOVER: Color32 = Color32::from_rgb(0xDD, 0xE3, 0xEA);
+/// A pressed toolbar button, or one whose menu is open.
+pub const PRESSED: Color32 = Color32::from_rgb(0xC9, 0xD3, 0xDF);
+/// A hovered menu row.
+pub const MENU_HOVER: Color32 = Color32::from_rgb(0xF1, 0xF3, 0xF4);
+/// Tooltips: dark grey with white text, 4 px corners (Google's look, as StarSheets has).
+pub const TIP_BG: Color32 = Color32::from_rgb(0x3C, 0x40, 0x43);
+/// The picked row in a dark pop-up on the tooltip layer (white text stays readable on it).
+const TIP_PICKED: Color32 = Color32::from_rgb(0x0B, 0x57, 0xD0);
+/// A hovered row in a dark pop-up.
+const TIP_HOVER: Color32 = Color32::from_rgb(0x5F, 0x63, 0x68);
+
+/// How many surround shapes the last frame repainted (for [`state`]).
+fn drawn_id() -> egui::Id {
+    egui::Id::unique("stardocs_surround_drawn")
+}
+
+/// Runs [`after_pass`] at the end of every frame of `ctx`, once however often it is called.
+pub fn install(ctx: &egui::Context) {
+    let id = egui::Id::unique("stardocs_looks_installed");
+    if ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(false) {
+        return;
+    }
+    ctx.data_mut(|d| d.insert_temp(id, true));
+    ctx.on_end_pass("stardocs_looks", Arc::new(|ui: &mut egui::Ui| after_pass(ui.ctx())));
+}
+
+/// WordCraft paints the area round the page and behind the rulers with its `canvas` colour
+/// (#E6E6E6), which isn't a setting; Docs' is [`SURROUND`]. Its square-cornered fills of that
+/// colour on the window's background layer are repainted. (Hovered buttons share the colour but
+/// have rounded corners, so they stay.) Tooltips are restyled dark, as in StarSheets: egui draws
+/// them in the menu frame, so only the tooltip layer is changed.
+fn after_pass(ctx: &egui::Context) {
+    let canvas = Tokens::light().canvas;
+    let tip_fill = ctx.global_style().visuals.window_fill;
+    let mut layers: Vec<egui::LayerId> = ctx.memory(|m| m.layer_ids().filter(|l| matches!(l.order, Order::Background | Order::Tooltip)).collect());
+    if !layers.contains(&egui::LayerId::background()) {
+        layers.push(egui::LayerId::background());
+    }
+    let mut drawn = 0_usize;
+    ctx.graphics_mut(|g| {
+        for l in layers {
+            let Some(list) = g.get_mut(l) else { continue };
+            for i in 0..list.next_idx().0 {
+                list.mutate_shape(egui::layers::ShapeIdx(i), |cs| {
+                    if l.order == Order::Tooltip {
+                        if restyle_tip(&mut cs.shape, tip_fill) {
+                            cs.clip_rect = cs.clip_rect.expand2(vec2(8.0, 4.0));
+                        }
+                    } else {
+                        drawn += recolour_surround(&mut cs.shape, canvas);
+                    }
+                });
+            }
+        }
+    });
+    ctx.data_mut(|d| d.insert_temp(drawn_id(), drawn));
+}
+
+/// Repaints WordCraft's square `canvas`-coloured fills [`SURROUND`]; how many it changed.
+fn recolour_surround(shape: &mut egui::Shape, canvas: Color32) -> usize {
+    match shape {
+        egui::Shape::Rect(r) if r.fill == canvas && r.corner_radius == CornerRadius::ZERO => {
+            r.fill = SURROUND;
+            1
+        }
+        egui::Shape::Vec(v) => v.iter_mut().map(|s| recolour_surround(s, canvas)).sum(),
+        _ => 0,
+    }
+}
+
+/// Restyles one tooltip shape; true when it grew (the background, given side padding).
+fn restyle_tip(shape: &mut egui::Shape, fill: Color32) -> bool {
+    match shape {
+        egui::Shape::Rect(r) if r.fill == fill => {
+            r.fill = TIP_BG;
+            r.stroke = Stroke::NONE;
+            r.corner_radius = CornerRadius::same(4);
+            r.rect = r.rect.expand2(vec2(8.0, 0.0));
+            true
+        }
+        // Rows inside dark pop-ups on the tooltip layer: a light highlight under white text
+        // can't be read, so a picked row turns strong blue and a hovered one mid grey.
+        egui::Shape::Rect(r) if r.fill.a() > 0 && u16::from(r.fill.r()) + u16::from(r.fill.g()) + u16::from(r.fill.b()) > 540 => {
+            let bluish = r.fill.b() > r.fill.r().saturating_add(20);
+            r.fill = if bluish { TIP_PICKED } else { TIP_HOVER };
+            false
+        }
+        egui::Shape::Text(t) => {
+            t.override_text_color = Some(Color32::WHITE);
+            false
+        }
+        egui::Shape::Vec(v) => v.iter_mut().fold(false, |grew, s| restyle_tip(s, fill) | grew),
+        _ => false,
+    }
+}
 
 /// Pins WordCraft's interface theme to Light. WordCraft applies it (egui `ThemePreference::Light`)
 /// in its next `logic` pass, so every egui surface takes the light visuals.
@@ -15,17 +121,24 @@ pub fn keep_light(app: &mut WordApp) {
 }
 
 /// What the test hook reports (`state().theme`): the system's preference, the theme egui draws
-/// with, and the colours of the page surround, the rulers and a hovered button, as `#rrggbb`.
+/// with, and the colours of the page surround (as drawn: [`SURROUND`] once [`after_pass`] has
+/// repainted it, with how many shapes it repainted), the rulers, a hovered button, a hovered and
+/// a pressed toolbar button and the tooltips, as `#rrggbb`.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub fn state(ctx: &egui::Context) -> serde_json::Value {
     let name = |t: egui::Theme| if t == egui::Theme::Dark { "dark" } else { "light" };
     let hex = |c: egui::Color32| format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b());
     let tokens = Tokens::get(ctx);
     let visuals = ctx.global_style().visuals.clone();
+    let drawn = ctx.data(|d| d.get_temp::<usize>(drawn_id())).unwrap_or(0);
     serde_json::json!({
         "system": ctx.system_theme().map(name),
         "interface": name(ctx.theme()),
-        "surround": hex(tokens.canvas),
+        "surround": hex(if drawn > 0 { SURROUND } else { tokens.canvas }),
+        "surroundShapes": drawn,
+        "toolbarHover": hex(HOVER),
+        "toolbarPressed": hex(PRESSED),
+        "tooltip": hex(TIP_BG),
         "ruler": hex(tokens.ruler),
         "hover": hex(visuals.widgets.hovered.weak_bg_fill),
         "textBox": hex(visuals.text_edit_bg_color()),
@@ -110,6 +223,34 @@ mod tests {
     fn a_dark_system_keeps_the_light_interface() {
         let h = dark_system_window(new_app());
         assert_light(&h);
+    }
+
+    /// The area round the page and behind the rulers is Docs' near-white, not WordCraft's grey.
+    #[test]
+    fn the_page_surround_is_docs_near_white() {
+        let h = dark_system_window(new_app());
+        let st = super::state(&h.ctx);
+        assert_eq!(st["surround"], "#f9fbfd", "{st}");
+        assert!(st["surroundShapes"].as_u64().unwrap() >= 1, "{st}");
+    }
+
+    /// Tooltips are dark with white text and no border, as in StarSheets and Google.
+    #[test]
+    fn tooltips_are_dark() {
+        use egui::epaint::{CornerRadius, RectShape, Stroke as S};
+        let fill = Color32::WHITE;
+        let bg = RectShape::new(
+            egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(50.0, 20.0)),
+            CornerRadius::same(6),
+            fill,
+            S::new(1.0, Color32::GRAY),
+            egui::StrokeKind::Inside,
+        );
+        let mut shape = egui::Shape::Vec(vec![egui::Shape::Rect(bg)]);
+        assert!(super::restyle_tip(&mut shape, fill), "the background grows");
+        let egui::Shape::Vec(v) = shape else { panic!() };
+        let egui::Shape::Rect(r) = &v[0] else { panic!() };
+        assert_eq!((r.fill, r.stroke, r.corner_radius), (super::TIP_BG, S::NONE, CornerRadius::same(4)));
     }
 
     /// A "dark" theme stored by an earlier visit (or chosen in WordCraft's Options) doesn't come
