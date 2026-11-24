@@ -186,12 +186,8 @@ fn run(app: &mut WordApp, shell: &mut Shell, link: Option<&Link>, id: &str, para
 }
 
 /// StarDocs' own menu ids (`stardocs.*`).
-// TODO(lead): add to shell.rs
-//   `pub fn test_command(&mut self, app: &mut WordApp, link: Option<&Link>, id: &str, params: Value) -> Result<Value, String>`
-// and replace this body with `shell.test_command(app, link, id, params)`.
 fn stardocs_command(shell: &mut Shell, app: &mut WordApp, link: Option<&Link>, id: &str, params: Value) -> Result<Value, String> {
-    let _ = (shell, app, link, params);
-    Err(format!("{id}: not wired yet (Shell::test_command)"))
+    shell.test_command(app, link, id, params)
 }
 
 /// The app and document as JSON: what the window shows, the formatting and view at the caret,

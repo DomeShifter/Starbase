@@ -238,6 +238,8 @@ pub struct Shell {
     widths: Widths,
     /// How many toolbar groups didn't fit and are in the ⋮ menu.
     in_more: usize,
+    /// The window's egui context, kept from the last frame for the test hook.
+    ctx: Option<egui::Context>,
 }
 
 /// The toolbar groups' widths, starting from a guess.
@@ -320,8 +322,16 @@ fn set_suggesting(app: &mut WordApp, on: bool) {
     }
 }
 
+/// StarDocs' own menu commands, which [`run_menu`] handles itself.
+fn is_own(id: &str) -> bool {
+    matches!(
+        id,
+        "stardocs.words" | "stardocs.compact" | "stardocs.shortcuts" | "stardocs.editing" | "stardocs.suggesting" | "stardocs.download" | "stardocs.rename"
+    )
+}
+
 /// Menu commands: a few mean something else when the Starbase server keeps the document.
-fn run_menu(app: &mut WordApp, ui: &Ui, flags: &mut Flags, link: Option<&Link>, id: &str, p: Value) {
+fn run_menu(app: &mut WordApp, ctx: &egui::Context, flags: &mut Flags, link: Option<&Link>, id: &str, p: Value) {
     match (id, link) {
         ("stardocs.words", _) => flags.words = !flags.words,
         ("stardocs.compact", _) => flags.compact = !flags.compact,
@@ -334,7 +344,7 @@ fn run_menu(app: &mut WordApp, ui: &Ui, flags: &mut Flags, link: Option<&Link>, 
         }
         ("stardocs.download", None) => run(app, "file.save", json!({})),
         ("stardocs.rename", Some(_)) => {
-            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(RENAME), true));
+            ctx.data_mut(|d| d.insert_temp(egui::Id::unique(RENAME), true));
         }
         ("stardocs.rename", None) => run(app, "ui.dialog:renameDocument", json!({})),
         ("file.new", Some(link)) => link.new_document(),
@@ -431,6 +441,26 @@ fn current(app: &mut WordApp) -> Current {
 impl Shell {
     /// What the window shows, as JSON, for tests and AI agents (the test hook, `testhook.rs`):
     /// filled in by the lead; keys are stable names, values plain JSON.
+    /// Runs one of StarDocs' own commands (`stardocs.*`, as the menus do) for the test hook.
+    /// `stardocs.rename` takes `{"name": …}` and renames at once; `stardocs.share` opens the
+    /// Share dialog; `stardocs.customColour` opens the Custom colour dialog.
+    pub fn test_command(&mut self, app: &mut WordApp, link: Option<&Link>, id: &str, params: Value) -> Result<Value, String> {
+        let ctx = self.ctx.clone().ok_or("the window hasn't been drawn yet")?;
+        match (id, link) {
+            ("stardocs.rename", Some(link)) if params.get("name").is_some() => {
+                let name = params["name"].as_str().ok_or("name must be text")?;
+                link.rename(name);
+            }
+            ("stardocs.share", Some(link)) => self.share.ask(app, link, &ctx),
+            ("stardocs.share", None) => return Err("sharing needs a Starbase server document".into()),
+            ("stardocs.customColour", _) => self.custom = Some(BLUE),
+            _ if is_own(id) => run_menu(app, &ctx, &mut self.flags, link, id, params),
+            _ => return Err(format!("{id}: not a StarDocs command")),
+        }
+        ctx.request_repaint();
+        Ok(json!(true))
+    }
+
     pub fn test_state(&mut self, app: &mut WordApp, link: Option<&Link>) -> Value {
         let cur = current(app);
         let saved = link.map(|l| match l.saved() {
@@ -467,6 +497,7 @@ impl Shell {
 
     /// Draws the title row, menus and toolbar above the page. Call before `WordApp::ui`.
     pub fn ui(&mut self, app: &mut WordApp, ui: &mut Ui, link: Option<&Link>) {
+        self.ctx = Some(ui.ctx().clone());
         let before = self.flags;
         if !self.flags.loaded {
             // Docs has no floating mini toolbar over selected text.
@@ -965,7 +996,7 @@ fn menu_items(app: &mut WordApp, ui: &mut Ui, flags: &mut Flags, items: &[Item],
                     .right_text(RichText::new(*keys).size(13.0).color(TEXT_DIM))
                     .min_size(vec2(260.0, 30.0));
                 if ui.add(b).clicked() {
-                    run_menu(app, ui, flags, link, id, params(p));
+                    run_menu(app, ui.ctx(), flags, link, id, params(p));
                     ui.close();
                 }
             }
@@ -979,7 +1010,7 @@ fn menu_items(app: &mut WordApp, ui: &mut Ui, flags: &mut Flags, items: &[Item],
                     None => Button::new(RichText::new(format!("      {label}")).size(14.0).color(TEXT)),
                 };
                 if ui.add(b.right_text(RichText::new(*keys).size(13.0).color(TEXT_DIM)).min_size(vec2(260.0, 30.0))).clicked() {
-                    run_menu(app, ui, flags, link, id, json!({}));
+                    run_menu(app, ui.ctx(), flags, link, id, json!({}));
                     ui.close();
                 }
             }
