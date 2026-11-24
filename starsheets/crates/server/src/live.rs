@@ -1545,8 +1545,15 @@ mod tests {
         std::fs::write(dir.join("t.xlsx"), bytes).unwrap();
         let store = Store { root: dir.clone(), keep: 3, spaces: false };
         let file = store.synced_index().unwrap().keys().next().unwrap().clone();
-        let app =
-            Arc::new(App { store, base: dir.clone(), lock: Mutex::new(()), location: String::new(), auth: false, site: None, rooms: Rooms::default() });
+        let app = Arc::new(App {
+            store,
+            base: dir.clone(),
+            lock: Mutex::new(()),
+            location: String::new(),
+            auth: false,
+            site: None,
+            rooms: Rooms::default(),
+        });
         let opened = |dir: &std::path::Path| {
             let bytes = std::fs::read(dir.join("t.xlsx")).unwrap();
             gridcraft_engine::io::open_bytes("t.xlsx", &bytes).unwrap().0.active_sheet()
