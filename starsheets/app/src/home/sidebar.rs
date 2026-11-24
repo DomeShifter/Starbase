@@ -172,7 +172,7 @@ impl Home {
             p.rect_filled(r, 17, theme::HOVER);
         }
         if dropping {
-            p.rect_stroke(r, 17, Stroke::new(2.0, GREEN), egui::StrokeKind::Inside);
+            p.rect_stroke(r, 17, Stroke::new(2.0, ACCENT), egui::StrokeKind::Inside);
             ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique("home_drop"), folder.clone().unwrap_or_default()));
         }
         let x = r.left() + 4.0 + depth as f32 * 16.0;

@@ -35,7 +35,8 @@ const CARD_H: f32 = 196.0;
 const PIC_H: f32 = 144.0;
 const CHIP_H: f32 = 48.0;
 const ROW: f32 = 40.0;
-const GREEN: Color32 = house::GREEN;
+/// Starbase Drive's accent: Google Drive's blue (drop targets, dialog buttons), not Sheets' green.
+const ACCENT: Color32 = house::BLUE;
 /// Preview pictures fetched at once.
 const THUMBS_AT_ONCE: usize = 4;
 
@@ -768,11 +769,13 @@ impl Home {
                 ui.add(img);
             }
             ui.add_space(house::S);
-            ui.label(RichText::new("StarDrive").size(22.0).color(theme::TEXT));
-            ui.add_space(LEFT - 190.0);
+            ui.label(RichText::new("Starbase Drive").size(22.0).color(theme::TEXT));
+            // The search box starts where it always has, whatever the name's width.
+            let x = ui.cursor().min.x - ui.max_rect().left();
+            ui.add_space((LEFT - 28.0 - x - ui.spacing().item_spacing.x).max(house::M));
             let search = house::field(&mut self.search, house::SEARCH_TEXT)
                 .id(egui::Id::unique("home_search"))
-                .hint_text(RichText::new("Search in StarDrive").size(house::SEARCH_TEXT))
+                .hint_text(RichText::new("Search in Drive").size(house::SEARCH_TEXT))
                 .frame(egui::Frame::NONE)
                 .margin(vec2(0.0, 0.0))
                 .min_size(vec2(0.0, 24.0))

@@ -28,6 +28,8 @@ pub const CAPS: f32 = 11.0;
 // ── Colours (on top of theme.rs) ─────────────────────────────────────────────────────────
 /// Sheets' green for the main button in a dialog, and the text of the others.
 pub const GREEN: Color32 = Color32::from_rgb(0x14, 0x6C, 0x2E);
+/// Google's blue: the Share dialog's buttons and Starbase Drive's accent (as in Starbase Docs).
+pub const BLUE: Color32 = Color32::from_rgb(0x0B, 0x57, 0xD0);
 /// The soft blue behind a selected item (a chosen list row, a picked chip).
 pub const SELECTED: Color32 = Color32::from_rgb(0xE8, 0xF0, 0xFE);
 /// The scroll bar handle (and egui's resting widget fill outside forms).
@@ -386,8 +388,13 @@ pub fn text(ui: &mut Ui, text: &str) {
 
 /// The main button: a green pill with white text.
 pub fn primary(text: &str) -> egui::Button<'static> {
+    primary_in(text, GREEN)
+}
+
+/// A main button in another accent ([`BLUE`] in the Share dialog, as in Google's).
+pub fn primary_in(text: &str, accent: Color32) -> egui::Button<'static> {
     egui::Button::new(RichText::new(text.to_string()).size(BODY).color(Color32::WHITE))
-        .fill(GREEN)
+        .fill(accent)
         .stroke(Stroke::NONE)
         .corner_radius(CornerRadius::same(BUTTON_RADIUS))
         .min_size(vec2(88.0, BUTTON_HEIGHT))
@@ -395,7 +402,12 @@ pub fn primary(text: &str) -> egui::Button<'static> {
 
 /// Any other button: a white pill with a grey outline and green text.
 pub fn secondary(text: &str) -> egui::Button<'static> {
-    egui::Button::new(RichText::new(text.to_string()).size(BODY).color(GREEN))
+    secondary_in(text, GREEN)
+}
+
+/// Any other button, its text in another accent.
+pub fn secondary_in(text: &str, accent: Color32) -> egui::Button<'static> {
+    egui::Button::new(RichText::new(text.to_string()).size(BODY).color(accent))
         .fill(Color32::WHITE)
         .stroke(Stroke::new(1.0, theme::BOX))
         .corner_radius(CornerRadius::same(BUTTON_RADIUS))
@@ -410,12 +422,17 @@ pub fn link(text: &str) -> egui::Button<'static> {
 /// A dialog's buttons, at the bottom right with 24 px above and 8 px between. The last one is
 /// the main (green) one. Returns the index of the one clicked.
 pub fn actions(ui: &mut Ui, labels: &[&str]) -> Option<usize> {
+    actions_in(ui, labels, GREEN)
+}
+
+/// A dialog's buttons in another accent.
+pub fn actions_in(ui: &mut Ui, labels: &[&str], accent: Color32) -> Option<usize> {
     ui.add_space(XL - S);
     let mut hit = None;
     ui.allocate_ui_with_layout(vec2(ui.available_width(), BUTTON_HEIGHT), Layout::right_to_left(Align::Center), |ui| {
         ui.spacing_mut().item_spacing.x = S;
         for (i, l) in labels.iter().enumerate().rev() {
-            let b = if i + 1 == labels.len() { primary(l) } else { secondary(l) };
+            let b = if i + 1 == labels.len() { primary_in(l, accent) } else { secondary_in(l, accent) };
             if ui.add(b).clicked() {
                 hit = Some(i);
             }
