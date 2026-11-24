@@ -202,6 +202,7 @@ pub struct Shell {
     fonts: Option<Vec<String>>,
     /// The title being typed over (server documents: the file's name).
     renaming: Option<String>,
+    share: crate::share::Share,
 }
 
 use crate::server::{Link, Saved};
@@ -274,10 +275,12 @@ impl Shell {
         egui::Panel::top("stardocs_head")
             .frame(egui::Frame::NONE.fill(PAGE).inner_margin(egui::Margin { left: 12, right: 16, top: 8, bottom: 6 }))
             .show(ui, |ui| {
+                self.share.logic(app, link, ui.ctx());
                 self.title_and_menus(app, ui, link);
                 ui.add_space(6.0);
                 self.toolbar(app, ui);
             });
+        self.share.ui(ui.ctx());
     }
 
     fn toolbar(&mut self, app: &mut WordApp, ui: &mut Ui) {
@@ -433,8 +436,18 @@ impl Shell {
                 });
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let share = Button::new(RichText::new("Share").size(14.0).color(TEXT)).fill(SHARE).corner_radius(18.0).min_size(vec2(84.0, 36.0));
-                ui.add_enabled(false, share).on_disabled_hover_text("Sharing a document comes next; share its folder from the home screen meanwhile");
+                let label = if self.share.waiting() { "Saving…" } else { "Share" };
+                let share = Button::new(RichText::new(label).size(14.0).color(TEXT)).fill(SHARE).corner_radius(18.0).min_size(vec2(84.0, 36.0));
+                match link {
+                    Some(link) => {
+                        if ui.add(share).on_hover_text("Share this document with people on this server").clicked() {
+                            self.share.ask(app, link, ui.ctx());
+                        }
+                    }
+                    None => {
+                        ui.add_enabled(false, share).on_disabled_hover_text("Sharing needs a Starbase server: open the document from the home screen");
+                    }
+                }
             });
         });
     }

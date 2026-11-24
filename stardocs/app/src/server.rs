@@ -103,7 +103,7 @@ fn query_param(key: &str) -> Option<String> {
 }
 
 /// The server's address for `path` (`api/…`): StarDocs sits in `docs/` beside the home page.
-fn api(path: &str) -> String {
+pub(crate) fn api(path: &str) -> String {
     format!("../{path}")
 }
 
@@ -198,6 +198,23 @@ impl Link {
         let folder = self.state.borrow().folder.clone();
         if let Some(w) = web_sys::window() {
             let _ = w.open_with_url_and_target(&format!("?new=1&folder={}", enc(&folder)), "_blank");
+        }
+    }
+
+    /// The server's id for the file (`None` until a new document's first save).
+    pub fn id(&self) -> Option<String> {
+        self.state.borrow().id.clone()
+    }
+
+    /// Saves now, without waiting for the quiet moment (Share on a document not saved yet).
+    pub fn save_now(&self, app: &mut WordApp) {
+        let busy = {
+            let mut s = self.state.borrow_mut();
+            s.dirty_since = None;
+            s.busy
+        };
+        if !busy {
+            crate::shell::run(app, "file.save", serde_json::json!({}));
         }
     }
 
@@ -446,7 +463,7 @@ fn header(h: &web_sys::Headers, name: &str) -> Option<String> {
 }
 
 /// One request to the server, with the page's sign-in cookie: (status, headers, body).
-async fn fetch(method: &str, url: &str, if_match: Option<&str>, body: Option<&[u8]>) -> Result<(u16, web_sys::Headers, Vec<u8>), String> {
+pub(crate) async fn fetch(method: &str, url: &str, if_match: Option<&str>, body: Option<&[u8]>) -> Result<(u16, web_sys::Headers, Vec<u8>), String> {
     let init = web_sys::RequestInit::new();
     init.set_method(method);
     init.set_credentials(web_sys::RequestCredentials::SameOrigin);

@@ -32,6 +32,8 @@ mod icons;
 #[cfg(target_arch = "wasm32")]
 mod server;
 #[cfg(target_arch = "wasm32")]
+mod share;
+#[cfg(target_arch = "wasm32")]
 mod shell;
 #[cfg(target_arch = "wasm32")]
 mod web;
