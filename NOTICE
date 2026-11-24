@@ -10,7 +10,8 @@ redistributed in this repository, except stardocs/app/src/{web,host,api,prefs,sa
 which are adapted from WordCraft's apps/wordcraft-web. WordCraft's own NOTICE and ATTRIBUTION.md
 list the third-party material it bundles.
 
-Bundled assets: Material Symbols icons (stardocs/app/icons, Apache License 2.0; see the README there).
+Bundled assets: Material Symbols icons (stardocs/app/icons) and the Arimo fonts (stardocs/app/fonts),
+both Apache License 2.0; see the README in each folder.
 
 The ArtCraft and WordCraft names and logos are trademarks of the ArtCraft Team and are not used by
 Starbase. "Google Docs" is a trademark of Google LLC; Starbase is not affiliated with Google.
