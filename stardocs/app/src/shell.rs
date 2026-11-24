@@ -20,15 +20,18 @@ pub const SHARE: Color32 = Color32::from_rgb(0xC2, 0xE7, 0xFF);
 
 /// A menu entry: a command (label, id, params as JSON text, shortcut shown), a sub-menu, a line,
 /// an on/off setting with a tick (label, command id, what it reads, shortcut shown; see
-/// [`is_on`]), or Docs' grid for picking a table's size.
+/// [`is_on`]), a command whose wording follows a setting (label when off, label when on, command
+/// id, what it reads: Docs' "Add/Remove space before paragraph"), or Docs' grid for picking a
+/// table's size. Commands are greyed out where WordCraft would refuse them ([`greyed`]).
 pub enum Item {
     Cmd(&'static str, &'static str, &'static str, &'static str),
     Sub(&'static str, &'static [Item]),
     Sep,
     Toggle(&'static str, &'static str, &'static str, &'static str),
+    Flip(&'static str, &'static str, &'static str, &'static str),
     TableGrid,
 }
-use Item::{Cmd, Sep, Sub, TableGrid, Toggle};
+use Item::{Cmd, Flip, Sep, Sub, TableGrid, Toggle};
 
 const NO: &str = "{}";
 
@@ -125,17 +128,90 @@ pub const MENUS: &[(&str, &[Item])] = &[
                     Cmd("Small caps", "format.smallCaps", NO, ""),
                     Cmd("Superscript", "format.superscript", NO, "Ctrl+."),
                     Cmd("Subscript", "format.subscript", NO, "Ctrl+,"),
+                    Sep,
+                    Sub(
+                        "Size",
+                        &[
+                            Cmd("Increase font size", "format.growFont1", NO, "Ctrl+Shift+."),
+                            Cmd("Decrease font size", "format.shrinkFont1", NO, "Ctrl+Shift+,"),
+                        ],
+                    ),
+                    Sub(
+                        "Capitalisation",
+                        &[
+                            Cmd("lowercase", "format.changeCase", r#"{"mode":"lower"}"#, ""),
+                            Cmd("UPPERCASE", "format.changeCase", r#"{"mode":"upper"}"#, ""),
+                            Cmd("Title Case", "format.changeCase", r#"{"mode":"title"}"#, ""),
+                        ],
+                    ),
                 ],
             ),
             Sub(
                 "Paragraph styles",
                 &[
-                    Cmd("Normal text", "para.style", r#"{"style":"Normal"}"#, "Ctrl+Alt+0"),
-                    Cmd("Title", "para.style", r#"{"style":"Title"}"#, ""),
-                    Cmd("Subtitle", "para.style", r#"{"style":"Subtitle"}"#, ""),
-                    Cmd("Heading 1", "para.style", r#"{"style":"Heading 1"}"#, "Ctrl+Alt+1"),
-                    Cmd("Heading 2", "para.style", r#"{"style":"Heading 2"}"#, "Ctrl+Alt+2"),
-                    Cmd("Heading 3", "para.style", r#"{"style":"Heading 3"}"#, "Ctrl+Alt+3"),
+                    Sub(
+                        "Normal text",
+                        &[
+                            Cmd("Apply 'Normal text'", "para.style", r#"{"style":"Normal"}"#, "Ctrl+Alt+0"),
+                            Cmd("Update 'Normal text' to match", "styles.updateToMatch", r#"{"style":"Normal"}"#, ""),
+                        ],
+                    ),
+                    Sub(
+                        "Title",
+                        &[
+                            Cmd("Apply 'Title'", "para.style", r#"{"style":"Title"}"#, ""),
+                            Cmd("Update 'Title' to match", "styles.updateToMatch", r#"{"style":"Title"}"#, ""),
+                        ],
+                    ),
+                    Sub(
+                        "Subtitle",
+                        &[
+                            Cmd("Apply 'Subtitle'", "para.style", r#"{"style":"Subtitle"}"#, ""),
+                            Cmd("Update 'Subtitle' to match", "styles.updateToMatch", r#"{"style":"Subtitle"}"#, ""),
+                        ],
+                    ),
+                    Sub(
+                        "Heading 1",
+                        &[
+                            Cmd("Apply 'Heading 1'", "para.style", r#"{"style":"Heading 1"}"#, "Ctrl+Alt+1"),
+                            Cmd("Update 'Heading 1' to match", "styles.updateToMatch", r#"{"style":"Heading 1"}"#, ""),
+                        ],
+                    ),
+                    Sub(
+                        "Heading 2",
+                        &[
+                            Cmd("Apply 'Heading 2'", "para.style", r#"{"style":"Heading 2"}"#, "Ctrl+Alt+2"),
+                            Cmd("Update 'Heading 2' to match", "styles.updateToMatch", r#"{"style":"Heading 2"}"#, ""),
+                        ],
+                    ),
+                    Sub(
+                        "Heading 3",
+                        &[
+                            Cmd("Apply 'Heading 3'", "para.style", r#"{"style":"Heading 3"}"#, "Ctrl+Alt+3"),
+                            Cmd("Update 'Heading 3' to match", "styles.updateToMatch", r#"{"style":"Heading 3"}"#, ""),
+                        ],
+                    ),
+                    Sub(
+                        "Heading 4",
+                        &[
+                            Cmd("Apply 'Heading 4'", "para.style", r#"{"style":"Heading 4"}"#, "Ctrl+Alt+4"),
+                            Cmd("Update 'Heading 4' to match", "styles.updateToMatch", r#"{"style":"Heading 4"}"#, ""),
+                        ],
+                    ),
+                    Sub(
+                        "Heading 5",
+                        &[
+                            Cmd("Apply 'Heading 5'", "para.style", r#"{"style":"Heading 5"}"#, "Ctrl+Alt+5"),
+                            Cmd("Update 'Heading 5' to match", "styles.updateToMatch", r#"{"style":"Heading 5"}"#, ""),
+                        ],
+                    ),
+                    Sub(
+                        "Heading 6",
+                        &[
+                            Cmd("Apply 'Heading 6'", "para.style", r#"{"style":"Heading 6"}"#, "Ctrl+Alt+6"),
+                            Cmd("Update 'Heading 6' to match", "styles.updateToMatch", r#"{"style":"Heading 6"}"#, ""),
+                        ],
+                    ),
                 ],
             ),
             Sub(
@@ -159,15 +235,71 @@ pub const MENUS: &[(&str, &[Item])] = &[
                     Cmd("1.5", "para.lineSpacing", r#"{"value":1.5}"#, ""),
                     Cmd("Double", "para.lineSpacing", r#"{"value":2.0}"#, ""),
                     Sep,
+                    Flip("Add space before paragraph", "Remove space before paragraph", "para.addSpaceBefore", "para.spaceBefore"),
+                    Flip("Add space after paragraph", "Remove space after paragraph", "para.removeSpaceAfter", "para.spaceAfter"),
+                    Sep,
                     Cmd("Custom spacing", "ui.dialog:paragraph", NO, ""),
+                    Sep,
+                    Toggle("Keep with next", "para.keepNext", "para.keepNext", ""),
+                    Toggle("Keep lines together", "para.keepLines", "para.keepLines", ""),
                 ],
             ),
             Cmd("Columns", "layout.columns", NO, ""),
             Sub(
                 "Bullets and numbering",
-                &[Cmd("Bulleted list", "para.bullets", NO, "Ctrl+Shift+8"), Cmd("Numbered list", "para.numbering", NO, "Ctrl+Shift+7")],
+                &[
+                    Cmd("Bulleted list", "para.bullets", NO, "Ctrl+Shift+8"),
+                    Cmd("Numbered list", "para.numbering", NO, "Ctrl+Shift+7"),
+                    Sep,
+                    Sub(
+                        "Bullet style",
+                        &[
+                            Cmd("Disc, circle, square", "para.bullets", r#"{"kind":"bullet"}"#, ""),
+                            Cmd("Diamond", "para.bullets", r#"{"kind":"❖"}"#, ""),
+                            Cmd("Arrowhead", "para.bullets", r#"{"kind":"➢"}"#, ""),
+                            Cmd("Arrow", "para.bullets", r#"{"kind":"➔"}"#, ""),
+                            Cmd("Star", "para.bullets", r#"{"kind":"★"}"#, ""),
+                            Cmd("Square", "para.bullets", r#"{"kind":"■"}"#, ""),
+                            Cmd("Dash", "para.bullets", r#"{"kind":"–"}"#, ""),
+                        ],
+                    ),
+                    Sub(
+                        "Numbering style",
+                        &[
+                            Cmd("1.  2.  3.", "para.numbering", r#"{"kind":"numbered"}"#, ""),
+                            Cmd("1)  2)  3)", "para.numbering", r#"{"kind":"numberedParen"}"#, ""),
+                            Cmd("A.  B.  C.", "para.numbering", r#"{"kind":"upperLetter"}"#, ""),
+                            Cmd("a.  b.  c.", "para.numbering", r#"{"kind":"lowerLetter"}"#, ""),
+                            Cmd("i.  ii.  iii.", "para.numbering", r#"{"kind":"lowerRoman"}"#, ""),
+                            Cmd("1.  a.  i.", "para.numbering", r#"{"kind":"outline"}"#, ""),
+                        ],
+                    ),
+                    Sub("List options", &[Cmd("Restart numbering", "stardocs.restartNumbering", NO, "")]),
+                ],
             ),
             Sep,
+            Sub(
+                "Table",
+                &[
+                    Cmd("Insert row above", "table.insertRowAbove", NO, ""),
+                    Cmd("Insert row below", "table.insertRowBelow", NO, ""),
+                    Cmd("Insert column left", "table.insertColumnLeft", NO, ""),
+                    Cmd("Insert column right", "table.insertColumnRight", NO, ""),
+                    Sep,
+                    Cmd("Delete row", "table.deleteRow", NO, ""),
+                    Cmd("Delete column", "table.deleteColumn", NO, ""),
+                    Cmd("Delete table", "table.deleteTable", NO, ""),
+                    Sep,
+                    Cmd("Merge cells", "table.merge", NO, ""),
+                    Cmd("Split cells", "table.split", NO, ""),
+                    Sep,
+                    Cmd("Distribute rows", "table.distributeRows", NO, ""),
+                    Cmd("Distribute columns", "table.distributeColumns", NO, ""),
+                    Sep,
+                    Toggle("Pin header row", "table.repeatHeader", "table.header", ""),
+                    Cmd("Table properties", "table.properties", NO, ""),
+                ],
+            ),
             Cmd("Borders and shading", "ui.dialog:borders", NO, ""),
             Cmd("Clear formatting", "format.clear", NO, "Ctrl+\\"),
         ],
@@ -234,6 +366,10 @@ pub struct Shell {
     word_count: crate::wordcount::WordCount,
     /// The colour being mixed in the Custom colour dialog, while it is open.
     custom: Option<Color32>,
+    /// The number typed in the Restart numbering dialog, while it is open.
+    restart: Option<String>,
+    /// The dialog has just opened: its box takes the keyboard.
+    restart_focus: bool,
     /// Each toolbar group's width last frame, to decide which fit.
     widths: Widths,
     /// How many toolbar groups didn't fit and are in the ⋮ menu.
@@ -273,6 +409,8 @@ struct Flags {
     compact: bool,
     /// The keyboard shortcuts list is open.
     shortcuts: bool,
+    /// Asks for the Restart numbering dialog (Format › Bullets and numbering › List options).
+    restart: bool,
     /// Read from storage yet.
     loaded: bool,
 }
@@ -335,7 +473,44 @@ fn is_on(app: &mut WordApp, flags: &Flags, key: &str) -> bool {
         "stardocs.menus" => !flags.compact,
         "stardocs.print" => app.run("view.state", json!({})).ok().is_some_and(|v| v["mode"] == "print"),
         "trackChanges" => app.session.doc.settings.track_changes,
+        "para.spaceBefore" => selection_para(app).space_before > 0.0,
+        "para.spaceAfter" => selection_para(app).space_after > 0.0,
+        "para.keepNext" => selection_para(app).keep_next,
+        "para.keepLines" => selection_para(app).keep_lines,
+        "table.header" => header_row(app),
         _ => app.run("view.state", json!({})).ok().and_then(|v| v.get(key).and_then(Value::as_bool)).unwrap_or(false),
+    }
+}
+
+/// The caret paragraph's formatting, its style's included (what WordCraft's own buttons read).
+fn selection_para(app: &WordApp) -> wordcraft_doc::resolve::ResolvedPara {
+    wordcraft_engine::cmd::para::selection_para(&app.session)
+}
+
+/// Whether the caret's table row is a header row repeated on each page (Docs' pinned row).
+fn header_row(app: &WordApp) -> bool {
+    let focus = &app.session.sel.focus;
+    focus.path.cell().and_then(|(t, r, _)| app.session.doc.table(focus.story, &t)?.rows.get(r).map(|row| row.props.header)).unwrap_or(false)
+}
+
+/// Whether the caret is in a numbered (not bulleted) list.
+fn in_numbered_list(app: &WordApp) -> bool {
+    selection_para(app)
+        .numbering
+        .filter(|n| n.num != 0)
+        .and_then(|n| app.session.doc.numbering.level(n.num, n.level))
+        .is_some_and(|l| l.format != wordcraft_doc::section::NumFormat::Bullet)
+}
+
+/// Whether a menu command is greyed out, as Docs greys what doesn't apply where the caret is:
+/// WordCraft's own check (`why_disabled`: table commands outside a table, …), plus Docs' rules
+/// that WordCraft only checks when the command runs.
+pub fn greyed(app: &WordApp, id: &str) -> bool {
+    match id {
+        "table.merge" => wordcraft_engine::cmd::table::selected_cells(&app.session).len() < 2,
+        "stardocs.restartNumbering" => !in_numbered_list(app),
+        _ if id.starts_with("stardocs.") || id.starts_with("ui.") => false,
+        _ => app.session.why_disabled(id).is_some(),
     }
 }
 
@@ -357,6 +532,7 @@ fn is_own(id: &str) -> bool {
             | "stardocs.suggesting"
             | "stardocs.download"
             | "stardocs.rename"
+            | "stardocs.restartNumbering"
     )
 }
 
@@ -366,6 +542,7 @@ fn run_menu(app: &mut WordApp, ctx: &egui::Context, flags: &mut Flags, link: Opt
         ("stardocs.words", _) => flags.words = !flags.words,
         ("stardocs.compact", _) => flags.compact = !flags.compact,
         ("stardocs.shortcuts", _) => flags.shortcuts = true,
+        ("stardocs.restartNumbering", _) => flags.restart = true,
         ("stardocs.editing", _) => set_suggesting(app, false),
         ("stardocs.suggesting", _) => set_suggesting(app, true),
         ("stardocs.download", Some(link)) => {
@@ -437,7 +614,7 @@ struct Current {
     shown_as: Option<String>,
     /// Points; 0 when the selection mixes sizes.
     size: f64,
-    /// The caret paragraph's style name, as the style box shows it.
+    /// The caret paragraph's style name, as the style box shows it; blank when the selection mixes styles.
     style: String,
     bold: bool,
     italic: bool,
@@ -460,7 +637,11 @@ fn current(app: &mut WordApp) -> Current {
         font: f.get("font").and_then(Value::as_str).unwrap_or("").to_string(),
         shown_as: f.get("fontShownAs").and_then(Value::as_str).map(str::to_string),
         size: f.get("size").and_then(Value::as_f64).unwrap_or(0.0),
-        style: style_label(f.get("styleName").or_else(|| f.get("style")).and_then(Value::as_str).unwrap_or("Normal")),
+        // Paragraphs of different styles selected (null): an empty box, as Google Docs shows.
+        style: match f.get("styleName").or_else(|| f.get("style")) {
+            Some(Value::Null) => String::new(),
+            v => style_label(v.and_then(Value::as_str).unwrap_or("Normal")),
+        },
         bold: on("bold"),
         italic: on("italic"),
         underline: f.get("underline").is_some_and(|u| u.as_bool().unwrap_or(!u.is_null() && u != "none")),
@@ -512,6 +693,7 @@ impl Shell {
                 "share": self.share.is_open(),
                 "shortcuts": self.shortcuts.open,
                 "customColour": self.custom.is_some(),
+                "restartNumbering": self.restart.is_some(),
                 "wordcraft": app.dialog.is_some(),
             },
             "toolbar": {
@@ -554,6 +736,11 @@ impl Shell {
         if std::mem::take(&mut self.flags.shortcuts) {
             self.shortcuts.open = true;
         }
+        if std::mem::take(&mut self.flags.restart) {
+            self.restart = Some("1".into());
+            self.restart_focus = true;
+        }
+        self.restart_numbering(app, ui.ctx());
         self.shortcuts.ui(ui.ctx(), MENUS);
         if self.flags.words {
             self.word_count.ui(app, ui.ctx());
@@ -575,6 +762,20 @@ impl Shell {
                 i.consume_shortcut(&KeyboardShortcut::new(ctrl_shift, Key::C)),
             )
         });
+        // Docs' text size up and down by one point (WordCraft's keys step through Word's size
+        // list), and Headings 4 to 6, which WordCraft has no keys for.
+        let more: [(Modifiers, Key, &str, Value); 5] = [
+            (ctrl_shift, Key::Period, "format.growFont1", json!({})),
+            (ctrl_shift, Key::Comma, "format.shrinkFont1", json!({})),
+            (ctrl_alt, Key::Num4, "para.style", json!({"style": "Heading 4"})),
+            (ctrl_alt, Key::Num5, "para.style", json!({"style": "Heading 5"})),
+            (ctrl_alt, Key::Num6, "para.style", json!({"style": "Heading 6"})),
+        ];
+        for (m, k, id, p) in more {
+            if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k))) {
+                run(app, id, p);
+            }
+        }
         if count {
             run(app, "ui.dialog:wordCount", json!({}));
         }
@@ -670,6 +871,53 @@ impl Shell {
     }
 
     /// Docs' custom colour: a small dialog with a colour picker, opened from the text colour menu.
+    /// Docs' Restart numbering dialog: the caret's numbered list starts again here, at the number
+    /// typed (`para.setNumberingValue`).
+    fn restart_numbering(&mut self, app: &mut WordApp, ctx: &egui::Context) {
+        let Some(mut text) = self.restart.take() else { return };
+        let mut done = None;
+        let modal = egui::Modal::new(egui::Id::unique("stardocs_restart_numbering"))
+            .frame(egui::Frame::popup(&ctx.global_style()).fill(Color32::WHITE).corner_radius(8.0).inner_margin(20.0));
+        let shown = modal.show(ctx, |ui| {
+            ui.label(RichText::new("Restart numbering").size(18.0).color(TEXT));
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Start at").size(14.0).color(TEXT));
+                let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(80.0));
+                r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Start at"));
+                if std::mem::take(&mut self.restart_focus) {
+                    r.request_focus();
+                }
+                if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    done = Some(true);
+                }
+            });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Cancel").clicked() {
+                    done = Some(false);
+                }
+                if ui.add(Button::new(RichText::new("OK").color(Color32::WHITE)).fill(BLUE)).clicked() {
+                    done = Some(true);
+                }
+            });
+        });
+        if shown.should_close() {
+            done.get_or_insert(false);
+        }
+        match done {
+            Some(true) => match text.trim().parse::<u32>() {
+                Ok(n) => run(app, "para.setNumberingValue", json!({ "value": n })),
+                Err(_) => {
+                    app.status("Type a whole number to start the list at".to_string());
+                    self.restart = Some(text);
+                }
+            },
+            Some(false) => {}
+            None => self.restart = Some(text),
+        }
+    }
+
     fn custom_colour(&mut self, app: &mut WordApp, ctx: &egui::Context) {
         let Some(mut c) = self.custom else { return };
         let mut done = None;
@@ -1032,7 +1280,7 @@ fn menu_items(app: &mut WordApp, ui: &mut Ui, flags: &mut Flags, items: &[Item],
                 let b = Button::new(RichText::new(*label).size(14.0).color(TEXT))
                     .right_text(RichText::new(*keys).size(13.0).color(TEXT_DIM))
                     .min_size(vec2(260.0, 30.0));
-                if ui.add(b).clicked() {
+                if ui.add_enabled(!greyed(app, id), b).clicked() {
                     run_menu(app, ui.ctx(), flags, link, id, params(p));
                     ui.close();
                 }
@@ -1046,7 +1294,16 @@ fn menu_items(app: &mut WordApp, ui: &mut Ui, flags: &mut Flags, items: &[Item],
                     Some(img) => Button::image_and_text(img, text),
                     None => Button::new(RichText::new(format!("      {label}")).size(14.0).color(TEXT)),
                 };
-                if ui.add(b.right_text(RichText::new(*keys).size(13.0).color(TEXT_DIM)).min_size(vec2(260.0, 30.0))).clicked() {
+                let b = b.right_text(RichText::new(*keys).size(13.0).color(TEXT_DIM)).min_size(vec2(260.0, 30.0));
+                if ui.add_enabled(!greyed(app, id), b).clicked() {
+                    run_menu(app, ui.ctx(), flags, link, id, json!({}));
+                    ui.close();
+                }
+            }
+            Flip(off, on, id, key) => {
+                let label = if is_on(app, flags, key) { on } else { off };
+                let b = Button::new(RichText::new(*label).size(14.0).color(TEXT)).min_size(vec2(260.0, 30.0));
+                if ui.add_enabled(!greyed(app, id), b).clicked() {
                     run_menu(app, ui.ctx(), flags, link, id, json!({}));
                     ui.close();
                 }
