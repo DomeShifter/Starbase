@@ -398,4 +398,14 @@ mod tests {
         s.insert("last".into(), json!({ "when": "2026-11-26T08:30:00Z", "ok": false }));
         assert!(!due(&s, &at("2026-11-26T09:00:00+00:00[UTC]")), "failed 30 min ago: wait an hour");
     }
+
+    #[test]
+    fn time_zones_work_without_the_systems_list() {
+        // Slim Docker images have no /usr/share/zoneinfo: the built-in copy still knows TZ names.
+        let db = jiff::tz::TimeZoneDatabase::bundled();
+        let london = db.get("Europe/London").expect("Europe/London from the built-in list");
+        assert_eq!(london.iana_name(), Some("Europe/London"));
+        let summer = "2026-07-01T12:00:00Z".parse::<jiff::Timestamp>().unwrap().to_zoned(london);
+        assert_eq!(summer.hour(), 13, "British Summer Time");
+    }
 }

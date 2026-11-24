@@ -31,7 +31,9 @@ png = "0.18"
 # Backups in restic's format (local folders; S3 and others later through the "opendal" feature).
 rustic_core = "0.14"
 rustic_backend = { version = "0.8", default-features = false }
-jiff = "0.2"
+# The time-zone database is built in: slim Docker images have no /usr/share/zoneinfo, so TZ
+# (the backup hour) would otherwise silently stay UTC.
+jiff = { version = "0.2", features = ["tzdb-bundle-always"] }
 # Sign-in through the person's own identity provider (OpenID Connect, oidc.rs): discovery, PKCE
 # and ID-token checks. Without its default HTTP client (reqwest): ureq below, never following
 # redirects, trusting the computer's own certificates (a home CA added to the system works).
