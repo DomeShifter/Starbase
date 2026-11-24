@@ -25,6 +25,9 @@ log = { workspace = true }
 serde_json = { workspace = true }
 wordcraft-doc = { workspace = true }
 wordcraft-fonts = { workspace = true }
+# Draws the top of page 1 for the home screen's preview picture.
+wordcraft-render = { workspace = true }
+kurbo = { workspace = true }
 # SVG loader for the toolbar icons (resvg).
 egui_extras = { workspace = true, features = ["svg"] }
 

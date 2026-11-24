@@ -37,6 +37,13 @@ const QUIET_MS: f64 = 2000.0;
 /// How long after a failed save it is tried again (milliseconds).
 const RETRY_MS: f64 = 15_000.0;
 
+/// The home screen's preview picture: the top of page 1, the size of a spreadsheet's (the
+/// server's `thumbs::WIDTH`/`HEIGHT`), drawn here because the server can't lay out documents.
+const THUMB_W: u32 = 720;
+const THUMB_H: u32 = 480;
+/// At most one new picture this often while someone keeps editing (milliseconds).
+const THUMB_MS: f64 = 30_000.0;
+
 thread_local! {
     /// This page's link, for the unsaved-changes guard ([`unsaved`]), which is set up before it.
     static CURRENT: RefCell<Option<Rc<RefCell<State>>>> = const { RefCell::new(None) };
@@ -91,6 +98,9 @@ struct State {
     retry: Option<(Vec<u8>, f64)>,
     /// The signed-in person's name from the server, until the page signs comments with it.
     author: Option<String>,
+    /// When the next preview picture is due (after a save), and when the last one was sent (ms).
+    thumb_due: Option<f64>,
+    thumb_last: f64,
 }
 
 #[derive(Clone)]
@@ -293,6 +303,7 @@ impl Link {
         if let Some((name, bytes)) = again {
             self.save(&name, bytes);
         }
+        self.maybe_thumb(app, ctx, t);
         let since = {
             let mut s = self.state.borrow_mut();
             if !app.session.dirty {
@@ -307,6 +318,45 @@ impl Link {
         } else {
             ctx.request_repaint_after(std::time::Duration::from_millis(500));
         }
+    }
+
+    /// Sends the preview picture once it is due and everything is saved: drawn from what is on
+    /// screen, which then matches the version the server has (unsaved edits wait for their save).
+    fn maybe_thumb(&self, app: &WordApp, ctx: &egui::Context, t: f64) {
+        let (id, version) = {
+            let s = self.state.borrow();
+            let Some(due) = s.thumb_due else { return };
+            if due > t || s.busy || s.waiting.is_some() || s.retry.is_some() || app.session.dirty {
+                ctx.request_repaint_after(std::time::Duration::from_secs(1));
+                return;
+            }
+            match &s.id {
+                Some(id) if !s.version.is_empty() => (id.clone(), s.version.clone()),
+                _ => return,
+            }
+        };
+        {
+            let mut s = self.state.borrow_mut();
+            s.thumb_due = None;
+            s.thumb_last = t;
+        }
+        let layout = app.session.export_layout();
+        let Some(page) = layout.pages.first() else { return };
+        let scale = f64::from(THUMB_W) / f64::from(page.w.max(1.0));
+        let picture = wordcraft_render::render_region(&app.session.doc, page, THUMB_W, THUMB_H, kurbo::Affine::scale(scale), &Default::default());
+        let png = picture.to_png();
+        if png.is_empty() {
+            return;
+        }
+        let url = api(&format!("api/files/{id}/thumb?version={}", enc(&version)));
+        wasm_bindgen_futures::spawn_local(async move {
+            // 409: a newer save got there first; its own picture follows.
+            match fetch("PUT", &url, None, Some(&png)).await {
+                Ok((200 | 409, ..)) => {}
+                Ok((code, _, body)) => log::warn!("preview picture not kept: {}", reason(code, &body)),
+                Err(e) => log::warn!("preview picture not sent: {e}"),
+            }
+        });
     }
 
     /// Renames the file on the server (the title row).
@@ -437,6 +487,7 @@ impl Link {
         if let Saved::Failed(_) = s.saved {
             s.saved = Saved::Saving;
         }
+        s.thumb_due = Some((s.thumb_last + THUMB_MS).max(now()));
         let name = s.name.clone();
         drop(s);
         set_title(&name);
