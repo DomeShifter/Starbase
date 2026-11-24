@@ -88,6 +88,7 @@ const ICONS: &[(&str, &[u8])] = &[
     ("sort_by_alpha", include_bytes!("../icons/sort_by_alpha.svg")),
     ("spellcheck", include_bytes!("../icons/spellcheck.svg")),
     ("stardocs", include_bytes!("../icons/stardocs.svg")),
+    ("stardrive", include_bytes!("../icons/stardrive.svg")),
     ("starsheets", include_bytes!("../icons/starsheets.svg")),
     ("sticky_note_2", include_bytes!("../icons/sticky_note_2.svg")),
     ("strikethrough_s", include_bytes!("../icons/strikethrough_s.svg")),
@@ -153,4 +154,13 @@ pub fn has(name: &str) -> bool {
 pub fn logo(size: f32) -> Option<Image<'static>> {
     let (_, bytes) = ICONS.iter().find(|(n, _)| *n == "starsheets")?;
     Some(Image::new(ImageSource::Bytes { uri: "bytes://starsheets/logo.svg".into(), bytes: (*bytes).into() }).fit_to_exact_size(vec2(size, size)))
+}
+
+/// The StarDrive logo (app/icons/stardrive.svg; app/stardrive.svg is the same, as the home screen's tab icon) at `size` px, in colour.
+pub fn drive_logo(size: f32) -> Option<Image<'static>> {
+    let (_, bytes) = ICONS.iter().find(|(n, _)| *n == "stardrive")?;
+    Some(
+        Image::new(ImageSource::Bytes { uri: "bytes://starsheets/stardrive_logo.svg".into(), bytes: (*bytes).into() })
+            .fit_to_exact_size(vec2(size, size)),
+    )
 }
