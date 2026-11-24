@@ -131,14 +131,52 @@ fn shortcuts_toggle_compact_and_open_the_shortcuts_list() {
 }
 
 #[test]
-fn toolbar_moves_groups_into_the_more_menu_when_narrow() {
-    // The nine groups measure about 1300 px together, plus the mode box and the margins.
-    let mut wide = window(1600.0);
-    assert_eq!(wide.state_mut().state()["toolbar"]["groupsInMoreMenu"], 0, "{}", wide.state_mut().state()["toolbar"]);
-    let mut narrow = window(900.0);
-    let more = narrow.state_mut().state()["toolbar"]["groupsInMoreMenu"].as_u64().unwrap();
-    assert!(more > 0, "at 900 px some groups are in the ⋮ menu");
-    assert!(narrow.query(By::new().role(Role::Button).label("More")).is_some(), "the ⋮ button is shown");
+fn toolbar_fits_at_1400_and_moves_groups_into_the_more_menu_when_narrower() {
+    // Like Google Docs, every group shows at 1400 px; narrower windows put the last ones in ⋮.
+    let mut wide = window(1400.0);
+    let t = wide.state_mut().state()["toolbar"].clone();
+    assert_eq!(t["groupsInMoreMenu"], 0, "{t}");
+    assert!(wide.query(By::new().role(Role::Button).label("More")).is_none(), "no ⋮ button at 1400 px");
+    for width in [1100.0, 900.0] {
+        let mut narrow = window(width);
+        let more = narrow.state_mut().state()["toolbar"]["groupsInMoreMenu"].as_u64().unwrap();
+        assert!(more > 0, "at {width} px some groups are in the ⋮ menu");
+        assert!(narrow.query(By::new().role(Role::Button).label("More")).is_some(), "the ⋮ button is shown");
+    }
+}
+
+fn font_size(h: &mut Harness<'static, Win>) -> Value {
+    h.state_mut().app.run("format.state", json!({})).unwrap()["size"].clone()
+}
+
+#[test]
+fn typing_in_the_font_size_box_sets_the_size() {
+    let mut h = window(1400.0);
+    assert_eq!(font_size(&mut h), json!(11.0));
+    h.get(By::new().label("Font size")).focus();
+    steps(&mut h, 3);
+    assert!(h.query(By::new().label("14")).is_some(), "the size list opens under the box");
+    type_text(&mut h, "13");
+    keys(&mut h, Modifiers::NONE, Key::Enter);
+    assert_eq!(font_size(&mut h), json!(13.0));
+    assert!(h.query(By::new().label("14")).is_none(), "Enter closes the list");
+    type_text(&mut h, "after");
+    assert!(body_text(&mut h).contains("after"), "the page has the keyboard again");
+    // Out of range: nothing changes.
+    h.get(By::new().label("Font size")).focus();
+    steps(&mut h, 3);
+    type_text(&mut h, "999");
+    keys(&mut h, Modifiers::NONE, Key::Enter);
+    assert_eq!(font_size(&mut h), json!(13.0));
+}
+
+#[test]
+fn the_font_size_list_still_works() {
+    let mut h = window(1400.0);
+    h.get(By::new().label("Font size")).focus();
+    steps(&mut h, 3);
+    click(&mut h, "18");
+    assert_eq!(font_size(&mut h), json!(18.0));
 }
 
 #[test]
