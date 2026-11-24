@@ -5,7 +5,10 @@ Everything is upstream's (versions, lints, profiles, [patch.crates-io]) except:
 - the [workspace] block: our members only;
 - path dependencies point into upstream/wordcraft;
 - release builds strip symbol names: wasm-bindgen then fits in 9 GB of memory (it was killed
-  without this) and the site is no bigger.
+  without this) and the site is no bigger;
+- release builds are optimised for size (opt-level "s", one codegen unit; the page painter and
+  line layout stay at opt-level 3 for typing speed), and the image and zip
+  crates leave out TIFF and zopfli: a smaller download (docs/research/wordcraft-trim.md).
 Run by fetch-upstream.sh; a changed Cargo.toml after a pin bump is expected and committed.
 """
 import pathlib, re
@@ -18,4 +21,24 @@ body = re.sub(r"\A\[workspace\]\n(?:(?!\n\[).)*\n", "", up, count=1, flags=re.S)
 body = re.sub(r'path = "(crates|apps)/', r'path = "upstream/wordcraft/\1/', body)
 body = body.replace('repository = "https://github.com/storytold/wordcraft"', 'repository = "https://github.com/DomeShifter/Starbase"')
 body = re.sub(r"(\[profile\.release\]\n)", r'\1strip = "symbols"\n', body, count=1)
+# Smaller download (docs/research/wordcraft-trim.md): optimise release code for size.
+rel = re.search(r"\[profile\.release\]\n(?:(?!\n\[).)*", body, flags=re.S)
+# "s", not "z": "z" made typing in a 100-page document ~3x slower; codegen-units = 1 costs
+# only build time.
+sect = re.sub(r'(?m)^opt-level = .*$', 'opt-level = "s"', rel.group(0))
+sect = re.sub(r'(?m)^codegen-units = .*$', 'codegen-units = 1', sect)
+# Except the crates a keystroke spends its time in, kept at opt-level 3: the page painter
+# (wordcraft-render on vello_cpu) and line layout. With them, typing and Enter in a 100-page
+# document are as fast as an all-3 build (all-"s": ~30 % slower) for +0.15 MB brotli; the
+# text-shaping crates (harfrust, skrifa…) cost +0.2 MB more and bought nothing measurable.
+HOT = ["wordcraft-layout", "wordcraft-render", "vello_cpu", "vello_common", "fearless_simd", "glifo", "peniko", "kurbo"]
+# After the profile's keys, before the comment that belongs to the next section.
+keys, _, rest = sect.partition("\n\n")
+sect = keys + "\n\n" + "".join(f"[profile.release.package.{c}]\nopt-level = 3\n\n" for c in HOT) + rest
+body = body[: rel.start()] + sect + body[rel.end():]
+# No TIFF decoder (Google Docs can't insert TIFF either) and no zopfli compressor: zip's
+# `deflate` adds zopfli, which only runs above level 9 and WordCraft writes level 6.
+for old, new in (('"bmp", "tiff"]', '"bmp"]'), ('features = ["deflate"]', 'features = ["deflate-flate2-zlib-rs"]')):
+    assert body.count(old) == 1, f"gen-cargo.py: upstream changed, {old} not found once"
+    body = body.replace(old, new)
 (root / "Cargo.toml").write_text(head + ws + "\n" + body.lstrip("\n"))
