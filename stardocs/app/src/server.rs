@@ -174,7 +174,16 @@ impl Link {
                 if v["you"].as_str() == Some("view") {
                     link.state.borrow_mut().view_only = true;
                     link.ctx.request_repaint();
+                    return;
                 }
+            }
+            // A document without a preview picture (made elsewhere, or never pictured) gets one now.
+            let thumb = api(&format!("api/files/{}/thumb", link.id().unwrap_or_default()));
+            if let Ok((404, ..)) = fetch("GET", &thumb, None, None).await {
+                let mut s = link.state.borrow_mut();
+                s.thumb_due = Some(now());
+                drop(s);
+                link.ctx.request_repaint();
             }
         });
     }
@@ -241,7 +250,11 @@ impl Link {
                     link.ask_role(&id);
                 }
                 Ok((401, ..)) => go_home(""),
-                Ok((code, _, body)) => link.fail(&format!("Couldn't open the document ({})", reason(code, &body))),
+                Ok((code, _, body)) => {
+                    // Nothing to edit: the blank page is read-only, so typing can't look like work.
+                    link.state.borrow_mut().view_only = true;
+                    link.fail(&format!("Couldn't open the document ({})", reason(code, &body)));
+                }
                 Err(e) => link.fail(&format!("Couldn't reach the server: {e}")),
             }
             link.ctx.request_repaint();

@@ -57,6 +57,7 @@ pub struct Share {
     add_role: usize,
     error: Option<String>,
     copied: bool,
+    copy_failed: bool,
     busy: bool,
 }
 
@@ -117,6 +118,32 @@ fn note(ui: &mut Ui, text: &str) {
 
 fn button(text: &str, fill: Color32, colour: Color32) -> egui::Button<'static> {
     egui::Button::new(RichText::new(text.to_string()).size(14.0).color(colour)).fill(fill).corner_radius(18.0).min_size(vec2(84.0, 36.0))
+}
+
+/// Copies `text`. Browsers offer the clipboard API only on https (or localhost), so on a plain
+/// http address this falls back to the old way: a hidden text box, selected, and "copy".
+fn copy_text(text: &str) -> bool {
+    use wasm_bindgen::JsCast as _;
+    let Some(w) = web_sys::window() else { return false };
+    let nav = w.navigator();
+    let has_api = js_sys::Reflect::get(&nav, &"clipboard".into()).is_ok_and(|c| !c.is_undefined() && !c.is_null());
+    if has_api {
+        let _ = nav.clipboard().write_text(text);
+        return true;
+    }
+    let Some(doc) = w.document() else { return false };
+    let Ok(area) = doc.create_element("textarea") else { return false };
+    let Ok(area) = area.dyn_into::<web_sys::HtmlTextAreaElement>() else { return false };
+    area.set_value(text);
+    let _ = area.set_attribute("style", "position:fixed;top:0;left:0;opacity:0");
+    let Some(body) = doc.body() else { return false };
+    if body.append_child(&area).is_err() {
+        return false;
+    }
+    area.select();
+    let done = doc.dyn_ref::<web_sys::HtmlDocument>().is_some_and(|d| d.exec_command("copy").unwrap_or(false));
+    area.remove();
+    done
 }
 
 impl Share {
@@ -272,14 +299,14 @@ impl Share {
                 let width = ui.available_width() - 110.0;
                 ui.add(egui::TextEdit::singleline(&mut url).desired_width(width).margin(vec2(8.0, 6.0)));
                 if ui.add(button(if self.copied { "Copied" } else { "Copy link" }, Color32::WHITE, BLUE)).clicked() {
-                    if let Some(w) = web_sys::window() {
-                        let _ = w.navigator().clipboard().write_text(&url);
-                    }
-                    self.copied = true;
+                    self.copied = copy_text(&url);
+                    self.copy_failed = !self.copied;
                 }
             });
             if self.copied {
                 note(ui, "Link copied. Anyone you send it to signs in here first.");
+            } else if self.copy_failed {
+                note(ui, "Couldn't copy here: select the link above and copy it yourself.");
             }
             if let Some(e) = &self.error {
                 ui.add_space(6.0);

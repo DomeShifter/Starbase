@@ -317,7 +317,9 @@ impl Shell {
                 self.share.logic(link, ui.ctx());
                 self.title_and_menus(app, ui, link);
                 ui.add_space(6.0);
-                self.toolbar(app, ui);
+                // A view-only document: the toolbar is shown greyed, like Google Docs' viewer.
+                let editable = !link.is_some_and(Link::view_only);
+                ui.add_enabled_ui(editable, |ui| self.toolbar(app, ui));
             });
         self.share.ui(ui.ctx());
     }
