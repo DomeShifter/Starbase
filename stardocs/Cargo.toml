@@ -66,12 +66,12 @@ wuff = "0.2.9"
 # `forbid(unsafe_code)` in its default build, no_std-capable (builds for wasm), BSD-3-Clause/MIT.
 brotli-decompressor = "5"
 vello_cpu = "0.2"
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp"] }
 craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "6e03f65bf45181db77ba6229716e6624db9eb25b", version = "=0.1.0", default-features = false, features = ["write"] }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "6e03f65bf45181db77ba6229716e6624db9eb25b", features = ["egui"] }
 quick-xml = "0.41"
-zip = { version = "3", default-features = false, features = ["deflate"] }
+zip = { version = "3", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 # zlib streams (compressed metafile pictures in `.doc` drawings); already in the lock as a dependency of other crates.
 miniz_oxide = "0.9"
 cfb = "0.15"
@@ -128,10 +128,34 @@ debug = "line-tables-only"
 
 [profile.release]
 strip = "symbols"
-opt-level = 3
+opt-level = "s"
 lto = "thin"
-codegen-units = 16
+codegen-units = 1
 debug = 0
+
+[profile.release.package.wordcraft-layout]
+opt-level = 3
+
+[profile.release.package.wordcraft-render]
+opt-level = 3
+
+[profile.release.package.vello_cpu]
+opt-level = 3
+
+[profile.release.package.vello_common]
+opt-level = 3
+
+[profile.release.package.fearless_simd]
+opt-level = 3
+
+[profile.release.package.glifo]
+opt-level = 3
+
+[profile.release.package.peniko]
+opt-level = 3
+
+[profile.release.package.kurbo]
+opt-level = 3
 
 # Required by craft-pdf: the backend rejects writers that failed during unwinding.
 [patch.crates-io]
