@@ -238,6 +238,9 @@ pub struct Shell {
     widths: Widths,
     /// How many toolbar groups didn't fit and are in the ⋮ menu.
     in_more: usize,
+    /// The mode box and arrow's width last frame, and the room the groups had.
+    right_end: f32,
+    room: f32,
     /// The window's egui context, kept from the last frame for the test hook.
     ctx: Option<egui::Context>,
 }
@@ -511,6 +514,8 @@ impl Shell {
                 "painting": app.session.painter.is_some(),
                 "groupWidths": self.widths.to_vec(),
                 "groupsInMoreMenu": self.in_more,
+                "groupRoom": self.room,
+                "rightEndWidth": self.right_end,
             },
             "fontsListed": self.fonts.as_ref().map_or(0, Vec::len),
         })
@@ -584,6 +589,8 @@ impl Shell {
         let flags = &mut self.flags;
         let widths = &mut self.widths;
         let in_more = &mut self.in_more;
+        let right_end = &mut self.right_end;
+        let room_seen = &mut self.room;
         let mut tools = Tools { app, cur: &cur, fonts: &fonts, custom: &mut self.custom };
         egui::Frame::NONE.fill(TOOLBAR).corner_radius(24.0).inner_margin(egui::Margin::symmetric(10, 4)).show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -592,7 +599,9 @@ impl Shell {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 // As many groups as fit, in order; the rest go into the ⋮ menu (as Docs does),
                 // leaving room for the mode box and arrow at the right end.
-                let mut room = ui.available_width() - RIGHT_END;
+                // The right end's width as drawn last frame (a guess before the first).
+                let mut room = ui.available_width() - if *right_end > 0.0 { *right_end + 8.0 } else { RIGHT_END };
+                *room_seen = room;
                 let mut shown = GROUPS.len();
                 let mut used = 0.0;
                 for (i, w) in widths.iter().enumerate() {
@@ -632,7 +641,8 @@ impl Shell {
                     }
                 });
                 // The right end: the mode switch and the compact-mode arrow (Docs' "Hide the menus").
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                let end = ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let start = ui.cursor().right();
                     let (icon, tip) = if flags.compact {
                         ("keyboard_arrow_down", "Show the menus (Ctrl+Shift+F)")
                     } else {
@@ -642,7 +652,9 @@ impl Shell {
                         flags.compact = !flags.compact;
                     }
                     mode_switch(tools.app, ui, editable);
+                    start - ui.cursor().right()
                 });
+                *right_end = end.inner;
             });
         });
     }
