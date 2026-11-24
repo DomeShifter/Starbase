@@ -45,7 +45,8 @@ fn words(n: u64) -> String {
 
 /// The engine's Word count: the selection's words when text is selected, else the document's.
 fn count(app: &mut WordApp) -> Option<u64> {
-    app.run("review.wordCount", json!({})).ok()?["words"].as_u64()
+    // The engine directly: through `WordApp::run`, a parameterless review.wordCount opens the dialog.
+    app.session.run("review.wordCount", &json!({})).ok()?["words"].as_u64()
 }
 
 impl WordCount {

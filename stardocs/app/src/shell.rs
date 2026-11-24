@@ -400,6 +400,13 @@ fn current(app: &mut WordApp) -> Current {
 }
 
 impl Shell {
+    /// What the window shows, as JSON, for tests and AI agents (the test hook, `testhook.rs`):
+    /// filled in by the lead; keys are stable names, values plain JSON.
+    pub fn test_state(&mut self, app: &mut WordApp, link: Option<&Link>) -> Value {
+        let _ = (app, link);
+        json!({})
+    }
+
     /// Draws the title row, menus and toolbar above the page. Call before `WordApp::ui`.
     pub fn ui(&mut self, app: &mut WordApp, ui: &mut Ui, link: Option<&Link>) {
         let before = self.flags;
