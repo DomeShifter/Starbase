@@ -712,6 +712,7 @@ impl Shell {
     /// Draws the title row, menus and toolbar above the page. Call before `WordApp::ui`.
     pub fn ui(&mut self, app: &mut WordApp, ui: &mut Ui, link: Option<&Link>) {
         self.ctx = Some(ui.ctx().clone());
+        crate::theme::keep_light(app);
         let before = self.flags;
         if !self.flags.loaded {
             // Docs has no floating mini toolbar over selected text.
