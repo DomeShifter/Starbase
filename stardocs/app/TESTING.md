@@ -7,7 +7,7 @@ without clicking at screen positions. Without `test` it is not there. Code: `src
 | Call | What it does | Returns |
 |---|---|---|
 | `stardocs.run(id, params)` | Runs a command: a WordCraft id (`format.bold`, `insert.table` …), `ui.dialog:<name>`, or a StarDocs menu id (`stardocs.*`). `params` is a JSON string or an object; leave it out for `{}`. | request number |
-| `stardocs.state()` | Takes a snapshot: `shell` (what the window shows), `format`, `view`, `words`, `text` (first 100 KB, `textTruncated`), `dirty`, `status`. | request number |
+| `stardocs.state()` | Takes a snapshot: `shell` (what the window shows), `format`, `view`, `words`, `text` (first 100 KB, `textTruncated`), `dirty`, `status`, `theme` (system preference, interface theme, surround/ruler/hover/text box colours). | request number |
 | `stardocs.type(text)` | Types text at the caret (`text.insert`). | request number |
 | `stardocs.key(name)` | One key: Enter, Tab, Backspace, Delete, Left/Right/Up/Down, Home, End, ctrl+Home, ctrl+End. | request number |
 | `stardocs.wait(n)` | Waits (up to 10 s) for request `n`'s answer. | promise of a JSON string |

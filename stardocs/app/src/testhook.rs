@@ -48,6 +48,7 @@ pub struct TestHook {
     queue: Queue,
     results: Results,
     object: js_sys::Object,
+    ctx: egui::Context,
 }
 
 impl TestHook {
@@ -132,7 +133,7 @@ impl TestHook {
             return None;
         }
         log::info!("test hook: window.stardocs is on");
-        Some(Self { queue, results, object })
+        Some(Self { queue, results, object, ctx: ctx.clone() })
     }
 
     /// Answers every queued request. Call at the start of `WebShell::ui`, before the shell draws.
@@ -142,7 +143,7 @@ impl TestHook {
             let Some((n, request)) = self.queue.borrow_mut().pop_front() else { break };
             let answer = match request {
                 Request::Run(id, params) => run(app, shell, link, &id, params),
-                Request::State => Ok(snapshot(app, shell, link)),
+                Request::State => Ok(snapshot(app, shell, link, &self.ctx)),
                 Request::Type(text) => app.run("text.insert", json!({ "text": text })),
                 Request::Key(name) => match key_command(&name) {
                     Some(id) => app.run(id, json!({})),
@@ -192,7 +193,7 @@ fn stardocs_command(shell: &mut Shell, app: &mut WordApp, link: Option<&Link>, i
 
 /// The app and document as JSON: what the window shows, the formatting and view at the caret,
 /// the word count, the plain text (first 100 KB), unsaved changes and the status line.
-fn snapshot(app: &mut WordApp, shell: &mut Shell, link: Option<&Link>) -> Value {
+fn snapshot(app: &mut WordApp, shell: &mut Shell, link: Option<&Link>, ctx: &egui::Context) -> Value {
     let shell_state = shell.test_state(app, link);
     let mut engine = |id: &str| app.session.run(id, &json!({})).unwrap_or_else(|e| json!({ "err": e.to_string() }));
     let format = engine("format.state");
@@ -216,6 +217,7 @@ fn snapshot(app: &mut WordApp, shell: &mut Shell, link: Option<&Link>) -> Value 
         "textTruncated": truncated,
         "dirty": app.session.dirty,
         "status": app.session.status,
+        "theme": crate::theme::state(ctx),
     })
 }
 
