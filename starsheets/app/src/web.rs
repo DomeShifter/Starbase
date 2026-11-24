@@ -782,10 +782,10 @@ fn install_wake(ctx: &egui::Context) {
     wake.forget();
 }
 
-/// The browser tab's title: the open file's name only (no ".xlsx", no "StarSheets"), as Google
-/// Sheets' tab shows the file's name; "StarSheets" on the home screen. eframe's web runner
-/// ignores `ViewportCommand::Title`, so the page's own `document.title` is set here, and only
-/// when it changes.
+/// The browser tab's title and icon: the open file's name only (no ".xlsx", no "StarSheets") with
+/// the StarSheets icon, as Google Sheets' tab shows the file's name; "StarDrive" with the
+/// StarDrive icon on the home screen. eframe's web runner ignores `ViewportCommand::Title`, so the
+/// page's own `document.title` and icon links (index.html) are set here, and only when they change.
 fn set_tab_title(file: Option<&str>) {
     thread_local!(static SHOWN: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) });
     let title = match file {
@@ -797,14 +797,21 @@ fn set_tab_title(file: Option<&str>) {
                 .map_or(name, |e| &name[..name.len() - e.len()]);
             if stem.trim().is_empty() { "Untitled spreadsheet".to_string() } else { stem.to_string() }
         }
-        None => "StarSheets".to_string(),
+        None => "StarDrive".to_string(),
     };
+    let icon = if file.is_some() { "favicon" } else { "stardrive" };
+    let shown = format!("{icon}\n{title}");
     SHOWN.with(|s| {
-        if *s.borrow() != title
+        if *s.borrow() != shown
             && let Some(doc) = web_sys::window().and_then(|w| w.document())
         {
             doc.set_title(&title);
-            *s.borrow_mut() = title;
+            for (id, ext) in [("tab_icon_ico", "ico"), ("tab_icon_svg", "svg")] {
+                if let Some(link) = doc.get_element_by_id(id) {
+                    let _ = link.set_attribute("href", &format!("{icon}.{ext}"));
+                }
+            }
+            *s.borrow_mut() = shown;
         }
     });
 }
