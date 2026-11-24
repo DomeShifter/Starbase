@@ -28,16 +28,18 @@ apt update && apt install -y curl
 curl -fsSL https://get.docker.com | sh
 ```
 
-## 3. Choose where your files live
+## 3. Choose where your files and backups live
 
 Your files can stay inside the container (simplest: they are then in the container's disk and in
 its Proxmox backups), or on another disk or NAS share that the **host** has mounted. For the
-second, on the Proxmox host's shell (container number `<ct>`, host folder of your choice):
+second, on the Proxmox host's shell (container number `<ct>`, host folders of your choice; the
+backups folder is best on a different disk or share from the files):
 
 ```sh
-mkdir -p /mnt/bigdisk/starbase
-chown 101000:101000 /mnt/bigdisk/starbase   # user 1000 inside an unprivileged container
+mkdir -p /mnt/bigdisk/starbase /mnt/nas-backups/starbase
+chown 101000:101000 /mnt/bigdisk/starbase /mnt/nas-backups/starbase   # user 1000 inside the container
 pct set <ct> -mp0 /mnt/bigdisk/starbase,mp=/srv/starbase
+pct set <ct> -mp1 /mnt/nas-backups/starbase,mp=/srv/starbase-backups
 pct reboot <ct>
 ```
 
@@ -46,25 +48,33 @@ mounted on the host over SMB/CIFS needs `uid=101000,gid=101000` in its mount opt
 
 ## 4. Run Starbase
 
-In the container's console:
+In the container's console (you are root there, so no `sudo`):
 
 ```sh
-mkdir -p /srv/starbase && chown 1000:1000 /srv/starbase
+mkdir -p /srv/starbase /srv/starbase-backups
+chown 1000:1000 /srv/starbase /srv/starbase-backups
 docker run -d --name starbase --restart unless-stopped -p 8080:8080 \
-  -v /srv/starbase:/data ghcr.io/domeshifter/starbase:latest
+  --memory 1536m --memory-swap 1536m -e TZ=Europe/London \
+  -v /srv/starbase:/data -v /srv/starbase-backups:/backups \
+  ghcr.io/domeshifter/starbase:latest
 docker logs starbase   # shows the setup code
 ```
 
-Open `http://<container address>:8080` and make the owner's account with the setup code. StarDocs
-is at `/docs/`.
+Use your own time zone in `TZ` (it sets the hour backups run; without it, UTC). Open
+`http://<container address>:8080` and make the owner's account with the setup code (the screen
+may still say StarSheets). Starbase Docs is at `/docs/`.
 
 ## Backups
 
 - **Proxmox backups** of the container include your files only if they live inside it (step 3,
   first option). A mount point (`mp0`) is left out unless you tick *Backup* on it.
-- **Starbase's own backups** (encrypted, once a day, restorable file by file): mount a second
-  folder, e.g. `pct set <ct> -mp1 /mnt/nas-backups/starbase,mp=/srv/starbase-backups`, add
-  `-v /srv/starbase-backups:/backups` to the `docker run`, then avatar › Backups… in the app.
-  Keep the recovery key it shows somewhere else. Details: [Docker guide, Backups](docker.md#backups).
+- **Starbase's own backups** (encrypted, once a day, restorable file by file): in the app,
+  avatar › Backups… › **Set up backups**. The first one runs straight away, then daily at the hour
+  you pick. Keep the recovery key it shows somewhere other than this server.
+- Started without the `/backups` line? Add the `mp1` mount point (step 3), then
+  `docker rm -f starbase` and run the `docker run` from step 4 again: your files stay in
+  `/srv/starbase`.
+- Restoring, and rebuilding on a new server from a backup:
+  [Docker guide, Backups](docker.md#backups).
 
 Updating, settings, and use from outside your home: see the [Docker guide](docker.md).

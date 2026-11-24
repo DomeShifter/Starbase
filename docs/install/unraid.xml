@@ -7,14 +7,14 @@
   <Privileged>false</Privileged>
   <Support>https://github.com/DomeShifter/Starbase/issues</Support>
   <Project>https://github.com/DomeShifter/Starbase</Project>
-  <Overview>Spreadsheets (StarSheets) and documents (StarDocs) you host yourself, familiar to anyone who uses Google Workspace. Your files are kept as ordinary .xlsx and .docx. The setup code for the first (owner's) account is in the container's log.</Overview>
+  <Overview>Starbase: files (Starbase Drive), spreadsheets (Starbase Sheets) and documents (Starbase Docs) you host yourself, familiar to anyone who uses Google Workspace. Your files are kept as ordinary .xlsx and .docx. The setup code for the first (owner's) account is in the container's log.</Overview>
   <Category>Productivity: Cloud:</Category>
   <WebUI>http://[IP]:[PORT:8080]/</WebUI>
   <Icon>https://raw.githubusercontent.com/DomeShifter/Starbase/main/starsheets/app/apple-touch-icon.png</Icon>
   <ExtraParams>--user 99:100 --memory=1536m --memory-swap=1536m</ExtraParams>
   <Config Name="Web port" Target="8080" Default="8080" Mode="tcp" Description="Port for the web page" Type="Port" Display="always" Required="true" Mask="false">8080</Config>
   <Config Name="Files" Target="/data" Default="/mnt/user/appdata/starbase" Mode="rw" Description="Your spreadsheets and documents, versions and accounts" Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/starbase</Config>
-  <Config Name="Backups" Target="/backups" Default="" Mode="rw" Description="Optional: a share for Starbase's own encrypted backups (avatar › Backups… in the app)" Type="Path" Display="always" Required="false" Mask="false"></Config>
+  <Config Name="Backups" Target="/backups" Default="" Mode="rw" Description="Optional: a share for Starbase's own encrypted backups (avatar › Backups… in the app; the first backup runs straight away)" Type="Path" Display="always" Required="false" Mask="false"></Config>
   <Config Name="Setup code" Target="STARSHEETS_PASSWORD" Default="" Mode="" Description="Optional: your own setup code for the owner's account (12+ characters). Empty: a random one is printed in the log" Type="Variable" Display="always" Required="false" Mask="true"></Config>
   <Config Name="Where files are kept (shown in the app)" Target="LOCATION" Default="the server" Mode="" Description="How the apps tell people where files are saved" Type="Variable" Display="advanced" Required="false" Mask="false">the server</Config>
 </Container>
