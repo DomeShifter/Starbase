@@ -448,6 +448,10 @@ impl Oidc {
             req = req.add_prompt(CoreAuthPrompt::None);
         } else if start.fresh {
             req = req.add_prompt(CoreAuthPrompt::Login).add_extra_param("max_age", "0");
+        } else if start.link.is_some() {
+            // Linking: the provider asks who to link (otherwise it silently hands back whoever is
+            // signed in there, and "Link another sign-in" couldn't pick another one).
+            req = req.add_prompt(CoreAuthPrompt::Login);
         }
         let (url, state, nonce) = req.url();
         let binding = random_hex(32);

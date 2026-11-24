@@ -51,6 +51,16 @@ pub fn ask_sign_in() {
     SIGN_IN.with(|s| *s.borrow_mut() = true);
 }
 
+/// Opens one of the avatar menu's dialogs, as the menu does (the test hook: `account:profile`,
+/// `account:password`, `account:people`).
+pub fn request(ctx: &egui::Context, what: &str) -> Result<(), String> {
+    if !matches!(what, "profile" | "password" | "people" | "storage" | "backups") {
+        return Err(format!("no account dialog `{what}`"));
+    }
+    ctx.data_mut(|m| m.insert_temp(egui::Id::unique(REQUEST), what.to_string()));
+    Ok(())
+}
+
 /// A request found the single sign-on session ended but renewable: renew it at a quiet moment.
 pub fn renewal_needed() {
     RENEW.with(|r| *r.borrow_mut() = true);

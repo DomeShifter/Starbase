@@ -21,7 +21,8 @@ StarSheets keep working alongside, unless you turn that off.
   service user called `ann`: they get `ann2`.
 - **Linking.** Someone who already has a StarSheets account (the owner too) can link it: sign
   in with the password, then your avatar › Your name and colour, type your password and press
-  the SSO button.
+  the SSO button. The service then asks who to link (`prompt=login`), even when someone is
+  already signed in there.
 - **An account made through your service** has no password, so it can't simply be unlinked
   (it couldn't sign in at all then). In Your name and colour it has "Confirm who you are": the
   service asks them to sign in again (`api/oidc/login?fresh=1`: `prompt=login`, `max_age=0`),

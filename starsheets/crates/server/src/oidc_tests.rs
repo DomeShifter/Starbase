@@ -446,6 +446,7 @@ async fn link_trip(app: &Shared, f: &Fake, session: &str, password: &str, who: &
     let pending = g.cookie(HOST_COOKIE).expect("the sign-in cookie");
     let url = Url::parse(g.json["url"].as_str().unwrap()).unwrap();
     let q: HashMap<String, String> = url.query_pairs().into_owned().collect();
+    assert_eq!(q.get("prompt").map(String::as_str), Some("login"), "linking lets the person pick who to link");
     let code = random_hex(8);
     f.codes.lock().unwrap().insert(code.clone(), (who.clone(), q["nonce"].clone(), q["code_challenge"].clone(), q["redirect_uri"].clone()));
     send(app, "GET", &format!("/api/oidc/callback?code={code}&state={}", q["state"]), &format!("{pending}; {session}"), Value::Null).await
