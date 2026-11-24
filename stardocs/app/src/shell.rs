@@ -230,6 +230,8 @@ pub struct Shell {
     renaming: Option<String>,
     share: crate::share::Share,
     flags: Flags,
+    shortcuts: crate::shortcuts::Shortcuts,
+    word_count: crate::wordcount::WordCount,
     /// The colour being mixed in the text colour menu's Custom picker.
     custom: Option<Color32>,
 }
@@ -416,6 +418,13 @@ impl Shell {
                 self.toolbar(app, ui, editable);
             });
         self.share.ui(ui.ctx());
+        if std::mem::take(&mut self.flags.shortcuts) {
+            self.shortcuts.open = true;
+        }
+        self.shortcuts.ui(ui.ctx(), MENUS);
+        if self.flags.words {
+            self.word_count.ui(app, ui.ctx());
+        }
         self.flags.sync(before);
     }
 

@@ -38,7 +38,7 @@ pub struct Shortcuts {
 fn collect(items: &[Item], path: &str, out: &mut Vec<(String, &'static str)>) {
     for item in items {
         match item {
-            Item::Cmd(label, _, _, keys) if !keys.is_empty() => {
+            Item::Cmd(label, _, _, keys) | Item::Toggle(label, _, _, keys) if !keys.is_empty() => {
                 let name = if path.is_empty() { (*label).to_string() } else { format!("{path} › {label}") };
                 if !out.iter().any(|(n, k)| *n == name && k == keys) {
                     out.push((name, keys));
