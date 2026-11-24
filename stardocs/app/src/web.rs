@@ -178,6 +178,13 @@ impl eframe::App for WebShell {
         }
         self.app.logic(ctx);
         if let Some(link) = &self.link {
+            // Comments and tracked changes are signed with the server account's name; the name
+            // chosen in File › Options stays stored for documents opened without the server.
+            if let Some(author) = link.take_author() {
+                let own = self.app.session.author.clone();
+                crate::host::Bridge::set_author(&mut self.app, &author);
+                self.prefs.keep_own_author(&self.app.session.author, &own);
+            }
             link.tick(&mut self.app, ctx);
         }
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#2132).

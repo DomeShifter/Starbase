@@ -89,6 +89,8 @@ struct State {
     download_next: bool,
     /// A save that failed, and when (ms): tried again after [`RETRY_MS`] unless a newer one comes.
     retry: Option<(Vec<u8>, f64)>,
+    /// The signed-in person's name from the server, until the page signs comments with it.
+    author: Option<String>,
 }
 
 #[derive(Clone)]
@@ -126,7 +128,30 @@ impl Link {
         let folder = query_param("folder").unwrap_or_default();
         let state = Rc::new(RefCell::new(State { id, folder, ..Default::default() }));
         CURRENT.with(|c| *c.borrow_mut() = Some(state.clone()));
-        Some(Self { state, ctx })
+        let link = Self { state, ctx };
+        link.ask_who();
+        Some(link)
+    }
+
+    /// Asks the server who is signed in, so comments and tracked changes carry their name.
+    fn ask_who(&self) {
+        let link = self.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Ok((200, _, body)) = fetch("GET", &api("api/info"), None, None).await {
+                let v: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+                let user = &v["user"];
+                let name = user["name"].as_str().filter(|n| !n.trim().is_empty()).or_else(|| user["username"].as_str());
+                if let Some(name) = name.filter(|n| !n.trim().is_empty()) {
+                    link.state.borrow_mut().author = Some(name.to_string());
+                    link.ctx.request_repaint();
+                }
+            }
+        });
+    }
+
+    /// The signed-in person's name, once, when the server has said it (see [`Self::ask_who`]).
+    pub fn take_author(&self) -> Option<String> {
+        self.state.borrow_mut().author.take()
     }
 
     /// Saves go to the server; exports still download (`download` is the browser's).
