@@ -676,3 +676,50 @@ fn a_pictures_right_click_menu_offers_format_image() {
     click_containing(&mut h, "Size and rotation");
     assert_eq!(h.state_mut().state()["dialogs"]["wordcraft"], true, "Size and rotation opens WordCraft's size dialog");
 }
+
+#[test]
+fn every_menu_icon_is_bundled() {
+    fn walk(items: &[crate::shell::Item], bad: &mut Vec<String>) {
+        use crate::shell::Item::{Cmd, Sub};
+        for item in items {
+            if let Cmd(label, ..) | Sub(label, _) = item
+                && let Some(name) = crate::icons::menu_icon_name(label)
+                && crate::icons::icon(name).is_none()
+            {
+                bad.push(format!("{label}: {name}"));
+            }
+            if let Sub(_, sub) = item {
+                walk(sub, bad);
+            }
+        }
+    }
+    let mut bad = Vec::new();
+    for (_, items) in crate::shell::MENUS {
+        walk(items, &mut bad);
+    }
+    assert!(bad.is_empty(), "menu icons missing from icons.rs: {bad:?}");
+}
+
+/// Docs' menus: every row the same height, and every row (so every label after the icon
+/// column) starting at the same place.
+#[test]
+fn menu_rows_are_even_and_line_up() {
+    let mut h = window(1400.0);
+    for menu in ["File", "Edit", "View", "Insert", "Format", "Tools", "Help"] {
+        click(&mut h, menu);
+        let toolbar = h.state().toolbar.clone();
+        let named: Vec<(String, egui::Rect)> = h
+            .query_all(By::new().role(Role::Button))
+            .map(|n| (n.accesskit_node().label().unwrap_or_default(), n.rect()))
+            .filter(|(_, r)| !toolbar.contains(r))
+            .collect();
+        let rows: Vec<egui::Rect> = named.iter().map(|(_, r)| *r).collect();
+        assert!(rows.len() >= 3, "{menu} opened: {rows:?}");
+        for r in &rows {
+            assert!((r.height() - 32.0).abs() < 0.6, "{menu}: a {}-px row in {named:?}", r.height());
+        }
+        let lefts: Vec<f32> = rows.iter().map(|r| r.left()).collect();
+        assert!(lefts.iter().all(|l| (l - lefts[0]).abs() < 0.6), "{menu}: rows start together {lefts:?}");
+        close_menus(&mut h);
+    }
+}
