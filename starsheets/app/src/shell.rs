@@ -1288,7 +1288,8 @@ pub fn run_entry_with(app: &mut SheetApp, ctx: &egui::Context, id: &str, params:
         _ => None,
     };
     if let Some(key) = request {
-        return ctx.data_mut(|m| m.insert_temp(egui::Id::unique(key), true));
+        ctx.data_mut(|m| m.insert_temp(egui::Id::unique(key), true));
+        return;
     }
     // "ui:<dialog>" opens one of GridCraft's dialogs (some, like conditional
     // formatting, are then shown as our own side panel).

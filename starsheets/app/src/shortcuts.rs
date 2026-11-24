@@ -97,7 +97,9 @@ pub fn groups(filter: &str) -> Vec<(String, Vec<(String, String)>)> {
     let squash = |s: &str| s.chars().filter(|c| !c.is_whitespace() && *c != '+').collect::<String>().to_lowercase();
     let needle_keys = squash(&needle);
     for (_, list) in &mut out {
-        list.retain(|(l, k)| needle.is_empty() || l.to_lowercase().contains(&needle) || (!needle_keys.is_empty() && squash(k).contains(&needle_keys)));
+        list.retain(|(l, k)| {
+            needle.is_empty() || l.to_lowercase().contains(&needle) || (!needle_keys.is_empty() && squash(k).contains(&needle_keys))
+        });
     }
     out.retain(|(_, l)| !l.is_empty());
     out
