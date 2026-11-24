@@ -442,8 +442,9 @@ fn animations_enabled() -> Box<dyn Fn() -> Option<bool>> {
 fn guard_unload(dirty: Rc<Cell<bool>>, saves: AsyncSaves) -> Result<(), String> {
     let window = web_sys::window().ok_or("no window")?;
     let on_unload = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::BeforeUnloadEvent)>::new(move |e: web_sys::BeforeUnloadEvent| {
-        // A save still in the browser's picker hasn't written anything yet.
-        if dirty.get() || saves.pending() > 0 {
+        // A save still in the browser's picker hasn't written anything yet, nor has one still on
+        // its way to the Starbase server (or one that failed there).
+        if dirty.get() || saves.pending() > 0 || crate::server::unsaved() {
             e.prevent_default();
             // Older browsers ask only when `returnValue` is set.
             e.set_return_value("unsaved changes");

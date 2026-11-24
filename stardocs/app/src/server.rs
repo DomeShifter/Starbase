@@ -14,7 +14,9 @@
 //! - Exports (PDF, pictures, other formats) still download in the browser.
 //!
 //! The page saves by itself ([`Link::tick`]) a couple of seconds after the last change, like
-//! Google Docs, and the title row shows "Saving…" / "Saved".
+//! Google Docs, and the title row shows "Saving…" / "Saved". A save that failed is tried again
+//! every [`RETRY_MS`] until it goes through or a newer save replaces it, and leaving the page
+//! asks first while anything is not yet on the server ([`unsaved`]).
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -31,6 +33,24 @@ const NOTICE_MS: f64 = 20_000.0;
 
 /// How long the document must sit unchanged before it saves by itself (milliseconds).
 const QUIET_MS: f64 = 2000.0;
+
+/// How long after a failed save it is tried again (milliseconds).
+const RETRY_MS: f64 = 15_000.0;
+
+thread_local! {
+    /// This page's link, for the unsaved-changes guard ([`unsaved`]), which is set up before it.
+    static CURRENT: RefCell<Option<Rc<RefCell<State>>>> = const { RefCell::new(None) };
+}
+
+/// Whether something is not on the server yet: a save on its way or waiting, or one that failed.
+/// The page's `beforeunload` guard asks the browser to confirm leaving while this is true (the
+/// editor's own unsaved flag clears as soon as a save is handed over, before the server has it).
+pub fn unsaved() -> bool {
+    CURRENT.with(|c| c.borrow().as_ref().is_some_and(|s| {
+        let s = s.borrow();
+        s.busy || s.waiting.is_some() || s.retry.is_some()
+    }))
+}
 
 /// What the title row says about saving.
 #[derive(Clone, Default, PartialEq)]
@@ -65,6 +85,8 @@ struct State {
     dirty_since: Option<f64>,
     /// The next save also downloads (File › Download › Word).
     download_next: bool,
+    /// A save that failed, and when (ms): tried again after [`RETRY_MS`] unless a newer one comes.
+    retry: Option<(Vec<u8>, f64)>,
 }
 
 #[derive(Clone)]
@@ -100,7 +122,9 @@ impl Link {
             return None;
         }
         let folder = query_param("folder").unwrap_or_default();
-        Some(Self { state: Rc::new(RefCell::new(State { id, folder, ..Default::default() })), ctx })
+        let state = Rc::new(RefCell::new(State { id, folder, ..Default::default() }));
+        CURRENT.with(|c| *c.borrow_mut() = Some(state.clone()));
+        Some(Self { state, ctx })
     }
 
     /// Saves go to the server; exports still download (`download` is the browser's).
@@ -196,11 +220,33 @@ impl Link {
     /// Every frame: news for the status line, and the save made by itself once the document has
     /// been left alone for a moment.
     pub fn tick(&self, app: &mut WordApp, ctx: &egui::Context) {
-        for msg in std::mem::take(&mut self.state.borrow_mut().news) {
-            self.state.borrow_mut().notice = Some((msg.clone(), now()));
+        // Taken first: a `for` over `take(&mut self.state.borrow_mut().news)` keeps that borrow for
+        // the whole loop, and the body's own borrow then panicked (froze the page on any message).
+        let news = std::mem::take(&mut self.state.borrow_mut().news);
+        for msg in news {
+            let mut s = self.state.borrow_mut();
+            // A failed save already says so in red beside the name; no second copy in amber.
+            if s.saved != Saved::Failed(msg.clone()) {
+                s.notice = Some((msg.clone(), now()));
+            }
+            drop(s);
             app.status(msg);
         }
         let t = now();
+        let again = {
+            let mut s = self.state.borrow_mut();
+            match &s.retry {
+                Some((_, at)) if !s.busy && t - at >= RETRY_MS => s.retry.take().map(|(bytes, _)| (s.name.clone(), bytes)),
+                Some(_) => {
+                    ctx.request_repaint_after(std::time::Duration::from_secs(1));
+                    None
+                }
+                None => None,
+            }
+        };
+        if let Some((name, bytes)) = again {
+            self.save(&name, bytes);
+        }
         let since = {
             let mut s = self.state.borrow_mut();
             if !app.session.dirty {
@@ -252,6 +298,8 @@ impl Link {
         {
             let mut s = self.state.borrow_mut();
             s.saved = Saved::Saving;
+            // A newer save replaces one that failed.
+            s.retry = None;
             if s.busy {
                 s.waiting = Some(bytes);
                 return;
@@ -265,7 +313,9 @@ impl Link {
         wasm_bindgen_futures::spawn_local(async move {
             let mut next = Some(bytes);
             while let Some(bytes) = next.take() {
-                link.send(bytes).await;
+                if let Err(bytes) = link.send(bytes).await {
+                    link.state.borrow_mut().retry = Some((bytes, now()));
+                }
                 next = link.state.borrow_mut().waiting.take();
             }
             let mut s = link.state.borrow_mut();
@@ -278,8 +328,9 @@ impl Link {
         });
     }
 
-    /// One save: the file itself, a new file, or (changed elsewhere) a kept copy.
-    async fn send(&self, bytes: Vec<u8>) {
+    /// One save: the file itself, a new file, or (changed elsewhere) a kept copy. A failed save
+    /// hands its bytes back, to try again.
+    async fn send(&self, bytes: Vec<u8>) -> Result<(), Vec<u8>> {
         let (id, version, name, folder) = {
             let s = self.state.borrow();
             (s.id.clone(), s.version.clone(), s.name.clone(), s.folder.clone())
@@ -288,8 +339,11 @@ impl Link {
             Some(id) => fetch("PUT", &api(&format!("api/files/{id}")), Some(&version), Some(&bytes)).await,
             None => self.create(&folder, &name, &bytes).await,
         };
-        match r {
-            Ok((200 | 201, _, body)) => self.took(&body),
+        let why = match r {
+            Ok((200 | 201, _, body)) => {
+                self.took(&body);
+                return Ok(());
+            }
             Ok((409, ..)) => {
                 let (stem, ext) = split(&name);
                 let copy = format!("{stem} (StarDocs copy {}){ext}", stamp());
@@ -298,15 +352,18 @@ impl Link {
                         self.took(&body);
                         let shown = self.name();
                         self.news(format!("Someone else changed \"{name}\" while you were editing. Their version is untouched; yours is kept as \"{shown}\", which is open now."));
+                        return Ok(());
                     }
-                    Ok((code, _, body)) => self.fail(&format!("Not saved: the file changed elsewhere and a copy couldn't be made ({})", reason(code, &body))),
-                    Err(e) => self.fail(&format!("Not saved: {e}")),
+                    Ok((code, _, body)) => format!("Not saved: the file changed elsewhere and a copy couldn't be made ({})", reason(code, &body)),
+                    Err(e) => format!("Not saved: {e}"),
                 }
             }
-            Ok((401, ..)) => self.fail("Not saved: you're signed out. Sign in on the home screen in another tab, then edit again here."),
-            Ok((code, _, body)) => self.fail(&format!("Not saved ({})", reason(code, &body))),
-            Err(e) => self.fail(&format!("Not saved: couldn't reach the server ({e})")),
-        }
+            Ok((401, ..)) => "Not saved: you're signed out. Sign in on the home screen in another tab".to_string(),
+            Ok((code, _, body)) => format!("Not saved ({})", reason(code, &body)),
+            Err(e) => format!("Not saved: couldn't reach the server ({e})"),
+        };
+        self.fail(&format!("{why}. Trying again by itself; keep this tab open."));
+        Err(bytes)
     }
 
     async fn create(&self, folder: &str, name: &str, bytes: &[u8]) -> Result<(u16, web_sys::Headers, Vec<u8>), String> {
