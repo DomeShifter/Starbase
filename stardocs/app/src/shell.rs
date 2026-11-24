@@ -44,7 +44,18 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Cmd("New document", "file.new", NO, ""),
             Cmd("Open", "file.open", NO, "Ctrl+O"),
             Sep,
-            Sub("Download", &[Cmd("Microsoft Word (.docx)", "stardocs.download", NO, ""), Cmd("PDF document (.pdf)", "file.exportPdf", NO, "")]),
+            Sub(
+                "Download",
+                &[
+                    Cmd("Microsoft Word (.docx)", "stardocs.download", NO, ""),
+                    Cmd("OpenDocument format (.odt)", "stardocs.downloadAs", r#"{"ext":"odt"}"#, ""),
+                    Cmd("Rich Text Format (.rtf)", "stardocs.downloadAs", r#"{"ext":"rtf"}"#, ""),
+                    Cmd("PDF document (.pdf)", "file.exportPdf", NO, ""),
+                    Cmd("Plain text (.txt)", "stardocs.downloadAs", r#"{"ext":"txt"}"#, ""),
+                    Cmd("Web page (.html)", "stardocs.downloadAs", r#"{"ext":"html"}"#, ""),
+                    Cmd("Markdown (.md)", "stardocs.downloadAs", r#"{"ext":"md"}"#, ""),
+                ],
+            ),
             Cmd("Rename", "stardocs.rename", NO, ""),
             Sep,
             Cmd("Page setup", "ui.dialog:pageSetup", NO, ""),
@@ -104,15 +115,64 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Cmd("Comment", "review.newComment", NO, "Ctrl+Alt+M"),
             Sep,
             Cmd("Horizontal line", "insert.horizontalLine", NO, ""),
-            Cmd("Page break", "insert.pageBreak", NO, "Ctrl+Enter"),
-            Sub("Headers and footers", &[Cmd("Header", "insert.editHeader", NO, ""), Cmd("Footer", "insert.editFooter", NO, "")]),
-            Cmd("Page numbers", "insert.pageNumber", NO, ""),
+            Sub(
+                "Break",
+                &[
+                    Cmd("Page break", "insert.pageBreak", NO, "Ctrl+Enter"),
+                    Cmd("Column break", "text.columnBreak", NO, "Ctrl+Shift+Enter"),
+                    Sep,
+                    Cmd("Section break (next page)", "layout.break", r#"{"kind":"nextPage"}"#, ""),
+                    Cmd("Section break (continuous)", "layout.break", r#"{"kind":"continuous"}"#, ""),
+                ],
+            ),
+            Sub(
+                "Headers and footers",
+                &[
+                    Cmd("Header", "insert.editHeader", NO, ""),
+                    Cmd("Footer", "insert.editFooter", NO, ""),
+                    Sep,
+                    Toggle("Different first page", "layout.differentFirstPage", "layout.firstPage", ""),
+                    Toggle("Different odd and even", "layout.differentOddEven", "layout.oddEven", ""),
+                    Sep,
+                    Cmd("Remove header", "insert.removeHeader", NO, ""),
+                    Cmd("Remove footer", "insert.removeFooter", NO, ""),
+                ],
+            ),
+            Sub(
+                "Page numbers",
+                &[
+                    Cmd("Top of page", "insert.pageNumber", r#"{"position":"top","align":"right"}"#, ""),
+                    Cmd("Bottom of page", "insert.pageNumber", r#"{"position":"bottom","align":"right"}"#, ""),
+                    Cmd("Page count", "insert.field", r#"{"instr":"NUMPAGES"}"#, ""),
+                    Sep,
+                    Sub(
+                        "Number format",
+                        &[
+                            Cmd("1, 2, 3", "layout.pageNumberFormat", r#"{"format":"decimal"}"#, ""),
+                            Cmd("i, ii, iii", "layout.pageNumberFormat", r#"{"format":"lowerRoman"}"#, ""),
+                            Cmd("I, II, III", "layout.pageNumberFormat", r#"{"format":"upperRoman"}"#, ""),
+                            Cmd("a, b, c", "layout.pageNumberFormat", r#"{"format":"lowerLetter"}"#, ""),
+                            Cmd("A, B, C", "layout.pageNumberFormat", r#"{"format":"upperLetter"}"#, ""),
+                        ],
+                    ),
+                    Cmd("More options", "ui.dialog:pageNumbers", NO, ""),
+                ],
+            ),
             Cmd("Footnote", "references.footnote", NO, "Ctrl+Alt+F"),
             Sep,
             Cmd("Special characters", "insert.symbol", NO, ""),
             Cmd("Equation", "insert.equation", NO, ""),
             Cmd("Bookmark", "ui.dialog:bookmark", NO, ""),
-            Cmd("Table of contents", "references.toc", NO, ""),
+            Sub(
+                "Table of contents",
+                &[
+                    Cmd("With page numbers", "references.toc", r#"{"pageNumbers":true,"hyperlinks":true}"#, ""),
+                    Cmd("With links", "references.toc", r#"{"pageNumbers":false,"hyperlinks":true}"#, ""),
+                    Sep,
+                    Cmd("Update table of contents", "references.updateToc", NO, ""),
+                    Cmd("Delete table of contents", "references.removeToc", NO, ""),
+                ],
+            ),
         ],
     ),
     (
@@ -300,6 +360,36 @@ pub const MENUS: &[(&str, &[Item])] = &[
                     Cmd("Table properties", "table.properties", NO, ""),
                 ],
             ),
+            Sub(
+                "Image",
+                &[
+                    Cmd("Crop image", "ui.crop", NO, ""),
+                    Cmd("Size and rotation", "picture.size", NO, ""),
+                    Sub(
+                        "Rotate",
+                        &[
+                            Cmd("Rotate clockwise 90°", "arrange.rotate", r#"{"direction":"right"}"#, ""),
+                            Cmd("Rotate anticlockwise 90°", "arrange.rotate", r#"{"direction":"left"}"#, ""),
+                            Cmd("Flip horizontally", "arrange.rotate", r#"{"direction":"flipHorizontal"}"#, ""),
+                            Cmd("Flip vertically", "arrange.rotate", r#"{"direction":"flipVertical"}"#, ""),
+                        ],
+                    ),
+                    Sub(
+                        "Text wrapping",
+                        &[
+                            Cmd("In line with text", "arrange.wrap", r#"{"wrap":"inline"}"#, ""),
+                            Cmd("Wrap text", "arrange.wrap", r#"{"wrap":"square"}"#, ""),
+                            Cmd("Break text", "arrange.wrap", r#"{"wrap":"topAndBottom"}"#, ""),
+                            Cmd("Behind text", "arrange.wrap", r#"{"wrap":"behindText"}"#, ""),
+                            Cmd("In front of text", "arrange.wrap", r#"{"wrap":"inFrontOfText"}"#, ""),
+                        ],
+                    ),
+                    Sep,
+                    Cmd("Alt text", "view.altTextPane", r#"{"value":true}"#, ""),
+                    Cmd("Replace image", "ui.changePicture", NO, ""),
+                    Cmd("Reset image", "picture.reset", NO, ""),
+                ],
+            ),
             Cmd("Borders and shading", "ui.dialog:borders", NO, ""),
             Cmd("Clear formatting", "format.clear", NO, "Ctrl+\\"),
         ],
@@ -311,8 +401,37 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Cmd("Word count", "ui.dialog:wordCount", NO, "Ctrl+Shift+C"),
             Sep,
             Toggle("Suggesting (track changes)", "review.trackChanges", "trackChanges", ""),
-            Cmd("Accept all suggestions", "review.acceptAll", NO, ""),
-            Cmd("Reject all suggestions", "review.rejectAll", NO, ""),
+            Sub(
+                "Review suggested edits",
+                &[
+                    Cmd("Accept suggestion", "review.accept", NO, ""),
+                    Cmd("Reject suggestion", "review.reject", NO, ""),
+                    Sep,
+                    Cmd("Next suggestion", "review.nextChange", NO, ""),
+                    Cmd("Previous suggestion", "review.previousChange", NO, ""),
+                    Sep,
+                    Cmd("Accept all", "review.acceptAll", NO, ""),
+                    Cmd("Reject all", "review.rejectAll", NO, ""),
+                ],
+            ),
+            Sub(
+                "Citations",
+                &[
+                    Sub(
+                        "Citation style",
+                        &[
+                            Cmd("MLA", "references.citationStyle", r#"{"style":"MLA"}"#, ""),
+                            Cmd("APA", "references.citationStyle", r#"{"style":"APA"}"#, ""),
+                            Cmd("Chicago", "references.citationStyle", r#"{"style":"Chicago"}"#, ""),
+                            Cmd("Harvard", "references.citationStyle", r#"{"style":"Harvard (Anglia)"}"#, ""),
+                        ],
+                    ),
+                    Cmd("Add citation source", "references.citation", NO, ""),
+                    Cmd("Manage sources", "references.sources", NO, ""),
+                    Sep,
+                    Cmd("Insert bibliography", "references.bibliography", NO, ""),
+                ],
+            ),
             Sep,
             Cmd("Read aloud", "review.readAloud", NO, ""),
         ],
@@ -478,6 +597,8 @@ fn is_on(app: &mut WordApp, flags: &Flags, key: &str) -> bool {
         "para.keepNext" => selection_para(app).keep_next,
         "para.keepLines" => selection_para(app).keep_lines,
         "table.header" => header_row(app),
+        "layout.firstPage" => wordcraft_engine::cmd::page::sect(&app.session).title_page,
+        "layout.oddEven" => app.session.doc.settings.even_odd_headers,
         _ => app.run("view.state", json!({})).ok().and_then(|v| v.get(key).and_then(Value::as_bool)).unwrap_or(false),
     }
 }
@@ -509,6 +630,9 @@ pub fn greyed(app: &WordApp, id: &str) -> bool {
     match id {
         "table.merge" => wordcraft_engine::cmd::table::selected_cells(&app.session).len() < 2,
         "stardocs.restartNumbering" => !in_numbered_list(app),
+        // Format › Image: WordCraft's crop mode, and the items it keys to a selected picture.
+        "ui.crop" => !wordcraft_ui_egui::widgets::enabled(app, id),
+        "ui.changePicture" | "view.altTextPane" => app.session.why_disabled("picture.reset").is_some(),
         _ if id.starts_with("stardocs.") || id.starts_with("ui.") => false,
         _ => app.session.why_disabled(id).is_some(),
     }
@@ -531,6 +655,7 @@ fn is_own(id: &str) -> bool {
             | "stardocs.editing"
             | "stardocs.suggesting"
             | "stardocs.download"
+            | "stardocs.downloadAs"
             | "stardocs.rename"
             | "stardocs.restartNumbering"
     )
@@ -550,6 +675,13 @@ fn run_menu(app: &mut WordApp, ctx: &egui::Context, flags: &mut Flags, link: Opt
             run(app, "file.save", json!({}));
         }
         ("stardocs.download", None) => run(app, "file.save", json!({})),
+        ("stardocs.downloadAs", _) => {
+            let ext = p.get("ext").and_then(Value::as_str).unwrap_or("odt");
+            if let Err(e) = download_as(app, link, ext) {
+                log::warn!("download .{ext}: {e}");
+                app.status(e);
+            }
+        }
         ("stardocs.rename", Some(_)) => {
             ctx.data_mut(|d| d.insert_temp(egui::Id::unique(RENAME), true));
         }
@@ -563,6 +695,23 @@ fn run_menu(app: &mut WordApp, ctx: &egui::Context, flags: &mut Flags, link: Opt
         }
         ("file.open", Some(link)) => link.home(),
         _ => run(app, id, p),
+    }
+}
+
+/// File › Download in a format other than Word's: a copy written by WordCraft's `formats` crate,
+/// handed straight to the browser's download. It is never the document's own save (`file.saveAs`
+/// would make an .odt the server's copy, or mark unsaved changes as saved).
+fn download_as(app: &mut WordApp, link: Option<&Link>, ext: &str) -> Result<(), String> {
+    let stem = match link.map(Link::name).filter(|n| !n.is_empty()) {
+        Some(n) => n.rsplit_once('.').map_or(n.as_str(), |(s, _)| s).to_string(),
+        None => app.title_stem(),
+    };
+    let name = format!("{stem}.{ext}");
+    let opts = wordcraft_engine::cmd::file::export_options(&app.session, &json!({}));
+    let bytes = wordcraft_engine::io::save_bytes_with(&name, &app.session.doc, None, &opts)?;
+    match &app.services.download {
+        Some(download) => download(&name, &bytes),
+        None => Err("downloads are unavailable here".into()),
     }
 }
 
@@ -712,6 +861,7 @@ impl Shell {
     /// Draws the title row, menus and toolbar above the page. Call before `WordApp::ui`.
     pub fn ui(&mut self, app: &mut WordApp, ui: &mut Ui, link: Option<&Link>) {
         self.ctx = Some(ui.ctx().clone());
+        crate::theme::keep_light(app);
         let before = self.flags;
         if !self.flags.loaded {
             // Docs has no floating mini toolbar over selected text.

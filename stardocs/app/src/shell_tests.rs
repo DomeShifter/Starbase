@@ -272,7 +272,9 @@ fn every_menu_command_is_a_wordcraft_or_stardocs_command() {
         for item in items {
             match item {
                 Item::Cmd(_, id, _, _) | Item::Toggle(_, id, _, _) | Item::Flip(_, _, id, _) => {
-                    if !(id.starts_with("stardocs.") || id.starts_with("ui.dialog:") || s.registry.get(id).is_some()) {
+                    // WordCraft's window commands (not in the engine's registry) the menus use.
+                    let window = matches!(*id, "ui.crop" | "ui.changePicture");
+                    if !(window || id.starts_with("stardocs.") || id.starts_with("ui.dialog:") || s.registry.get(id).is_some()) {
                         bad.push((*id).to_string());
                     }
                 }
@@ -455,4 +457,157 @@ fn the_mini_toolbar_is_off_while_the_comments_panel_is_open() {
     assert!(wordcraft_ui_egui::mini_toolbar::visible(app), "a selection would show the bar");
     app.run("view.commentsPane", json!({"value": true})).unwrap();
     assert!(!wordcraft_ui_egui::mini_toolbar::visible(app), "not with the comments panel open");
+}
+
+/// A 4 × 2 red PNG.
+const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAACCAIAAADwyuo0AAAAEklEQVR4nGP4z8AARwjWfwYGAG+qB/lC/d2tAAAAAElFTkSuQmCC";
+
+/// The selected picture, and whether it floats (any wrapping but "In line with text").
+fn selected_picture(h: &Harness<'static, Win>) -> Option<bool> {
+    match wordcraft_engine::cmd::objects::selected(&h.state().app.session) {
+        Some((_, o @ wordcraft_doc::para::InlineObject::Image { .. })) => Some(o.is_floating()),
+        _ => None,
+    }
+}
+
+#[test]
+fn format_image_is_greyed_without_a_picture_and_wraps_a_selected_one() {
+    let mut h = window(1400.0);
+    let items = ["Crop image", "Size and rotation", "Alt text", "Replace image", "Reset image"];
+    menu(&mut h, &["Format", "Image"]);
+    for label in items {
+        assert!(is_greyed(&h, label), "{label} is greyed with no picture selected");
+    }
+    close_menus(&mut h);
+    run(&mut h, "insert.picture", json!({"data": PNG, "width": 100}));
+    if selected_picture(&h).is_none() {
+        run(&mut h, "select.all", json!({}));
+    }
+    assert_eq!(selected_picture(&h), Some(false), "an inline picture, selected");
+    menu(&mut h, &["Format", "Image"]);
+    for label in items {
+        assert!(!is_greyed(&h, label), "{label} works on a selected picture");
+    }
+    entry(&h, "Text wrapping").click();
+    steps(&mut h, 3);
+    entry(&h, "Wrap text").click();
+    steps(&mut h, 3);
+    assert_eq!(selected_picture(&h), Some(true), "Wrap text floats it");
+    menu(&mut h, &["Format", "Image", "Text wrapping", "In line with text"]);
+    assert_eq!(selected_picture(&h), Some(false), "back in line");
+    menu(&mut h, &["Format", "Image", "Alt text"]);
+    assert!(h.state().app.session.view.alt_text_pane, "Alt text opens WordCraft's alt text panel");
+    menu(&mut h, &["Format", "Image", "Size and rotation"]);
+    assert_eq!(h.state_mut().state()["dialogs"]["wordcraft"], true, "Size and rotation opens WordCraft's size dialog");
+}
+
+#[test]
+fn file_download_writes_other_formats_without_saving_the_document() {
+    use std::{cell::RefCell, rc::Rc};
+    let mut h = window(1400.0);
+    let got: Rc<RefCell<Vec<(String, Vec<u8>)>>> = Rc::default();
+    let keep = got.clone();
+    h.state_mut().app.services.download = Some(Box::new(move |name: &str, bytes: &[u8]| {
+        keep.borrow_mut().push((name.to_string(), bytes.to_vec()));
+        Ok(())
+    }));
+    type_text(&mut h, "Downloaded words");
+    assert!(h.state().app.session.dirty);
+    for (label, ext) in [
+        ("OpenDocument format (.odt)", "odt"),
+        ("Rich Text Format (.rtf)", "rtf"),
+        ("Plain text (.txt)", "txt"),
+        ("Web page (.html)", "html"),
+        ("Markdown (.md)", "md"),
+    ] {
+        menu(&mut h, &["File", "Download", label]);
+        let (name, bytes) = got.borrow_mut().pop().unwrap_or_else(|| panic!("{label}: nothing downloaded"));
+        assert!(name.ends_with(&format!(".{ext}")), "{label}: {name}");
+        if ext == "odt" {
+            assert!(bytes.starts_with(b"PK"), "an .odt is a zip package");
+        } else {
+            assert!(String::from_utf8_lossy(&bytes).contains("Downloaded words"), "{label} has the text");
+        }
+    }
+    assert!(h.state().app.session.dirty, "a download is a copy: the document still needs saving");
+    assert!(h.state().app.session.path.is_none(), "and it is still the same document");
+}
+
+/// The body's section breaks (paragraphs that end a section).
+fn section_breaks(h: &Harness<'static, Win>) -> usize {
+    let doc = &h.state().app.session.doc;
+    doc.story(wordcraft_doc::StoryRef::Body).unwrap().iter().filter_map(|b| b.as_para()).filter(|p| p.section.is_some()).count()
+}
+
+#[test]
+fn insert_break_headers_and_page_numbers() {
+    let mut h = window(1400.0);
+    type_text(&mut h, "One");
+    menu(&mut h, &["Insert", "Break", "Section break (continuous)"]);
+    assert_eq!(section_breaks(&h), 1);
+    menu(&mut h, &["Insert", "Break", "Section break (next page)"]);
+    assert_eq!(section_breaks(&h), 2);
+    let before = body_text(&mut h).chars().count();
+    menu(&mut h, &["Insert", "Break", "Column break"]);
+    assert_eq!(body_text(&mut h).chars().count(), before + 1, "a column break character");
+
+    let sect = |h: &Harness<'static, Win>| wordcraft_engine::cmd::page::sect(&h.state().app.session);
+    assert!(!sect(&h).title_page);
+    menu(&mut h, &["Insert", "Headers and footers", "Different first page"]);
+    assert!(sect(&h).title_page);
+    menu(&mut h, &["Insert", "Headers and footers", "Different odd and even"]);
+    assert!(h.state().app.session.doc.settings.even_odd_headers);
+    menu(&mut h, &["Insert", "Page numbers", "Number format", "i, ii, iii"]);
+    assert_eq!(sect(&h).page_num_format, wordcraft_doc::section::NumFormat::LowerRoman);
+    menu(&mut h, &["Insert", "Page numbers", "More options"]);
+    assert_eq!(h.state_mut().state()["dialogs"]["wordcraft"], true, "WordCraft's page number dialog");
+}
+
+#[test]
+fn tools_review_one_suggestion_at_a_time() {
+    let mut h = window(1400.0);
+    type_text(&mut h, "Kept ");
+    run(&mut h, "review.trackChanges", json!({"value": true}));
+    type_text(&mut h, "suggested");
+    let changes = |h: &mut Harness<'static, Win>| h.state_mut().app.run("review.changes", json!({})).unwrap().as_array().map_or(0, Vec::len);
+    assert_eq!(changes(&mut h), 1);
+    menu(&mut h, &["Tools", "Review suggested edits", "Previous suggestion"]);
+    menu(&mut h, &["Tools", "Review suggested edits", "Reject suggestion"]);
+    assert_eq!(changes(&mut h), 0);
+    assert_eq!(body_text(&mut h), "Kept ");
+}
+
+#[test]
+fn table_of_contents_update_and_delete() {
+    let mut h = window(1400.0);
+    run(&mut h, "text.insert", json!({"text": "Chapter one"}));
+    run(&mut h, "para.style", json!({"style": "Heading 1"}));
+    run(&mut h, "text.newParagraph", json!({}));
+    menu(&mut h, &["Insert", "Table of contents", "With page numbers"]);
+    assert!(body_text(&mut h).matches("Chapter one").count() >= 2, "{}", body_text(&mut h));
+    menu(&mut h, &["Insert", "Table of contents", "Update table of contents"]);
+    menu(&mut h, &["Insert", "Table of contents", "Delete table of contents"]);
+    assert_eq!(body_text(&mut h).matches("Chapter one").count(), 1, "{}", body_text(&mut h));
+}
+
+#[test]
+fn tools_citations_style_and_source_dialog() {
+    let mut h = window(1400.0);
+    menu(&mut h, &["Tools", "Citations", "Citation style", "MLA"]);
+    assert_eq!(h.state().app.session.bib_style, "MLA");
+    menu(&mut h, &["Tools", "Citations", "Add citation source"]);
+    assert_eq!(h.state_mut().state()["dialogs"]["wordcraft"], true, "WordCraft's source dialog");
+}
+
+#[test]
+fn comment_cards_reply_resolve_and_delete_are_reachable() {
+    let mut h = window(1400.0);
+    type_text(&mut h, "Some words");
+    run(&mut h, "select.all", json!({}));
+    run(&mut h, "review.newComment", json!({"text": "Look here"}));
+    run(&mut h, "view.commentsPane", json!({"value": true}));
+    steps(&mut h, 3);
+    for label in ["Reply", "Resolve", "Delete"] {
+        assert!(h.query_all(By::new().label(label)).next().is_some(), "the comments panel shows {label}");
+    }
 }
