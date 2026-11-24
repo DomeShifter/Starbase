@@ -13,6 +13,7 @@ mod chartpanel;
 mod colourpicker;
 #[cfg(target_arch = "wasm32")]
 mod copyto;
+mod currency;
 mod customdate;
 mod customnumber;
 mod datepicker;
@@ -36,6 +37,7 @@ mod input;
 mod linkcard;
 #[cfg(target_arch = "wasm32")]
 mod live;
+mod menuactions;
 mod merge;
 mod messages;
 mod namespanel;
@@ -50,6 +52,7 @@ mod settings;
 mod share;
 mod sheets_formulas;
 mod shell;
+mod shortcuts;
 mod spelling;
 #[cfg(target_arch = "wasm32")]
 mod testhook;

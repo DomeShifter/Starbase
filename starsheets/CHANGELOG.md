@@ -54,6 +54,14 @@ new features and the last one for fixes.
   tall), and fonts in files without a theme keep their link to the theme when saved.
 
 ### Added
+- More of Google Sheets' menus: **Edit › Paste special** (values only with Ctrl+Shift+V, format,
+  formula, data validation, transposed, column widths, all except borders), **Edit › Move**
+  (column left / right), **View › Freeze** 2 rows / 2 columns / up to the active row or column,
+  **Data › Sort sheet** by the active column (rows below the frozen ones), **Data › Randomise
+  range**, **Data › Data clean-up › Trim whitespace**, **Format › Number › Custom currency**,
+  **Help › Keyboard shortcuts** (Ctrl+/, searchable) and **Help › Search the menus** (Alt+/).
+  Entries that can't run where you are (Paste special before copying, Move column left in
+  column A) are greyed out.
 - Right-click inside a cell (or the formula bar) while typing: Cut, Copy, Paste, Delete and
   Select all for the text.
 - Share works on a new, empty spreadsheet: it is saved first, then the share box opens.
