@@ -40,6 +40,9 @@ mod shell;
 mod shortcuts;
 #[cfg(target_arch = "wasm32")]
 mod web;
+#[cfg(target_arch = "wasm32")]
+#[expect(dead_code, reason = "drawn from shell.rs once it is wired in; remove this line then")]
+mod wordcount;
 
 #[cfg(target_arch = "wasm32")]
 fn main() {
