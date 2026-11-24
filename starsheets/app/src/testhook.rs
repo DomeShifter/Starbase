@@ -144,7 +144,7 @@ impl TestHook {
     }
 
     /// Answers every queued request. Call at the start of `WebShell::ui`, before anything draws.
-    pub fn process(&self, ctx: &egui::Context, mut p: Parts) {
+    pub fn process(&self, ctx: &egui::Context, p: Parts) {
         loop {
             // Take one at a time: a command may not hold the queue while the page adds to it.
             let Some((n, request)) = self.queue.borrow_mut().pop_front() else { break };
