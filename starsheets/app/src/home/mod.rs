@@ -26,6 +26,7 @@ mod bin;
 mod input;
 mod items;
 mod sidebar;
+mod test;
 
 const LEFT: f32 = 256.0;
 const TOP: f32 = 64.0;

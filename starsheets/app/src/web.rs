@@ -90,7 +90,9 @@ pub fn start() {
                     crate::theme::install(&cc.egui_ctx);
                     egui_extras::install_image_loaders(&cc.egui_ctx);
                     install_wake(&cc.egui_ctx);
-                    Ok(Box::new(WebShell::new(app, inbox, prefs)))
+                    // `?test`: window.starsheets for agents and scripts (testhook.rs, TESTING.md).
+                    let test = crate::testhook::TestHook::install(&cc.egui_ctx);
+                    Ok(Box::new(WebShell { test, ..WebShell::new(app, inbox, prefs) }))
                 }),
             )
             .await;
@@ -144,6 +146,8 @@ struct WebShell {
     prefs_checked: f64,
     prefs_input: bool,
     prefs: crate::prefs::PrefsSync,
+    /// `window.starsheets`, only when the URL has `test` (testhook.rs).
+    test: Option<crate::testhook::TestHook>,
 }
 
 impl WebShell {
@@ -179,6 +183,7 @@ impl WebShell {
             webfonts: Default::default(),
             prefs_checked: 0.0,
             prefs_input: false,
+            test: None,
         }
     }
 }
@@ -285,6 +290,10 @@ impl eframe::App for WebShell {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if let Some(test) = &self.test {
+            let parts = crate::testhook::Parts { app: &mut self.app, home: &mut self.home, files: &self.files, compact: self.shell.compact };
+            test.process(ui.ctx(), parts);
+        }
         let open = (!self.home.active).then(|| self.app.session.active().map(|d| d.display_title())).flatten();
         set_tab_title(open.as_deref());
         if self.home.active {

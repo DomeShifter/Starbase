@@ -51,6 +51,8 @@ mod share;
 mod sheets_formulas;
 mod shell;
 mod spelling;
+#[cfg(target_arch = "wasm32")]
+mod testhook;
 mod theme;
 #[cfg(target_arch = "wasm32")]
 mod web;
