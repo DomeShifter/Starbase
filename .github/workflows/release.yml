@@ -10,6 +10,7 @@ name: Release
 on:
   push:
     tags: ["v*"]
+    branches: [docker-image] # TEMPORARY: test build before release.yml is on main
   workflow_dispatch:
 
 permissions:
