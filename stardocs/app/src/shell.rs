@@ -75,7 +75,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
                 ],
             ),
             Sep,
-            Cmd("Print layout", "view.printLayout", NO, ""),
+            Toggle("Print layout", "view.printLayout", "stardocs.print", ""),
             Toggle("Show ruler", "view.ruler", "ruler", ""),
             Toggle("Show outline", "view.navigationPane", "navPane", "Ctrl+Alt+H"),
             Toggle("Show comments", "view.commentsPane", "commentsPane", ""),
@@ -232,8 +232,31 @@ pub struct Shell {
     flags: Flags,
     shortcuts: crate::shortcuts::Shortcuts,
     word_count: crate::wordcount::WordCount,
-    /// The colour being mixed in the text colour menu's Custom picker.
+    /// The colour being mixed in the Custom colour dialog, while it is open.
     custom: Option<Color32>,
+    /// Each toolbar group's width last frame, to decide which fit.
+    widths: Widths,
+    /// How many toolbar groups didn't fit and are in the ⋮ menu.
+    in_more: usize,
+}
+
+/// The toolbar groups' widths, starting from a guess.
+struct Widths([f32; 9]);
+impl Default for Widths {
+    fn default() -> Self {
+        Self(GUESSED_WIDTHS)
+    }
+}
+impl std::ops::Deref for Widths {
+    type Target = [f32; 9];
+    fn deref(&self) -> &[f32; 9] {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for Widths {
+    fn deref_mut(&mut self) -> &mut [f32; 9] {
+        &mut self.0
+    }
 }
 
 /// StarDocs' own on/off settings, kept in the browser between visits ([`FLAGS_KEY`]).
@@ -284,6 +307,7 @@ fn is_on(app: &mut WordApp, flags: &Flags, key: &str) -> bool {
     match key {
         "stardocs.words" => flags.words,
         "stardocs.menus" => !flags.compact,
+        "stardocs.print" => app.run("view.state", json!({})).ok().is_some_and(|v| v["mode"] == "print"),
         "trackChanges" => app.session.doc.settings.track_changes,
         _ => app.run("view.state", json!({})).ok().and_then(|v| v.get(key).and_then(Value::as_bool)).unwrap_or(false),
     }
@@ -357,6 +381,11 @@ pub fn run(app: &mut WordApp, id: &str, p: Value) {
         log::warn!("{id}: {e}");
         app.status(e);
     }
+    // A click on our toolbar or menus leaves the page without the keyboard (WordCraft gives it
+    // back only after clicks on its own chrome): hand it back, unless a dialog took over.
+    if app.dialog.is_none() && !id.starts_with("ui.dialog") {
+        app.canvas.want_focus = true;
+    }
 }
 
 /// What the toolbar shows about the selection.
@@ -403,13 +432,46 @@ impl Shell {
     /// What the window shows, as JSON, for tests and AI agents (the test hook, `testhook.rs`):
     /// filled in by the lead; keys are stable names, values plain JSON.
     pub fn test_state(&mut self, app: &mut WordApp, link: Option<&Link>) -> Value {
-        let _ = (app, link);
-        json!({})
+        let cur = current(app);
+        let saved = link.map(|l| match l.saved() {
+            Saved::Nothing => "nothing".to_string(),
+            Saved::Saving => "saving".to_string(),
+            Saved::Done => "saved".to_string(),
+            Saved::Failed(why) => format!("failed: {why}"),
+        });
+        json!({
+            "title": link.map(Link::name),
+            "saved": saved,
+            "notice": link.and_then(Link::notice),
+            "viewOnly": link.is_some_and(Link::view_only),
+            "mode": if link.is_some_and(Link::view_only) { "viewing" } else if app.session.doc.settings.track_changes { "suggesting" } else { "editing" },
+            "compact": self.flags.compact,
+            "wordCountShown": self.flags.words,
+            "renaming": self.renaming,
+            "dialogs": {
+                "share": self.share.is_open(),
+                "shortcuts": self.shortcuts.open,
+                "customColour": self.custom.is_some(),
+                "wordcraft": app.dialog.is_some(),
+            },
+            "toolbar": {
+                "font": cur.font, "fontShownAs": cur.shown_as, "size": cur.size, "style": cur.style,
+                "bold": cur.bold, "italic": cur.italic, "underline": cur.underline, "zoom": cur.zoom,
+                "painting": app.session.painter.is_some(),
+                "groupWidths": self.widths.to_vec(),
+                "groupsInMoreMenu": self.in_more,
+            },
+            "fontsListed": self.fonts.as_ref().map_or(0, Vec::len),
+        })
     }
 
     /// Draws the title row, menus and toolbar above the page. Call before `WordApp::ui`.
     pub fn ui(&mut self, app: &mut WordApp, ui: &mut Ui, link: Option<&Link>) {
         let before = self.flags;
+        if !self.flags.loaded {
+            // Docs has no floating mini toolbar over selected text.
+            app.ui.mini_toolbar = false;
+        }
         self.flags.sync(before);
         self.keys(app, ui.ctx());
         egui::Panel::top("stardocs_head")
@@ -425,6 +487,7 @@ impl Shell {
                 self.toolbar(app, ui, editable);
             });
         self.share.ui(ui.ctx());
+        self.custom_colour(app, ui.ctx());
         if std::mem::take(&mut self.flags.shortcuts) {
             self.shortcuts.open = true;
         }
@@ -440,13 +503,18 @@ impl Shell {
         use egui::{Key, KeyboardShortcut, Modifiers};
         let ctrl_shift = Modifiers::COMMAND | Modifiers::SHIFT;
         let ctrl_alt = Modifiers::COMMAND | Modifiers::ALT;
-        let (menus, outline, help) = ctx.input_mut(|i| {
+        let (menus, outline, help, count) = ctx.input_mut(|i| {
             (
                 i.consume_shortcut(&KeyboardShortcut::new(ctrl_shift, Key::F)),
                 i.consume_shortcut(&KeyboardShortcut::new(ctrl_alt, Key::H)),
                 i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::Slash)),
+                // Docs' word count; WordCraft would copy formatting (Word's Ctrl+Shift+C).
+                i.consume_shortcut(&KeyboardShortcut::new(ctrl_shift, Key::C)),
             )
         });
+        if count {
+            run(app, "ui.dialog:wordCount", json!({}));
+        }
         if menus {
             self.flags.compact = !self.flags.compact;
         }
@@ -460,149 +528,56 @@ impl Shell {
 
     fn toolbar(&mut self, app: &mut WordApp, ui: &mut Ui, editable: bool) {
         let cur = current(app);
+        let fonts = self.fonts.get_or_insert_with(|| font_names(app)).clone();
         let flags = &mut self.flags;
-        let custom = &mut self.custom;
+        let widths = &mut self.widths;
+        let in_more = &mut self.in_more;
+        let mut tools = Tools { app, cur: &cur, fonts: &fonts, custom: &mut self.custom };
         egui::Frame::NONE.fill(TOOLBAR).corner_radius(24.0).inner_margin(egui::Margin::symmetric(10, 4)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 flat(ui);
                 ui.spacing_mut().item_spacing.x = 2.0;
+                // As many groups as fit, in order; the rest go into the ⋮ menu (as Docs does),
+                // leaving room for the mode box and arrow at the right end.
+                let mut room = ui.available_width() - RIGHT_END;
+                let mut shown = GROUPS.len();
+                let mut used = 0.0;
+                for (i, w) in widths.iter().enumerate() {
+                    if used + w > room {
+                        shown = i;
+                        break;
+                    }
+                    used += w;
+                }
+                if shown < GROUPS.len() {
+                    room -= MORE;
+                    used = 0.0;
+                    shown = widths.iter().take_while(|w| {
+                        used += *w;
+                        used <= room
+                    }).count();
+                }
+                *in_more = GROUPS.len() - shown;
                 ui.add_enabled_ui(editable, |ui| {
-                    tool(app, ui, "undo", "Undo (Ctrl+Z)", "edit.undo", json!({}), false);
-                    tool(app, ui, "redo", "Redo (Ctrl+Y)", "edit.redo", json!({}), false);
-                    tool(app, ui, "print", "Print (Ctrl+P)", "file.print", json!({}), false);
-                    tool(app, ui, "spellcheck", "Spelling and grammar", "review.spelling", json!({}), false);
-                    let painting = app.session.painter.is_some();
-                    tool(
-                        app,
-                        ui,
-                        "format_paint",
-                        "Paint format: copy this text's look, then select where it goes",
-                        "edit.formatPainter",
-                        json!({}),
-                        painting,
-                    );
-                    bar(ui);
-                    let zoom = format!("{}%", (cur.zoom * 100.0).round());
-                    drop_menu(ui, &zoom, 64.0, false, |ui| {
-                        for z in ZOOMS {
-                            if ui.button(format!("{z}%")).clicked() {
-                                run(app, "view.zoom", json!({ "value": z }));
-                                ui.close();
-                            }
+                    for (i, g) in GROUPS.iter().take(shown).enumerate() {
+                        let x = ui.cursor().left();
+                        tools.draw(ui, *g);
+                        if i + 1 < GROUPS.len() {
+                            bar(ui);
                         }
-                        if ui.button("Fit").clicked() {
-                            run(app, "view.zoom", json!({ "value": "pageWidth" }));
-                            ui.close();
-                        }
-                    });
-                    bar(ui);
-                    drop_menu(ui, &cur.style, 116.0, false, |ui| {
-                        for (label, name) in STYLES {
-                            let size = match *name {
-                                "Title" => 22.0,
-                                "Heading 1" => 18.0,
-                                "Heading 2" | "Subtitle" => 16.0,
-                                "Heading 3" => 14.0,
-                                _ => 13.0,
-                            };
-                            if ui.button(RichText::new(*label).size(size)).clicked() {
-                                run(app, "para.style", json!({ "style": name }));
-                                ui.close();
-                            }
-                        }
-                    });
-                    bar(ui);
-                    let fonts = self.fonts.get_or_insert_with(|| font_names(app)).clone();
-                    let font = drop_menu(ui, &cur.font, 116.0, false, |ui| {
-                        egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
-                            for f in &fonts {
-                                if ui.button(f).clicked() {
-                                    run(app, "format.font", json!({ "name": f }));
-                                    ui.close();
-                                }
+                        widths[i] = ui.cursor().left() - x;
+                    }
+                    if shown < GROUPS.len() {
+                        icon_menu(ui, "more_vert", "More", |ui| {
+                            for g in &GROUPS[shown..] {
+                                ui.horizontal(|ui| {
+                                    flat(ui);
+                                    tools.draw(ui, *g);
+                                });
                             }
                         });
-                    });
-                    match &cur.shown_as {
-                        Some(face) => font.on_hover_text(format!("Font: {} (not installed, shown as {face})", cur.font)),
-                        None => font.on_hover_text("Font"),
-                    };
-                    bar(ui);
-                    tool(app, ui, "remove", "Decrease font size", "format.shrinkFont1", json!({}), false);
-                    let size = if cur.size > 0.0 { format!("{}", cur.size) } else { String::new() };
-                    drop_menu(ui, &size, 40.0, true, |ui| {
-                        for s in SIZES {
-                            if ui.button(format!("{s}")).clicked() {
-                                run(app, "format.size", json!({ "size": s }));
-                                ui.close();
-                            }
-                        }
-                    });
-                    tool(app, ui, "add", "Increase font size", "format.growFont1", json!({}), false);
-                    bar(ui);
-                    tool(app, ui, "format_bold", "Bold (Ctrl+B)", "format.bold", json!({}), cur.bold);
-                    tool(app, ui, "format_italic", "Italic (Ctrl+I)", "format.italic", json!({}), cur.italic);
-                    tool(app, ui, "format_underlined", "Underline (Ctrl+U)", "format.underline", json!({}), cur.underline);
-                    icon_menu(ui, "format_color_text", "Text colour", |ui| {
-                        palette(ui, COLOURS.iter().map(|c| (*c, *c)), |c| run(app, "format.color", json!({ "color": c })));
-                        ui.horizontal(|ui| {
-                            if ui.button("Automatic").clicked() {
-                                run(app, "format.color", json!({ "color": "auto" }));
-                                ui.close();
-                            }
-                            if custom.is_none() && ui.button("Custom…").clicked() {
-                                *custom = Some(Color32::from_rgb(0x0B, 0x57, 0xD0));
-                            }
-                        });
-                        // Docs' custom colour: pick any colour, then OK.
-                        if let Some(mut c) = *custom {
-                            ui.separator();
-                            egui::widgets::color_picker::color_picker_color32(ui, &mut c, egui::widgets::color_picker::Alpha::Opaque);
-                            *custom = Some(c);
-                            ui.horizontal(|ui| {
-                                if ui.button("OK").clicked() {
-                                    let hex = format!("{:02X}{:02X}{:02X}", c.r(), c.g(), c.b());
-                                    run(app, "format.color", json!({ "color": hex }));
-                                    *custom = None;
-                                    ui.close();
-                                }
-                                if ui.button("Cancel").clicked() {
-                                    *custom = None;
-                                }
-                            });
-                        }
-                    });
-                    icon_menu(ui, "ink_highlighter", "Highlight colour", |ui| {
-                        palette(ui, HIGHLIGHTS.iter().copied(), |c| run(app, "format.highlight", json!({ "color": c })));
-                        if ui.button("None").clicked() {
-                            run(app, "format.highlight", json!({ "color": "none" }));
-                            ui.close();
-                        }
-                    });
-                    bar(ui);
-                    tool(app, ui, "link", "Insert link (Ctrl+K)", "ui.dialog:link", json!({}), false);
-                    tool(app, ui, "add_comment", "Add comment (Ctrl+Alt+M)", "review.newComment", json!({}), false);
-                    tool(app, ui, "image", "Insert image", "insert.picture", json!({}), false);
-                    bar(ui);
-                    tool(app, ui, "format_align_left", "Left align (Ctrl+Shift+L)", "para.alignLeft", json!({}), false);
-                    tool(app, ui, "format_align_center", "Centre align (Ctrl+Shift+E)", "para.alignCenter", json!({}), false);
-                    tool(app, ui, "format_align_right", "Right align (Ctrl+Shift+R)", "para.alignRight", json!({}), false);
-                    tool(app, ui, "format_align_justify", "Justify (Ctrl+Shift+J)", "para.justify", json!({}), false);
-                    icon_menu(ui, "format_line_spacing", "Line and paragraph spacing", |ui| {
-                        for (label, v) in [("Single", 1.0), ("1.15", 1.15), ("1.5", 1.5), ("Double", 2.0)] {
-                            if ui.button(label).clicked() {
-                                run(app, "para.lineSpacing", json!({ "value": v }));
-                                ui.close();
-                            }
-                        }
-                    });
-                    bar(ui);
-                    tool(app, ui, "format_list_bulleted", "Bulleted list (Ctrl+Shift+8)", "para.bullets", json!({}), false);
-                    tool(app, ui, "format_list_numbered", "Numbered list (Ctrl+Shift+7)", "para.numbering", json!({}), false);
-                    tool(app, ui, "format_indent_decrease", "Decrease indent (Ctrl+[)", "para.outdent", json!({}), false);
-                    tool(app, ui, "format_indent_increase", "Increase indent (Ctrl+])", "para.indent", json!({}), false);
-                    tool(app, ui, "format_clear", "Clear formatting (Ctrl+\\)", "format.clear", json!({}), false);
+                    }
                 });
                 // The right end: the mode switch and the compact-mode arrow (Docs' "Hide the menus").
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -614,10 +589,205 @@ impl Shell {
                     if icon_button(ui, icon, false).on_hover_text(tip).clicked() {
                         flags.compact = !flags.compact;
                     }
-                    mode_switch(app, ui, editable);
+                    mode_switch(tools.app, ui, editable);
                 });
             });
         });
+    }
+
+    /// Docs' custom colour: a small dialog with a colour picker, opened from the text colour menu.
+    fn custom_colour(&mut self, app: &mut WordApp, ctx: &egui::Context) {
+        let Some(mut c) = self.custom else { return };
+        let mut done = None;
+        let modal = egui::Modal::new(egui::Id::unique("stardocs_custom_colour"))
+            .frame(egui::Frame::popup(&ctx.global_style()).fill(Color32::WHITE).corner_radius(8.0).inner_margin(20.0));
+        let shown = modal.show(ctx, |ui| {
+            ui.label(RichText::new("Custom colour").size(18.0).color(TEXT));
+            ui.add_space(8.0);
+            egui::widgets::color_picker::color_picker_color32(ui, &mut c, egui::widgets::color_picker::Alpha::Opaque);
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Cancel").clicked() {
+                    done = Some(false);
+                }
+                if ui.add(Button::new(RichText::new("OK").color(Color32::WHITE)).fill(BLUE)).clicked() {
+                    done = Some(true);
+                }
+            });
+        });
+        if shown.should_close() {
+            done.get_or_insert(false);
+        }
+        match done {
+            Some(true) => {
+                run(app, "format.color", json!({ "color": format!("{:02X}{:02X}{:02X}", c.r(), c.g(), c.b()) }));
+                self.custom = None;
+            }
+            Some(false) => self.custom = None,
+            None => self.custom = Some(c),
+        }
+    }
+}
+
+/// The toolbar's groups, left to right, with a first guess at their widths (measured after
+/// the first frame).
+#[derive(Clone, Copy)]
+enum Group {
+    History,
+    Zoom,
+    Style,
+    Font,
+    Size,
+    Text,
+    Insert,
+    Align,
+    Lists,
+}
+const GROUPS: [Group; 9] = [Group::History, Group::Zoom, Group::Style, Group::Font, Group::Size, Group::Text, Group::Insert, Group::Align, Group::Lists];
+pub const GUESSED_WIDTHS: [f32; 9] = [160.0, 75.0, 127.0, 127.0, 113.0, 160.0, 100.0, 160.0, 150.0];
+/// Room kept for the mode box and the compact-mode arrow, and for the ⋮ button.
+const RIGHT_END: f32 = 170.0;
+const MORE: f32 = 34.0;
+
+/// What the toolbar's groups draw with.
+struct Tools<'a> {
+    app: &'a mut WordApp,
+    cur: &'a Current,
+    fonts: &'a [String],
+    custom: &'a mut Option<Color32>,
+}
+
+impl Tools<'_> {
+    fn draw(&mut self, ui: &mut Ui, g: Group) {
+        let (app, cur) = (&mut *self.app, self.cur);
+        match g {
+            Group::History => {
+                tool(app, ui, "undo", "Undo (Ctrl+Z)", "edit.undo", json!({}), false);
+                tool(app, ui, "redo", "Redo (Ctrl+Y)", "edit.redo", json!({}), false);
+                tool(app, ui, "print", "Print (Ctrl+P)", "file.print", json!({}), false);
+                tool(app, ui, "spellcheck", "Spelling and grammar", "review.spelling", json!({}), false);
+                let painting = app.session.painter.is_some();
+                let tip = "Paint format: copy this text's look, then select where it goes";
+                tool(app, ui, "format_paint", tip, "edit.formatPainter", json!({}), painting);
+            }
+            Group::Zoom => {
+                let zoom = format!("{}%", (cur.zoom * 100.0).round());
+                drop_menu(ui, &zoom, 64.0, false, |ui| {
+                    for z in ZOOMS {
+                        if ui.button(format!("{z}%")).clicked() {
+                            run(app, "view.zoom", json!({ "value": z }));
+                            ui.close();
+                        }
+                    }
+                    if ui.button("Fit").clicked() {
+                        run(app, "view.zoom", json!({ "value": "pageWidth" }));
+                        ui.close();
+                    }
+                });
+            }
+            Group::Style => {
+                drop_menu(ui, &cur.style, 116.0, false, |ui| {
+                    ui.set_min_width(180.0);
+                    for (label, name) in STYLES {
+                        let size = match *name {
+                            "Title" => 22.0,
+                            "Heading 1" => 18.0,
+                            "Heading 2" | "Subtitle" => 16.0,
+                            "Heading 3" => 14.0,
+                            _ => 13.0,
+                        };
+                        if ui.button(RichText::new(*label).size(size)).clicked() {
+                            run(app, "para.style", json!({ "style": name }));
+                            ui.close();
+                        }
+                    }
+                });
+            }
+            Group::Font => {
+                let fonts = self.fonts;
+                let font = drop_menu(ui, &cur.font, 116.0, false, |ui| {
+                    ui.set_min_width(200.0);
+                    egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+                        for f in fonts {
+                            if ui.button(RichText::new(f).size(14.0)).clicked() {
+                                run(app, "format.font", json!({ "name": f }));
+                                ui.close();
+                            }
+                        }
+                    });
+                });
+                match &cur.shown_as {
+                    Some(face) => font.on_hover_text(format!("Font: {} (not installed, shown as {face})", cur.font)),
+                    None => font.on_hover_text("Font"),
+                };
+            }
+            Group::Size => {
+                tool(app, ui, "remove", "Decrease font size", "format.shrinkFont1", json!({}), false);
+                let size = if cur.size > 0.0 { format!("{}", cur.size) } else { String::new() };
+                drop_menu(ui, &size, 40.0, true, |ui| {
+                    for s in SIZES {
+                        if ui.button(format!("{s}")).clicked() {
+                            run(app, "format.size", json!({ "size": s }));
+                            ui.close();
+                        }
+                    }
+                });
+                tool(app, ui, "add", "Increase font size", "format.growFont1", json!({}), false);
+            }
+            Group::Text => {
+                tool(app, ui, "format_bold", "Bold (Ctrl+B)", "format.bold", json!({}), cur.bold);
+                tool(app, ui, "format_italic", "Italic (Ctrl+I)", "format.italic", json!({}), cur.italic);
+                tool(app, ui, "format_underlined", "Underline (Ctrl+U)", "format.underline", json!({}), cur.underline);
+                let custom = &mut *self.custom;
+                icon_menu(ui, "format_color_text", "Text colour", |ui| {
+                    palette(ui, COLOURS.iter().map(|c| (*c, *c)), |c| run(app, "format.color", json!({ "color": c })));
+                    ui.horizontal(|ui| {
+                        if ui.button("Automatic").clicked() {
+                            run(app, "format.color", json!({ "color": "auto" }));
+                            ui.close();
+                        }
+                        // Opens its own dialog (Shell::custom_colour): a click in a menu closes it.
+                        if ui.button("Custom…").clicked() {
+                            *custom = Some(BLUE);
+                            ui.close();
+                        }
+                    });
+                });
+                icon_menu(ui, "ink_highlighter", "Highlight colour", |ui| {
+                    palette(ui, HIGHLIGHTS.iter().copied(), |c| run(app, "format.highlight", json!({ "color": c })));
+                    if ui.button("None").clicked() {
+                        run(app, "format.highlight", json!({ "color": "none" }));
+                        ui.close();
+                    }
+                });
+            }
+            Group::Insert => {
+                tool(app, ui, "link", "Insert link (Ctrl+K)", "ui.dialog:link", json!({}), false);
+                tool(app, ui, "add_comment", "Add comment (Ctrl+Alt+M)", "review.newComment", json!({}), false);
+                tool(app, ui, "image", "Insert image", "insert.picture", json!({}), false);
+            }
+            Group::Align => {
+                tool(app, ui, "format_align_left", "Left align (Ctrl+Shift+L)", "para.alignLeft", json!({}), false);
+                tool(app, ui, "format_align_center", "Centre align (Ctrl+Shift+E)", "para.alignCenter", json!({}), false);
+                tool(app, ui, "format_align_right", "Right align (Ctrl+Shift+R)", "para.alignRight", json!({}), false);
+                tool(app, ui, "format_align_justify", "Justify (Ctrl+Shift+J)", "para.justify", json!({}), false);
+                icon_menu(ui, "format_line_spacing", "Line and paragraph spacing", |ui| {
+                    for (label, v) in [("Single", 1.0), ("1.15", 1.15), ("1.5", 1.5), ("Double", 2.0)] {
+                        if ui.button(label).clicked() {
+                            run(app, "para.lineSpacing", json!({ "value": v }));
+                            ui.close();
+                        }
+                    }
+                });
+            }
+            Group::Lists => {
+                tool(app, ui, "format_list_bulleted", "Bulleted list (Ctrl+Shift+8)", "para.bullets", json!({}), false);
+                tool(app, ui, "format_list_numbered", "Numbered list (Ctrl+Shift+7)", "para.numbering", json!({}), false);
+                tool(app, ui, "format_indent_decrease", "Decrease indent (Ctrl+[)", "para.outdent", json!({}), false);
+                tool(app, ui, "format_indent_increase", "Increase indent (Ctrl+])", "para.indent", json!({}), false);
+                tool(app, ui, "format_clear", "Clear formatting (Ctrl+\\)", "format.clear", json!({}), false);
+            }
+        }
     }
 }
 
@@ -661,7 +831,7 @@ fn mode_switch(app: &mut WordApp, ui: &mut Ui, editable: bool) {
 }
 
 fn font_names(app: &mut WordApp) -> Vec<String> {
-    let v = app.run("font.list", json!({})).unwrap_or_default();
+    let v = app.run("font.list", json!({ "all": true })).unwrap_or_default();
     let list = v.get("fonts").or_else(|| v.get("families")).unwrap_or(&v);
     let mut out: Vec<String> = list
         .as_array()

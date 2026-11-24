@@ -42,6 +42,7 @@ static ICONS: &[(&str, &[u8])] = icons!(
     "keyboard_arrow_up",
     "keyboard_arrow_down",
     "check",
+    "more_vert",
 );
 
 /// The icon called `name` at 18 px, or none for an unknown name.

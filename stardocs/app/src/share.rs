@@ -202,6 +202,11 @@ impl Share {
     }
 
     /// Whether the Share button is waiting for the first save.
+    /// The dialog is showing.
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
     pub fn waiting(&self) -> bool {
         self.pending
     }
