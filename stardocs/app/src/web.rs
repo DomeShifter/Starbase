@@ -102,6 +102,8 @@ pub fn start() {
                     let stored = stored_prefs();
                     crate::prefs::restore(&mut app, stored.as_deref());
                     crate::theme::keep_light(&mut app);
+                    // Google Docs' look for WordCraft's own dialogs and Comments pane.
+                    crate::looks::apply(&mut app);
                     // A region chosen in File › Options replaces the browser's for the first blank
                     // document too (#838).
                     if !sample && app.session.prefs.region.is_some() {
