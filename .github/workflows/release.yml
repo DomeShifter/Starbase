@@ -36,6 +36,11 @@ jobs:
   image:
     name: Docker image
     needs: [starsheets, stardocs]
+    # A release needs every check green. A test build (by hand) goes on when only a check failed:
+    # the next step stops it if a build is missing.
+    if: >-
+      !cancelled() && ((needs.starsheets.result == 'success' && needs.stardocs.result == 'success')
+      || !startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
