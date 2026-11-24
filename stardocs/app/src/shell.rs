@@ -1,0 +1,485 @@
+//! The Google Docs-style window around WordCraft's page: a title row, the menu bar and a one-row
+//! toolbar. WordCraft's own title bar, ribbon and status bar are switched off
+//! (`HostChrome`, fork change StarDocs 0001); every item here runs a WordCraft command by id
+//! (`WordApp::run`), or opens one of its dialogs (`ui.dialog`).
+
+use egui::{Align, Button, Color32, Layout, RichText, Stroke, Ui, vec2};
+use serde_json::{Value, json};
+use wordcraft_ui_egui::WordApp;
+
+use crate::icons;
+
+pub const BLUE: Color32 = Color32::from_rgb(0x0B, 0x57, 0xD0);
+pub const PAGE: Color32 = Color32::from_rgb(0xF9, 0xFB, 0xFD);
+pub const TOOLBAR: Color32 = Color32::from_rgb(0xED, 0xF2, 0xFA);
+pub const TEXT: Color32 = Color32::from_rgb(0x1F, 0x1F, 0x1F);
+pub const TEXT_DIM: Color32 = Color32::from_rgb(0x44, 0x47, 0x46);
+pub const DIVIDER: Color32 = Color32::from_rgb(0xC7, 0xC7, 0xC7);
+pub const ON: Color32 = Color32::from_rgb(0xD3, 0xE3, 0xFD);
+pub const SHARE: Color32 = Color32::from_rgb(0xC2, 0xE7, 0xFF);
+
+/// A menu entry: a command (label, id, params as JSON text, shortcut shown), a sub-menu, or a line.
+pub enum Item {
+    Cmd(&'static str, &'static str, &'static str, &'static str),
+    Sub(&'static str, &'static [Item]),
+    Sep,
+}
+use Item::{Cmd, Sep, Sub};
+
+const NO: &str = "{}";
+
+/// The menus, in Google Docs' order and wording. An id starting `ui.dialog:` opens that
+/// WordCraft dialog.
+pub const MENUS: &[(&str, &[Item])] = &[
+    (
+        "File",
+        &[
+            Cmd("New document", "file.new", NO, ""),
+            Cmd("Open", "file.open", NO, "Ctrl+O"),
+            Sep,
+            Sub(
+                "Download",
+                &[
+                    Cmd("Microsoft Word (.docx)", "file.save", NO, ""),
+                    Cmd("PDF document (.pdf)", "file.exportPdf", NO, ""),
+                ],
+            ),
+            Cmd("Rename", "ui.dialog:renameDocument", NO, ""),
+            Sep,
+            Cmd("Page setup", "ui.dialog:pageSetup", NO, ""),
+            Cmd("Print", "file.print", NO, "Ctrl+P"),
+        ],
+    ),
+    (
+        "Edit",
+        &[
+            Cmd("Undo", "edit.undo", NO, "Ctrl+Z"),
+            Cmd("Redo", "edit.redo", NO, "Ctrl+Y"),
+            Sep,
+            Cmd("Cut", "edit.cut", NO, "Ctrl+X"),
+            Cmd("Copy", "edit.copy", NO, "Ctrl+C"),
+            Cmd("Paste", "edit.paste", NO, "Ctrl+V"),
+            Cmd("Paste without formatting", "edit.pasteText", NO, "Ctrl+Shift+V"),
+            Sep,
+            Cmd("Select all", "select.all", NO, "Ctrl+A"),
+            Sep,
+            Cmd("Find and replace", "ui.dialog:replace", NO, "Ctrl+H"),
+        ],
+    ),
+    (
+        "View",
+        &[
+            Cmd("Print layout", "view.printLayout", NO, ""),
+            Cmd("Show ruler", "view.ruler", NO, ""),
+            Cmd("Show non-printing characters", "view.marks", NO, "Ctrl+Shift+P"),
+            Sep,
+            Cmd("Zoom in", "view.zoomIn", NO, ""),
+            Cmd("Zoom out", "view.zoomOut", NO, ""),
+            Cmd("Fit page width", "view.zoom", r#"{"value":"pageWidth"}"#, ""),
+            Sep,
+            Cmd("Full screen", "view.fullScreen", NO, ""),
+        ],
+    ),
+    (
+        "Insert",
+        &[
+            Cmd("Image", "insert.picture", NO, ""),
+            Cmd("Table", "ui.dialog:insertTable", NO, ""),
+            Sep,
+            Cmd("Link", "ui.dialog:link", NO, "Ctrl+K"),
+            Cmd("Comment", "review.newComment", NO, "Ctrl+Alt+M"),
+            Sep,
+            Cmd("Horizontal line", "insert.horizontalLine", NO, ""),
+            Cmd("Page break", "insert.pageBreak", NO, "Ctrl+Enter"),
+            Sub(
+                "Headers and footers",
+                &[Cmd("Header", "insert.editHeader", NO, ""), Cmd("Footer", "insert.editFooter", NO, "")],
+            ),
+            Cmd("Page numbers", "insert.pageNumber", NO, ""),
+            Cmd("Footnote", "references.footnote", NO, "Ctrl+Alt+F"),
+            Sep,
+            Cmd("Special characters", "insert.symbol", NO, ""),
+            Cmd("Equation", "insert.equation", NO, ""),
+            Cmd("Bookmark", "ui.dialog:bookmark", NO, ""),
+            Cmd("Table of contents", "references.toc", NO, ""),
+        ],
+    ),
+    (
+        "Format",
+        &[
+            Sub(
+                "Text",
+                &[
+                    Cmd("Bold", "format.bold", NO, "Ctrl+B"),
+                    Cmd("Italic", "format.italic", NO, "Ctrl+I"),
+                    Cmd("Underline", "format.underline", NO, "Ctrl+U"),
+                    Cmd("Strikethrough", "format.strikethrough", NO, "Alt+Shift+5"),
+                    Cmd("Superscript", "format.superscript", NO, "Ctrl+."),
+                    Cmd("Subscript", "format.subscript", NO, "Ctrl+,"),
+                ],
+            ),
+            Sub(
+                "Paragraph styles",
+                &[
+                    Cmd("Normal text", "para.style", r#"{"style":"Normal"}"#, "Ctrl+Alt+0"),
+                    Cmd("Title", "para.style", r#"{"style":"Title"}"#, ""),
+                    Cmd("Subtitle", "para.style", r#"{"style":"Subtitle"}"#, ""),
+                    Cmd("Heading 1", "para.style", r#"{"style":"Heading 1"}"#, "Ctrl+Alt+1"),
+                    Cmd("Heading 2", "para.style", r#"{"style":"Heading 2"}"#, "Ctrl+Alt+2"),
+                    Cmd("Heading 3", "para.style", r#"{"style":"Heading 3"}"#, "Ctrl+Alt+3"),
+                ],
+            ),
+            Sub(
+                "Align and indent",
+                &[
+                    Cmd("Left", "para.alignLeft", NO, "Ctrl+Shift+L"),
+                    Cmd("Centre", "para.alignCenter", NO, "Ctrl+Shift+E"),
+                    Cmd("Right", "para.alignRight", NO, "Ctrl+Shift+R"),
+                    Cmd("Justified", "para.justify", NO, "Ctrl+Shift+J"),
+                    Sep,
+                    Cmd("Increase indent", "para.indent", NO, "Ctrl+]"),
+                    Cmd("Decrease indent", "para.outdent", NO, "Ctrl+["),
+                    Cmd("Indentation options", "ui.dialog:paragraph", NO, ""),
+                ],
+            ),
+            Sub(
+                "Line and paragraph spacing",
+                &[
+                    Cmd("Single", "para.lineSpacing", r#"{"value":1.0}"#, ""),
+                    Cmd("1.15", "para.lineSpacing", r#"{"value":1.15}"#, ""),
+                    Cmd("1.5", "para.lineSpacing", r#"{"value":1.5}"#, ""),
+                    Cmd("Double", "para.lineSpacing", r#"{"value":2.0}"#, ""),
+                    Sep,
+                    Cmd("Custom spacing", "ui.dialog:paragraph", NO, ""),
+                ],
+            ),
+            Cmd("Columns", "layout.columns", NO, ""),
+            Sub(
+                "Bullets and numbering",
+                &[
+                    Cmd("Bulleted list", "para.bullets", NO, "Ctrl+Shift+8"),
+                    Cmd("Numbered list", "para.numbering", NO, "Ctrl+Shift+7"),
+                ],
+            ),
+            Sep,
+            Cmd("Borders and shading", "ui.dialog:borders", NO, ""),
+            Cmd("Clear formatting", "format.clear", NO, "Ctrl+\\"),
+        ],
+    ),
+    (
+        "Tools",
+        &[
+            Cmd("Spelling and grammar", "review.spelling", NO, ""),
+            Cmd("Word count", "ui.dialog:wordCount", NO, "Ctrl+Shift+C"),
+            Sep,
+            Cmd("Suggesting (track changes)", "review.trackChanges", NO, ""),
+            Cmd("Accept all suggestions", "review.acceptAll", NO, ""),
+            Cmd("Reject all suggestions", "review.rejectAll", NO, ""),
+            Sep,
+            Cmd("Read aloud", "review.readAloud", NO, ""),
+        ],
+    ),
+    ("Help", &[Cmd("Search the menus", "tools.search", NO, "Alt+/"), Cmd("About StarDocs", "ui.dialog:about", NO, "")]),
+];
+
+const STYLES: &[(&str, &str)] =
+    &[("Normal text", "Normal"), ("Title", "Title"), ("Subtitle", "Subtitle"), ("Heading 1", "Heading 1"), ("Heading 2", "Heading 2"), ("Heading 3", "Heading 3")];
+const SIZES: &[f64] = &[8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 18.0, 24.0, 30.0, 36.0, 48.0, 60.0, 72.0, 96.0];
+const ZOOMS: &[u32] = &[50, 75, 90, 100, 125, 150, 200];
+/// Google Docs' first palette row and its brighter row, enough for a prototype.
+const COLOURS: &[&str] = &[
+    "000000", "434343", "666666", "999999", "B7B7B7", "CCCCCC", "D9D9D9", "EFEFEF", "F3F3F3", "FFFFFF", "980000", "FF0000", "FF9900", "FFFF00", "00FF00",
+    "00FFFF", "4A86E8", "0000FF", "9900FF", "FF00FF",
+];
+const HIGHLIGHTS: &[(&str, &str)] =
+    &[("yellow", "FFFF00"), ("brightGreen", "00FF00"), ("turquoise", "00FFFF"), ("pink", "FF00FF"), ("blue", "0000FF"), ("red", "FF0000"), ("green", "008000"), ("lightGray", "C0C0C0")];
+
+/// Our part of the window. Fonts are listed once from WordCraft (`font.list`).
+#[derive(Default)]
+pub struct Shell {
+    fonts: Option<Vec<String>>,
+}
+
+fn params(text: &str) -> Value {
+    serde_json::from_str(text).unwrap_or_else(|_| json!({}))
+}
+
+/// Runs a command; a refusal goes to the app's status line instead of vanishing.
+pub fn run(app: &mut WordApp, id: &str, p: Value) {
+    let r = match id.strip_prefix("ui.dialog:") {
+        Some(name) => app.run("ui.dialog", json!({ "name": name })),
+        None => app.run(id, p),
+    };
+    if let Err(e) = r {
+        log::warn!("{id}: {e}");
+        app.status(e);
+    }
+}
+
+/// What the toolbar shows about the selection.
+#[derive(Default)]
+struct Current {
+    font: String,
+    size: f64,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+    zoom: f64,
+}
+
+fn current(app: &mut WordApp) -> Current {
+    let f = app.run("format.state", json!({})).unwrap_or_default();
+    let v = app.run("view.state", json!({})).unwrap_or_default();
+    let on = |k: &str| f.get(k).and_then(Value::as_bool).unwrap_or(false);
+    Current {
+        font: f.get("fontShownAs").or_else(|| f.get("font")).and_then(Value::as_str).unwrap_or("").to_string(),
+        size: f.get("size").and_then(Value::as_f64).unwrap_or(0.0),
+        bold: on("bold"),
+        italic: on("italic"),
+        underline: f.get("underline").is_some_and(|u| u.as_bool().unwrap_or(!u.is_null() && u != "none")),
+        zoom: v.get("zoom").and_then(Value::as_f64).unwrap_or(1.0),
+    }
+}
+
+impl Shell {
+    /// Draws the title row, menus and toolbar above the page. Call before `WordApp::ui`.
+    pub fn ui(&mut self, app: &mut WordApp, ui: &mut Ui) {
+        egui::Panel::top("stardocs_head").frame(egui::Frame::NONE.fill(PAGE).inner_margin(egui::Margin { left: 12, right: 16, top: 8, bottom: 6 })).show(ui, |ui| {
+            title_and_menus(app, ui);
+            ui.add_space(6.0);
+            self.toolbar(app, ui);
+        });
+    }
+
+    fn toolbar(&mut self, app: &mut WordApp, ui: &mut Ui) {
+        let cur = current(app);
+        egui::Frame::NONE.fill(TOOLBAR).corner_radius(24.0).inner_margin(egui::Margin::symmetric(10, 4)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                flat(ui);
+                ui.spacing_mut().item_spacing.x = 2.0;
+                tool(app, ui, "undo", "Undo (Ctrl+Z)", "edit.undo", json!({}), false);
+                tool(app, ui, "redo", "Redo (Ctrl+Y)", "edit.redo", json!({}), false);
+                tool(app, ui, "print", "Print (Ctrl+P)", "file.print", json!({}), false);
+                tool(app, ui, "spellcheck", "Spelling and grammar", "review.spelling", json!({}), false);
+                bar(ui);
+                let zoom = format!("{}%", (cur.zoom * 100.0).round());
+                drop_menu(ui, &zoom, 56.0, |ui| {
+                    for z in ZOOMS {
+                        if ui.button(format!("{z}%")).clicked() {
+                            run(app, "view.zoom", json!({ "value": z }));
+                            ui.close();
+                        }
+                    }
+                    if ui.button("Fit").clicked() {
+                        run(app, "view.zoom", json!({ "value": "pageWidth" }));
+                        ui.close();
+                    }
+                });
+                bar(ui);
+                drop_menu(ui, "Styles", 100.0, |ui| {
+                    for (label, name) in STYLES {
+                        let size = match *name {
+                            "Title" => 22.0,
+                            "Heading 1" => 18.0,
+                            "Heading 2" | "Subtitle" => 16.0,
+                            "Heading 3" => 14.0,
+                            _ => 13.0,
+                        };
+                        if ui.button(RichText::new(*label).size(size)).clicked() {
+                            run(app, "para.style", json!({ "style": name }));
+                            ui.close();
+                        }
+                    }
+                });
+                bar(ui);
+                let fonts = self.fonts.get_or_insert_with(|| font_names(app)).clone();
+                drop_menu(ui, &cur.font, 110.0, |ui| {
+                    egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+                        for f in &fonts {
+                            if ui.button(f).clicked() {
+                                run(app, "format.font", json!({ "name": f }));
+                                ui.close();
+                            }
+                        }
+                    });
+                });
+                bar(ui);
+                tool(app, ui, "remove", "Decrease font size", "format.shrinkFont1", json!({}), false);
+                let size = if cur.size > 0.0 { format!("{}", cur.size) } else { String::new() };
+                drop_menu(ui, &size, 34.0, |ui| {
+                    for s in SIZES {
+                        if ui.button(format!("{s}")).clicked() {
+                            run(app, "format.size", json!({ "size": s }));
+                            ui.close();
+                        }
+                    }
+                });
+                tool(app, ui, "add", "Increase font size", "format.growFont1", json!({}), false);
+                bar(ui);
+                tool(app, ui, "format_bold", "Bold (Ctrl+B)", "format.bold", json!({}), cur.bold);
+                tool(app, ui, "format_italic", "Italic (Ctrl+I)", "format.italic", json!({}), cur.italic);
+                tool(app, ui, "format_underlined", "Underline (Ctrl+U)", "format.underline", json!({}), cur.underline);
+                icon_menu(ui, "format_color_text", "Text colour", |ui| {
+                    palette(ui, COLOURS.iter().map(|c| (*c, *c)), |c| run(app, "format.color", json!({ "color": c })));
+                    if ui.button("Automatic").clicked() {
+                        run(app, "format.color", json!({ "color": "auto" }));
+                        ui.close();
+                    }
+                });
+                icon_menu(ui, "ink_highlighter", "Highlight colour", |ui| {
+                    palette(ui, HIGHLIGHTS.iter().copied(), |c| run(app, "format.highlight", json!({ "color": c })));
+                    if ui.button("None").clicked() {
+                        run(app, "format.highlight", json!({ "color": "none" }));
+                        ui.close();
+                    }
+                });
+                bar(ui);
+                tool(app, ui, "link", "Insert link (Ctrl+K)", "ui.dialog:link", json!({}), false);
+                tool(app, ui, "add_comment", "Add comment (Ctrl+Alt+M)", "review.newComment", json!({}), false);
+                tool(app, ui, "image", "Insert image", "insert.picture", json!({}), false);
+                bar(ui);
+                tool(app, ui, "format_align_left", "Left align (Ctrl+Shift+L)", "para.alignLeft", json!({}), false);
+                tool(app, ui, "format_align_center", "Centre align (Ctrl+Shift+E)", "para.alignCenter", json!({}), false);
+                tool(app, ui, "format_align_right", "Right align (Ctrl+Shift+R)", "para.alignRight", json!({}), false);
+                tool(app, ui, "format_align_justify", "Justify (Ctrl+Shift+J)", "para.justify", json!({}), false);
+                icon_menu(ui, "format_line_spacing", "Line and paragraph spacing", |ui| {
+                    for (label, v) in [("Single", 1.0), ("1.15", 1.15), ("1.5", 1.5), ("Double", 2.0)] {
+                        if ui.button(label).clicked() {
+                            run(app, "para.lineSpacing", json!({ "value": v }));
+                            ui.close();
+                        }
+                    }
+                });
+                bar(ui);
+                tool(app, ui, "format_list_bulleted", "Bulleted list (Ctrl+Shift+8)", "para.bullets", json!({}), false);
+                tool(app, ui, "format_list_numbered", "Numbered list (Ctrl+Shift+7)", "para.numbering", json!({}), false);
+                tool(app, ui, "format_indent_decrease", "Decrease indent (Ctrl+[)", "para.outdent", json!({}), false);
+                tool(app, ui, "format_indent_increase", "Increase indent (Ctrl+])", "para.indent", json!({}), false);
+                tool(app, ui, "format_clear", "Clear formatting (Ctrl+\\)", "format.clear", json!({}), false);
+            });
+        });
+    }
+}
+
+fn font_names(app: &mut WordApp) -> Vec<String> {
+    let v = app.run("font.list", json!({})).unwrap_or_default();
+    let list = v.get("fonts").or_else(|| v.get("families")).unwrap_or(&v);
+    let mut out: Vec<String> = list
+        .as_array()
+        .map(|a| a.iter().filter_map(|f| f.as_str().map(str::to_string).or_else(|| f.get("family").or_else(|| f.get("name")).and_then(Value::as_str).map(str::to_string))).collect())
+        .unwrap_or_default();
+    out.sort_by_key(|s| s.to_lowercase());
+    out.dedup();
+    out
+}
+
+fn title_and_menus(app: &mut WordApp, ui: &mut Ui) {
+    ui.horizontal(|ui| {
+        let logo = ui.add(egui::Label::new(RichText::new("📄").size(30.0).color(BLUE)).sense(egui::Sense::click()));
+        logo.on_hover_text("StarDocs");
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.label(RichText::new(app.title_stem()).size(18.0).color(TEXT));
+            ui.horizontal(|ui| {
+                flat(ui);
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.spacing_mut().button_padding = vec2(7.0, 2.0);
+                for (title, items) in MENUS {
+                    ui.menu_button(RichText::new(*title).size(14.0).color(TEXT), |ui| menu_items(app, ui, items));
+                }
+            });
+        });
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let share = Button::new(RichText::new("Share").size(14.0).color(TEXT)).fill(SHARE).corner_radius(18.0).min_size(vec2(84.0, 36.0));
+            ui.add_enabled(false, share).on_disabled_hover_text("Sharing comes with the Starbase server");
+        });
+    });
+}
+
+fn menu_items(app: &mut WordApp, ui: &mut Ui, items: &[Item]) {
+    ui.set_min_width(260.0);
+    for item in items {
+        match item {
+            Cmd(label, id, p, keys) => {
+                let b = Button::new(RichText::new(*label).size(14.0).color(TEXT)).right_text(RichText::new(*keys).size(13.0).color(TEXT_DIM)).min_size(vec2(260.0, 30.0));
+                if ui.add(b).clicked() {
+                    run(app, id, params(p));
+                    ui.close();
+                }
+            }
+            Sub(label, sub) => {
+                ui.menu_button(RichText::new(*label).size(14.0).color(TEXT), |ui| menu_items(app, ui, sub));
+            }
+            Sep => {
+                ui.separator();
+            }
+        }
+    }
+}
+
+/// Toolbar buttons are flat until hovered, as in Docs.
+fn flat(ui: &mut Ui) {
+    let w = &mut ui.visuals_mut().widgets;
+    w.inactive.weak_bg_fill = Color32::TRANSPARENT;
+    w.inactive.bg_stroke = Stroke::NONE;
+    w.hovered.bg_stroke = Stroke::NONE;
+    w.active.bg_stroke = Stroke::NONE;
+}
+
+fn bar(ui: &mut Ui) {
+    ui.add_space(4.0);
+    let (r, _) = ui.allocate_exact_size(vec2(1.0, 20.0), egui::Sense::hover());
+    ui.painter().rect_filled(r, 0.0, DIVIDER);
+    ui.add_space(4.0);
+}
+
+fn icon_button(ui: &mut Ui, name: &str, on: bool) -> egui::Response {
+    let b = match icons::icon(name) {
+        Some(img) => Button::image(img),
+        None => Button::new(name),
+    };
+    ui.add(b.fill(if on { ON } else { Color32::TRANSPARENT }).corner_radius(4.0).min_size(vec2(28.0, 28.0)))
+}
+
+fn tool(app: &mut WordApp, ui: &mut Ui, icon: &str, tip: &str, id: &str, p: Value, on: bool) {
+    if icon_button(ui, icon, on).on_hover_text(tip).clicked() {
+        run(app, id, p);
+    }
+}
+
+fn icon_menu(ui: &mut Ui, icon: &str, tip: &str, add: impl FnOnce(&mut Ui)) {
+    let img = icons::icon(icon);
+    let r = match img {
+        Some(img) => ui.menu_image_button(img, add).response,
+        None => ui.menu_button(icon, add).response,
+    };
+    r.on_hover_text(tip);
+}
+
+fn drop_menu(ui: &mut Ui, text: &str, width: f32, add: impl FnOnce(&mut Ui)) {
+    ui.scope(|ui| {
+        ui.set_min_width(width);
+        ui.menu_button(RichText::new(format!("{text} ▾")).size(14.0).color(TEXT_DIM), add);
+    });
+}
+
+fn palette<'a>(ui: &mut Ui, colours: impl Iterator<Item = (&'a str, &'a str)>, mut pick: impl FnMut(&str)) {
+    let all: Vec<_> = colours.collect();
+    egui::Grid::new(ui.next_auto_id()).spacing(vec2(4.0, 4.0)).show(ui, |ui| {
+        for (i, (value, hex)) in all.iter().enumerate() {
+            let c = u32::from_str_radix(hex, 16).unwrap_or(0);
+            let colour = Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8);
+            let (r, resp) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::click());
+            ui.painter().circle_filled(r.center(), 9.0, colour);
+            ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, DIVIDER));
+            if resp.on_hover_text(*value).clicked() {
+                pick(value);
+                ui.close();
+            }
+            if i % 10 == 9 {
+                ui.end_row();
+            }
+        }
+    });
+}

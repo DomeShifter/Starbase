@@ -1,0 +1,8 @@
+# WordCraft as StarDocs builds it: our fork's "stardocs" branch = upstream tag `base` plus one
+# commit per StarDocs change. Bump `commit` after pushing to the fork, then run
+# scripts/fetch-upstream.sh (it also regenerates Cargo.toml from upstream's).
+repo = "https://github.com/DomeShifter/wordcraft.git"
+branch = "stardocs"
+commit = "85e98f33b47bb7b9a1c2231a224cd949ebfe1f45"
+base = "v0.18.1"
+upstream = "https://github.com/storytold/wordcraft.git"

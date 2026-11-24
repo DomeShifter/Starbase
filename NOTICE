@@ -1,0 +1,16 @@
+Starbase
+Copyright (c) 2026 the Starbase contributors.
+Licensed under the MIT License or the Apache License, Version 2.0, at your option
+(LICENSE-MIT, LICENSE-APACHE).
+
+StarDocs (stardocs/) is built on WordCraft (https://github.com/storytold/wordcraft):
+Copyright (c) 2026 ArtCraft Team and the WordCraft contributors, MIT OR Apache-2.0.
+WordCraft's code is fetched at build time (stardocs/scripts/fetch-upstream.sh) and is not
+redistributed in this repository, except stardocs/app/src/{web,host,api,prefs,save_fallback,main}.rs,
+which are adapted from WordCraft's apps/wordcraft-web. WordCraft's own NOTICE and ATTRIBUTION.md
+list the third-party material it bundles.
+
+Bundled assets: Material Symbols icons (stardocs/app/icons, Apache License 2.0; see the README there).
+
+The ArtCraft and WordCraft names and logos are trademarks of the ArtCraft Team and are not used by
+Starbase. "Google Docs" is a trademark of Google LLC; Starbase is not affiliated with Google.
