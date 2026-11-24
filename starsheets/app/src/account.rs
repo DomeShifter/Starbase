@@ -117,6 +117,8 @@ enum Reply {
         signup_code: bool,
         signed_in: bool,
         user: Option<Me>,
+        /// Single sign-on (STARSHEETS_OIDC_*), when the server has it.
+        sso: Option<Sso>,
     },
     Signup {
         on: bool,
@@ -124,6 +126,8 @@ enum Reply {
     },
     /// Signed in or out, or the password changed: start the page again.
     Reload,
+    /// Signed out: go to the identity provider's sign-out page (single sign-on), or reload.
+    SignedOut(Option<String>),
     Saved(Me),
     People(Vec<Me>),
     Error(String),
@@ -141,6 +145,46 @@ enum Reply {
     BackupKey(String),
     /// Settings saved, a backup started or a restore done: say so and look again.
     BackupDone(String),
+}
+
+/// What the server says about single sign-on (GET /api/info `sso`).
+#[derive(Clone, Debug, Default)]
+struct Sso {
+    label: String,
+    /// Only single sign-on (passwords only for owners).
+    only: bool,
+    /// Members of the provider's owner group can set up a new server with it.
+    owner_group: bool,
+    /// The signed-in account is linked to a sign-in at the provider.
+    linked: bool,
+}
+
+fn sso_from(v: &Json) -> Option<Sso> {
+    let o = v.as_object()?;
+    Some(Sso {
+        label: o.get("label").and_then(Json::as_str).unwrap_or("Sign in with SSO").to_string(),
+        only: o.get("only").and_then(Json::as_bool).unwrap_or(false),
+        owner_group: o.get("owner_group").and_then(Json::as_bool).unwrap_or(false),
+        linked: o.get("linked").and_then(Json::as_bool).unwrap_or(false),
+    })
+}
+
+/// Sends the browser to the server's single sign-on (`what`: login or link), coming back to
+/// this page.
+fn go_sso(what: &str) {
+    let Some(w) = web_sys::window() else { return };
+    let here = format!("{}{}", w.location().pathname().unwrap_or_default(), w.location().search().unwrap_or_default());
+    crate::files::clear_unsaved_flag();
+    let _ = w.location().set_href(&format!("api/oidc/{what}?next={}", crate::files::enc(&here)));
+}
+
+/// What happened at the last single sign-on (index.html reads `?sso=` from the address and
+/// explains it), taken once.
+fn sso_message() -> Option<String> {
+    let w = web_sys::window()?;
+    let v = js_sys::Reflect::get(&w, &"__ssSsoMessage".into()).ok()?.as_string().filter(|m| !m.is_empty())?;
+    let _ = js_sys::Reflect::set(&w, &"__ssSsoMessage".into(), &"".into());
+    Some(v)
 }
 
 #[derive(Default, PartialEq)]
@@ -165,6 +209,7 @@ pub struct Account {
     /// The server lets people make their own account (and whether that needs a code).
     signup: bool,
     signup_code: bool,
+    sso: Option<Sso>,
     /// The owner's sign-up setting, as shown in People.
     signup_on: bool,
     signup_secret: String,
@@ -263,17 +308,27 @@ impl Account {
                 signup_code: v["signup_code"].as_bool().unwrap_or(false),
                 signed_in: v["signed_in"].as_bool().unwrap_or(true),
                 user: me_from(&v["user"]),
+                sso: sso_from(&v["sso"]),
             });
         }
         let replies: Vec<Reply> = std::mem::take(&mut *self.inbox.borrow_mut());
         for r in replies {
             self.busy = false;
             match r {
-                Reply::Info { auth, setup, signup, signup_code, signed_in, user } => {
+                Reply::Info { auth, setup, signup, signup_code, signed_in, user, sso } => {
                     self.auth = auth;
                     self.signup = signup;
                     self.signup_code = signup_code;
+                    self.sso = sso;
                     ME.with(|m| *m.borrow_mut() = user);
+                    // Back from linking an account at the provider: say how it went.
+                    if auth
+                        && signed_in
+                        && let Some(why) = sso_message()
+                    {
+                        self.open(Dialog::Profile);
+                        self.error = Some(why);
+                    }
                     if auth && !signed_in {
                         self.open(if setup { Dialog::Setup } else { Dialog::SignIn });
                         if setup {
@@ -282,6 +337,13 @@ impl Account {
                     }
                 }
                 Reply::Reload => reload(),
+                Reply::SignedOut(to) => match (to, web_sys::window()) {
+                    (Some(url), Some(w)) => {
+                        crate::files::clear_unsaved_flag();
+                        let _ = w.location().set_href(&url);
+                    }
+                    _ => reload(),
+                },
                 Reply::Saved(me) => {
                     ME.with(|m| *m.borrow_mut() = Some(me));
                     self.dialog = Dialog::None;
@@ -372,7 +434,10 @@ impl Account {
                     });
                     call(&self.inbox, ctx, Method::Get, "api/signup/settings", None, signup_reply);
                 }
-                "signout" => call(&self.inbox, ctx, Method::Post, "api/logout", None, |_| Reply::Reload),
+                "signout" => call(&self.inbox, ctx, Method::Post, "api/logout", None, |v| {
+                    Reply::SignedOut(v["logout_url"].as_str().filter(|u| u.starts_with("https://") || u.starts_with("http://")).map(str::to_string))
+                }),
+                "sso-unlink" => call(&self.inbox, ctx, Method::Post, "api/oidc/unlink", None, |_| Reply::Reload),
                 _ => {}
             }
         }
@@ -756,7 +821,8 @@ impl Account {
         if want != self.dom_sign_in {
             self.dom_sign_in = want;
             if let Some(f) = js_sys::Reflect::get(&w, &"__ssSignIn".into()).ok().and_then(|f| f.dyn_into::<js_sys::Function>().ok()) {
-                let _ = f.call2(&w, &want.into(), &self.signup.into());
+                let sso = self.sso.as_ref().map_or(wasm_bindgen::JsValue::NULL, |s| json!({ "label": s.label, "only": s.only }).to_string().into());
+                let _ = f.call3(&w, &want.into(), &self.signup.into(), &sso);
             }
         }
         if want && js_sys::Reflect::get(&w, &"__ssWantSignUp".into()).is_ok_and(|v| v.is_truthy()) {
@@ -816,6 +882,12 @@ impl Account {
                 ui,
                 "The setup code is printed in the server's log when it starts (with Docker: docker logs followed by the container's name). If the server was started with STARSHEETS_PASSWORD, that is the code.",
             );
+            if let Some(sso) = self.sso.as_ref().filter(|s| s.owner_group) {
+                house::note(ui, "Or, if you are in the owner group at your sign-in service, sign in with it: you become the owner.");
+                if ui.add(house::secondary(&sso.label)).clicked() {
+                    go_sso("login");
+                }
+            }
             house::gap(ui);
             house::label(ui, "Setup code", "");
             let r = Self::field(ui, &mut self.code, "From the server's log", false);
@@ -898,6 +970,20 @@ impl Account {
                     }
                 }
             });
+            if let Some(sso) = self.sso.clone() {
+                house::gap(ui);
+                if sso.linked {
+                    house::label(ui, "Single sign-on", "Your account is linked to your sign-in at the sign-in service.");
+                    if ui.add(house::link("Unlink")).clicked() {
+                        ctx.data_mut(|m| m.insert_temp(egui::Id::unique(REQUEST), "sso-unlink".to_string()));
+                    }
+                } else {
+                    house::label(ui, "Single sign-on", "Link this account to your sign-in at the sign-in service, then use it to sign in here.");
+                    if ui.add(house::secondary(&sso.label)).clicked() {
+                        go_sso("link");
+                    }
+                }
+            }
             self.messages(ui);
             match house::actions(ui, &["Cancel", "Save"]) {
                 Some(0) => cancel = true,

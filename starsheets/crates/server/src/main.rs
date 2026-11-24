@@ -4,9 +4,9 @@
 //!
 //! Settings (environment): STORE (folder, default /data), KEEP (versions kept, 6), PORT (8080),
 //! LOCATION (how people are told where files are kept), STARSHEETS_AUTH (off = no login),
-//! STARSHEETS_PASSWORD, SITE (a built StarSheets site to serve), and the security settings in
+//! STARSHEETS_PASSWORD, SITE (a built StarSheets site to serve), the security settings in
 //! guard.rs (STARSHEETS_PUBLIC_URL, STARSHEETS_ALLOWED_HOSTS, STARSHEETS_TRUSTED_PROXY,
-//! STARSHEETS_SECURE_COOKIE).
+//! STARSHEETS_SECURE_COOKIE) and single sign-on's STARSHEETS_OIDC_* (oidc.rs, docs/oidc.md).
 
 // Request handlers return a ready HTTP response as their error (axum's usual way); boxing it to
 // make the error smaller would only add an allocation on the error path.
@@ -17,6 +17,7 @@ mod backup;
 mod guard;
 mod live;
 mod log;
+mod oidc;
 mod sharing;
 mod spaces;
 mod store;
@@ -65,6 +66,8 @@ struct App {
     auth: bool,
     site: Option<PathBuf>,
     rooms: live::Rooms,
+    /// Single sign-on through the owner's identity provider (STARSHEETS_OIDC_ISSUER set).
+    oidc: Option<Arc<oidc::Oidc>>,
 }
 
 type Shared = Arc<App>;
@@ -130,11 +133,7 @@ fn reply(r: Result<Reply, Bad>) -> Response<Body> {
 // ---------------------------------------------------------------- sign-in
 
 fn cookie_token(headers: &HeaderMap) -> Option<String> {
-    let cookies = headers.get_all(header::COOKIE).iter().filter_map(|v| v.to_str().ok()).collect::<Vec<_>>().join(";");
-    cookies.split(';').find_map(|part| {
-        let (name, value) = part.trim().split_once('=')?;
-        (name == COOKIE && !value.is_empty()).then(|| value.to_string())
-    })
+    named_cookie(headers, COOKIE)
 }
 
 /// Who is asking (`None`: not signed in, or sign-in is off).
@@ -161,15 +160,43 @@ fn same(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
-fn cookie_reply(value: &str, max_age: u64, body: Value, secure: bool) -> Response<Body> {
+fn session_cookie(value: &str, max_age: u64, secure: bool) -> String {
     let secure = if secure { "; Secure" } else { "" };
+    format!("{COOKIE}={value}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Strict{secure}")
+}
+
+fn cookie_reply(value: &str, max_age: u64, body: Value, secure: bool) -> Response<Body> {
     Response::builder()
         .status(200)
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::CACHE_CONTROL, "no-store")
-        .header(header::SET_COOKIE, format!("{COOKIE}={value}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Strict{secure}"))
+        .header(header::SET_COOKIE, session_cookie(value, max_age, secure))
         .body(Body::from(serde_json::to_vec(&body).unwrap_or_default()))
         .unwrap()
+}
+
+/// Sends the browser on to `location` (single sign-on), setting `cookies`.
+fn see_other(location: &str, cookies: &[String]) -> Response<Body> {
+    let mut b = Response::builder().status(303).header(header::LOCATION, location).header(header::CACHE_CONTROL, "no-store");
+    for c in cookies {
+        b = b.header(header::SET_COOKIE, c);
+    }
+    b.body(Body::empty()).unwrap()
+}
+
+/// The cookie that ties a sign-in at the identity provider to this browser. SameSite=Lax: the
+/// provider sends the browser back from its own site, and a Strict cookie wouldn't come along.
+fn oidc_cookie(value: &str, max_age: u64, secure: bool) -> String {
+    let secure = if secure { "; Secure" } else { "" };
+    format!("{}={value}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Lax{secure}", oidc::COOKIE)
+}
+
+fn named_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
+    let cookies = headers.get_all(header::COOKIE).iter().filter_map(|v| v.to_str().ok()).collect::<Vec<_>>().join(";");
+    cookies.split(';').find_map(|part| {
+        let (n, value) = part.trim().split_once('=')?;
+        (n == name && !value.is_empty()).then(|| value.to_string())
+    })
 }
 
 /// Runs account work (Argon2 is slow) off the async threads, under the store lock.
@@ -237,9 +264,14 @@ async fn accounts(
         (["info"], "GET") => {
             let setup = on && !auth::any_users(&app.store);
             let s = auth::signup(&app.store);
-            let signup = on && !setup && s.on;
+            let sso = app.oidc.as_ref().filter(|_| on).map(|o| {
+                let linked = me.as_ref().is_some_and(|u| auth::is_linked(&app.store, &u.username));
+                json!({ "label": o.cfg.label, "only": o.cfg.only, "owner_group": o.cfg.owner_group.is_some(), "linked": linked })
+            });
+            let only = app.oidc.as_ref().is_some_and(|o| o.cfg.only);
+            let signup = on && !setup && s.on && !only;
             send_json(
-                &json!({ "location": app.location, "auth": on, "signed_in": !on || me.is_some(), "setup": setup, "signup": signup, "signup_code": signup && !s.code.is_empty(), "user": me.map(|u| u.json()) }),
+                &json!({ "location": app.location, "auth": on, "signed_in": !on || me.is_some(), "setup": setup, "signup": signup, "signup_code": signup && !s.code.is_empty(), "user": me.map(|u| u.json()), "sso": sso }),
                 200,
             )
         }
@@ -293,6 +325,9 @@ async fn accounts(
         (["signup"], "POST") => {
             if !on {
                 return Some(error(400, "Sign-in is off on this server."));
+            }
+            if app.oidc.as_ref().is_some_and(|o| o.cfg.only) {
+                return Some(error(403, "This server signs people in through single sign-on only."));
             }
             if !LIMITS.take(&ip_key("signup", ask.ip), guard::SIGNUP_IP) {
                 return Some(too_many());
@@ -361,6 +396,10 @@ async fn accounts(
             let found = blocking(app, move |app| auth::login_hash(&app.store, &username)).await.flatten();
             let (hash, user) = found.map_or((None, None), |(u, h)| (Some(h), Some(u)));
             let right = slow(move || auth::verify(&password, hash.as_deref())).await.unwrap_or(false);
+            // STARSHEETS_OIDC_ONLY: passwords only for owners (a way in when the provider is down).
+            if right && user.as_ref().is_some_and(|u| !u.owner) && app.oidc.as_ref().is_some_and(|o| o.cfg.only) {
+                return Some(error(403, "This server signs people in through single sign-on: use the button above."));
+            }
             match user.filter(|_| right) {
                 Some(user) => blocking(app, move |app| session_reply(app, &user, secure)).await.unwrap_or_else(|| error(500, "server error")),
                 None => {
@@ -370,11 +409,25 @@ async fn accounts(
             }
         }
         (["logout"], "POST") => {
+            let mut answer = json!({ "ok": true });
             if let Some(t) = cookie_token(headers) {
-                blocking(app, move |app| auth::end_session(&app.store, &t)).await;
+                let id_token = blocking(app, move |app| {
+                    let id_token = auth::session_id_token(&app.store, &t);
+                    auth::end_session(&app.store, &t);
+                    id_token
+                })
+                .await
+                .flatten();
+                // Signed in through single sign-on: sign out at the provider too, when it can.
+                if let (Some(id_token), Some(o)) = (id_token, app.oidc.clone())
+                    && let Ok(Some(url)) = tokio::task::spawn_blocking(move || o.logout_url(&id_token)).await
+                {
+                    answer["logout_url"] = json!(url);
+                }
             }
-            cookie_reply("", 0, json!({ "ok": true }), secure)
+            cookie_reply("", 0, answer, secure)
         }
+        (["oidc", ..], _) => sso(app, &path, m, q, headers, me, ask).await,
         (["me"], "POST") => {
             let Some(me) = me else { return Some(error(401, "please sign in")) };
             let mut new_hash = None;
@@ -469,6 +522,96 @@ async fn accounts(
         }
         _ => return None,
     })
+}
+
+// ---------------------------------------------------------------- single sign-on
+
+/// /api/oidc/login, /api/oidc/link, /api/oidc/callback and /api/oidc/unlink (oidc.rs). The
+/// browser comes to the first three itself (links and redirects), so problems are shown by
+/// sending it back to StarSheets with `?sso=<what happened>`, which the sign-in box explains.
+async fn sso(
+    app: &Shared,
+    path: &[&str],
+    m: &str,
+    q: &HashMap<String, String>,
+    headers: &HeaderMap,
+    me: Option<auth::User>,
+    ask: Ask,
+) -> Response<Body> {
+    use guard::{LIMITS, ip_key};
+    let Some(o) = app.oidc.clone().filter(|_| app.auth) else { return error(404, "Single sign-on isn't set up on this server.") };
+    let secure = ask.secure || o.cfg.https();
+    let back = |next: &str, what: &str| see_other(&oidc::with_param(next, "sso", what), &[oidc_cookie("", 0, secure)]);
+    match (path, m) {
+        (["oidc", which @ ("login" | "link")], "GET") => {
+            let next = q.get("next").and_then(|n| oidc::safe_next(n)).unwrap_or_else(|| o.cfg.base_path());
+            if !LIMITS.take(&ip_key("oidc", ask.ip), guard::LOGIN_IP) {
+                return back(&next, "busy");
+            }
+            let link = match (*which, me) {
+                ("link", Some(u)) => Some(u.username),
+                ("link", None) => return back(&next, "signin-first"),
+                _ => None,
+            };
+            let (o2, next2) = (o.clone(), next.clone());
+            match tokio::task::spawn_blocking(move || o2.start(next2, link)).await {
+                Ok(Ok((url, binding))) => see_other(&url, &[oidc_cookie(&binding, oidc::PENDING_FOR.as_secs(), secure)]),
+                Ok(Err(why)) => {
+                    eprintln!("Single sign-on: {why}");
+                    back(&next, "unreachable")
+                }
+                Err(_) => back(&next, "failed"),
+            }
+        }
+        (["oidc", "callback"], "GET") => {
+            let home = o.cfg.base_path();
+            if !LIMITS.take(&ip_key("oidc", ask.ip), guard::LOGIN_IP) {
+                return back(&home, "busy");
+            }
+            let state = q.get("state").cloned().unwrap_or_default();
+            let binding = named_cookie(headers, oidc::COOKIE).unwrap_or_default();
+            let Some(pending) = o.take(&state, &binding) else { return back(&home, "expired") };
+            if let Some(e) = q.get("error") {
+                return back(&pending.next, if e == "access_denied" { "denied" } else { "failed" });
+            }
+            let code = q.get("code").cloned().unwrap_or_default();
+            let o2 = o.clone();
+            let found = tokio::task::spawn_blocking(move || {
+                let r = o2.finish(&pending, &code);
+                (r, pending)
+            })
+            .await;
+            let (who, id_token, pending) = match found {
+                Ok((Ok((who, id_token)), pending)) => (who, id_token, pending),
+                Ok((Err(why), pending)) => {
+                    eprintln!("Single sign-on failed: {why}");
+                    return back(&pending.next, "failed");
+                }
+                Err(_) => return back(&home, "failed"),
+            };
+            let (next, link) = (pending.next.clone(), pending.link.clone());
+            let cfg = o.cfg.clone();
+            let r = blocking(app, move |app| {
+                let user = oidc::account(&app.store, &cfg, &who, link.as_deref())?;
+                auth::new_session_with(&app.store, &user.username, Some(&id_token)).map_err(|_| "failed")
+            })
+            .await;
+            match r {
+                Some(Ok(token)) => see_other(&next, &[oidc_cookie("", 0, secure), session_cookie(&token, auth::SESSION_DAYS * 86400, secure)]),
+                Some(Err(what)) => back(&next, what),
+                None => back(&next, "failed"),
+            }
+        }
+        (["oidc", "unlink"], "POST") => {
+            let Some(me) = me else { return error(401, "please sign in") };
+            match blocking(app, move |app| auth::unlink(&app.store, &me.username)).await {
+                Some(Ok(())) => send_json(&json!({ "ok": true }), 200),
+                Some(Err(why)) => error(400, &why),
+                None => error(500, "server error"),
+            }
+        }
+        _ => error(404, "not found"),
+    }
 }
 
 // ---------------------------------------------------------------- sharing
@@ -1171,9 +1314,10 @@ fn takes_a_file(m: &str, p: &[String]) -> bool {
     matches!((m, p.as_slice()), ("POST", ["files"]) | ("PUT", ["files", _]) | ("POST", ["files", _, "add-sheets"]))
 }
 
-/// Paths answered before (or without) sign-in: accounts and, while setting up, storage.
+/// Paths answered before (or without) sign-in: accounts (single sign-on too) and, while
+/// setting up, storage.
 fn before_sign_in(p: &[String]) -> bool {
-    matches!(p.first().map(String::as_str), Some("info" | "setup" | "signup" | "login" | "logout" | "me" | "users" | "storage"))
+    matches!(p.first().map(String::as_str), Some("info" | "setup" | "signup" | "login" | "logout" | "me" | "users" | "storage" | "oidc"))
 }
 
 /// Reads a request's body: at most `limit` bytes, within `wait`.
@@ -1401,7 +1545,22 @@ async fn main() {
         std::process::exit(1);
     }
     let site = Some(env("SITE", "")).filter(|s| !s.is_empty()).map(PathBuf::from);
-    let app = Arc::new(App { store, base, lock: Mutex::new(()), location: env("LOCATION", "the server"), auth, site, rooms: live::Rooms::default() });
+    let oidc = match oidc::Config::from(|k| std::env::var(k).ok()) {
+        Ok(c) => c.map(|c| Arc::new(oidc::Oidc::new(c))),
+        Err(why) => {
+            eprintln!("{why}");
+            std::process::exit(1);
+        }
+    };
+    if let Some(o) = &oidc {
+        if auth {
+            println!("Single sign-on: {} (the provider's settings are read at the first sign-in).", o.cfg.issuer);
+        } else {
+            println!("Single sign-on is set, but sign-in is off (STARSHEETS_AUTH=off), so it isn't used.");
+        }
+    }
+    let app =
+        Arc::new(App { store, base, lock: Mutex::new(()), location: env("LOCATION", "the server"), auth, site, rooms: live::Rooms::default(), oidc });
     if let Err(e) = std::fs::create_dir_all(app.store.meta()) {
         eprintln!("Can't use the folder {}: {e}", app.store.root.display());
         std::process::exit(1);
@@ -1450,7 +1609,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let store = Store { root: dir.clone(), keep: 3, spaces: auth };
         std::fs::create_dir_all(store.meta()).unwrap();
-        Arc::new(App { store, base: dir, lock: Mutex::new(()), location: "here".into(), auth, site: None, rooms: live::Rooms::default() })
+        Arc::new(App { store, base: dir, lock: Mutex::new(()), location: "here".into(), auth, site: None, rooms: live::Rooms::default(), oidc: None })
     }
 
     /// A made-up address per call site, so the try limits of one test don't touch another's.

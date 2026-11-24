@@ -1,0 +1,469 @@
+//! Single sign-on through the server owner's own identity provider (OpenID Connect: Authelia,
+//! Authentik, Keycloak, Kanidm and others). Setting it up: docs/oidc.md.
+//!
+//! The flow: GET /api/oidc/login?next=/path sends the browser to the provider (authorization
+//! code with PKCE, state and nonce; kept here for ten minutes, used once, and tied to the
+//! browser by a cookie). The provider sends it back to GET /api/oidc/callback: the code is
+//! exchanged, the ID token checked (signature, issuer, audience, expiry, nonce, access-token
+//! hash), and the provider's userinfo is always read too (some providers put groups and email
+//! only there). The account is the one linked to that provider's sign-in (issuer and subject,
+//! never email or username), or a new one. Then it is an ordinary session (auth.rs).
+//!
+//! Password sign-in keeps working alongside, unless STARSHEETS_OIDC_ONLY is on (then only for
+//! owners).
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+use base64::Engine;
+use openidconnect::core::{CoreAuthenticationFlow, CoreClient, CoreGenderClaim};
+use openidconnect::url::Url;
+use openidconnect::{
+    AccessTokenHash, AdditionalClaims, AuthorizationCode, ClientId, ClientSecret, CsrfToken, HttpRequest, HttpResponse, IssuerUrl, Nonce,
+    OAuth2TokenResponse, PkceCodeChallenge, PkceCodeVerifier, ProviderMetadataWithLogout, RedirectUrl, Scope, SyncHttpClient, TokenResponse,
+    UserInfoClaims,
+};
+use serde_json::{Map, Value};
+
+use crate::auth::{self, User};
+use crate::store::{Store, random_hex};
+
+/// How long a started sign-in may take at the provider.
+pub const PENDING_FOR: Duration = Duration::from_secs(600);
+/// Sign-ins waiting at the provider at once (more are refused until some finish or expire).
+const MAX_PENDING: usize = 10_000;
+/// How long the provider's settings and keys are kept before they are read again.
+const REFRESH: Duration = Duration::from_secs(3600);
+/// The cookie that ties a started sign-in to the browser that started it.
+pub const COOKIE: &str = "starsheets_oidc";
+/// Where the provider sends people back to (the end of STARSHEETS_OIDC_REDIRECT_URL).
+pub const CALLBACK: &str = "api/oidc/callback";
+
+// ---------------------------------------------------------------- settings
+
+/// The STARSHEETS_OIDC_* settings (docs/oidc.md).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Config {
+    pub issuer: String,
+    pub client_id: String,
+    pub client_secret: Option<String>,
+    pub redirect: String,
+    pub scopes: Vec<String>,
+    pub label: String,
+    pub auto_create: bool,
+    pub groups_claim: String,
+    pub owner_group: Option<String>,
+    pub allowed_group: Option<String>,
+    pub only: bool,
+    /// Seconds of clock difference allowed with the provider when checking expiry.
+    pub skew: u64,
+}
+
+impl Config {
+    /// From settings looked up by `get` (the environment, or a test's own). `Ok(None)`: single
+    /// sign-on is off (no STARSHEETS_OIDC_ISSUER).
+    pub fn from(get: impl Fn(&str) -> Option<String>) -> Result<Option<Config>, String> {
+        let v = |k: &str| get(&format!("STARSHEETS_OIDC_{k}")).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let yes = |k: &str, default: bool| v(k).map_or(default, |s| matches!(s.to_lowercase().as_str(), "1" | "true" | "on" | "yes"));
+        let Some(issuer) = v("ISSUER") else { return Ok(None) };
+        IssuerUrl::new(issuer.clone()).map_err(|e| format!("STARSHEETS_OIDC_ISSUER isn't a web address: {e}"))?;
+        let client_id = v("CLIENT_ID").ok_or("STARSHEETS_OIDC_ISSUER is set, but STARSHEETS_OIDC_CLIENT_ID isn't.")?;
+        let redirect = v("REDIRECT_URL").ok_or("STARSHEETS_OIDC_ISSUER is set, but STARSHEETS_OIDC_REDIRECT_URL isn't.")?;
+        let url = Url::parse(&redirect).map_err(|e| format!("STARSHEETS_OIDC_REDIRECT_URL isn't a web address: {e}"))?;
+        if !matches!(url.scheme(), "http" | "https") || !url.path().ends_with(&format!("/{CALLBACK}")) || url.query().is_some() {
+            return Err(format!(
+                "STARSHEETS_OIDC_REDIRECT_URL must be the address StarSheets is opened at followed by {CALLBACK}, for example https://sheets.example.com/{CALLBACK}"
+            ));
+        }
+        let client_secret = match v("CLIENT_SECRET_FILE") {
+            Some(path) => Some(
+                std::fs::read_to_string(&path)
+                    .map_err(|e| format!("Can't read STARSHEETS_OIDC_CLIENT_SECRET_FILE ({path}): {e}"))?
+                    .trim()
+                    .to_string(),
+            ),
+            None => v("CLIENT_SECRET"),
+        }
+        .filter(|s| !s.is_empty());
+        let mut scopes: Vec<String> = Vec::new();
+        for s in v("SCOPES").unwrap_or_else(|| "openid profile email groups".into()).split([' ', ',']).filter(|s| !s.is_empty()) {
+            if !scopes.iter().any(|x| x == s) {
+                scopes.push(s.to_string());
+            }
+        }
+        let label: String = v("BUTTON_LABEL").unwrap_or_else(|| "Sign in with SSO".into()).chars().filter(|c| !c.is_control()).take(60).collect();
+        let skew = match v("CLOCK_SKEW") {
+            Some(s) => s.parse::<u64>().ok().filter(|n| *n <= 3600).ok_or("STARSHEETS_OIDC_CLOCK_SKEW is a number of seconds (0 to 3600).")?,
+            None => 60,
+        };
+        Ok(Some(Config {
+            issuer,
+            client_id,
+            client_secret,
+            redirect,
+            scopes,
+            label,
+            auto_create: yes("AUTO_CREATE", true),
+            groups_claim: v("GROUPS_CLAIM").unwrap_or_else(|| "groups".into()),
+            owner_group: v("OWNER_GROUP"),
+            allowed_group: v("ALLOWED_GROUP"),
+            only: yes("ONLY", false),
+            skew,
+        }))
+    }
+
+    /// The address StarSheets is opened at (the redirect URL without api/oidc/callback).
+    pub fn base(&self) -> &str {
+        self.redirect.strip_suffix(CALLBACK).unwrap_or(&self.redirect)
+    }
+
+    /// The path of that address (where people land after signing in, unless they asked for
+    /// another page), ending in /.
+    pub fn base_path(&self) -> String {
+        Url::parse(self.base()).map(|u| u.path().to_string()).unwrap_or_else(|_| "/".into())
+    }
+
+    /// Whether the cookies of this sign-in must be Secure (the redirect URL is HTTPS).
+    pub fn https(&self) -> bool {
+        self.redirect.starts_with("https://")
+    }
+}
+
+/// A page to go back to after signing in: only a path on this server (never `//host` or
+/// `/\host`, which browsers treat as another site).
+pub fn safe_next(next: &str) -> Option<String> {
+    let ok = next.starts_with('/')
+        && !next.starts_with("//")
+        && !next.contains('\\')
+        && next.len() <= 2000
+        && !next.chars().any(|c| c.is_control() || c.is_whitespace());
+    ok.then(|| next.to_string())
+}
+
+/// `path` with `?key=value` (or `&key=value`) added.
+pub fn with_param(path: &str, key: &str, value: &str) -> String {
+    let sep = if path.contains('?') { '&' } else { '?' };
+    format!("{path}{sep}{key}={value}")
+}
+
+// ---------------------------------------------------------------- talking to the provider
+
+#[derive(Debug)]
+pub struct HttpError(String);
+
+impl std::fmt::Display for HttpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for HttpError {}
+
+/// The HTTP client for the provider: never follows redirects (a redirect could send the
+/// server's requests somewhere else), gives up after 15 seconds, reads at most 1 MiB, and trusts
+/// the computer's own certificate store.
+struct Http(ureq::Agent);
+
+impl Http {
+    fn new() -> Http {
+        let tls = ureq::tls::TlsConfig::builder().root_certs(ureq::tls::RootCerts::PlatformVerifier).build();
+        let config = ureq::Agent::config_builder()
+            .max_redirects(0)
+            .http_status_as_error(false)
+            .timeout_global(Some(Duration::from_secs(15)))
+            .user_agent(concat!("StarSheets/", env!("CARGO_PKG_VERSION")))
+            .tls_config(tls)
+            .build();
+        Http(ureq::Agent::new_with_config(config))
+    }
+}
+
+impl SyncHttpClient for Http {
+    type Error = HttpError;
+
+    fn call(&self, request: HttpRequest) -> Result<HttpResponse, HttpError> {
+        let (parts, body) = request.into_parts();
+        let sent = if body.is_empty() {
+            self.0.run(ureq::http::Request::from_parts(parts, ureq::SendBody::none()))
+        } else {
+            self.0.run(ureq::http::Request::from_parts(parts, body))
+        };
+        let (parts, mut body) = sent.map_err(|e| HttpError(e.to_string()))?.into_parts();
+        let bytes = body.with_config().limit(1024 * 1024).read_to_vec().map_err(|e| HttpError(e.to_string()))?;
+        Ok(HttpResponse::from_parts(parts, bytes))
+    }
+}
+
+/// An error and what caused it, in one line.
+fn why(e: &dyn std::error::Error) -> String {
+    let mut s = e.to_string();
+    let mut src = e.source();
+    while let Some(c) = src {
+        s.push_str(": ");
+        s.push_str(&c.to_string());
+        src = c.source();
+    }
+    s
+}
+
+/// Claims beyond the standard ones (the groups claim, whatever it is called).
+#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
+pub struct Extra {
+    #[serde(flatten)]
+    pub claims: Map<String, Value>,
+}
+
+impl AdditionalClaims for Extra {}
+
+/// The groups in a groups claim: a list of names, or an object whose keys are the names
+/// (Zitadel), or one name.
+pub fn groups(v: Option<&Value>) -> Vec<String> {
+    match v {
+        Some(Value::Array(a)) => a.iter().filter_map(|g| g.as_str().map(str::to_string)).collect(),
+        Some(Value::Object(o)) => o.keys().cloned().collect(),
+        Some(Value::String(s)) => vec![s.clone()],
+        _ => Vec::new(),
+    }
+}
+
+/// Whether `want` is among `groups`. Keycloak can send full paths ("/admins"): either form
+/// matches.
+pub fn in_group(groups: &[String], want: &str) -> bool {
+    let want = want.trim().trim_start_matches('/');
+    !want.is_empty() && groups.iter().any(|g| g.trim().trim_start_matches('/') == want)
+}
+
+/// The claims inside a JWT (whose signature was already checked).
+fn jwt_claims(jwt: &str) -> Map<String, Value> {
+    jwt.split('.')
+        .nth(1)
+        .and_then(|p| base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(p.trim_end_matches('=')).ok())
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+/// Who signed in, as the provider says.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Identity {
+    pub issuer: String,
+    pub subject: String,
+    /// What they are called at the provider (preferred_username, else the start of their email).
+    pub username: String,
+    pub name: String,
+    pub groups: Vec<String>,
+}
+
+/// A sign-in waiting at the provider.
+pub struct Pending {
+    binding: String,
+    nonce: String,
+    verifier: String,
+    made: Instant,
+    /// Where to go afterwards.
+    pub next: String,
+    /// Linking an account that is already signed in (its username), rather than signing in.
+    pub link: Option<String>,
+}
+
+/// Single sign-on for one server: its settings, the sign-ins under way and the provider's
+/// settings (read when first needed, then once an hour, or again after a failure).
+pub struct Oidc {
+    pub cfg: Config,
+    http: Http,
+    pending: Mutex<HashMap<String, Pending>>,
+    provider: Mutex<Option<(Instant, ProviderMetadataWithLogout)>>,
+}
+
+macro_rules! client {
+    ($self:ident, $meta:expr) => {
+        CoreClient::from_provider_metadata($meta, ClientId::new($self.cfg.client_id.clone()), $self.cfg.client_secret.clone().map(ClientSecret::new))
+            .set_redirect_uri(RedirectUrl::new($self.cfg.redirect.clone()).map_err(|e| e.to_string())?)
+    };
+}
+
+impl Oidc {
+    pub fn new(cfg: Config) -> Oidc {
+        Oidc { cfg, http: Http::new(), pending: Mutex::default(), provider: Mutex::default() }
+    }
+
+    /// The provider's settings and keys (discovery). Blocking: call it off the async threads.
+    fn provider(&self) -> Result<ProviderMetadataWithLogout, String> {
+        if let Some((at, m)) = &*self.provider.lock().unwrap_or_else(|e| e.into_inner())
+            && at.elapsed() < REFRESH
+        {
+            return Ok(m.clone());
+        }
+        let issuer = IssuerUrl::new(self.cfg.issuer.clone()).map_err(|e| e.to_string())?;
+        let m = ProviderMetadataWithLogout::discover(&issuer, &self.http)
+            .map_err(|e| format!("couldn't read the identity provider's settings at {}: {}", self.cfg.issuer, why(&e)))?;
+        *self.provider.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), m.clone()));
+        Ok(m)
+    }
+
+    /// Reads the provider's settings again next time (its keys may have changed).
+    fn forget_provider(&self) {
+        *self.provider.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    /// Starts a sign-in: (the provider's address to send the browser to, the cookie value that
+    /// ties it to this browser). Blocking.
+    pub fn start(&self, next: String, link: Option<String>) -> Result<(String, String), String> {
+        let meta = self.provider()?;
+        let client = client!(self, meta);
+        let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
+        let mut req =
+            client.authorize_url(CoreAuthenticationFlow::AuthorizationCode, CsrfToken::new_random, Nonce::new_random).set_pkce_challenge(challenge);
+        for s in self.cfg.scopes.iter().filter(|s| *s != "openid") {
+            req = req.add_scope(Scope::new(s.clone()));
+        }
+        let (url, state, nonce) = req.url();
+        let binding = random_hex(32);
+        let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+        pending.retain(|_, p| p.made.elapsed() < PENDING_FOR);
+        if pending.len() >= MAX_PENDING {
+            return Err("too many sign-ins under way".into());
+        }
+        let p = Pending {
+            binding: binding.clone(),
+            nonce: nonce.secret().clone(),
+            verifier: verifier.secret().clone(),
+            made: Instant::now(),
+            next,
+            link,
+        };
+        pending.insert(state.secret().clone(), p);
+        Ok((url.to_string(), binding))
+    }
+
+    /// The sign-in started with `state`, if this browser (`binding`, from its cookie) started it
+    /// and it hasn't expired. Each can be taken once, whatever the answer.
+    pub fn take(&self, state: &str, binding: &str) -> Option<Pending> {
+        let p = self.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(state)?;
+        (p.made.elapsed() < PENDING_FOR && crate::same(p.binding.as_bytes(), binding.as_bytes())).then_some(p)
+    }
+
+    /// Finishes a sign-in with the code the provider sent back: who it is, and the raw ID token
+    /// (for signing out at the provider). Blocking.
+    pub fn finish(&self, p: &Pending, code: &str) -> Result<(Identity, String), String> {
+        let r = self.finish_inner(p, code);
+        if r.is_err() {
+            self.forget_provider();
+        }
+        r
+    }
+
+    fn finish_inner(&self, p: &Pending, code: &str) -> Result<(Identity, String), String> {
+        let meta = self.provider()?;
+        let issuer = meta.issuer().to_string();
+        let client = client!(self, meta);
+        let token = client
+            .exchange_code(AuthorizationCode::new(code.to_string()))
+            .map_err(|e| format!("the identity provider has no token address: {e}"))?
+            .set_pkce_verifier(PkceCodeVerifier::new(p.verifier.clone()))
+            .request(&self.http)
+            .map_err(|e| format!("the identity provider didn't accept the sign-in code: {}", why(&e)))?;
+        let id_token = token.id_token().ok_or("the identity provider sent no ID token (is the openid scope allowed for this client?)")?;
+        let skew = chrono::Duration::seconds(self.cfg.skew as i64);
+        let verifier = client.id_token_verifier().set_time_fn(move || chrono::Utc::now() - skew);
+        let claims =
+            id_token.claims(&verifier, &Nonce::new(p.nonce.clone())).map_err(|e| format!("the ID token didn't pass the checks: {}", why(&e)))?;
+        if let Some(expected) = claims.access_token_hash() {
+            let alg = id_token.signing_alg().map_err(|e| why(&e))?;
+            let key = id_token.signing_key(&verifier).map_err(|e| why(&e))?;
+            let actual = AccessTokenHash::from_token(token.access_token(), alg, key).map_err(|e| why(&e))?;
+            if actual != *expected {
+                return Err("the access token doesn't belong to the ID token".into());
+            }
+        }
+        let subject = claims.subject().clone();
+        let raw = id_token.to_string();
+        let from_id = jwt_claims(&raw);
+        let id_str = |k: &str| from_id.get(k).and_then(Value::as_str).map(str::to_string);
+        // Userinfo, always: Authelia (and others) put groups, email and name only there.
+        let info: Option<UserInfoClaims<Extra, CoreGenderClaim>> = match client.user_info(token.access_token().clone(), Some(subject.clone())) {
+            Ok(req) => Some(req.request(&self.http).map_err(|e| format!("couldn't read the person's details (userinfo): {}", why(&e)))?),
+            Err(_) => None,
+        };
+        let std = info.as_ref().map(|i| i.standard_claims());
+        let email = std.and_then(|s| s.email()).map(|e| e.to_string()).or_else(|| id_str("email"));
+        let username = std
+            .and_then(|s| s.preferred_username())
+            .map(|u| u.to_string())
+            .or_else(|| id_str("preferred_username"))
+            .or_else(|| email.as_ref().and_then(|e| e.split('@').next()).map(str::to_string))
+            .unwrap_or_else(|| "user".into());
+        let name = std
+            .and_then(|s| s.name())
+            .and_then(|n| n.get(None))
+            .map(|n| n.to_string())
+            .or_else(|| id_str("name"))
+            .unwrap_or_else(|| username.clone());
+        let claim = &self.cfg.groups_claim;
+        let groups = match info.as_ref().and_then(|i| i.additional_claims().claims.get(claim)) {
+            Some(g) => groups(Some(g)),
+            None => groups(from_id.get(claim)),
+        };
+        Ok((Identity { issuer, subject: subject.to_string(), username, name, groups }, raw))
+    }
+
+    /// Where to send the browser to sign out at the provider too, when it has an address for
+    /// that (Authelia has none: then only StarSheets' own session ends). Blocking.
+    pub fn logout_url(&self, id_token: &str) -> Option<String> {
+        let meta = self.provider().ok()?;
+        let mut url = meta.additional_metadata().end_session_endpoint.as_ref()?.url().clone();
+        url.query_pairs_mut()
+            .append_pair("id_token_hint", id_token)
+            .append_pair("client_id", &self.cfg.client_id)
+            .append_pair("post_logout_redirect_uri", self.cfg.base());
+        Some(url.to_string())
+    }
+}
+
+// ---------------------------------------------------------------- accounts
+
+/// The account for someone who signed in at the provider, or why there is none (a short code
+/// the sign-in box explains: not-allowed, no-account, setup-first, linked-elsewhere, failed).
+/// Run under the store lock.
+///
+/// Found by (issuer, subject) only. Made when there is none and STARSHEETS_OIDC_AUTO_CREATE is
+/// on, with a username from the provider (made unique) and no password. Owner only through
+/// STARSHEETS_OIDC_OWNER_GROUP, checked again at every sign-in (the last owner always stays
+/// one). On a new server the owner is still made with the setup code, unless an owner group
+/// is set and this person is in it.
+pub fn account(store: &Store, cfg: &Config, who: &Identity, link: Option<&str>) -> Result<User, &'static str> {
+    let owner_member = cfg.owner_group.as_deref().is_some_and(|g| in_group(&who.groups, g));
+    if let Some(g) = &cfg.allowed_group
+        && !owner_member
+        && !in_group(&who.groups, g)
+    {
+        return Err("not-allowed");
+    }
+    let user = if let Some(username) = link {
+        if auth::linked(store, &who.issuer, &who.subject).is_some_and(|u| u.username != username) {
+            return Err("linked-elsewhere");
+        }
+        auth::link(store, username, &who.issuer, &who.subject).map_err(|_| "failed")?
+    } else if let Some(u) = auth::linked(store, &who.issuer, &who.subject) {
+        u
+    } else if !auth::any_users(store) {
+        if !owner_member {
+            return Err("setup-first");
+        }
+        let u = auth::add_linked(store, &who.username, &who.name, &who.issuer, &who.subject, true).map_err(|_| "failed")?;
+        // Files already in the folder become the new owner's (as with the setup code).
+        crate::spaces::migrate(store).map_err(|_| "failed")?;
+        u
+    } else if !cfg.auto_create {
+        return Err("no-account");
+    } else {
+        let u = auth::add_linked(store, &who.username, &who.name, &who.issuer, &who.subject, owner_member).map_err(|_| "failed")?;
+        let _ = crate::spaces::ensure_space(store, &u.username);
+        u
+    };
+    if cfg.owner_group.is_some() { auth::set_owner(store, &user.username, owner_member).map_err(|_| "failed") } else { Ok(user) }
+}
+
+#[cfg(test)]
+#[path = "oidc_tests.rs"]
+mod tests;

@@ -6,6 +6,12 @@ new features and the last one for fixes.
 
 ## [Unreleased]
 
+### Added
+- Single sign-on through your own sign-in service (Authelia, Authentik, Keycloak and other
+  OpenID Connect services): a "Sign in with SSO" button, accounts made or linked on first
+  sign-in, owners from a group, passwords still available. Set up with `STARSHEETS_OIDC_*`
+  (docs/oidc.md).
+
 ### Fixed
 - Menu Paste (Edit › Paste, or right-click › Paste) pastes what you last copied in StarSheets,
   including text copied from inside a cell; Edit › Copy and Cut also reach the clipboard now.

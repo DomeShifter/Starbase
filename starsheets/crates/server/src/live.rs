@@ -1107,8 +1107,16 @@ mod tests {
         std::fs::write(dir.join("t.csv"), "a,b\n1,2\n").unwrap();
         let store = Store { root: dir.clone(), keep: 3, spaces: false };
         let id = store.synced_index().unwrap().keys().next().unwrap().clone();
-        let app =
-            Arc::new(App { store, base: dir.clone(), lock: Mutex::new(()), location: String::new(), auth, site: None, rooms: Rooms::default() });
+        let app = Arc::new(App {
+            store,
+            base: dir.clone(),
+            lock: Mutex::new(()),
+            location: String::new(),
+            auth,
+            site: None,
+            rooms: Rooms::default(),
+            oidc: None,
+        });
         (app, id, dir)
     }
 
