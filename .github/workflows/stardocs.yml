@@ -107,5 +107,5 @@ jobs:
           key: clippy
           workspaces: stardocs
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Clippy (our code compiles without warnings)
-        run: cargo clippy -p stardocs --target wasm32-unknown-unknown -- -D warnings
+      - name: Clippy (our code only, --no-deps; WordCraft is linted upstream)
+        run: cargo clippy -p stardocs --no-deps --target wasm32-unknown-unknown -- -D warnings
