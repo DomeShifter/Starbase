@@ -314,7 +314,7 @@ impl Shell {
         egui::Panel::top("stardocs_head")
             .frame(egui::Frame::NONE.fill(PAGE).inner_margin(egui::Margin { left: 12, right: 16, top: 8, bottom: 6 }))
             .show(ui, |ui| {
-                self.share.logic(app, link, ui.ctx());
+                self.share.logic(link, ui.ctx());
                 self.title_and_menus(app, ui, link);
                 ui.add_space(6.0);
                 self.toolbar(app, ui);

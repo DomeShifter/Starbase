@@ -144,7 +144,7 @@ impl Share {
     }
 
     /// Every frame: the pending first save, and the server's replies.
-    pub fn logic(&mut self, app: &WordApp, link: Option<&Link>, ctx: &egui::Context) {
+    pub fn logic(&mut self, link: Option<&Link>, ctx: &egui::Context) {
         if self.pending
             && let Some(link) = link
             && link.id().is_some()
