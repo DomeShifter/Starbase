@@ -1,0 +1,111 @@
+# StarDocs: builds the web app, runs the native window tests (egui_kittest) and the lint
+# checks on every push and pull request that touches stardocs/. The built site is kept as the
+# `stardocs-web` artifact (30 days). WordCraft's web build needs more memory and disk than a
+# small machine has (the wasm-bindgen step alone uses ~9 GB), which is why it runs here.
+name: StarDocs
+on:
+  push:
+    branches: [main]
+    paths: ["stardocs/**", ".github/workflows/stardocs.yml", "rustfmt.toml"]
+  pull_request:
+    paths: ["stardocs/**", ".github/workflows/stardocs.yml", "rustfmt.toml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stardocs-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  TRUNK_VERSION: v0.22.2
+
+defaults:
+  run:
+    working-directory: stardocs
+
+jobs:
+  web:
+    name: Build web app
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Make disk space (WordCraft's build needs more than the runner leaves free)
+        working-directory: /
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL; df -h /
+      - uses: actions/checkout@v7
+      - name: Fetch WordCraft at the pinned commit of our fork
+        run: scripts/fetch-upstream.sh
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: web
+          workspaces: stardocs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install trunk
+        run: |
+          curl -sSfL "https://github.com/trunk-rs/trunk/releases/download/${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" | sudo tar xz -C /usr/local/bin trunk
+          trunk --version
+      - name: Build
+        working-directory: stardocs/app
+        run: trunk build --release
+      - name: Record build info
+        run: |
+          printf '{"commit":"%s","wordcraft":"%s","built":"%s"}\n' "$GITHUB_SHA" "$(sed -n 's/^commit = "\(.*\)"/\1/p' upstream.pin)" "$(date -u +%FT%TZ)" > dist/build.json
+          du -sh dist; ls -la dist/*.wasm
+      - uses: actions/upload-artifact@v7
+        with:
+          name: stardocs-web
+          path: stardocs/dist/
+          retention-days: 30
+
+  test:
+    name: Window tests (native, egui_kittest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Make disk space
+        working-directory: /
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+      - uses: actions/checkout@v7
+      - name: Fetch WordCraft at the pinned commit of our fork
+        run: scripts/fetch-upstream.sh
+      - name: System libraries for egui's native backends
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-dev libxkbcommon-dev libwayland-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: test
+          workspaces: stardocs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Test
+        run: cargo test -p stardocs
+
+  lint:
+    name: Formatting + clippy (wasm)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Make disk space
+        working-directory: /
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+      - uses: actions/checkout@v7
+      - name: Fetch WordCraft at the pinned commit of our fork
+        run: scripts/fetch-upstream.sh
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+      - name: Formatting
+        run: cargo fmt -p stardocs --check
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: clippy
+          workspaces: stardocs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Clippy (our code compiles without warnings)
+        run: cargo clippy -p stardocs --target wasm32-unknown-unknown -- -D warnings
