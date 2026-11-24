@@ -122,7 +122,9 @@ pub fn start() {
                     if let Some(link) = &link {
                         link.open(inbox.clone());
                     }
-                    Ok(Box::new(WebShell { app, inbox, messages, prefs, shell: crate::shell::Shell::default(), link }))
+                    // `?test`: window.stardocs for agents and scripts (testhook.rs, TESTING.md).
+                    let test = crate::testhook::TestHook::install(&cc.egui_ctx);
+                    Ok(Box::new(WebShell { app, inbox, messages, prefs, shell: crate::shell::Shell::default(), link, test }))
                 }),
             )
             .await;
@@ -160,6 +162,8 @@ struct WebShell {
     shell: crate::shell::Shell,
     /// The Starbase server keeping this document, when opened from the home screen.
     link: Option<crate::server::Link>,
+    /// `window.stardocs`, only when the URL has `test` (testhook.rs).
+    test: Option<crate::testhook::TestHook>,
 }
 
 fn local_storage() -> Option<web_sys::Storage> {
@@ -212,6 +216,10 @@ impl eframe::App for WebShell {
     /// Draws the app. On the first pass of a visible frame it takes the browser's dropped files and
     /// spawns asynchronous byte reads into the inbox; later passes only draw.
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Test hook requests from the page run before anything draws, so a snapshot shows this frame.
+        if let Some(test) = &self.test {
+            test.process(&mut self.app, &mut self.shell, self.link.as_ref());
+        }
         // Browser drops are input: take them only in the first real UI pass, never in a hidden
         // `run_logic` tick that still sees the previous shown frame's RawInput.
         if ui.ctx().current_pass_index() == 0 {

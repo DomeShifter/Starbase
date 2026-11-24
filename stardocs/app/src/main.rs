@@ -38,6 +38,8 @@ mod shell;
 #[cfg(target_arch = "wasm32")]
 mod shortcuts;
 #[cfg(target_arch = "wasm32")]
+mod testhook;
+#[cfg(target_arch = "wasm32")]
 mod web;
 #[cfg(target_arch = "wasm32")]
 mod wordcount;
