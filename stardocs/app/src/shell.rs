@@ -350,7 +350,13 @@ fn set_suggesting(app: &mut WordApp, on: bool) {
 fn is_own(id: &str) -> bool {
     matches!(
         id,
-        "stardocs.words" | "stardocs.compact" | "stardocs.shortcuts" | "stardocs.editing" | "stardocs.suggesting" | "stardocs.download" | "stardocs.rename"
+        "stardocs.words"
+            | "stardocs.compact"
+            | "stardocs.shortcuts"
+            | "stardocs.editing"
+            | "stardocs.suggesting"
+            | "stardocs.download"
+            | "stardocs.rename"
     )
 }
 
@@ -614,10 +620,13 @@ impl Shell {
                 if shown < GROUPS.len() {
                     room -= MORE;
                     used = 0.0;
-                    shown = widths.iter().take_while(|w| {
-                        used += *w;
-                        used <= room
-                    }).count();
+                    shown = widths
+                        .iter()
+                        .take_while(|w| {
+                            used += *w;
+                            used <= room
+                        })
+                        .count();
                 }
                 *in_more = GROUPS.len() - shown;
                 ui.add_enabled_ui(editable, |ui| {
@@ -708,7 +717,8 @@ enum Group {
     Align,
     Lists,
 }
-const GROUPS: [Group; 9] = [Group::History, Group::Zoom, Group::Style, Group::Font, Group::Size, Group::Text, Group::Insert, Group::Align, Group::Lists];
+const GROUPS: [Group; 9] =
+    [Group::History, Group::Zoom, Group::Style, Group::Font, Group::Size, Group::Text, Group::Insert, Group::Align, Group::Lists];
 pub const GUESSED_WIDTHS: [f32; 9] = [151.0, 79.0, 117.0, 109.0, 99.0, 151.0, 95.0, 151.0, 140.0];
 /// Room kept for the mode box and the compact-mode arrow, and for the ⋮ button.
 const RIGHT_END: f32 = 170.0;
@@ -1184,13 +1194,15 @@ fn size_box(app: &mut WordApp, ui: &mut Ui, size: f64) {
         .text_color(TEXT_DIM)
         .margin(vec2(4.0, 5.0))
         .background_color(Color32::TRANSPARENT);
-    let r = ui.scope(|ui| {
-        let w = &mut ui.visuals_mut().widgets;
-        for s in [&mut w.inactive, &mut w.hovered] {
-            s.bg_stroke = Stroke::new(1.0, TEXT_DIM);
-        }
-        ui.add(edit)
-    }).inner;
+    let r = ui
+        .scope(|ui| {
+            let w = &mut ui.visuals_mut().widgets;
+            for s in [&mut w.inactive, &mut w.hovered] {
+                s.bg_stroke = Stroke::new(1.0, TEXT_DIM);
+            }
+            ui.add(edit)
+        })
+        .inner;
     let enabled = ui.is_enabled();
     r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, enabled, "Font size"));
     if r.gained_focus() {

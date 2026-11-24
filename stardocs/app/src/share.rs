@@ -61,7 +61,14 @@ pub struct Share {
     busy: bool,
 }
 
-fn call(inbox: &Rc<RefCell<Vec<Reply>>>, ctx: &egui::Context, method: &'static str, url: String, body: Option<Json>, then: impl FnOnce(Json) -> Reply + 'static) {
+fn call(
+    inbox: &Rc<RefCell<Vec<Reply>>>,
+    ctx: &egui::Context,
+    method: &'static str,
+    url: String,
+    body: Option<Json>,
+    then: impl FnOnce(Json) -> Reply + 'static,
+) {
     let (inbox, ctx) = (inbox.clone(), ctx.clone());
     wasm_bindgen_futures::spawn_local(async move {
         let bytes = body.map(|b| serde_json::to_vec(&b).unwrap_or_default());
@@ -99,11 +106,14 @@ fn avatar(ui: &mut Ui, name: &str, colour: &str, size: f32) {
 }
 
 fn pick(ui: &mut Ui, id: &str, width: f32, current: &mut usize, labels: &[&str]) {
-    egui::ComboBox::from_id_salt(id).width(width).selected_text(RichText::new(labels[(*current).min(labels.len() - 1)]).color(TEXT)).show_ui(ui, |ui| {
-        for (i, l) in labels.iter().enumerate() {
-            ui.selectable_value(current, i, *l);
-        }
-    });
+    egui::ComboBox::from_id_salt(id).width(width).selected_text(RichText::new(labels[(*current).min(labels.len() - 1)]).color(TEXT)).show_ui(
+        ui,
+        |ui| {
+            for (i, l) in labels.iter().enumerate() {
+                ui.selectable_value(current, i, *l);
+            }
+        },
+    );
 }
 
 fn heading(ui: &mut Ui, text: &str) {
@@ -262,7 +272,10 @@ impl Share {
                     pick(ui, "stardocs_share_add", 250.0, &mut self.add, &refs);
                     pick(ui, "stardocs_share_add_role", 100.0, &mut self.add_role, &ROLES[..2]);
                     let h = ui.spacing().interact_size.y;
-                    let add = egui::Button::new(RichText::new("Add").size(14.0).color(BLUE)).fill(Color32::WHITE).corner_radius(h / 2.0).min_size(vec2(64.0, h));
+                    let add = egui::Button::new(RichText::new("Add").size(14.0).color(BLUE))
+                        .fill(Color32::WHITE)
+                        .corner_radius(h / 2.0)
+                        .min_size(vec2(64.0, h));
                     if ui.add(add).clicked()
                         && let Some(u) = others.get(self.add)
                     {
