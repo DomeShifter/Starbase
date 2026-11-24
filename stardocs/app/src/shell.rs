@@ -35,6 +35,43 @@ use Item::{Cmd, Flip, Sep, Sub, TableGrid, Toggle};
 
 const NO: &str = "{}";
 
+/// Format › Image, which the page's right-click menu also shows for a selected picture
+/// ([`picture_menu`]).
+pub const IMAGE: &[Item] = &[
+    Cmd("Crop image", "ui.crop", NO, ""),
+    Cmd("Size and rotation", "picture.size", NO, ""),
+    Sub(
+        "Rotate",
+        &[
+            Cmd("Rotate clockwise 90°", "arrange.rotate", r#"{"direction":"right"}"#, ""),
+            Cmd("Rotate anticlockwise 90°", "arrange.rotate", r#"{"direction":"left"}"#, ""),
+            Cmd("Flip horizontally", "arrange.rotate", r#"{"direction":"flipHorizontal"}"#, ""),
+            Cmd("Flip vertically", "arrange.rotate", r#"{"direction":"flipVertical"}"#, ""),
+        ],
+    ),
+    Sub(
+        "Text wrapping",
+        &[
+            Cmd("In line with text", "arrange.wrap", r#"{"wrap":"inline"}"#, ""),
+            Cmd("Wrap text", "arrange.wrap", r#"{"wrap":"square"}"#, ""),
+            Cmd("Break text", "arrange.wrap", r#"{"wrap":"topAndBottom"}"#, ""),
+            Cmd("Behind text", "arrange.wrap", r#"{"wrap":"behindText"}"#, ""),
+            Cmd("In front of text", "arrange.wrap", r#"{"wrap":"inFrontOfText"}"#, ""),
+        ],
+    ),
+    Sep,
+    Cmd("Alt text", "view.altTextPane", r#"{"value":true}"#, ""),
+    Cmd("Replace image", "ui.changePicture", NO, ""),
+    Cmd("Reset image", "picture.reset", NO, ""),
+];
+
+/// The page's right-click menu for a selected picture: Format › Image's items in place of
+/// WordCraft's own, whose Size and Crop would open a ribbon tab StarDocs hides (fork change
+/// StarDocs 0007, `WordApp::set_picture_menu`). They are all WordCraft commands.
+pub fn picture_menu(app: &mut WordApp, ui: &mut Ui) {
+    menu_items(app, ui, &mut Flags::default(), IMAGE, None);
+}
+
 /// The menus, in Google Docs' order and wording. An id starting `ui.dialog:` opens that
 /// WordCraft dialog.
 pub const MENUS: &[(&str, &[Item])] = &[
@@ -86,6 +123,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
                 &[
                     Cmd("Editing: edit the document directly", "stardocs.editing", NO, ""),
                     Cmd("Suggesting: edits become suggestions", "stardocs.suggesting", NO, ""),
+                    Cmd("Viewing: read or print the final document", "stardocs.viewing", NO, ""),
                 ],
             ),
             Sep,
@@ -310,6 +348,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
                 &[
                     Cmd("Bulleted list", "para.bullets", NO, "Ctrl+Shift+8"),
                     Cmd("Numbered list", "para.numbering", NO, "Ctrl+Shift+7"),
+                    Cmd("Checklist", "list.checklist", NO, "Ctrl+Shift+9"),
                     Sep,
                     Sub(
                         "Bullet style",
@@ -360,36 +399,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
                     Cmd("Table properties", "table.properties", NO, ""),
                 ],
             ),
-            Sub(
-                "Image",
-                &[
-                    Cmd("Crop image", "ui.crop", NO, ""),
-                    Cmd("Size and rotation", "picture.size", NO, ""),
-                    Sub(
-                        "Rotate",
-                        &[
-                            Cmd("Rotate clockwise 90°", "arrange.rotate", r#"{"direction":"right"}"#, ""),
-                            Cmd("Rotate anticlockwise 90°", "arrange.rotate", r#"{"direction":"left"}"#, ""),
-                            Cmd("Flip horizontally", "arrange.rotate", r#"{"direction":"flipHorizontal"}"#, ""),
-                            Cmd("Flip vertically", "arrange.rotate", r#"{"direction":"flipVertical"}"#, ""),
-                        ],
-                    ),
-                    Sub(
-                        "Text wrapping",
-                        &[
-                            Cmd("In line with text", "arrange.wrap", r#"{"wrap":"inline"}"#, ""),
-                            Cmd("Wrap text", "arrange.wrap", r#"{"wrap":"square"}"#, ""),
-                            Cmd("Break text", "arrange.wrap", r#"{"wrap":"topAndBottom"}"#, ""),
-                            Cmd("Behind text", "arrange.wrap", r#"{"wrap":"behindText"}"#, ""),
-                            Cmd("In front of text", "arrange.wrap", r#"{"wrap":"inFrontOfText"}"#, ""),
-                        ],
-                    ),
-                    Sep,
-                    Cmd("Alt text", "view.altTextPane", r#"{"value":true}"#, ""),
-                    Cmd("Replace image", "ui.changePicture", NO, ""),
-                    Cmd("Reset image", "picture.reset", NO, ""),
-                ],
-            ),
+            Sub("Image", IMAGE),
             Cmd("Borders and shading", "ui.dialog:borders", NO, ""),
             Cmd("Clear formatting", "format.clear", NO, "Ctrl+\\"),
         ],
@@ -638,10 +648,38 @@ pub fn greyed(app: &WordApp, id: &str) -> bool {
     }
 }
 
-/// Editing or suggesting: Docs' mode switch, which is WordCraft's track changes.
-fn set_suggesting(app: &mut WordApp, on: bool) {
-    if app.session.doc.settings.track_changes != on {
-        run(app, "review.trackChanges", json!({ "value": on }));
+/// Docs' three modes (the mode box and View › Mode).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Mode {
+    Editing,
+    Suggesting,
+    Viewing,
+}
+
+impl Mode {
+    pub fn of(app: &WordApp) -> Mode {
+        if app.session.view.viewing {
+            Mode::Viewing
+        } else if app.session.doc.settings.track_changes {
+            Mode::Suggesting
+        } else {
+            Mode::Editing
+        }
+    }
+}
+
+/// Switches mode. Editing or suggesting is WordCraft's track changes; Viewing is its read-only
+/// state for this session (`view.viewing`, fork change StarDocs 0005, never saved in the
+/// document), showing the document as it would print: no suggestions marked up.
+pub fn set_mode(app: &mut WordApp, mode: Mode) {
+    let viewing = mode == Mode::Viewing;
+    if app.session.view.viewing != viewing {
+        run(app, "view.viewing", json!({ "value": viewing }));
+        run(app, "review.markup", json!({ "value": if viewing { "noMarkup" } else { "all" } }));
+    }
+    let suggesting = mode == Mode::Suggesting;
+    if !viewing && app.session.doc.settings.track_changes != suggesting {
+        run(app, "review.trackChanges", json!({ "value": suggesting }));
     }
 }
 
@@ -654,6 +692,7 @@ fn is_own(id: &str) -> bool {
             | "stardocs.shortcuts"
             | "stardocs.editing"
             | "stardocs.suggesting"
+            | "stardocs.viewing"
             | "stardocs.download"
             | "stardocs.downloadAs"
             | "stardocs.rename"
@@ -668,8 +707,11 @@ fn run_menu(app: &mut WordApp, ctx: &egui::Context, flags: &mut Flags, link: Opt
         ("stardocs.compact", _) => flags.compact = !flags.compact,
         ("stardocs.shortcuts", _) => flags.shortcuts = true,
         ("stardocs.restartNumbering", _) => flags.restart = true,
-        ("stardocs.editing", _) => set_suggesting(app, false),
-        ("stardocs.suggesting", _) => set_suggesting(app, true),
+        // Someone who may only view the document stays in Viewing.
+        ("stardocs.editing" | "stardocs.suggesting", Some(link)) if link.view_only() => app.status("You can view this document but not change it"),
+        ("stardocs.editing", _) => set_mode(app, Mode::Editing),
+        ("stardocs.suggesting", _) => set_mode(app, Mode::Suggesting),
+        ("stardocs.viewing", _) => set_mode(app, Mode::Viewing),
         ("stardocs.download", Some(link)) => {
             link.download_next();
             run(app, "file.save", json!({}));
@@ -834,7 +876,12 @@ impl Shell {
             "saved": saved,
             "notice": link.and_then(Link::notice),
             "viewOnly": link.is_some_and(Link::view_only),
-            "mode": if link.is_some_and(Link::view_only) { "viewing" } else if app.session.doc.settings.track_changes { "suggesting" } else { "editing" },
+            "mode": match Mode::of(app) {
+                _ if link.is_some_and(Link::view_only) => "viewing",
+                Mode::Viewing => "viewing",
+                Mode::Suggesting => "suggesting",
+                Mode::Editing => "editing",
+            },
             "compact": self.flags.compact,
             "wordCountShown": self.flags.words,
             "renaming": self.renaming,
@@ -865,6 +912,8 @@ impl Shell {
         if !self.flags.loaded {
             // Docs has no floating mini toolbar over selected text.
             app.ui.mini_toolbar = false;
+            // A selected picture's right-click menu: Format › Image's items.
+            app.set_picture_menu(Some(picture_menu));
         }
         self.flags.sync(before);
         self.keys(app, ui.ctx());
@@ -876,9 +925,10 @@ impl Shell {
                     self.title_and_menus(app, ui, link);
                     ui.add_space(6.0);
                 }
-                // A view-only document: the toolbar is shown greyed, like Google Docs' viewer.
-                let editable = !link.is_some_and(Link::view_only);
-                self.toolbar(app, ui, editable);
+                // A view-only document, or Viewing chosen: the toolbar is shown greyed, like
+                // Google Docs' viewer. Only someone who may edit can leave Viewing.
+                let may_edit = !link.is_some_and(Link::view_only);
+                self.toolbar(app, ui, may_edit);
             });
         self.share.ui(ui.ctx());
         self.custom_colour(app, ui.ctx());
@@ -913,12 +963,14 @@ impl Shell {
         });
         // Docs' text size up and down by one point (WordCraft's keys step through Word's size
         // list), and Headings 4 to 6, which WordCraft has no keys for.
-        let more: [(Modifiers, Key, &str, Value); 5] = [
+        let more: [(Modifiers, Key, &str, Value); 6] = [
             (ctrl_shift, Key::Period, "format.growFont1", json!({})),
             (ctrl_shift, Key::Comma, "format.shrinkFont1", json!({})),
             (ctrl_alt, Key::Num4, "para.style", json!({"style": "Heading 4"})),
             (ctrl_alt, Key::Num5, "para.style", json!({"style": "Heading 5"})),
             (ctrl_alt, Key::Num6, "para.style", json!({"style": "Heading 6"})),
+            // Docs' checklist (fork change StarDocs 0006).
+            (ctrl_shift, Key::Num9, "list.checklist", json!({})),
         ];
         for (m, k, id, p) in more {
             if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k))) {
@@ -939,7 +991,8 @@ impl Shell {
         }
     }
 
-    fn toolbar(&mut self, app: &mut WordApp, ui: &mut Ui, editable: bool) {
+    fn toolbar(&mut self, app: &mut WordApp, ui: &mut Ui, may_edit: bool) {
+        let editable = may_edit && Mode::of(app) != Mode::Viewing;
         let cur = current(app);
         let fonts = self.fonts.get_or_insert_with(|| font_names(app)).clone();
         let flags = &mut self.flags;
@@ -1011,7 +1064,7 @@ impl Shell {
                     if icon_button(ui, icon, false).on_hover_text(tip).clicked() {
                         flags.compact = !flags.compact;
                     }
-                    mode_switch(tools.app, ui, editable);
+                    mode_switch(tools.app, ui, may_edit);
                     start - ui.cursor().right()
                 });
                 *right_end = end.inner;
@@ -1255,39 +1308,45 @@ impl Tools<'_> {
     }
 }
 
-/// Docs' mode box at the right of the toolbar: Editing or Suggesting (WordCraft's track
-/// changes), or a fixed "Viewing" for a view-only document.
-fn mode_switch(app: &mut WordApp, ui: &mut Ui, editable: bool) {
-    let suggesting = app.session.doc.settings.track_changes;
-    let (icon, label) = match (editable, suggesting) {
-        (false, _) => ("visibility", "Viewing"),
-        (true, true) => ("rate_review", "Suggesting"),
-        (true, false) => ("edit", "Editing"),
+/// Docs' mode box at the right of the toolbar: Editing, Suggesting or Viewing ([`set_mode`]),
+/// or a fixed "Viewing" for someone who may only view the document.
+fn mode_switch(app: &mut WordApp, ui: &mut Ui, may_edit: bool) {
+    let mode = if may_edit { Mode::of(app) } else { Mode::Viewing };
+    let (icon, label) = match mode {
+        Mode::Viewing => ("visibility", "Viewing"),
+        Mode::Suggesting => ("rate_review", "Suggesting"),
+        Mode::Editing => ("edit", "Editing"),
     };
     let text = RichText::new(label).size(14.0).color(TEXT_DIM);
     let button = match icons::icon(icon) {
         Some(img) => Button::image_and_text(img, text),
         None => Button::new(text),
     };
-    if !editable {
+    if !may_edit {
         ui.add_enabled(false, button).on_disabled_hover_text("You can view this document but not change it");
         return;
     }
     let r = ui.add(button.corner_radius(4.0).min_size(vec2(116.0, 28.0)));
-    let tip = if suggesting { "Suggesting: your edits show as suggestions others can accept" } else { "Editing: you change the document directly" };
+    let tip = match mode {
+        Mode::Viewing => "Viewing: read or print the final document",
+        Mode::Suggesting => "Suggesting: your edits show as suggestions others can accept",
+        Mode::Editing => "Editing: you change the document directly",
+    };
     let r = r.on_hover_text(tip);
     egui::Popup::menu(&r).show(|ui| {
         ui.set_min_width(300.0);
-        for (on, icon, title, about) in
-            [(false, "edit", "Editing", "Edit the document directly"), (true, "rate_review", "Suggesting", "Edits become suggestions")]
-        {
+        for (to, icon, title, about) in [
+            (Mode::Editing, "edit", "Editing", "Edit the document directly"),
+            (Mode::Suggesting, "rate_review", "Suggesting", "Edits become suggestions"),
+            (Mode::Viewing, "visibility", "Viewing", "Read or print the final document"),
+        ] {
             let text = RichText::new(format!("{title}\n{about}")).size(14.0).color(TEXT);
             let item = match icons::icon(icon) {
                 Some(img) => Button::image_and_text(img, text),
                 None => Button::new(text),
             };
-            if ui.add(item.selected(on == suggesting).min_size(vec2(300.0, 44.0))).clicked() {
-                set_suggesting(app, on);
+            if ui.add(item.selected(to == mode).min_size(vec2(300.0, 44.0))).clicked() {
+                set_mode(app, to);
                 ui.close();
             }
         }
