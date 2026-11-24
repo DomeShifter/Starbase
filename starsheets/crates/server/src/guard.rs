@@ -279,9 +279,22 @@ impl Limiter {
 
 pub static LIMITS: LazyLock<Limiter> = LazyLock::new(Limiter::default);
 
-/// The key for an address in the limiter ("?" when unknown).
+/// Who an address belongs to, for the try limits: an IPv4 address itself, but for IPv6 its /64
+/// network (one home or one server is usually given a whole /64, so counting each address on
+/// its own would let one machine pretend to be millions of people).
+pub fn ip_prefix(ip: IpAddr) -> String {
+    match ip.to_canonical() {
+        IpAddr::V4(a) => a.to_string(),
+        IpAddr::V6(a) => {
+            let net = std::net::Ipv6Addr::from(u128::from(a) & (u128::MAX << 64));
+            format!("{net}/64")
+        }
+    }
+}
+
+/// The key for an address in the limiter ("?" when unknown; an IPv6 address counts by its /64).
 pub fn ip_key(kind: &str, ip: Option<IpAddr>) -> String {
-    format!("{kind}:{}", ip.map_or_else(|| "?".to_string(), |i| i.to_string()))
+    format!("{kind}:{}", ip.map_or_else(|| "?".to_string(), ip_prefix))
 }
 
 #[cfg(test)]
@@ -376,5 +389,23 @@ mod tests {
         assert!(l.take("q", quick) && !l.take("q", quick));
         std::thread::sleep(Duration::from_millis(30));
         assert!(l.take("q", quick), "fills up again");
+    }
+
+    #[test]
+    fn ipv6_addresses_count_by_their_64() {
+        let a = ip("2001:db8:1:2:aaaa::1");
+        let b = ip("2001:db8:1:2:ffff:ffff:ffff:ffff");
+        let other = ip("2001:db8:1:3::1");
+        assert_eq!(ip_key("login", a), ip_key("login", b), "the same /64 is one address");
+        assert_ne!(ip_key("login", a), ip_key("login", other));
+        assert_eq!(ip_key("login", a), "login:2001:db8:1:2::/64");
+        assert_eq!(ip_key("login", ip("1.2.3.4")), "login:1.2.3.4");
+        assert_eq!(ip_key("login", ip("::ffff:1.2.3.4")), "login:1.2.3.4", "IPv4 written as IPv6");
+        assert_ne!(ip_key("login", ip("1.2.3.4")), ip_key("login", ip("1.2.3.5")));
+        // A whole /64 shares one bucket.
+        let l = Limiter::default();
+        let b1 = Bucket { burst: 2.0, every: Duration::from_secs(3600) };
+        assert!(l.take(&ip_key("t", a), b1) && l.take(&ip_key("t", ip("2001:db8:1:2::77")), b1));
+        assert!(!l.take(&ip_key("t", ip("2001:db8:1:2::78")), b1));
     }
 }

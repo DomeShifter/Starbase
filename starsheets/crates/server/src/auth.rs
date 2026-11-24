@@ -267,7 +267,7 @@ pub fn update_hashed(store: &Store, username: &str, name: Option<&str>, colour: 
     let user = to_user(u);
     save(store, &users).map_err(|e| e.to_string())?;
     if new_password {
-        end_sessions(store, username);
+        end_all_sessions(store, username);
     }
     Ok(user)
 }
@@ -280,7 +280,7 @@ pub fn remove(store: &Store, username: &str) -> Result<(), String> {
         return Err("That person can't be removed.".into());
     }
     save(store, &users).map_err(|e| e.to_string())?;
-    end_sessions(store, username);
+    end_all_sessions(store, username);
     Ok(())
 }
 
@@ -302,12 +302,30 @@ pub fn linked(store: &Store, iss: &str, sub: &str) -> Option<User> {
 
 /// Whether `username` has a single sign-on link.
 pub fn is_linked(store: &Store, username: &str) -> bool {
-    load(store)
-        .iter()
-        .find(|u| u.get("username").and_then(Value::as_str) == Some(username))
-        .and_then(|u| u.get("oidc"))
-        .and_then(Value::as_array)
-        .is_some_and(|l| !l.is_empty())
+    link_of(store, username).is_some()
+}
+
+/// The provider's sign-in `username` is linked to: (issuer, subject).
+pub fn link_of(store: &Store, username: &str) -> Option<(String, String)> {
+    let users = load(store);
+    let l = users.iter().find(|u| u.get("username").and_then(Value::as_str) == Some(username))?.get("oidc")?.as_array()?.first()?.clone();
+    Some((l.get("iss")?.as_str()?.to_string(), l.get("sub")?.as_str()?.to_string()))
+}
+
+/// Whether `username` has a password (accounts made through single sign-on have none).
+pub fn has_password(store: &Store, username: &str) -> bool {
+    login_hash(store, username).is_some_and(|(_, h)| !h.is_empty())
+}
+
+/// Removes `username`'s single sign-on link, whatever it is (a new password was set, so the
+/// account can still be signed in to).
+pub fn drop_links(store: &Store, username: &str) -> Result<(), String> {
+    let mut users = load(store);
+    let u = users.iter_mut().find(|u| u.get("username").and_then(Value::as_str) == Some(username)).ok_or("No such person.")?;
+    if u.remove("oidc").is_some() {
+        save(store, &users).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// Links `username` to a provider's sign-in (one link per account; a new one replaces it).
@@ -335,17 +353,25 @@ pub fn unlink(store: &Store, username: &str) -> Result<(), String> {
     save(store, &users).map_err(|e| e.to_string())
 }
 
-/// Makes `username` an owner or not. Never takes it from the last owner (nobody could manage
-/// the server then): that answers the account unchanged.
-pub fn set_owner(store: &Store, username: &str, owner: bool) -> Result<User, String> {
+/// Makes `username` an owner or not because of STARSHEETS_OIDC_OWNER_GROUP. Only takes away
+/// what the group gave: an owner made with the setup code stays one, whatever group the
+/// sign-in they link is in (so linking can't lock them out). Never takes it from the last owner
+/// (nobody could manage the server then). Unchanged: the account as it is.
+pub fn set_owner_by_group(store: &Store, username: &str, owner: bool) -> Result<User, String> {
     let mut users = load(store);
     let owners = users.iter().filter(|u| u.get("owner").and_then(Value::as_bool) == Some(true)).count();
     let u = users.iter_mut().find(|u| u.get("username").and_then(Value::as_str) == Some(username)).ok_or("No such person.")?;
     let was = u.get("owner").and_then(Value::as_bool).unwrap_or(false);
-    if was == owner || (was && owners <= 1) {
+    let from_group = u.get("owner_from").and_then(Value::as_str) == Some("group");
+    if was == owner || (was && (owners <= 1 || !from_group)) {
         return Ok(to_user(u));
     }
     u.insert("owner".into(), json!(owner));
+    if owner {
+        u.insert("owner_from".into(), json!("group"));
+    } else {
+        u.remove("owner_from");
+    }
     let user = to_user(u);
     save(store, &users).map_err(|e| e.to_string())?;
     Ok(user)
@@ -390,6 +416,9 @@ pub fn add_linked(store: &Store, wanted: &str, name: &str, iss: &str, sub: &str,
     u.insert("name".into(), json!(name));
     u.insert("colour".into(), json!(colour));
     u.insert("owner".into(), json!(owner));
+    if owner {
+        u.insert("owner_from".into(), json!("group"));
+    }
     u.insert("oidc".into(), json!([{ "iss": iss, "sub": sub }]));
     u.insert("created".into(), json!(now() as i64));
     let user = to_user(&u);
@@ -410,21 +439,53 @@ pub fn new_session(store: &Store, username: &str) -> std::io::Result<String> {
     new_session_with(store, username, None)
 }
 
-/// A new sign-in, remembering the provider's ID token when it came through single sign-on (for
-/// signing out at the provider too).
-pub fn new_session_with(store: &Store, username: &str, id_token: Option<&str>) -> std::io::Result<String> {
+/// When a session (a stored one) stops being kept: an ended single sign-on session is kept
+/// until it can't be renewed any more.
+fn kept_until(v: &Value) -> f64 {
+    let f = |k: &str| v.get(k).and_then(Value::as_f64).unwrap_or(0.0);
+    f("expires").max(f("renew_until"))
+}
+
+/// A new sign-in. Through single sign-on (`sso`: the provider's ID token, for signing out
+/// there too, and how long the session lasts in seconds) it is marked as such: it lasts that
+/// long, then can be renewed at the provider (without a password) until SESSION_DAYS are up.
+pub fn new_session_with(store: &Store, username: &str, sso: Option<(&str, u64)>) -> std::io::Result<String> {
     let token = random_hex(32);
     let t = now();
     let mut sessions = store.load_json(&sessions_path(store));
     // Sessions from before accounts (a bare expiry time) and expired ones go.
-    sessions.retain(|_, v| v.get("expires").and_then(Value::as_f64).unwrap_or(0.0) > t);
-    let mut s = json!({ "user": username, "expires": t + (SESSION_DAYS * 86400) as f64 });
-    if let Some(id) = id_token {
+    sessions.retain(|_, v| kept_until(v) > t);
+    let days = (SESSION_DAYS * 86400) as f64;
+    let mut s = json!({ "user": username, "expires": t + days, "made": t });
+    if let Some((id, secs)) = sso {
         s["id_token"] = json!(id);
+        s["sso"] = json!(true);
+        s["expires"] = json!(t + (secs as f64).min(days));
+        s["renew_until"] = json!(t + days);
     }
     sessions.insert(token_hash(&token), s);
     store.save_json(&sessions_path(store), &Value::Object(sessions))?;
     Ok(token)
+}
+
+/// A session made through single sign-on, still valid: when it was made.
+pub fn sso_session_made(store: &Store, token: &str) -> Option<f64> {
+    let sessions = store.load_json(&sessions_path(store));
+    let s = sessions.get(&token_hash(token))?;
+    let valid = s.get("expires").and_then(Value::as_f64).unwrap_or(0.0) > now();
+    (valid && s.get("sso").and_then(Value::as_bool) == Some(true)).then(|| s.get("made").and_then(Value::as_f64).unwrap_or(0.0))
+}
+
+/// Whether a session made through single sign-on has ended (STARSHEETS_OIDC_SESSION_HOURS) but
+/// may be renewed at the provider: the app then goes there without asking.
+pub fn session_renewable(store: &Store, token: &str) -> bool {
+    let sessions = store.load_json(&sessions_path(store));
+    let Some(s) = sessions.get(&token_hash(token)) else { return false };
+    let t = now();
+    s.get("sso").and_then(Value::as_bool) == Some(true)
+        && s.get("expires").and_then(Value::as_f64).unwrap_or(0.0) <= t
+        && s.get("renew_until").and_then(Value::as_f64).unwrap_or(0.0) > t
+        && s.get("user").and_then(Value::as_str).is_some_and(|u| users(store).iter().any(|x| x.username == u))
 }
 
 /// The provider's ID token of a session that came through single sign-on.
@@ -439,9 +500,17 @@ pub fn end_session(store: &Store, token: &str) {
     }
 }
 
-fn end_sessions(store: &Store, username: &str) {
+/// Signs `username` out everywhere.
+pub fn end_all_sessions(store: &Store, username: &str) {
     let mut sessions = store.load_json(&sessions_path(store));
     sessions.retain(|_, v| v.get("user").and_then(Value::as_str) != Some(username));
+    let _ = store.save_json(&sessions_path(store), &Value::Object(sessions));
+}
+
+/// Ends `username`'s sessions made through single sign-on (password ones stay).
+pub fn end_sso_sessions(store: &Store, username: &str) {
+    let mut sessions = store.load_json(&sessions_path(store));
+    sessions.retain(|_, v| v.get("user").and_then(Value::as_str) != Some(username) || v.get("sso").and_then(Value::as_bool) != Some(true));
     let _ = store.save_json(&sessions_path(store), &Value::Object(sessions));
 }
 

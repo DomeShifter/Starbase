@@ -11,13 +11,17 @@
 //!
 //! Password sign-in keeps working alongside, unless STARSHEETS_OIDC_ONLY is on (then only for
 //! owners).
+//!
+//! A session made through single sign-on lasts STARSHEETS_OIDC_SESSION_HOURS (12 by default),
+//! not 30 days: then the app goes back to the provider without asking (`prompt=none`), so
+//! someone removed or demoted there is noticed within that time.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use base64::Engine;
-use openidconnect::core::{CoreAuthenticationFlow, CoreClient, CoreGenderClaim};
+use openidconnect::core::{CoreAuthPrompt, CoreAuthenticationFlow, CoreClient, CoreGenderClaim};
 use openidconnect::url::Url;
 use openidconnect::{
     AccessTokenHash, AdditionalClaims, AuthorizationCode, ClientId, ClientSecret, CsrfToken, HttpRequest, HttpResponse, IssuerUrl, Nonce,
@@ -31,12 +35,24 @@ use crate::store::{Store, random_hex};
 
 /// How long a started sign-in may take at the provider.
 pub const PENDING_FOR: Duration = Duration::from_secs(600);
-/// Sign-ins waiting at the provider at once (more are refused until some finish or expire).
+/// Sign-ins waiting at the provider at once; a new one past this pushes out the oldest, so
+/// nobody can fill the list and stop everyone else from signing in.
 const MAX_PENDING: usize = 10_000;
+/// Sign-ins waiting at once from one address (an IPv6 /64 counts as one, guard::ip_prefix); a
+/// new one past this pushes out that address's oldest.
+const MAX_PENDING_PER_ADDRESS: usize = 50;
 /// How long the provider's settings and keys are kept before they are read again.
 const REFRESH: Duration = Duration::from_secs(3600);
-/// The cookie that ties a started sign-in to the browser that started it.
+/// Starting a sign-in reads them again when older than this, so a provider that has gone down
+/// shows StarSheets' own "couldn't be reached" rather than the browser's error page.
+const REFRESH_AT_START: Duration = Duration::from_secs(30);
+/// The cookie that ties a started sign-in to the browser that started it: over HTTPS with the
+/// `__Host-` prefix (HOST_COOKIE), which a sibling subdomain can't set.
 pub const COOKIE: &str = "starsheets_oidc";
+pub const HOST_COOKIE: &str = "__Host-starsheets_oidc";
+/// How long a session made through single sign-on lasts unless STARSHEETS_OIDC_SESSION_HOURS
+/// says otherwise.
+pub const SESSION_HOURS: u64 = 12;
 /// Where the provider sends people back to (the end of STARSHEETS_OIDC_REDIRECT_URL).
 pub const CALLBACK: &str = "api/oidc/callback";
 
@@ -51,13 +67,23 @@ pub struct Config {
     pub redirect: String,
     pub scopes: Vec<String>,
     pub label: String,
-    pub auto_create: bool,
+    /// STARSHEETS_OIDC_AUTO_CREATE when set. Unset: on with STARSHEETS_OIDC_ALLOWED_GROUP,
+    /// else it follows the server's sign-up setting (see `makes_accounts`).
+    pub auto_create: Option<bool>,
     pub groups_claim: String,
     pub owner_group: Option<String>,
     pub allowed_group: Option<String>,
     pub only: bool,
     /// Seconds of clock difference allowed with the provider when checking expiry.
     pub skew: u64,
+    /// How long a session made through single sign-on lasts, in hours.
+    pub session_hours: u64,
+}
+
+/// Whether a web address may be used: https://, or plain http:// only on this computer
+/// (localhost, 127.0.0.1, ::1), for testing.
+fn safe_scheme(url: &Url) -> bool {
+    url.scheme() == "https" || (url.scheme() == "http" && matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]" | "::1")))
 }
 
 impl Config {
@@ -67,6 +93,10 @@ impl Config {
         let v = |k: &str| get(&format!("STARSHEETS_OIDC_{k}")).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         let yes = |k: &str, default: bool| v(k).map_or(default, |s| matches!(s.to_lowercase().as_str(), "1" | "true" | "on" | "yes"));
         let Some(issuer) = v("ISSUER") else { return Ok(None) };
+        let issuer_url = Url::parse(&issuer).map_err(|e| format!("STARSHEETS_OIDC_ISSUER isn't a web address: {e}"))?;
+        if !safe_scheme(&issuer_url) {
+            return Err("STARSHEETS_OIDC_ISSUER must start with https:// (plain http:// only for localhost, while testing).".into());
+        }
         IssuerUrl::new(issuer.clone()).map_err(|e| format!("STARSHEETS_OIDC_ISSUER isn't a web address: {e}"))?;
         let client_id = v("CLIENT_ID").ok_or("STARSHEETS_OIDC_ISSUER is set, but STARSHEETS_OIDC_CLIENT_ID isn't.")?;
         let redirect = v("REDIRECT_URL").ok_or("STARSHEETS_OIDC_ISSUER is set, but STARSHEETS_OIDC_REDIRECT_URL isn't.")?;
@@ -75,6 +105,9 @@ impl Config {
             return Err(format!(
                 "STARSHEETS_OIDC_REDIRECT_URL must be the address StarSheets is opened at followed by {CALLBACK}, for example https://sheets.example.com/{CALLBACK}"
             ));
+        }
+        if !safe_scheme(&url) {
+            return Err("STARSHEETS_OIDC_REDIRECT_URL must start with https:// (plain http:// only for localhost, while testing).".into());
         }
         let client_secret = match v("CLIENT_SECRET_FILE") {
             Some(path) => Some(
@@ -97,6 +130,13 @@ impl Config {
             Some(s) => s.parse::<u64>().ok().filter(|n| *n <= 3600).ok_or("STARSHEETS_OIDC_CLOCK_SKEW is a number of seconds (0 to 3600).")?,
             None => 60,
         };
+        let session_hours = match v("SESSION_HOURS") {
+            Some(s) => {
+                s.parse::<u64>().ok().filter(|n| (1..=720).contains(n)).ok_or("STARSHEETS_OIDC_SESSION_HOURS is a number of hours (1 to 720).")?
+            }
+            None => SESSION_HOURS,
+        };
+        let auto_create = v("AUTO_CREATE").map(|_| yes("AUTO_CREATE", false));
         Ok(Some(Config {
             issuer,
             client_id,
@@ -104,13 +144,36 @@ impl Config {
             redirect,
             scopes,
             label,
-            auto_create: yes("AUTO_CREATE", true),
+            auto_create,
             groups_claim: v("GROUPS_CLAIM").unwrap_or_else(|| "groups".into()),
             owner_group: v("OWNER_GROUP"),
             allowed_group: v("ALLOWED_GROUP"),
             only: yes("ONLY", false),
             skew,
+            session_hours,
         }))
+    }
+
+    /// Warnings for the server's log at start.
+    pub fn warnings(&self) -> Vec<String> {
+        let mut w = Vec::new();
+        if self.auto_create == Some(true) && self.allowed_group.is_none() {
+            w.push(
+                "Single sign-on: STARSHEETS_OIDC_AUTO_CREATE is on and STARSHEETS_OIDC_ALLOWED_GROUP isn't set, so EVERYONE who can sign in at the identity provider gets an account here.".into(),
+            );
+        }
+        w
+    }
+
+    /// Whether someone signing in through the provider for the first time gets an account:
+    /// STARSHEETS_OIDC_AUTO_CREATE when set; else yes with STARSHEETS_OIDC_ALLOWED_GROUP (the
+    /// provider decides who), else only when the owner lets people make their own account
+    /// (sign-up on, with no code: a code can't be given at the provider).
+    pub fn makes_accounts(&self, store: &Store) -> bool {
+        self.auto_create.unwrap_or_else(|| {
+            let s = auth::signup(store);
+            self.allowed_group.is_some() || (s.on && s.code.is_empty())
+        })
     }
 
     /// The address StarSheets is opened at (the redirect URL without api/oidc/callback).
@@ -207,6 +270,18 @@ fn why(e: &dyn std::error::Error) -> String {
     s
 }
 
+/// What to do about a certificate problem in `why` (an error reading the provider), in plain
+/// words; "" for other problems.
+pub fn certificate_hint(why: &str) -> &'static str {
+    if why.contains("CaUsedAsEndEntity") {
+        " (The identity provider's certificate is marked as a certificate authority (CA:TRUE), as the usual `openssl req -x509` one-liner makes it. StarSheets refuses such a certificate even when you trust it, while browsers and curl accept it. Make one with `basicConstraints=critical,CA:FALSE` instead: see docs/oidc.md, \"Your own certificate\".)"
+    } else if why.contains("UnknownIssuer") {
+        " (StarSheets doesn't trust the identity provider's certificate. If you made it yourself, add it to the list StarSheets trusts with SSL_CERT_FILE: see docs/oidc.md, \"Your own certificate\".)"
+    } else {
+        ""
+    }
+}
+
 /// Claims beyond the standard ones (the groups claim, whatever it is called).
 #[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
 pub struct Extra {
@@ -264,6 +339,11 @@ pub struct Pending {
     pub next: String,
     /// Linking an account that is already signed in (its username), rather than signing in.
     pub link: Option<String>,
+    /// Renewing an ended session without asking (`prompt=none`): if the provider needs to ask
+    /// something, the sign-in box is shown instead of an error.
+    pub silent: bool,
+    /// Who started it (guard::ip_prefix), for the per-address limit.
+    from: String,
 }
 
 /// Single sign-on for one server: its settings, the sign-ins under way and the provider's
@@ -287,18 +367,31 @@ impl Oidc {
         Oidc { cfg, http: Http::new(), pending: Mutex::default(), provider: Mutex::default() }
     }
 
-    /// The provider's settings and keys (discovery). Blocking: call it off the async threads.
-    fn provider(&self) -> Result<ProviderMetadataWithLogout, String> {
+    /// The provider's settings and keys (discovery), read again when older than `fresh`.
+    /// Blocking: call it off the async threads.
+    fn provider_within(&self, fresh: Duration) -> Result<ProviderMetadataWithLogout, String> {
         if let Some((at, m)) = &*self.provider.lock().unwrap_or_else(|e| e.into_inner())
-            && at.elapsed() < REFRESH
+            && at.elapsed() < fresh
         {
             return Ok(m.clone());
         }
         let issuer = IssuerUrl::new(self.cfg.issuer.clone()).map_err(|e| e.to_string())?;
-        let m = ProviderMetadataWithLogout::discover(&issuer, &self.http)
-            .map_err(|e| format!("couldn't read the identity provider's settings at {}: {}", self.cfg.issuer, why(&e)))?;
+        let m = ProviderMetadataWithLogout::discover(&issuer, &self.http).map_err(|e| {
+            let why = why(&e);
+            format!("couldn't read the identity provider's settings at {}: {why}{}", self.cfg.issuer, certificate_hint(&why))
+        })?;
         *self.provider.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), m.clone()));
         Ok(m)
+    }
+
+    fn provider(&self) -> Result<ProviderMetadataWithLogout, String> {
+        self.provider_within(REFRESH)
+    }
+
+    /// Reads the provider's settings once at start, so a mistake (a wrong address, a certificate
+    /// that isn't trusted) shows in the log straight away. Blocking.
+    pub fn check(&self) -> Result<(), String> {
+        self.provider().map(|_| ())
     }
 
     /// Reads the provider's settings again next time (its keys may have changed).
@@ -308,8 +401,8 @@ impl Oidc {
 
     /// Starts a sign-in: (the provider's address to send the browser to, the cookie value that
     /// ties it to this browser). Blocking.
-    pub fn start(&self, next: String, link: Option<String>) -> Result<(String, String), String> {
-        let meta = self.provider()?;
+    pub fn start(&self, next: String, link: Option<String>, silent: bool, from: String) -> Result<(String, String), String> {
+        let meta = self.provider_within(REFRESH_AT_START)?;
         let client = client!(self, meta);
         let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
         let mut req =
@@ -317,13 +410,11 @@ impl Oidc {
         for s in self.cfg.scopes.iter().filter(|s| *s != "openid") {
             req = req.add_scope(Scope::new(s.clone()));
         }
+        if silent {
+            req = req.add_prompt(CoreAuthPrompt::None);
+        }
         let (url, state, nonce) = req.url();
         let binding = random_hex(32);
-        let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
-        pending.retain(|_, p| p.made.elapsed() < PENDING_FOR);
-        if pending.len() >= MAX_PENDING {
-            return Err("too many sign-ins under way".into());
-        }
         let p = Pending {
             binding: binding.clone(),
             nonce: nonce.secret().clone(),
@@ -331,16 +422,52 @@ impl Oidc {
             made: Instant::now(),
             next,
             link,
+            silent,
+            from,
         };
-        pending.insert(state.secret().clone(), p);
+        self.keep(state.secret().clone(), p);
         Ok((url.to_string(), binding))
     }
 
+    /// Keeps a started sign-in. A full list never refuses: the oldest from the same address
+    /// goes first (past MAX_PENDING_PER_ADDRESS), then the oldest of all (past MAX_PENDING).
+    fn keep(&self, state: String, p: Pending) {
+        let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+        pending.retain(|_, p| p.made.elapsed() < PENDING_FOR);
+        let oldest = |pending: &HashMap<String, Pending>, from: Option<&str>| {
+            pending.iter().filter(|(_, q)| from.is_none_or(|f| q.from == f)).min_by_key(|(_, q)| q.made).map(|(k, _)| k.clone())
+        };
+        while pending.values().filter(|q| q.from == p.from).count() >= MAX_PENDING_PER_ADDRESS {
+            let Some(k) = oldest(&pending, Some(&p.from)) else { break };
+            pending.remove(&k);
+        }
+        while pending.len() >= MAX_PENDING {
+            let Some(k) = oldest(&pending, None) else { break };
+            pending.remove(&k);
+        }
+        pending.insert(state, p);
+    }
+
+    /// The states of the sign-ins waiting (for tests).
+    #[cfg(test)]
+    pub fn waiting(&self) -> Vec<String> {
+        self.pending.lock().unwrap_or_else(|e| e.into_inner()).keys().cloned().collect()
+    }
+
     /// The sign-in started with `state`, if this browser (`binding`, from its cookie) started it
-    /// and it hasn't expired. Each can be taken once, whatever the answer.
+    /// and it hasn't expired. Used up only by the browser that started it, so someone who only
+    /// saw `state` (in an address or a log) can't cancel it.
     pub fn take(&self, state: &str, binding: &str) -> Option<Pending> {
-        let p = self.pending.lock().unwrap_or_else(|e| e.into_inner()).remove(state)?;
-        (p.made.elapsed() < PENDING_FOR && crate::same(p.binding.as_bytes(), binding.as_bytes())).then_some(p)
+        let mut pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+        let p = pending.get(state)?;
+        if p.made.elapsed() >= PENDING_FOR {
+            pending.remove(state);
+            return None;
+        }
+        if !crate::same(p.binding.as_bytes(), binding.as_bytes()) {
+            return None;
+        }
+        pending.remove(state)
     }
 
     /// Finishes a sign-in with the code the provider sent back: who it is, and the raw ID token
@@ -426,8 +553,7 @@ impl Oidc {
 /// the sign-in box explains: not-allowed, no-account, setup-first, linked-elsewhere, failed).
 /// Run under the store lock.
 ///
-/// Found by (issuer, subject) only. Made when there is none and STARSHEETS_OIDC_AUTO_CREATE is
-/// on, with a username from the provider (made unique) and no password. Owner only through
+/// Found by (issuer, subject) only. Made when there is none and `Config::makes_accounts`, with a username from the provider (made unique) and no password. Owner only through
 /// STARSHEETS_OIDC_OWNER_GROUP, checked again at every sign-in (the last owner always stays
 /// one). On a new server the owner is still made with the setup code, unless an owner group
 /// is set and this person is in it.
@@ -437,6 +563,10 @@ pub fn account(store: &Store, cfg: &Config, who: &Identity, link: Option<&str>) 
         && !owner_member
         && !in_group(&who.groups, g)
     {
+        // Taken out of the allowed group: their sessions made through single sign-on end now.
+        if let Some(u) = auth::linked(store, &who.issuer, &who.subject) {
+            auth::end_sso_sessions(store, &u.username);
+        }
         return Err("not-allowed");
     }
     let user = if let Some(username) = link {
@@ -454,14 +584,23 @@ pub fn account(store: &Store, cfg: &Config, who: &Identity, link: Option<&str>) 
         // Files already in the folder become the new owner's (as with the setup code).
         crate::spaces::migrate(store).map_err(|_| "failed")?;
         u
-    } else if !cfg.auto_create {
+    } else if !cfg.makes_accounts(store) {
         return Err("no-account");
     } else {
         let u = auth::add_linked(store, &who.username, &who.name, &who.issuer, &who.subject, owner_member).map_err(|_| "failed")?;
         let _ = crate::spaces::ensure_space(store, &u.username);
         u
     };
-    if cfg.owner_group.is_some() { auth::set_owner(store, &user.username, owner_member).map_err(|_| "failed") } else { Ok(user) }
+    if cfg.owner_group.is_none() {
+        return Ok(user);
+    }
+    let was_owner = user.owner;
+    let user = auth::set_owner_by_group(store, &user.username, owner_member).map_err(|_| "failed")?;
+    // Left the owner group: their other sessions end too (this sign-in makes a new one).
+    if was_owner && !user.owner {
+        auth::end_all_sessions(store, &user.username);
+    }
+    Ok(user)
 }
 
 #[cfg(test)]

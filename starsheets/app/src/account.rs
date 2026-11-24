@@ -129,7 +129,10 @@ enum Reply {
     /// Signed out: go to the identity provider's sign-out page (single sign-on), or reload.
     SignedOut(Option<String>),
     Saved(Me),
-    People(Vec<Me>),
+    /// Everyone, and (owner) whom each is linked to at the identity provider.
+    People(Vec<(Me, Option<String>)>),
+    /// Go to this address (the identity provider, to link an account).
+    Go(String),
     Error(String),
     Done(String),
     /// Where files are kept now, and the folders that could be chosen (GET /api/storage).
@@ -157,6 +160,10 @@ struct Sso {
     owner_group: bool,
     /// The signed-in account is linked to a sign-in at the provider.
     linked: bool,
+    /// The signed-in account has a password (linking asks for it).
+    password: bool,
+    /// A session made through single sign-on has ended: renew it at the provider.
+    renew: bool,
 }
 
 fn sso_from(v: &Json) -> Option<Sso> {
@@ -166,16 +173,51 @@ fn sso_from(v: &Json) -> Option<Sso> {
         only: o.get("only").and_then(Json::as_bool).unwrap_or(false),
         owner_group: o.get("owner_group").and_then(Json::as_bool).unwrap_or(false),
         linked: o.get("linked").and_then(Json::as_bool).unwrap_or(false),
+        password: o.get("password").and_then(Json::as_bool).unwrap_or(false),
+        renew: o.get("renew").and_then(Json::as_bool).unwrap_or(false),
     })
 }
 
-/// Sends the browser to the server's single sign-on (`what`: login or link), coming back to
-/// this page.
-fn go_sso(what: &str) {
+/// Goes back to the identity provider without asking (`prompt=none`) to renew a session made
+/// through single sign-on that has ended (STARSHEETS_OIDC_SESSION_HOURS).
+fn renew_sso() {
     let Some(w) = web_sys::window() else { return };
     let here = format!("{}{}", w.location().pathname().unwrap_or_default(), w.location().search().unwrap_or_default());
     crate::files::clear_unsaved_flag();
-    let _ = w.location().set_href(&format!("api/oidc/{what}?next={}", crate::files::enc(&here)));
+    let _ = w.location().set_href(&format!("api/oidc/login?silent=1&next={}", crate::files::enc(&here)));
+}
+
+/// Whether the page came back from single sign-on with something to say (`?sso=`).
+fn sso_message_waiting() -> bool {
+    web_sys::window().and_then(|w| js_sys::Reflect::get(&w, &"__ssSsoMessage".into()).ok()).and_then(|v| v.as_string()).is_some_and(|m| !m.is_empty())
+}
+
+/// The people list (GET /api/users): each person, and for the owner whom they are linked to.
+fn people_from(v: Json) -> Reply {
+    Reply::People(
+        v.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|p| {
+                let linked = p["sso"]["subject"].as_str().map(|s| format!("{s} at {}", p["sso"]["issuer"].as_str().unwrap_or("")));
+                me_from(p).map(|m| (m, linked))
+            })
+            .collect(),
+    )
+}
+
+/// Sends the browser to the server's single sign-on, coming back to this page.
+fn go_sso_login() {
+    let Some(w) = web_sys::window() else { return };
+    let here = format!("{}{}", w.location().pathname().unwrap_or_default(), w.location().search().unwrap_or_default());
+    crate::files::clear_unsaved_flag();
+    let _ = w.location().set_href(&format!("api/oidc/login?next={}", crate::files::enc(&here)));
+}
+
+/// This page's address, to come back to after linking.
+fn here() -> String {
+    web_sys::window()
+        .map_or_else(String::new, |w| format!("{}{}", w.location().pathname().unwrap_or_default(), w.location().search().unwrap_or_default()))
 }
 
 /// What happened at the last single sign-on (index.html reads `?sso=` from the address and
@@ -228,7 +270,7 @@ pub struct Account {
     password2: String,
     current: String,
     colour: String,
-    people: Vec<Me>,
+    people: Vec<(Me, Option<String>)>,
     remove_armed: Option<String>,
     /// Where files are kept (dialog and first-time setup): what the server said, the folder
     /// picked ("" = the top folder), whether to switch to StarSheets files already there, and
@@ -329,6 +371,12 @@ impl Account {
                         self.open(Dialog::Profile);
                         self.error = Some(why);
                     }
+                    // A session made through single sign-on has ended: renew it at the provider
+                    // (unless that just failed: then the sign-in box says so).
+                    if auth && !signed_in && !setup && self.sso.as_ref().is_some_and(|s| s.renew) && !sso_message_waiting() {
+                        renew_sso();
+                        return;
+                    }
                     if auth && !signed_in {
                         self.open(if setup { Dialog::Setup } else { Dialog::SignIn });
                         if setup {
@@ -349,6 +397,12 @@ impl Account {
                     self.dialog = Dialog::None;
                 }
                 Reply::People(p) => self.people = p,
+                Reply::Go(url) => {
+                    if let Some(w) = web_sys::window() {
+                        crate::files::clear_unsaved_flag();
+                        let _ = w.location().set_href(&url);
+                    }
+                }
                 Reply::Storage(v) => {
                     self.storage_pick.get_or_insert_with(|| v["current"].as_str().unwrap_or("").to_string());
                     self.storage = Some(v);
@@ -405,9 +459,7 @@ impl Account {
                     self.name.clear();
                     self.username.clear();
                     self.password.clear();
-                    call(&self.inbox, ctx, Method::Get, "api/users", None, |v| {
-                        Reply::People(v.as_array().into_iter().flatten().filter_map(me_from).collect())
-                    });
+                    call(&self.inbox, ctx, Method::Get, "api/users", None, people_from);
                 }
             }
         }
@@ -429,9 +481,7 @@ impl Account {
                 }
                 "people" => {
                     self.open(Dialog::People);
-                    call(&self.inbox, ctx, Method::Get, "api/users", None, |v| {
-                        Reply::People(v.as_array().into_iter().flatten().filter_map(me_from).collect())
-                    });
+                    call(&self.inbox, ctx, Method::Get, "api/users", None, people_from);
                     call(&self.inbox, ctx, Method::Get, "api/signup/settings", None, signup_reply);
                 }
                 "signout" => call(&self.inbox, ctx, Method::Post, "api/logout", None, |v| {
@@ -885,7 +935,7 @@ impl Account {
             if let Some(sso) = self.sso.as_ref().filter(|s| s.owner_group) {
                 house::note(ui, "Or, if you are in the owner group at your sign-in service, sign in with it: you become the owner.");
                 if ui.add(house::secondary(&sso.label)).clicked() {
-                    go_sso("login");
+                    go_sso_login();
                 }
             }
             house::gap(ui);
@@ -979,8 +1029,17 @@ impl Account {
                     }
                 } else {
                     house::label(ui, "Single sign-on", "Link this account to your sign-in at the sign-in service, then use it to sign in here.");
-                    if ui.add(house::secondary(&sso.label)).clicked() {
-                        go_sso("link");
+                    if sso.password {
+                        Self::field(ui, &mut self.current, "Your password here (to link)", true);
+                        ui.add_space(house::S);
+                    }
+                    if ui.add(house::secondary(&sso.label)).clicked() && !self.busy {
+                        self.busy = true;
+                        let body = json!({ "current_password": self.current, "next": here() });
+                        call(&self.inbox, ctx, Method::Post, "api/oidc/link", Some(body), |v| match v["url"].as_str() {
+                            Some(u) => Reply::Go(u.to_string()),
+                            None => Reply::Error("The sign-in service couldn't be reached.".into()),
+                        });
                     }
                 }
             }
@@ -1046,18 +1105,27 @@ impl Account {
         let mut cancel = false;
         let mut add = false;
         let mut remove = None;
+        let mut unlink: Option<String> = None;
         let mut save_signup = false;
         let me = me().unwrap_or_default();
         house::dialog(ctx, "starsheets_people", 460.0, "People", Some(&mut close), |ui| {
             house::note(ui, "Everyone with an account on this server. Each person sees only their own files and the ones shared with them.");
             house::gap(ui);
-            for p in self.people.clone() {
+            for (p, linked) in self.people.clone() {
                 ui.horizontal(|ui| {
                     avatar(ui, &p.name, &p.colour, 28.0);
                     ui.add_space(house::S);
                     ui.vertical(|ui| {
                         ui.label(RichText::new(&p.name).size(house::BODY).color(theme::TEXT));
                         house::note(ui, &if p.owner { format!("{} · owner", p.username) } else { p.username.clone() });
+                        if let Some(l) = &linked {
+                            ui.horizontal(|ui| {
+                                house::note(ui, &format!("Single sign-on: {l}"));
+                                if ui.add(house::link("Remove link")).clicked() {
+                                    unlink = Some(p.username.clone());
+                                }
+                            });
+                        }
                     });
                     if !p.owner && p.username != me.username {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1126,6 +1194,9 @@ impl Account {
             self.remove_armed = None;
             let url = format!("api/users?username={}", crate::files::enc(&who));
             call(&self.inbox, ctx, Method::Delete, &url, None, move |_| Reply::Done(format!("Removed {who}.")));
+        } else if let Some(who) = unlink {
+            let url = format!("api/users/sso?username={}", crate::files::enc(&who));
+            call(&self.inbox, ctx, Method::Delete, &url, None, move |_| Reply::Done(format!("Removed {who}'s single sign-on link.")));
         }
     }
 }

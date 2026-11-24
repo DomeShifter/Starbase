@@ -118,7 +118,8 @@
         'setup-first': "This server isn't set up yet: its owner makes the first account with the setup code.",
         'linked-elsewhere': 'That sign-in is already linked to another account here.',
         'signin-first': 'Sign in first, then link your account.',
-        busy: 'Too many tries. Wait a few minutes, then try again.'
+        busy: 'Too many tries. Wait a few minutes, then try again.',
+        renew: 'Your sign-in has run out. Please sign in again.'
       };
       var params = new URLSearchParams(location.search), ssoCode = params.get('sso');
       window.__ssSsoMessage = ssoCode ? (ssoWhy[ssoCode] || ssoWhy.failed) : '';

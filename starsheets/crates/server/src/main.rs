@@ -54,7 +54,13 @@ static ARGON_AT_ONCE: LazyLock<tokio::sync::Semaphore> = LazyLock::new(|| tokio:
 const WRONG_WAIT: Duration = Duration::from_millis(1500);
 #[cfg(test)]
 const WRONG_WAIT: Duration = Duration::from_millis(10);
+/// The session cookie over plain HTTP (a home network), and over HTTPS: the `__Host-` prefix
+/// means only this exact site can set it (not a sibling subdomain). A cookie under the old name
+/// is still read, and moved to the new name on the next request over HTTPS (handle()).
 const COOKIE: &str = "starsheets_session";
+const HOST_COOKIE: &str = "__Host-starsheets_session";
+/// Linking an account that has no password needs a single sign-on sign-in this recent.
+const LINK_FRESH_SECS: f64 = 600.0;
 
 struct App {
     store: Store,
@@ -133,7 +139,7 @@ fn reply(r: Result<Reply, Bad>) -> Response<Body> {
 // ---------------------------------------------------------------- sign-in
 
 fn cookie_token(headers: &HeaderMap) -> Option<String> {
-    named_cookie(headers, COOKIE)
+    named_cookie(headers, HOST_COOKIE).or_else(|| named_cookie(headers, COOKIE))
 }
 
 /// Who is asking (`None`: not signed in, or sign-in is off).
@@ -161,18 +167,36 @@ fn same(a: &[u8], b: &[u8]) -> bool {
 }
 
 fn session_cookie(value: &str, max_age: u64, secure: bool) -> String {
-    let secure = if secure { "; Secure" } else { "" };
-    format!("{COOKIE}={value}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Strict{secure}")
+    if secure {
+        format!("{HOST_COOKIE}={value}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Strict; Secure")
+    } else {
+        format!("{COOKIE}={value}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Strict")
+    }
+}
+
+/// The Set-Cookie lines for a session (the first is the session itself): over HTTPS the old
+/// name is cleared too; signing out (`value` empty) clears both names.
+fn session_cookies(value: &str, max_age: u64, secure: bool) -> Vec<String> {
+    let mut v = vec![session_cookie(value, max_age, secure)];
+    if secure {
+        v.push(session_cookie("", 0, false));
+    } else if value.is_empty() {
+        v.push(session_cookie("", 0, true));
+    }
+    v
+}
+
+/// A JSON answer that sets cookies.
+fn json_with_cookies(body: Value, cookies: &[String]) -> Response<Body> {
+    let mut b = Response::builder().status(200).header(header::CONTENT_TYPE, "application/json").header(header::CACHE_CONTROL, "no-store");
+    for c in cookies {
+        b = b.header(header::SET_COOKIE, c);
+    }
+    b.body(Body::from(serde_json::to_vec(&body).unwrap_or_default())).unwrap()
 }
 
 fn cookie_reply(value: &str, max_age: u64, body: Value, secure: bool) -> Response<Body> {
-    Response::builder()
-        .status(200)
-        .header(header::CONTENT_TYPE, "application/json")
-        .header(header::CACHE_CONTROL, "no-store")
-        .header(header::SET_COOKIE, session_cookie(value, max_age, secure))
-        .body(Body::from(serde_json::to_vec(&body).unwrap_or_default()))
-        .unwrap()
+    json_with_cookies(body, &session_cookies(value, max_age, secure))
 }
 
 /// Sends the browser on to `location` (single sign-on), setting `cookies`.
@@ -186,9 +210,14 @@ fn see_other(location: &str, cookies: &[String]) -> Response<Body> {
 
 /// The cookie that ties a sign-in at the identity provider to this browser. SameSite=Lax: the
 /// provider sends the browser back from its own site, and a Strict cookie wouldn't come along.
+/// Over HTTPS it has the `__Host-` prefix, so a sibling subdomain can't plant its own (which
+/// would sign this browser in as someone else).
 fn oidc_cookie(value: &str, max_age: u64, secure: bool) -> String {
-    let secure = if secure { "; Secure" } else { "" };
-    format!("{}={value}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Lax{secure}", oidc::COOKIE)
+    if secure {
+        format!("{}={value}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Lax; Secure", oidc::HOST_COOKIE)
+    } else {
+        format!("{}={value}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Lax", oidc::COOKIE)
+    }
 }
 
 fn named_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -266,7 +295,11 @@ async fn accounts(
             let s = auth::signup(&app.store);
             let sso = app.oidc.as_ref().filter(|_| on).map(|o| {
                 let linked = me.as_ref().is_some_and(|u| auth::is_linked(&app.store, &u.username));
-                json!({ "label": o.cfg.label, "only": o.cfg.only, "owner_group": o.cfg.owner_group.is_some(), "linked": linked })
+                let password = me.as_ref().is_some_and(|u| auth::has_password(&app.store, &u.username));
+                // A session made through single sign-on that has ended: the app renews it at the
+                // provider without asking.
+                let renew = me.is_none() && cookie_token(headers).is_some_and(|t| auth::session_renewable(&app.store, &t));
+                json!({ "label": o.cfg.label, "only": o.cfg.only, "owner_group": o.cfg.owner_group.is_some(), "linked": linked, "password": password, "renew": renew })
             });
             let only = app.oidc.as_ref().is_some_and(|o| o.cfg.only);
             let signup = on && !setup && s.on && !only;
@@ -397,14 +430,19 @@ async fn accounts(
             let (hash, user) = found.map_or((None, None), |(u, h)| (Some(h), Some(u)));
             let right = slow(move || auth::verify(&password, hash.as_deref())).await.unwrap_or(false);
             // STARSHEETS_OIDC_ONLY: passwords only for owners (a way in when the provider is down).
-            if right && user.as_ref().is_some_and(|u| !u.owner) && app.oidc.as_ref().is_some_and(|o| o.cfg.only) {
-                return Some(error(403, "This server signs people in through single sign-on: use the button above."));
-            }
-            match user.filter(|_| right) {
+            // A right password for anyone else gets exactly the answer a wrong one gets, so the
+            // sign-in box can't be used to check passwords.
+            let only = app.oidc.as_ref().is_some_and(|o| o.cfg.only);
+            match user.filter(|u| right && (u.owner || !only)) {
                 Some(user) => blocking(app, move |app| session_reply(app, &user, secure)).await.unwrap_or_else(|| error(500, "server error")),
                 None => {
                     LIMITS.take(&user_key, guard::LOGIN_USER);
-                    wrong(401, "That username or password isn't right.").await
+                    let why = if only {
+                        "That username or password isn't right. This server signs people in through single sign-on: use the button above."
+                    } else {
+                        "That username or password isn't right."
+                    };
+                    wrong(401, why).await
                 }
             }
         }
@@ -427,7 +465,7 @@ async fn accounts(
             }
             cookie_reply("", 0, answer, secure)
         }
-        (["oidc", ..], _) => sso(app, &path, m, q, headers, me, ask).await,
+        (["oidc", ..], _) => sso(app, &path, m, q, headers, &json, ask).await,
         (["me"], "POST") => {
             let Some(me) = me else { return Some(error(401, "please sign in")) };
             let mut new_hash = None;
@@ -448,11 +486,19 @@ async fn accounts(
                     None => return Some(error(500, "server error")),
                 };
             }
+            let token = cookie_token(headers).unwrap_or_default();
             let r = blocking(app, move |app| {
                 let changed_password = new_hash.is_some();
+                // A password changed in a session made through single sign-on keeps the link
+                // (whoever did it can sign in at the provider); otherwise the link goes, so
+                // someone who learned the old password and linked their own sign-in is cut off.
+                let via_sso = auth::sso_session_made(&app.store, &token).is_some();
                 auth::update_hashed(&app.store, &me.username, opt_field(&json, "name").as_deref(), opt_field(&json, "colour").as_deref(), new_hash)
                     .and_then(|u| {
                         if changed_password {
+                            if !via_sso {
+                                auth::drop_links(&app.store, &u.username)?;
+                            }
                             auth::new_session(&app.store, &u.username).map(|t| (u, Some(t))).map_err(|e| e.to_string())
                         } else {
                             Ok((u, None))
@@ -472,8 +518,34 @@ async fn accounts(
             if !signed_in(app, headers) {
                 return Some(error(401, "please sign in"));
             }
-            let list = blocking(app, |app| auth::users(&app.store)).await.unwrap_or_default();
-            send_json(&Value::Array(list.iter().map(auth::User::json).collect()), 200)
+            // The owner also sees whom each account is linked to at the identity provider.
+            let owner = me.as_ref().is_some_and(|u| u.owner);
+            let list = blocking(app, move |app| {
+                auth::users(&app.store)
+                    .iter()
+                    .map(|u| {
+                        let mut v = u.json();
+                        if owner && let Some((iss, sub)) = auth::link_of(&app.store, &u.username) {
+                            v["sso"] = json!({ "issuer": iss, "subject": sub });
+                        }
+                        v
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .await
+            .unwrap_or_default();
+            send_json(&Value::Array(list), 200)
+        }
+        (["users", "sso"], "DELETE") => {
+            if me.as_ref().is_none_or(|u| !u.owner) {
+                return Some(error(403, "Only the owner can do that."));
+            }
+            let who = q.get("username").cloned().unwrap_or_default();
+            match blocking(app, move |app| auth::unlink(&app.store, &who)).await {
+                Some(Ok(())) => send_json(&json!({ "ok": true }), 200),
+                Some(Err(why)) => error(400, &why),
+                None => error(500, "server error"),
+            }
         }
         (["users"] | ["users", "password"], "POST" | "DELETE") => {
             let Some(me) = me.filter(|u| u.owner) else { return Some(error(403, "Only the owner can do that.")) };
@@ -504,7 +576,11 @@ async fn accounts(
                     }
                     Ok(json!({ "ok": true, "folder": moved }))
                 } else if reset {
-                    auth::update_hashed(&app.store, &field(&json, "username"), None, None, hash).map(|u| u.json())
+                    // A password set by the owner removes the person's single sign-on link: they
+                    // link again themselves if they want it.
+                    let u = auth::update_hashed(&app.store, &field(&json, "username"), None, None, hash)?;
+                    auth::drop_links(&app.store, &u.username)?;
+                    Ok(u.json())
                 } else {
                     let hash = hash.unwrap_or_default();
                     auth::add_hashed(&app.store, &field(&json, "username"), &field(&json, "name"), hash).map(|u| {
@@ -527,34 +603,25 @@ async fn accounts(
 // ---------------------------------------------------------------- single sign-on
 
 /// /api/oidc/login, /api/oidc/link, /api/oidc/callback and /api/oidc/unlink (oidc.rs). The
-/// browser comes to the first three itself (links and redirects), so problems are shown by
+/// browser comes to login and callback itself (links and redirects), so problems are shown by
 /// sending it back to StarSheets with `?sso=<what happened>`, which the sign-in box explains.
-async fn sso(
-    app: &Shared,
-    path: &[&str],
-    m: &str,
-    q: &HashMap<String, String>,
-    headers: &HeaderMap,
-    me: Option<auth::User>,
-    ask: Ask,
-) -> Response<Body> {
+async fn sso(app: &Shared, path: &[&str], m: &str, q: &HashMap<String, String>, headers: &HeaderMap, json: &Value, ask: Ask) -> Response<Body> {
     use guard::{LIMITS, ip_key};
+    let me = current_user(app, headers);
     let Some(o) = app.oidc.clone().filter(|_| app.auth) else { return error(404, "Single sign-on isn't set up on this server.") };
     let secure = ask.secure || o.cfg.https();
+    let from = ask.ip.map_or_else(|| "?".to_string(), guard::ip_prefix);
     let back = |next: &str, what: &str| see_other(&oidc::with_param(next, "sso", what), &[oidc_cookie("", 0, secure)]);
     match (path, m) {
-        (["oidc", which @ ("login" | "link")], "GET") => {
+        // ?silent=1: renewing an ended session without asking (oidc.rs).
+        (["oidc", "login"], "GET") => {
             let next = q.get("next").and_then(|n| oidc::safe_next(n)).unwrap_or_else(|| o.cfg.base_path());
             if !LIMITS.take(&ip_key("oidc", ask.ip), guard::LOGIN_IP) {
                 return back(&next, "busy");
             }
-            let link = match (*which, me) {
-                ("link", Some(u)) => Some(u.username),
-                ("link", None) => return back(&next, "signin-first"),
-                _ => None,
-            };
+            let silent = q.get("silent").is_some_and(|v| v == "1");
             let (o2, next2) = (o.clone(), next.clone());
-            match tokio::task::spawn_blocking(move || o2.start(next2, link)).await {
+            match tokio::task::spawn_blocking(move || o2.start(next2, None, silent, from)).await {
                 Ok(Ok((url, binding))) => see_other(&url, &[oidc_cookie(&binding, oidc::PENDING_FOR.as_secs(), secure)]),
                 Ok(Err(why)) => {
                     eprintln!("Single sign-on: {why}");
@@ -563,15 +630,69 @@ async fn sso(
                 Err(_) => back(&next, "failed"),
             }
         }
+        // Linking the signed-in account: a POST (so guard.rs's cross-site checks apply) with the
+        // account's current password, or, for an account with no password, a sign-in through
+        // single sign-on in the last LINK_FRESH_SECS. Answers where to send the browser.
+        (["oidc", "link"], "POST") => {
+            let Some(me) = me else { return error(401, "please sign in") };
+            let next = json.get("next").and_then(Value::as_str).and_then(oidc::safe_next).unwrap_or_else(|| o.cfg.base_path());
+            let user_key = format!("login-user:{}", me.username);
+            if !LIMITS.can(&user_key, guard::LOGIN_USER) || !LIMITS.take(&ip_key("oidc", ask.ip), guard::LOGIN_IP) {
+                return too_many();
+            }
+            let (who, token) = (me.username.clone(), cookie_token(headers).unwrap_or_default());
+            let found = blocking(app, move |app| {
+                let hash = auth::login_hash(&app.store, &who).map(|(_, h)| h).filter(|h| !h.is_empty());
+                let fresh = auth::sso_session_made(&app.store, &token).is_some_and(|made| store::now() - made < LINK_FRESH_SECS);
+                (hash, fresh)
+            })
+            .await;
+            let Some((hash, fresh)) = found else { return error(500, "server error") };
+            match hash {
+                Some(h) => {
+                    let current = field(json, "current_password");
+                    if !slow(move || auth::verify(&current, Some(&h))).await.unwrap_or(false) {
+                        LIMITS.take(&user_key, guard::LOGIN_USER);
+                        return wrong(400, "Your current password isn't right.").await;
+                    }
+                }
+                None if !fresh => {
+                    return error(403, "To link a different sign-in, sign out, sign in again with single sign-on, then link within 10 minutes.");
+                }
+                None => {}
+            }
+            let (o2, next2) = (o.clone(), next.clone());
+            match tokio::task::spawn_blocking(move || o2.start(next2, Some(me.username), false, from)).await {
+                Ok(Ok((url, binding))) => json_with_cookies(json!({ "url": url }), &[oidc_cookie(&binding, oidc::PENDING_FOR.as_secs(), secure)]),
+                Ok(Err(why)) => {
+                    eprintln!("Single sign-on: {why}");
+                    error(502, "The sign-in service couldn't be reached. Try again in a moment.")
+                }
+                Err(_) => error(500, "server error"),
+            }
+        }
         (["oidc", "callback"], "GET") => {
             let home = o.cfg.base_path();
             if !LIMITS.take(&ip_key("oidc", ask.ip), guard::LOGIN_IP) {
                 return back(&home, "busy");
             }
             let state = q.get("state").cloned().unwrap_or_default();
-            let binding = named_cookie(headers, oidc::COOKIE).unwrap_or_default();
+            let binding = named_cookie(headers, oidc::HOST_COOKIE).or_else(|| named_cookie(headers, oidc::COOKIE)).unwrap_or_default();
             let Some(pending) = o.take(&state, &binding) else { return back(&home, "expired") };
             if let Some(e) = q.get("error") {
+                if pending.silent {
+                    // The provider needs to ask something (signed out there, say): the ended
+                    // session goes, and the sign-in box is shown without an error.
+                    if let Some(t) = cookie_token(headers) {
+                        blocking(app, move |app| {
+                            if auth::session_user(&app.store, &t).is_none() {
+                                auth::end_session(&app.store, &t);
+                            }
+                        })
+                        .await;
+                    }
+                    return back(&pending.next, "renew");
+                }
                 return back(&pending.next, if e == "access_denied" { "denied" } else { "failed" });
             }
             let code = q.get("code").cloned().unwrap_or_default();
@@ -593,11 +714,15 @@ async fn sso(
             let cfg = o.cfg.clone();
             let r = blocking(app, move |app| {
                 let user = oidc::account(&app.store, &cfg, &who, link.as_deref())?;
-                auth::new_session_with(&app.store, &user.username, Some(&id_token)).map_err(|_| "failed")
+                auth::new_session_with(&app.store, &user.username, Some((&id_token, cfg.session_hours * 3600))).map_err(|_| "failed")
             })
             .await;
             match r {
-                Some(Ok(token)) => see_other(&next, &[oidc_cookie("", 0, secure), session_cookie(&token, auth::SESSION_DAYS * 86400, secure)]),
+                Some(Ok(token)) => {
+                    let mut cookies = vec![oidc_cookie("", 0, secure)];
+                    cookies.extend(session_cookies(&token, auth::SESSION_DAYS * 86400, secure));
+                    see_other(&next, &cookies)
+                }
                 Some(Err(what)) => back(&next, what),
                 None => back(&next, "failed"),
             }
@@ -1341,7 +1466,28 @@ async fn read_body(body: Body, headers: &HeaderMap, limit: u64, wait: Duration) 
     }
 }
 
+/// Every request but the live WebSocket. Over HTTPS, a session cookie still under the old name
+/// (from before the `__Host-` prefix) is moved to the new name.
 async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
+    let secure = guard::secure(guard::peer(req.extensions()), req.headers(), guard::config());
+    let old = if secure && app.auth && named_cookie(req.headers(), HOST_COOKIE).is_none() { named_cookie(req.headers(), COOKIE) } else { None };
+    let mut resp = handle_request(app.clone(), req).await;
+    if let Some(t) = old
+        && !resp.headers().contains_key(header::SET_COOKIE)
+    {
+        let t2 = t.clone();
+        if blocking(&app, move |a| auth::session_user(&a.store, &t2).is_some()).await == Some(true) {
+            for c in session_cookies(&t, auth::SESSION_DAYS * 86400, true) {
+                if let Ok(v) = header::HeaderValue::from_str(&c) {
+                    resp.headers_mut().append(header::SET_COOKIE, v);
+                }
+            }
+        }
+    }
+    resp
+}
+
+async fn handle_request(app: Shared, req: Request) -> Response<Body> {
     let (parts, body) = req.into_parts();
     let (method, uri, headers) = (parts.method, parts.uri, parts.headers);
     let peer = guard::peer(&parts.extensions);
@@ -1560,8 +1706,18 @@ async fn main() {
         }
     };
     if let Some(o) = &oidc {
+        for w in o.cfg.warnings() {
+            eprintln!("{w}");
+        }
         if auth {
-            println!("Single sign-on: {} (the provider's settings are read at the first sign-in).", o.cfg.issuer);
+            println!("Single sign-on: {}.", o.cfg.issuer);
+            let o = o.clone();
+            tokio::task::spawn_blocking(move || match o.check() {
+                Ok(()) => println!("Single sign-on: the identity provider answered."),
+                Err(why) => {
+                    eprintln!("Single sign-on: {why}. Sign-in through it won't work until this is fixed (it is tried again at each sign-in).")
+                }
+            });
         } else {
             println!("Single sign-on is set, but sign-in is off (STARSHEETS_AUTH=off), so it isn't used.");
         }

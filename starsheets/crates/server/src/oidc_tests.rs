@@ -168,12 +168,13 @@ fn config(issuer: &str) -> Config {
         redirect: format!("https://sheets.example.com/{CALLBACK}"),
         scopes: vec!["openid".into(), "profile".into(), "groups".into()],
         label: "Sign in with Example".into(),
-        auto_create: true,
+        auto_create: Some(true),
         groups_claim: "groups".into(),
         owner_group: None,
         allowed_group: None,
         only: false,
         skew: 60,
+        session_hours: 12,
     }
 }
 
@@ -236,7 +237,7 @@ async fn send(app: &Shared, method: &str, uri: &str, cookie: &str, body: Value) 
 async fn trip(app: &Shared, f: &Fake, start: &str, cookie: &str, who: &Person, nonce: Option<&str>) -> Got {
     let g = send(app, "GET", start, cookie, Value::Null).await;
     assert_eq!(g.status, 303, "{:?}", g.json);
-    let pending = g.cookie(COOKIE).expect("the sign-in cookie");
+    let pending = g.cookie(HOST_COOKIE).expect("the sign-in cookie");
     assert!(g.cookies[0].contains("HttpOnly") && g.cookies[0].contains("SameSite=Lax") && g.cookies[0].contains("Secure"), "{:?}", g.cookies);
     let url = Url::parse(&g.location).unwrap();
     assert!(g.location.starts_with(&format!("{}/authorize?", f.issuer)), "{}", g.location);
@@ -256,7 +257,7 @@ async fn sign_in(app: &Shared, f: &Fake, who: &Person) -> Got {
 }
 
 fn session(g: &Got) -> String {
-    g.cookie(crate::COOKIE).filter(|c| !c.ends_with('=')).unwrap_or_else(|| panic!("no session: {} {:?}", g.location, g.cookies))
+    g.cookie(crate::HOST_COOKIE).filter(|c| !c.ends_with('=')).unwrap_or_else(|| panic!("no session: {} {:?}", g.location, g.cookies))
 }
 
 async fn me(app: &Shared, cookie: &str) -> Value {
@@ -270,7 +271,8 @@ async fn first_sign_in_makes_an_account_and_the_next_reuses_it() {
     auth::add(&app.store, "boss", "Boss", "bosspassword").unwrap();
     let g = sign_in(&app, &f, &person("sub-ann", "Ann Smith", &[])).await;
     assert_eq!((g.status, g.location.as_str()), (303, "/folder?x=1"));
-    assert!(g.cookies.iter().any(|c| c.starts_with("starsheets_oidc=;") && c.contains("Max-Age=0")), "the sign-in cookie is cleared");
+    assert!(g.cookies.iter().any(|c| c.starts_with("__Host-starsheets_oidc=;") && c.contains("Max-Age=0")), "the sign-in cookie is cleared");
+    assert!(g.cookies.iter().any(|c| c.starts_with("starsheets_session=;") && c.contains("Max-Age=0")), "the old session name is cleared");
     let s = session(&g);
     assert!(g.cookies.iter().any(|c| c.starts_with(&s) && c.contains("SameSite=Strict") && c.contains("Secure")));
     let info = me(&app, &s).await;
@@ -331,11 +333,11 @@ async fn allowed_group_and_no_automatic_accounts() {
     let f = provider().await;
     let mut cfg = config(&f.issuer);
     cfg.allowed_group = Some("sheets".into());
-    cfg.auto_create = false;
+    cfg.auto_create = Some(false);
     let app = server(cfg);
     auth::add(&app.store, "boss", "Boss", "bosspassword").unwrap();
     let g = sign_in(&app, &f, &person("sub-a", "a", &["other"])).await;
-    assert!(g.location.ends_with("sso=not-allowed") && g.cookie(crate::COOKIE).is_none(), "{}", g.location);
+    assert!(g.location.ends_with("sso=not-allowed") && g.cookie(crate::HOST_COOKIE).is_none(), "{}", g.location);
     let g = sign_in(&app, &f, &person("sub-a", "a", &["sheets"])).await;
     assert!(g.location.ends_with("sso=no-account"), "{}", g.location);
     assert_eq!(auth::users(&app.store).len(), 1);
@@ -350,33 +352,38 @@ async fn state_nonce_and_audience_are_checked() {
     let ann = person("sub-ann", "ann", &[]);
     // A wrong nonce in the ID token.
     let g = trip(&app, &f, "/api/oidc/login", "", &ann, Some("not-the-nonce")).await;
-    assert_eq!((g.location.as_str(), g.cookie(crate::COOKIE)), ("/?sso=failed", None));
+    assert_eq!((g.location.as_str(), g.cookie(crate::HOST_COOKIE)), ("/?sso=failed", None));
     // An ID token for another client.
     *f.wrong_audience.lock().unwrap() = true;
     let g = sign_in(&app, &f, &ann).await;
-    assert!(g.location.ends_with("sso=failed") && g.cookie(crate::COOKIE).is_none());
+    assert!(g.location.ends_with("sso=failed") && g.cookie(crate::HOST_COOKIE).is_none());
     *f.wrong_audience.lock().unwrap() = false;
     // State: made up, from another browser (wrong cookie), or used twice.
     let g = send(&app, "GET", "/api/oidc/login", "", Value::Null).await;
-    let pending = g.cookie(COOKIE).unwrap();
+    let pending = g.cookie(HOST_COOKIE).unwrap();
     let q: HashMap<String, String> = Url::parse(&g.location).unwrap().query_pairs().into_owned().collect();
     let code = random_hex(8);
     f.codes.lock().unwrap().insert(code.clone(), (ann.clone(), q["nonce"].clone(), q["code_challenge"].clone(), q["redirect_uri"].clone()));
     let made_up = send(&app, "GET", &format!("/api/oidc/callback?code={code}&state=madeup"), &pending, Value::Null).await;
     assert_eq!(made_up.location, "/?sso=expired");
     let callback = format!("/api/oidc/callback?code={code}&state={}", q["state"]);
-    let other = send(&app, "GET", &callback, &format!("{COOKIE}=0123"), Value::Null).await;
+    let other = send(&app, "GET", &callback, &format!("{HOST_COOKIE}=0123"), Value::Null).await;
     assert_eq!(other.location, "/?sso=expired", "another browser's cookie");
+    let other = send(&app, "GET", &callback, "", Value::Null).await;
+    assert_eq!(other.location, "/?sso=expired", "no cookie");
+    // Someone who only saw `state` can't cancel the sign-in: the right browser still finishes it.
+    let g = send(&app, "GET", &callback, &pending, Value::Null).await;
+    assert_eq!(g.location, "/", "{:?}", g.cookies);
     let again = send(&app, "GET", &callback, &pending, Value::Null).await;
-    assert_eq!(again.location, "/?sso=expired", "the wrong cookie used the sign-in up");
+    assert_eq!(again.location, "/?sso=expired", "used once");
     // Cancelled at the provider.
     let g = send(&app, "GET", "/api/oidc/login?next=/x", "", Value::Null).await;
     let state = Url::parse(&g.location).unwrap().query_pairs().find(|(k, _)| k == "state").unwrap().1.into_owned();
-    let g = send(&app, "GET", &format!("/api/oidc/callback?error=access_denied&state={state}"), &g.cookie(COOKIE).unwrap(), Value::Null).await;
+    let g = send(&app, "GET", &format!("/api/oidc/callback?error=access_denied&state={state}"), &g.cookie(HOST_COOKIE).unwrap(), Value::Null).await;
     assert_eq!(g.location, "/x?sso=denied");
     // Only paths on this server as the page to go back to.
     let g = send(&app, "GET", "/api/oidc/login?next=//evil.example/", "", Value::Null).await;
-    let pending = g.cookie(COOKIE).unwrap();
+    let pending = g.cookie(HOST_COOKIE).unwrap();
     let state = Url::parse(&g.location).unwrap().query_pairs().find(|(k, _)| k == "state").unwrap().1.into_owned();
     let g = send(&app, "GET", &format!("/api/oidc/callback?error=x&state={state}"), &pending, Value::Null).await;
     assert_eq!(g.location, "/?sso=failed");
@@ -390,8 +397,17 @@ async fn linking_an_account_and_signing_out_at_the_provider() {
     auth::add(&app.store, "boss", "Boss", "bosspassword").unwrap();
     let g = send(&app, "POST", "/api/login", "", json!({"username": "boss", "password": "bosspassword"})).await;
     let boss = g.cookie(crate::COOKIE).unwrap();
-    assert_eq!(send(&app, "GET", "/api/oidc/link", "", Value::Null).await.location, "/?sso=signin-first");
-    let g = trip(&app, &f, "/api/oidc/link?next=/", &boss, &person("sub-boss", "james", &[]), None).await;
+    // Linking is a POST from a signed-in account with its current password (never a GET a
+    // sibling site could send the browser to).
+    assert_eq!(send(&app, "GET", "/api/oidc/link", &boss, Value::Null).await.status, 404);
+    assert_eq!(send(&app, "POST", "/api/oidc/link", "", json!({"current_password": "bosspassword"})).await.status, 401);
+    // (Wrong passwords with an account of its own: the per-username limit is shared by every
+    // test, and main.rs's tests count boss's.)
+    auth::add(&app.store, "linkwrong", "L", "linkpassword").unwrap();
+    let l = send(&app, "POST", "/api/login", "", json!({"username": "linkwrong", "password": "linkpassword"})).await.cookie(crate::COOKIE).unwrap();
+    assert_eq!(send(&app, "POST", "/api/oidc/link", &l, json!({"current_password": "wrong one"})).await.status, 400);
+    assert_eq!(send(&app, "POST", "/api/oidc/link", &l, json!({})).await.status, 400);
+    let g = link_trip(&app, &f, &boss, "bosspassword", &person("sub-boss", "james", &[])).await;
     assert_eq!(g.location, "/");
     assert!(auth::is_linked(&app.store, "boss"));
     // Signing in through the provider now gives the linked account, and signing out sends the
@@ -412,6 +428,196 @@ async fn linking_an_account_and_signing_out_at_the_provider() {
     let _ = std::fs::remove_dir_all(&app.store.root);
 }
 
+/// Linking through POST /api/oidc/link, then the provider, then the callback.
+async fn link_trip(app: &Shared, f: &Fake, session: &str, password: &str, who: &Person) -> Got {
+    let g = send(app, "POST", "/api/oidc/link", session, json!({"current_password": password, "next": "/"})).await;
+    assert_eq!(g.status, 200, "{:?}", g.json);
+    let pending = g.cookie(HOST_COOKIE).expect("the sign-in cookie");
+    let url = Url::parse(g.json["url"].as_str().unwrap()).unwrap();
+    let q: HashMap<String, String> = url.query_pairs().into_owned().collect();
+    let code = random_hex(8);
+    f.codes.lock().unwrap().insert(code.clone(), (who.clone(), q["nonce"].clone(), q["code_challenge"].clone(), q["redirect_uri"].clone()));
+    send(app, "GET", &format!("/api/oidc/callback?code={code}&state={}", q["state"]), &format!("{pending}; {session}"), Value::Null).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_new_password_removes_the_link_and_the_owner_sees_and_removes_links() {
+    let f = provider().await;
+    let app = server(config(&f.issuer));
+    auth::add(&app.store, "boss", "Boss", "bosspassword").unwrap();
+    auth::add(&app.store, "ann", "Ann", "annpassword").unwrap();
+    let ann = send(&app, "POST", "/api/login", "", json!({"username": "ann", "password": "annpassword"})).await.cookie(crate::COOKIE).unwrap();
+    let boss = send(&app, "POST", "/api/login", "", json!({"username": "boss", "password": "bosspassword"})).await.cookie(crate::COOKIE).unwrap();
+    link_trip(&app, &f, &ann, "annpassword", &person("sub-ann", "ann", &[])).await;
+    assert!(auth::is_linked(&app.store, "ann"));
+    // The owner sees the link (others don't), and can remove it.
+    let list = send(&app, "GET", "/api/users", &boss, Value::Null).await.json;
+    let a = list.as_array().unwrap().iter().find(|u| u["username"] == "ann").unwrap().clone();
+    assert_eq!((a["sso"]["issuer"].as_str(), a["sso"]["subject"].as_str()), (Some(f.issuer.as_str()), Some("sub-ann")));
+    let list = send(&app, "GET", "/api/users", &ann, Value::Null).await.json;
+    assert!(list.as_array().unwrap().iter().all(|u| u.get("sso").is_none()));
+    assert_eq!(send(&app, "DELETE", "/api/users/sso?username=ann", &ann, Value::Null).await.status, 403);
+    assert_eq!(send(&app, "DELETE", "/api/users/sso?username=ann", &boss, Value::Null).await.status, 200);
+    assert!(!auth::is_linked(&app.store, "ann"));
+    // Changing the password in a password session removes the link.
+    link_trip(&app, &f, &ann, "annpassword", &person("sub-ann", "ann", &[])).await;
+    let g = send(&app, "POST", "/api/me", &ann, json!({"current_password": "annpassword", "password": "a new password"})).await;
+    assert_eq!(g.status, 200);
+    assert!(!auth::is_linked(&app.store, "ann"), "a password change removes the link");
+    // ... but not in a session made through single sign-on.
+    let ann = g.cookie(crate::COOKIE).unwrap();
+    link_trip(&app, &f, &ann, "a new password", &person("sub-ann", "ann", &[])).await;
+    let s = session(&sign_in(&app, &f, &person("sub-ann", "ann", &[])).await);
+    assert_eq!(send(&app, "POST", "/api/me", &s, json!({"current_password": "a new password", "password": "another password"})).await.status, 200);
+    assert!(auth::is_linked(&app.store, "ann"), "changed through single sign-on: the link stays");
+    // A password reset by the owner removes it.
+    assert_eq!(send(&app, "POST", "/api/users/password", &boss, json!({"username": "ann", "password": "reset password"})).await.status, 200);
+    assert!(!auth::is_linked(&app.store, "ann"));
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_account_with_no_password_links_only_after_a_fresh_sign_in() {
+    let f = provider().await;
+    let app = server(config(&f.issuer));
+    auth::add(&app.store, "boss", "Boss", "bosspassword").unwrap();
+    let s = session(&sign_in(&app, &f, &person("sub-ann", "ann", &[])).await);
+    // Just signed in through single sign-on: may link (to another sign-in at the provider).
+    let g = send(&app, "POST", "/api/oidc/link", &s, json!({})).await;
+    assert_eq!(g.status, 200, "{:?}", g.json);
+    // A sign-in from long ago may not.
+    age_sessions(&app, 3600.0, false);
+    let g = send(&app, "POST", "/api/oidc/link", &s, json!({})).await;
+    assert_eq!(g.status, 403, "{:?}", g.json);
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+/// Moves every session `secs` into the past (`expire`: also ends them).
+fn age_sessions(app: &Shared, secs: f64, expire: bool) {
+    let path = app.store.meta().join("sessions.json");
+    let mut all = app.store.load_json(&path);
+    for v in all.values_mut() {
+        v["made"] = json!(v["made"].as_f64().unwrap() - secs);
+        if expire {
+            v["expires"] = json!(crate::store::now() - 1.0);
+        }
+    }
+    app.store.save_json(&path, &Value::Object(all)).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn single_sign_on_sessions_are_short_and_renewed_at_the_provider() {
+    let f = provider().await;
+    let mut cfg = config(&f.issuer);
+    cfg.session_hours = 2;
+    let app = server(cfg);
+    auth::add(&app.store, "boss", "Boss", "bosspassword").unwrap();
+    let s = session(&sign_in(&app, &f, &person("sub-ann", "ann", &[])).await);
+    let path = app.store.meta().join("sessions.json");
+    let left = app.store.load_json(&path).values().next().unwrap()["expires"].as_f64().unwrap() - crate::store::now();
+    assert!((7100.0..=7200.0).contains(&left), "two hours: {left}");
+    assert_eq!(me(&app, &s).await["sso"]["renew"], false);
+    // Ended: not signed in, but the app may renew it without asking.
+    age_sessions(&app, 0.0, true);
+    let info = me(&app, &s).await;
+    assert_eq!((info["signed_in"].as_bool(), info["sso"]["renew"].as_bool()), (Some(false), Some(true)));
+    assert_eq!(me(&app, "").await["sso"]["renew"], false);
+    // Renewing: prompt=none at the provider; when it needs to ask, the old session goes.
+    let g = send(&app, "GET", "/api/oidc/login?silent=1&next=/x", &s, Value::Null).await;
+    let q: HashMap<String, String> = Url::parse(&g.location).unwrap().query_pairs().into_owned().collect();
+    assert_eq!(q.get("prompt").map(String::as_str), Some("none"));
+    let back = format!("/api/oidc/callback?error=login_required&state={}", q["state"]);
+    let g = send(&app, "GET", &back, &format!("{}; {s}", g.cookie(HOST_COOKIE).unwrap()), Value::Null).await;
+    assert_eq!(g.location, "/x?sso=renew");
+    assert_eq!(me(&app, &s).await["sso"]["renew"], false, "the ended session is gone");
+    // A normal sign-in has no prompt=none.
+    let g = send(&app, "GET", "/api/oidc/login", "", Value::Null).await;
+    assert!(!g.location.contains("prompt="), "{}", g.location);
+    // A renewed session works again.
+    let s = session(&trip(&app, &f, "/api/oidc/login?silent=1", "", &person("sub-ann", "ann", &[]), None).await);
+    assert_eq!(me(&app, &s).await["user"]["username"], "ann");
+    // Password sessions keep their 30 days.
+    let g = send(&app, "POST", "/api/login", "", json!({"username": "boss", "password": "bosspassword"})).await;
+    assert_eq!(g.status, 200);
+    let days = app.store.load_json(&path).values().map(|v| v["expires"].as_f64().unwrap() - crate::store::now()).fold(0.0, f64::max);
+    assert!(days > 29.0 * 86400.0);
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn leaving_the_groups_ends_sessions() {
+    let f = provider().await;
+    let mut cfg = config(&f.issuer);
+    cfg.owner_group = Some("admins".into());
+    cfg.allowed_group = Some("sheets".into());
+    let app = server(cfg);
+    auth::add(&app.store, "boss", "Boss", "bosspassword").unwrap();
+    // Demoted at a sign-in: the other sessions end.
+    let cat = person("sub-cat", "cat", &["admins"]);
+    let old = session(&sign_in(&app, &f, &cat).await);
+    let g = sign_in(&app, &f, &person("sub-cat", "cat", &["sheets"])).await;
+    assert_eq!(me(&app, &session(&g)).await["user"]["owner"], false);
+    assert_eq!(me(&app, &old).await["signed_in"], false, "the owner's session ended");
+    // Out of the allowed group: refused, and their single sign-on sessions end.
+    let s = session(&g);
+    let g = sign_in(&app, &f, &person("sub-cat", "cat", &[])).await;
+    assert!(g.location.ends_with("sso=not-allowed"));
+    assert_eq!(me(&app, &s).await["signed_in"], false);
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn new_accounts_follow_the_sign_up_setting_unless_set() {
+    let f = provider().await;
+    let mut cfg = config(&f.issuer);
+    cfg.auto_create = None;
+    let app = server(cfg.clone());
+    auth::add(&app.store, "boss", "Boss", "bosspassword").unwrap();
+    let ann = person("sub-ann", "ann", &["sheets"]);
+    assert!(sign_in(&app, &f, &ann).await.location.ends_with("sso=no-account"), "sign-up is off by default");
+    auth::set_signup(&app.store, true, "a-code").unwrap();
+    assert!(sign_in(&app, &f, &ann).await.location.ends_with("sso=no-account"), "sign-up needs a code the provider can't give");
+    auth::set_signup(&app.store, true, "").unwrap();
+    assert_eq!(me(&app, &session(&sign_in(&app, &f, &ann).await)).await["user"]["username"], "ann");
+    // With an allowed group, the provider decides who.
+    cfg.allowed_group = Some("sheets".into());
+    let app = server(cfg);
+    auth::add(&app.store, "boss", "Boss", "bosspassword").unwrap();
+    assert_eq!(me(&app, &session(&sign_in(&app, &f, &ann).await)).await["user"]["username"], "ann");
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn waiting_sign_ins_push_out_the_oldest_never_refuse() {
+    let o = Oidc::new(config("https://auth.example.com"));
+    let pending = |from: &str| Pending {
+        binding: "b".into(),
+        nonce: "n".into(),
+        verifier: "v".into(),
+        made: Instant::now(),
+        next: "/".into(),
+        link: None,
+        silent: false,
+        from: from.into(),
+    };
+    // One address (an IPv6 /64) can keep at most MAX_PENDING_PER_ADDRESS: its oldest go.
+    for i in 0..MAX_PENDING_PER_ADDRESS + 5 {
+        o.keep(format!("a{i}"), pending("2001:db8::/64"));
+        std::thread::sleep(Duration::from_micros(50));
+    }
+    let w = o.waiting();
+    assert_eq!(w.len(), MAX_PENDING_PER_ADDRESS);
+    assert!(!w.contains(&"a0".to_string()) && w.contains(&format!("a{}", MAX_PENDING_PER_ADDRESS + 4)));
+    // Everyone together: the oldest of all go, and a new sign-in is always kept.
+    for i in 0..MAX_PENDING {
+        o.keep(format!("b{i}"), pending(&format!("10.0.{}.{}", i / 256, i % 256)));
+    }
+    o.keep("last".into(), pending("192.0.2.1"));
+    let w = o.waiting();
+    assert_eq!(w.len(), MAX_PENDING);
+    assert!(w.contains(&"last".to_string()) && !w.iter().any(|k| k.starts_with('a')));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn only_single_sign_on_leaves_passwords_to_owners() {
     let f = provider().await;
@@ -421,7 +627,11 @@ async fn only_single_sign_on_leaves_passwords_to_owners() {
     auth::add(&app.store, "boss", "Boss", "bosspassword").unwrap();
     auth::add(&app.store, "ann", "Ann", "annpassword").unwrap();
     auth::set_signup(&app.store, true, "").unwrap();
-    assert_eq!(send(&app, "POST", "/api/login", "", json!({"username": "ann", "password": "annpassword"})).await.status, 403);
+    // A right password for someone who isn't an owner gets exactly what a wrong one gets.
+    let right = send(&app, "POST", "/api/login", "", json!({"username": "ann", "password": "annpassword"})).await;
+    let wrong = send(&app, "POST", "/api/login", "", json!({"username": "ann", "password": "not-the-password"})).await;
+    assert_eq!((right.status, &right.json), (401, &wrong.json));
+    assert!(right.cookies.is_empty());
     assert_eq!(send(&app, "POST", "/api/login", "", json!({"username": "boss", "password": "bosspassword"})).await.status, 200);
     let info = me(&app, "").await;
     assert_eq!((info["sso"]["only"].as_bool(), info["signup"].as_bool()), (Some(true), Some(false)));
@@ -451,9 +661,32 @@ fn settings_groups_and_pages() {
     let base = [("ISSUER", "https://auth.example.com"), ("CLIENT_ID", "sheets"), ("REDIRECT_URL", "https://sheets.example.com/api/oidc/callback")];
     let c = env(&base).unwrap().unwrap();
     assert_eq!(
-        (c.scopes.join(" "), c.label.as_str(), c.auto_create, c.only, c.skew),
-        ("openid profile email groups".into(), "Sign in with SSO", true, false, 60)
+        (c.scopes.join(" "), c.label.as_str(), c.auto_create, c.only, c.skew, c.session_hours),
+        ("openid profile email groups".into(), "Sign in with SSO", None, false, 60, 12)
     );
+    assert!(c.warnings().is_empty());
+    let mut on = base.to_vec();
+    on.push(("AUTO_CREATE", "on"));
+    let c = env(&on).unwrap().unwrap();
+    assert_eq!((c.auto_create, c.warnings().len()), (Some(true), 1), "on with no allowed group: a warning in the log");
+    on.push(("ALLOWED_GROUP", "sheets"));
+    assert!(env(&on).unwrap().unwrap().warnings().is_empty());
+    // Plain http:// only on this computer.
+    let mut plain = base;
+    plain[0].1 = "http://auth.example.com";
+    assert!(env(&plain).unwrap_err().contains("https://"));
+    let mut plain = base;
+    plain[2].1 = "http://sheets.example.com/api/oidc/callback";
+    assert!(env(&plain).unwrap_err().contains("https://"));
+    for local in ["http://localhost:9000", "http://127.0.0.1:9000", "http://[::1]:9000"] {
+        let mut l = base;
+        l[0].1 = local;
+        l[2].1 = "http://localhost:8080/api/oidc/callback";
+        assert!(env(&l).is_ok(), "{local}");
+    }
+    let mut hours = base.to_vec();
+    hours.push(("SESSION_HOURS", "0"));
+    assert!(env(&hours).is_err());
     assert_eq!((c.base(), c.base_path(), c.https()), ("https://sheets.example.com/", "/".to_string(), true));
     let mut wrong = base;
     wrong[2].1 = "https://sheets.example.com/somewhere";
@@ -486,4 +719,54 @@ fn usernames_from_the_provider() {
     assert_eq!(auth::free_username(&s, "ann-example.com"), "ann-example.com2");
     assert!(auth::unlink(&s, "ann-example.com").is_err(), "no password: the link stays");
     let _ = std::fs::remove_dir_all(&s.root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn linking_never_takes_away_the_setup_owners_ownership() {
+    let f = provider().await;
+    let mut cfg = config(&f.issuer);
+    cfg.owner_group = Some("admins".into());
+    cfg.only = true;
+    let app = server(cfg);
+    auth::add(&app.store, "boss", "Boss", "bosspassword").unwrap();
+    // Another owner through the group, so boss isn't the last one.
+    let cat = person("sub-cat", "cat", &["admins"]);
+    assert_eq!(me(&app, &session(&sign_in(&app, &f, &cat).await)).await["user"]["owner"], true);
+    // The setup owner links a sign-in that isn't in the owner group: still the owner, and the
+    // password still gets in with only single sign-on on.
+    let boss = send(&app, "POST", "/api/login", "", json!({"username": "boss", "password": "bosspassword"})).await.cookie(crate::COOKIE).unwrap();
+    let g = link_trip(&app, &f, &boss, "bosspassword", &person("sub-boss", "james", &["users"])).await;
+    assert_eq!(g.location, "/");
+    assert_eq!(me(&app, &session(&g)).await["user"]["owner"], true, "linking didn't demote");
+    let g = sign_in(&app, &f, &person("sub-boss", "james", &[])).await;
+    assert_eq!(me(&app, &session(&g)).await["user"]["owner"], true);
+    assert_eq!(send(&app, "POST", "/api/login", "", json!({"username": "boss", "password": "bosspassword"})).await.status, 200);
+    // An owner through the group still stops being one on leaving it.
+    let g = sign_in(&app, &f, &person("sub-cat", "cat", &[])).await;
+    assert_eq!(me(&app, &session(&g)).await["user"]["owner"], false);
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_provider_gone_down_is_noticed_when_a_sign_in_starts() {
+    let f = provider().await;
+    let up = Arc::new(Oidc::new(config(&f.issuer)));
+    let down = Arc::new(Oidc::new(config("http://127.0.0.1:9")));
+    let u = up.clone();
+    let meta = tokio::task::spawn_blocking(move || u.provider()).await.unwrap().unwrap();
+    // Settings read a moment ago are used as they are ...
+    *down.provider.lock().unwrap() = Some((Instant::now(), meta.clone()));
+    let d = down.clone();
+    assert!(tokio::task::spawn_blocking(move || d.start("/".into(), None, false, "x".into())).await.unwrap().is_ok());
+    // ... older ones are read again, and a provider that doesn't answer is reported.
+    *down.provider.lock().unwrap() = Some((Instant::now() - Duration::from_secs(40), meta));
+    let d = down.clone();
+    assert!(tokio::task::spawn_blocking(move || d.start("/".into(), None, false, "x".into())).await.unwrap().is_err());
+}
+
+#[test]
+fn certificate_problems_in_plain_words() {
+    assert!(certificate_hint("invalid peer certificate: Other(OtherError(CaUsedAsEndEntity))").contains("CA:FALSE"));
+    assert!(certificate_hint("invalid peer certificate: UnknownIssuer").contains("SSL_CERT_FILE"));
+    assert_eq!(certificate_hint("Connection refused"), "");
 }
