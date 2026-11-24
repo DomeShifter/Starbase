@@ -352,8 +352,10 @@ impl Link {
         };
         if let Some(apply) = apply_view {
             if apply {
-                // WordCraft's own Restrict Editing (read only): typing and formatting are refused.
-                crate::shell::run(app, "review.restrict", serde_json::json!({ "mode": "readOnly" }));
+                // Viewing (WordCraft's session-only read-only state, fork change StarDocs
+                // 0005): typing and formatting are refused, and nothing of it is saved in the
+                // document, so a downloaded copy isn't protected.
+                crate::shell::set_mode(app, crate::shell::Mode::Viewing);
             }
             // Nothing a viewer does is saved (the server would refuse it).
             app.session.dirty = false;
