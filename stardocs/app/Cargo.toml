@@ -37,8 +37,9 @@ egui_kittest = { workspace = true }
 egui = { workspace = true, features = ["default_fonts"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-# `wgpu` pulls egui-wgpu's defaults: WebGPU plus the WebGL2 fallback.
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit"] }
+# `glow` draws with WebGL2 only: wgpu + naga (WebGPU) cost 0.6 MB of the brotli download, and
+# WordCraft's interface paints nothing wgpu-specific (docs/research/wordcraft-trim.md).
+eframe = { workspace = true, features = ["default_fonts", "glow", "accesskit"] }
 rfd = { workspace = true }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

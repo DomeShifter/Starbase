@@ -45,20 +45,13 @@ pub fn start() {
         {
             log::error!("no unsaved-changes guard: {e}");
         }
-        let mut options = eframe::WebOptions::default();
-        if query().contains("webgl")
-            && let eframe::egui_wgpu::WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup
-        {
-            create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
-        }
+        // WebGL2 through glow: no WebGPU path, a smaller download (docs/research/wordcraft-trim.md).
+        let options = eframe::WebOptions::default();
         let result = eframe::WebRunner::new()
             .start(
                 canvas,
                 options,
                 Box::new(move |cc| {
-                    if let Some(rs) = &cc.wgpu_render_state {
-                        log::info!("stardocs: wgpu backend {:?}", rs.adapter.get_info().backend);
-                    }
                     add_bundled_fonts();
                     // Fonts the user added on an earlier visit (#582); the app notices them arrive.
                     font_store::load_all(cc.egui_ctx.clone());
