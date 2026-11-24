@@ -1,0 +1,42 @@
+#!/bin/sh
+# AppRun for the Starbase AppImage: one AppImage, two programs. Picks the program to start:
+#
+#   Starbase.AppImage                      -> starsheets --home   (the StarDrive home)
+#   Starbase.AppImage stardocs [args]      -> stardocs [args]
+#   Starbase.AppImage starsheets [args]    -> starsheets [args]
+#   Starbase.AppImage report.docx          -> stardocs report.docx   (by the first file's extension)
+#   Starbase.AppImage budget.xlsx          -> starsheets budget.xlsx
+#   Starbase.AppImage --anything           -> starsheets --anything (e.g. the menu entry's --home)
+#
+# A symlink to the AppImage named stardocs or starsheets also picks that program ($ARGV0 is
+# the name the AppImage was started by).
+HERE="$(dirname "$(readlink -f "$0")")"
+BIN="$HERE/usr/bin"
+export STARBASE_APPDIR="$HERE"
+
+case "$(basename "${ARGV0:-}")" in
+  stardocs*) exec "$BIN/stardocs" "$@" ;;
+  starsheets*) exec "$BIN/starsheets" "$@" ;;
+esac
+
+case "${1:-}" in
+  "") exec "$BIN/starsheets" --home ;;
+  stardocs | starsheets)
+    prog="$1"
+    shift
+    exec "$BIN/$prog" "$@"
+    ;;
+esac
+
+# The first argument that is not an option decides, by its extension.
+for arg in "$@"; do
+  case "$arg" in
+    -*) continue ;;
+  esac
+  ext=$(printf '%s' "${arg##*.}" | tr '[:upper:]' '[:lower:]')
+  case "$ext" in
+    docx | docm | dotx | dotm | doc | odt | rtf) exec "$BIN/stardocs" "$@" ;;
+  esac
+  break
+done
+exec "$BIN/starsheets" "$@"

@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=StarSheets
+GenericName=Spreadsheet
+Comment=Calculate, analyse and chart data in workbooks
+Exec=starsheets %F
+TryExec=starsheets
+Icon=io.github.DomeShifter.Starbase.Sheets
+Terminal=false
+StartupNotify=true
+StartupWMClass=io.github.DomeShifter.Starbase.Sheets
+Categories=Office;Spreadsheet;
+Keywords=starbase;workbook;sheet;table;formula;chart;xlsx;ods;csv;tsv;excel;
+MimeType=application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;application/vnd.ms-excel.sheet.macroEnabled.12;application/vnd.ms-excel.sheet.binary.macroEnabled.12;application/vnd.oasis.opendocument.spreadsheet;text/csv;text/tab-separated-values;

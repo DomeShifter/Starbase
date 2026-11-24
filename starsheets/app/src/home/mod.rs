@@ -763,15 +763,15 @@ impl Home {
 
     fn top_ui(&mut self, ui: &mut Ui) {
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            if let Some(img) = crate::icons::logo(36.0) {
+            if let Some(img) = crate::icons::drive_logo(36.0) {
                 ui.add(img);
             }
             ui.add_space(house::S);
-            ui.label(RichText::new("StarSheets").size(22.0).color(theme::TEXT));
+            ui.label(RichText::new("StarDrive").size(22.0).color(theme::TEXT));
             ui.add_space(LEFT - 190.0);
             let search = house::field(&mut self.search, house::SEARCH_TEXT)
                 .id(egui::Id::unique("home_search"))
-                .hint_text(RichText::new("Search in StarSheets").size(house::SEARCH_TEXT))
+                .hint_text(RichText::new("Search in StarDrive").size(house::SEARCH_TEXT))
                 .frame(egui::Frame::NONE)
                 .margin(vec2(0.0, 0.0))
                 .min_size(vec2(0.0, 24.0))

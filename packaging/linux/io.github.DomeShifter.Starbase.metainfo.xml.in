@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata (software centres, Flathub) for the whole Starbase package. One
+     component, because Flathub has one app ID per package; the three menu entries are listed
+     as launchables. Template: the packaging scripts substitute @VERSION@ and @DATE@. -->
+<component type="desktop-application">
+  <id>io.github.DomeShifter.Starbase</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <name>Starbase</name>
+  <summary>Spreadsheets and documents, on your computer or your own server</summary>
+  <developer id="io.github.domeshifter">
+    <name>DomeShifter</name>
+  </developer>
+  <description>
+    <p>
+      Starbase is an open-source office suite: StarSheets for spreadsheets, StarDocs for
+      documents, and StarDrive, a home screen that lists your files and folders.
+    </p>
+    <p>
+      Work on files in your Documents folder, or connect to your own Starbase server to share
+      files and edit them together with other people at the same time.
+    </p>
+    <p>
+      StarSheets opens and saves Excel (.xlsx), OpenDocument (.ods) and CSV files. StarDocs
+      opens and saves Word (.docx), OpenDocument (.odt) and RTF files.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.DomeShifter.Starbase.desktop</launchable>
+  <launchable type="desktop-id">io.github.DomeShifter.Starbase.Sheets.desktop</launchable>
+  <launchable type="desktop-id">io.github.DomeShifter.Starbase.Docs.desktop</launchable>
+  <icon type="stock">io.github.DomeShifter.Starbase</icon>
+  <!-- Only url types known to appstream 0.15 (Ubuntu 22.04, where CI will validate). -->
+  <url type="homepage">https://github.com/DomeShifter/Starbase</url>
+  <url type="bugtracker">https://github.com/DomeShifter/Starbase/issues</url>
+  <url type="help">https://github.com/DomeShifter/Starbase</url>
+  <categories>
+    <category>Office</category>
+    <category>Spreadsheet</category>
+    <category>WordProcessor</category>
+  </categories>
+  <keywords>
+    <keyword>spreadsheet</keyword>
+    <keyword>word processor</keyword>
+    <keyword>office</keyword>
+    <keyword>xlsx</keyword>
+    <keyword>docx</keyword>
+  </keywords>
+  <!-- TODO before a Flathub submission: Flathub requires screenshots. Add them once the native
+       apps exist, e.g. images committed under docs/images/ and referenced by raw GitHub URL:
+  <screenshots>
+    <screenshot type="default">
+      <caption>StarDrive home with a folder of spreadsheets and documents</caption>
+      <image>https://raw.githubusercontent.com/DomeShifter/Starbase/main/docs/images/desktop-home.png</image>
+    </screenshot>
+  </screenshots>
+  -->
+  <requires>
+    <display_length compare="ge">760</display_length>
+  </requires>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <provides>
+    <binary>starsheets</binary>
+    <binary>stardocs</binary>
+    <mediatype>application/vnd.openxmlformats-officedocument.spreadsheetml.sheet</mediatype>
+    <mediatype>application/vnd.ms-excel.sheet.macroEnabled.12</mediatype>
+    <mediatype>application/vnd.ms-excel.sheet.binary.macroEnabled.12</mediatype>
+    <mediatype>application/vnd.oasis.opendocument.spreadsheet</mediatype>
+    <mediatype>text/csv</mediatype>
+    <mediatype>text/tab-separated-values</mediatype>
+    <mediatype>application/vnd.openxmlformats-officedocument.wordprocessingml.document</mediatype>
+    <mediatype>application/vnd.ms-word.document.macroEnabled.12</mediatype>
+    <mediatype>application/vnd.openxmlformats-officedocument.wordprocessingml.template</mediatype>
+    <mediatype>application/vnd.ms-word.template.macroEnabled.12</mediatype>
+    <mediatype>application/msword</mediatype>
+    <mediatype>application/vnd.oasis.opendocument.text</mediatype>
+    <mediatype>application/rtf</mediatype>
+  </provides>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="@VERSION@" date="@DATE@"/>
+  </releases>
+</component>

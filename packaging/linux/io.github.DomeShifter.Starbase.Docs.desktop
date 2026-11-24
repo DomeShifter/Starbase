@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=StarDocs
+GenericName=Word Processor
+Comment=Write and edit documents; open and save Word files
+Exec=stardocs %F
+TryExec=stardocs
+Icon=io.github.DomeShifter.Starbase.Docs
+Terminal=false
+StartupNotify=true
+StartupWMClass=io.github.DomeShifter.Starbase.Docs
+Categories=Office;WordProcessor;
+Keywords=starbase;word;processor;document;docx;odt;rtf;writer;text;letter;
+MimeType=application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/vnd.ms-word.document.macroEnabled.12;application/vnd.openxmlformats-officedocument.wordprocessingml.template;application/vnd.ms-word.template.macroEnabled.12;application/msword;application/vnd.oasis.opendocument.text;application/rtf;text/rtf;

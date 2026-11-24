@@ -205,3 +205,46 @@ fn toolbar_click_gives_the_keyboard_back_to_the_page() {
     type_text(&mut h, "typed after a toolbar click");
     assert!(body_text(&mut h).contains("typed after a toolbar click"), "the page has the keyboard");
 }
+
+fn comment_text(h: &mut Harness<'static, Win>, id: u32) -> String {
+    let doc = &h.state().app.session.doc;
+    doc.plain_text(wordcraft_doc::StoryRef::Part(doc.comments[&id].part))
+}
+
+#[test]
+fn add_comment_takes_the_keyboard_and_writes_as_it_is_typed() {
+    let mut h = window(1400.0);
+    type_text(&mut h, "Some words here");
+    h.state_mut().app.session.dirty = false;
+    click(&mut h, "Add comment (Ctrl+Alt+M)");
+    let id = *h.state().app.session.doc.comments.keys().next().expect("a comment was added");
+    type_text(&mut h, "A note");
+    assert_eq!(comment_text(&mut h, id), "A note", "typed into the new comment, written at once");
+    assert_eq!(body_text(&mut h), "Some words here", "not into the page");
+    assert!(h.state().app.session.dirty, "an unsaved change, so the page saves it");
+}
+
+#[test]
+fn style_is_null_when_the_selection_mixes_paragraph_styles() {
+    let mut h = window(1400.0);
+    let app = &mut h.state_mut().app;
+    app.run("text.insert", json!({"text": "Heading"})).unwrap();
+    app.run("para.style", json!({"style": "Heading1"})).unwrap();
+    app.run("text.newParagraph", json!({})).unwrap();
+    app.run("text.insert", json!({"text": "Body"})).unwrap();
+    app.run("para.style", json!({"style": "Normal"})).unwrap();
+    app.run("select.all", json!({})).unwrap();
+    let f = app.run("format.state", json!({})).unwrap();
+    assert!(f["style"].is_null(), "{f}");
+}
+
+#[test]
+fn the_mini_toolbar_is_off_while_the_comments_panel_is_open() {
+    let mut h = window(1400.0);
+    let app = &mut h.state_mut().app;
+    app.run("text.insert", json!({"text": "Some words"})).unwrap();
+    app.run("select.all", json!({})).unwrap();
+    assert!(wordcraft_ui_egui::mini_toolbar::visible(app), "a selection would show the bar");
+    app.run("view.commentsPane", json!({"value": true})).unwrap();
+    assert!(!wordcraft_ui_egui::mini_toolbar::visible(app), "not with the comments panel open");
+}

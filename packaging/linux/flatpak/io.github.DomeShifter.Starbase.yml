@@ -1,0 +1,146 @@
+# Flatpak manifest for Starbase: one app ID, two programs (starsheets, stardocs), three menu
+# entries. Adapted from WordCraft's packaging/linux/flatpak/ai.storyteller.wordcraft.yml
+# (storytold/wordcraft, MIT OR Apache-2.0).
+#
+# NOT BUILDABLE YET: the app crates are web-only today. The build commands below assume the
+# native entry points (plan jobs D1a/D1b) exist, i.e. `cargo build -p starsheets` and
+# `cargo build -p stardocs` produce desktop executables.
+#
+# Flatpak builds run offline, so crate sources must be vendored first, one file per Cargo
+# workspace (starsheets/ and stardocs/ each have their own Cargo.lock). From the repo root, after
+# both scripts/fetch-upstream.sh have run (the lockfiles reference the engines' path crates):
+#
+#   curl -fsSLO https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py
+#   python3 flatpak-cargo-generator.py starsheets/Cargo.lock -o packaging/linux/flatpak/cargo-sources-starsheets.json
+#   python3 flatpak-cargo-generator.py stardocs/Cargo.lock   -o packaging/linux/flatpak/cargo-sources-stardocs.json
+#   flatpak-builder --user --install --force-clean build-flatpak packaging/linux/flatpak/io.github.DomeShifter.Starbase.yml
+#   flatpak run io.github.DomeShifter.Starbase                 # StarDrive home
+#   flatpak run --command=stardocs io.github.DomeShifter.Starbase
+#
+# The two generated cargo-sources-*.json files are not committed yet (they are regenerated on
+# every lockfile change; the release job decides whether to commit them or generate them in CI).
+# Each module sets its own CARGO_HOME, so the two vendored trees never mix.
+#
+# For Flathub, replace the `dir` sources with a `git` source pinned to a release tag and commit.
+id: io.github.DomeShifter.Starbase
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: starsheets
+finish-args:
+  # Display: Wayland first; X11 only when no Wayland compositor is running.
+  - --socket=wayland
+  - --socket=fallback-x11
+  # X11 shared memory (MIT-SHM). Without it the X11 fallback is slow or fails.
+  - --share=ipc
+  # GPU access for the wgpu renderer (Vulkan, or GL as a fallback).
+  - --device=dri
+  # Network: "Connect to a server" (a Starbase server for shared files and live editing).
+  - --share=network
+  # Local mode works on one folder, ~/Documents/Starbase, created on first run. Files anywhere
+  # else are opened through the file-chooser portal and drag and drop through the document
+  # portal, so no broader filesystem access is needed. (If the local-mode scope becomes "all of
+  # Documents", this becomes --filesystem=xdg-documents.)
+  - --filesystem=xdg-documents/Starbase:create
+  # Deliberately not granted: home/host filesystem access, org.freedesktop.Flatpak (Flathub does
+  # the updating), WordCraft's xdg-data/ArtCraft/versions. Printing (upstream's cups-client
+  # module, --socket=cups, Avahi, ~/.cups:ro) is left out until the native apps can print.
+  # The server sign-in token is meant to go through the Secret portal (keyring crate), which
+  # needs no extra permission.
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+modules:
+  - name: starsheets
+    buildsystem: simple
+    subdir: starsheets
+    build-options:
+      env:
+        CARGO_HOME: /run/build/starsheets/cargo
+        CARGO_NET_OFFLINE: 'true'
+    build-commands:
+      - cargo --offline build --release --locked -p starsheets
+      - install -Dm755 target/release/starsheets /app/bin/starsheets
+    sources:
+      - type: dir
+        path: ../../..
+        skip:
+          - target
+          - dist
+          - build-flatpak
+          - .flatpak-builder
+          - .git
+      # GridCraft, our fork's branch at the commit in starsheets/upstream.pin (what
+      # starsheets/scripts/fetch-upstream.sh fetches). Keep the two equal.
+      - type: git
+        url: https://github.com/DomeShifter/gridcraft.git
+        commit: ad4b590f0e6faba09383d7601ab3d67749467af9
+        dest: starsheets/upstream/gridcraft
+      # TODO: fonts and the en-GB word list that starsheets/scripts/fetch-fonts.py and
+      # fetch-dictionary.py download need to be listed here as `file` sources (url + sha256),
+      # if the native build embeds them as the web build does.
+      - cargo-sources-starsheets.json
+
+  - name: stardocs
+    buildsystem: simple
+    subdir: stardocs
+    build-options:
+      env:
+        CARGO_HOME: /run/build/stardocs/cargo
+        CARGO_NET_OFFLINE: 'true'
+    build-commands:
+      - cargo --offline build --release --locked -p stardocs
+      - install -Dm755 target/release/stardocs /app/bin/stardocs
+    sources:
+      - type: dir
+        path: ../../..
+        skip:
+          - target
+          - dist
+          - build-flatpak
+          - .flatpak-builder
+          - .git
+      # WordCraft, our fork's branch at the commit in stardocs/upstream.pin. Keep the two equal.
+      - type: git
+        url: https://github.com/DomeShifter/wordcraft.git
+        commit: 85e98f33b47bb7b9a1c2231a224cd949ebfe1f45
+        dest: stardocs/upstream/wordcraft
+      - cargo-sources-stardocs.json
+
+  # Menu entries, MIME types, metainfo, icons and licences for the whole package.
+  - name: starbase-data
+    buildsystem: simple
+    build-commands:
+      - >-
+        for entry in io.github.DomeShifter.Starbase io.github.DomeShifter.Starbase.Sheets io.github.DomeShifter.Starbase.Docs; do
+        install -Dm644 packaging/linux/$entry.desktop /app/share/applications/$entry.desktop; done
+      - install -Dm644 packaging/linux/io.github.DomeShifter.Starbase.mime.xml /app/share/mime/packages/io.github.DomeShifter.Starbase.xml
+      - packaging/linux/icons.sh /app/share/icons
+      # TODO (release job): Starbase has no package version of its own yet (the two workspaces
+      # are versioned separately). Substitute the release tag here, as appimage.sh does.
+      - >-
+        version=0.0.0-dev;
+        install -d /app/share/metainfo;
+        sed -e "s/@VERSION@/$version/" -e "s/@DATE@/$(date -u +%Y-%m-%d)/"
+        packaging/linux/io.github.DomeShifter.Starbase.metainfo.xml.in > /app/share/metainfo/io.github.DomeShifter.Starbase.metainfo.xml
+      - install -Dm644 -t /app/share/licenses/io.github.DomeShifter.Starbase LICENSE-MIT LICENSE-APACHE NOTICE
+    sources:
+      - type: dir
+        path: ../../..
+        skip:
+          - target
+          - dist
+          - build-flatpak
+          - .flatpak-builder
+          - .git
+          - starsheets
+          - stardocs
+      # icons.sh reads the apps' SVGs; only these files are needed from the app folders.
+      - type: file
+        path: ../../../starsheets/app/favicon.svg
+        dest: starsheets/app
+      - type: file
+        path: ../../../stardocs/app/icons/stardocs_logo.svg
+        dest: stardocs/app/icons
+      # Once the `icons` branch is merged, add starsheets/app/stardrive.svg here too.
