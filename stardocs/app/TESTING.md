@@ -17,7 +17,7 @@ Requests are answered at the start of the next frame. Each answer is `{"ok": val
 
 ## With ff-shot
 
-`~/.claude/tools/ff-shot.py URL OUT.png --wait SECS --steps "…"` runs `js:EXPR` steps in the page
+A headless-Firefox screenshot tool (ff-shot: `ff-shot.py URL OUT.png --wait SECS --steps "…"`) runs `js:EXPR` steps in the page
 and prints each result as `js: …`; it waits for promises. Steps are split on `;`, so a `js:` step
 must be one expression with no semicolons: chain with commas, and wrap a call in
 `stardocs.wait(...)` to get its answer printed.

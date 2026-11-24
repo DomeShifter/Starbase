@@ -863,7 +863,8 @@ fn mode_switch(app: &mut WordApp, ui: &mut Ui, editable: bool) {
 
 fn font_names(app: &mut WordApp) -> Vec<String> {
     let v = app.run("font.list", json!({ "all": true })).unwrap_or_default();
-    let list = v.get("fonts").or_else(|| v.get("families")).unwrap_or(&v);
+    // "families" is every font it can draw; "fonts" only the ones the user added.
+    let list = v.get("families").or_else(|| v.get("fonts")).unwrap_or(&v);
     let mut out: Vec<String> = list
         .as_array()
         .map(|a| {
