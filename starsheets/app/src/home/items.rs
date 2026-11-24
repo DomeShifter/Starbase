@@ -586,7 +586,7 @@ fn shown_name(name: &str) -> &str {
 /// `text` on one line, at most `width` wide: cut short with "…" when longer (as Drive does).
 fn one_line(p: &egui::Painter, text: String, size: f32, colour: Color32, width: f32) -> std::sync::Arc<egui::Galley> {
     let mut job = egui::text::LayoutJob::simple_singleline(text, FontId::proportional(size), colour);
-    job.wrap = egui::text::TextWrapping::truncate(width.max(1.0));
+    job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(1.0));
     p.layout_job(job)
 }
 

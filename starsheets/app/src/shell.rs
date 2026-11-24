@@ -551,14 +551,7 @@ fn current(app: &SheetApp) -> Current {
     });
     let zoom = d.and_then(|d| d.wb.active().map(|sh| sh.zoom)).unwrap_or(100);
     match style {
-        Some(st) => Current {
-            font: st.font.name.clone(),
-            size: st.font.size,
-            zoom,
-            bold: st.font.bold,
-            italic: st.font.italic,
-            strike: st.font.strike,
-        },
+        Some(st) => Current { font: st.font.name.clone(), size: st.font.size, zoom, bold: st.font.bold, italic: st.font.italic, strike: st.font.strike },
         None => Current { font: "Arial".into(), size: 10.0, zoom, bold: false, italic: false, strike: false },
     }
 }
@@ -649,8 +642,7 @@ impl Shell {
                             }
                         }
                         Txt(text, tip, id, p) => {
-                            let b =
-                                ui.add(Button::new(RichText::new(*text).size(15.0).color(theme::TEXT_DIM)).min_size(vec2(28.0, 28.0)));
+                            let b = ui.add(Button::new(RichText::new(*text).size(15.0).color(theme::TEXT_DIM)).min_size(vec2(28.0, 28.0)));
                             if b.on_hover_text(*tip).clicked() {
                                 app.run_or_alert(id, params(p));
                             }
