@@ -1,0 +1,26 @@
+# Starbase with Docker Compose: `docker compose up -d`, then open http://localhost:8080
+# (StarSheets and the home screen; StarDocs is at /docs/). Install guides: docs/install/.
+# Your files are kept as ordinary .xlsx and .docx files in ./starbase-data. The server runs as
+# user 1000, so make that folder first:  mkdir starbase-data && sudo chown 1000:1000 starbase-data
+services:
+  starbase:
+    image: ghcr.io/domeshifter/starbase:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./starbase-data:/data
+      # Backups (avatar › Backups…): best on another disk or share than the files themselves.
+      # - /mnt/backup-disk/starbase-backups:/backups
+    environment:
+      # The first visit makes the owner's account with a setup code. By default a random one is
+      # printed in the log on first start (docker compose logs starbase). To choose your own,
+      # set a long one (12 characters or more) here; the server won't start with a short one.
+      # STARSHEETS_PASSWORD: "a-long-code-only-you-know"
+      # Reached through HTTPS from outside? See starsheets/docs/deploy.md, "Security settings".
+      # STARSHEETS_PUBLIC_URL: "https://office.example.com"
+      # How the apps describe where files are kept.
+      LOCATION: "the server"
+    # A cap, so one enormous file can't push the whole machine into swap (no swap for it either).
+    mem_limit: 1536m
+    memswap_limit: 1536m
+    restart: unless-stopped

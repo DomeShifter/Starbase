@@ -10,6 +10,7 @@ on:
   pull_request:
     paths: ["stardocs/**", ".github/workflows/stardocs.yml", "rustfmt.toml"]
   workflow_dispatch:
+  workflow_call: # from release.yml (the Starbase image)
 
 permissions:
   contents: read

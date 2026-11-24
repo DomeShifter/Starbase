@@ -10,6 +10,7 @@ on:
   pull_request:
     paths: ["starsheets/**", ".github/workflows/starsheets.yml"]
   workflow_dispatch:
+  workflow_call: # from release.yml (the Starbase image)
 
 permissions:
   contents: read
