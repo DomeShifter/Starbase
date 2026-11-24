@@ -1,4 +1,5 @@
-//! The toolbar icons: Material Symbols (app/icons, Apache License 2.0), drawn by egui_extras' SVG loader.
+//! The toolbar icons: Material Symbols (app/icons, Apache License 2.0), drawn by egui_extras' SVG loader,
+//! and StarDocs' own logo.
 
 use egui::{Image, ImageSource, vec2};
 
@@ -42,4 +43,11 @@ pub fn icon(name: &str) -> Option<Image<'static>> {
         Image::new(ImageSource::Bytes { uri: format!("bytes://stardocs/{n}.svg").into(), bytes: (*bytes).into() })
             .fit_to_exact_size(vec2(18.0, 18.0)),
     )
+}
+
+/// StarDocs' own logo (app/icons/stardocs_logo.svg), `height` pixels tall.
+pub fn logo(height: f32) -> Image<'static> {
+    let bytes: &'static [u8] = include_bytes!("../icons/stardocs_logo.svg");
+    Image::new(ImageSource::Bytes { uri: "bytes://stardocs/stardocs_logo.svg".into(), bytes: bytes.into() })
+        .fit_to_exact_size(vec2(height * 0.75, height))
 }

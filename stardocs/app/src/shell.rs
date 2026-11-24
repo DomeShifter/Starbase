@@ -223,9 +223,33 @@ fn run_menu(app: &mut WordApp, ui: &Ui, link: Option<&Link>, id: &str, p: Value)
         }
         ("stardocs.rename", None) => run(app, "ui.dialog:renameDocument", json!({})),
         ("file.new", Some(link)) => link.new_document(),
+        ("file.new", None) => {
+            run(app, "file.new", p);
+            let mut doc = app.session.doc.clone();
+            docs_defaults(&mut doc);
+            app.session.set_document(doc);
+        }
         ("file.open", Some(link)) => link.home(),
         _ => run(app, id, p),
     }
+}
+
+/// Google Docs' look for a new blank document: Arial, 11 pt body text, and Arial for the
+/// headings too (WordCraft's Normal template uses Aptos 12 pt). The margins are already 1 inch
+/// (2.54 cm) all round in WordCraft's blank document; they are set again here so they stay so.
+pub fn docs_defaults(doc: &mut wordcraft_doc::Document) {
+    use wordcraft_doc::styles::{BODY_FONT, HEADING_FONT};
+    const FONT: &str = "Arial";
+    let styles = std::sync::Arc::make_mut(&mut doc.styles);
+    styles.default_chr.font = Some(FONT.into());
+    styles.default_chr.size = Some(11.0);
+    for st in &mut styles.styles {
+        if matches!(st.chr.font.as_deref(), Some(BODY_FONT | HEADING_FONT)) {
+            st.chr.font = Some(FONT.into());
+        }
+    }
+    let s = &mut doc.last_section;
+    (s.margin_top, s.margin_bottom, s.margin_left, s.margin_right) = (72.0, 72.0, 72.0, 72.0);
 }
 
 fn params(text: &str) -> Value {
@@ -247,12 +271,24 @@ pub fn run(app: &mut WordApp, id: &str, p: Value) {
 /// What the toolbar shows about the selection.
 #[derive(Default)]
 struct Current {
+    /// The selection's font as the document names it; blank when it mixes fonts.
     font: String,
+    /// The face it is drawn in when that font isn't available.
+    shown_as: Option<String>,
+    /// Points; 0 when the selection mixes sizes.
     size: f64,
+    /// The caret paragraph's style name, as the style box shows it.
+    style: String,
     bold: bool,
     italic: bool,
     underline: bool,
     zoom: f64,
+}
+
+/// A style's name as the style box shows it: Google Docs' wording for the styles it lists
+/// ("Normal" is "Normal text"; Word files name headings "heading 1"), others as they are.
+fn style_label(name: &str) -> String {
+    STYLES.iter().find(|(_, n)| n.eq_ignore_ascii_case(name)).map_or(name, |(label, _)| label).to_string()
 }
 
 fn current(app: &mut WordApp) -> Current {
@@ -260,8 +296,11 @@ fn current(app: &mut WordApp) -> Current {
     let v = app.run("view.state", json!({})).unwrap_or_default();
     let on = |k: &str| f.get(k).and_then(Value::as_bool).unwrap_or(false);
     Current {
-        font: f.get("fontShownAs").or_else(|| f.get("font")).and_then(Value::as_str).unwrap_or("").to_string(),
+        // `format.state` gives null for a font or size the selection mixes.
+        font: f.get("font").and_then(Value::as_str).unwrap_or("").to_string(),
+        shown_as: f.get("fontShownAs").and_then(Value::as_str).map(str::to_string),
         size: f.get("size").and_then(Value::as_f64).unwrap_or(0.0),
+        style: style_label(f.get("styleName").or_else(|| f.get("style")).and_then(Value::as_str).unwrap_or("Normal")),
         bold: on("bold"),
         italic: on("italic"),
         underline: f.get("underline").is_some_and(|u| u.as_bool().unwrap_or(!u.is_null() && u != "none")),
@@ -296,7 +335,7 @@ impl Shell {
                 tool(app, ui, "spellcheck", "Spelling and grammar", "review.spelling", json!({}), false);
                 bar(ui);
                 let zoom = format!("{}%", (cur.zoom * 100.0).round());
-                drop_menu(ui, &zoom, 56.0, |ui| {
+                drop_menu(ui, &zoom, 64.0, false, |ui| {
                     for z in ZOOMS {
                         if ui.button(format!("{z}%")).clicked() {
                             run(app, "view.zoom", json!({ "value": z }));
@@ -309,7 +348,7 @@ impl Shell {
                     }
                 });
                 bar(ui);
-                drop_menu(ui, "Styles", 100.0, |ui| {
+                drop_menu(ui, &cur.style, 116.0, false, |ui| {
                     for (label, name) in STYLES {
                         let size = match *name {
                             "Title" => 22.0,
@@ -326,7 +365,7 @@ impl Shell {
                 });
                 bar(ui);
                 let fonts = self.fonts.get_or_insert_with(|| font_names(app)).clone();
-                drop_menu(ui, &cur.font, 110.0, |ui| {
+                let font = drop_menu(ui, &cur.font, 116.0, false, |ui| {
                     egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
                         for f in &fonts {
                             if ui.button(f).clicked() {
@@ -336,10 +375,14 @@ impl Shell {
                         }
                     });
                 });
+                match &cur.shown_as {
+                    Some(face) => font.on_hover_text(format!("Font: {} (not installed, shown as {face})", cur.font)),
+                    None => font.on_hover_text("Font"),
+                };
                 bar(ui);
                 tool(app, ui, "remove", "Decrease font size", "format.shrinkFont1", json!({}), false);
                 let size = if cur.size > 0.0 { format!("{}", cur.size) } else { String::new() };
-                drop_menu(ui, &size, 34.0, |ui| {
+                drop_menu(ui, &size, 40.0, true, |ui| {
                     for s in SIZES {
                         if ui.button(format!("{s}")).clicked() {
                             run(app, "format.size", json!({ "size": s }));
@@ -415,7 +458,9 @@ fn font_names(app: &mut WordApp) -> Vec<String> {
 impl Shell {
     fn title_and_menus(&mut self, app: &mut WordApp, ui: &mut Ui, link: Option<&Link>) {
         ui.horizontal(|ui| {
-            let logo = ui.add(egui::Label::new(RichText::new("📄").size(30.0).color(BLUE)).sense(egui::Sense::click()));
+            ui.add_space(4.0);
+            let logo = ui.add(icons::logo(36.0).sense(egui::Sense::click()));
+            ui.add_space(6.0);
             if let Some(link) = link {
                 if logo.on_hover_text("Starbase home").clicked() {
                     link.home();
@@ -449,7 +494,8 @@ impl Shell {
                         }
                     }
                     None => {
-                        ui.add_enabled(false, share).on_disabled_hover_text("Sharing needs a Starbase server: open the document from the home screen");
+                        ui.add_enabled(false, share)
+                            .on_disabled_hover_text("Sharing needs a Starbase server: open the document from the home screen");
                     }
                 }
             });
@@ -572,11 +618,36 @@ fn icon_menu(ui: &mut Ui, icon: &str, tip: &str, add: impl FnOnce(&mut Ui)) {
     r.on_hover_text(tip);
 }
 
-fn drop_menu(ui: &mut Ui, text: &str, width: f32, add: impl FnOnce(&mut Ui)) {
-    ui.scope(|ui| {
-        ui.set_min_width(width);
-        ui.menu_button(RichText::new(format!("{text} ▾")).size(14.0).color(TEXT_DIM), add);
-    });
+/// A toolbar box of a fixed `width` showing `text` (cut short with "…" when too long) that
+/// opens a menu, as Docs' zoom, style, font and size boxes do. `boxed` draws the size box's
+/// border; the others have a ▾ instead.
+fn drop_menu(ui: &mut Ui, text: &str, width: f32, boxed: bool, add: impl FnOnce(&mut Ui)) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 28.0), egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
+        let p = ui.painter();
+        if resp.hovered() || open {
+            p.rect_filled(rect, 4.0, ui.visuals().widgets.hovered.weak_bg_fill);
+        }
+        if boxed {
+            p.rect_stroke(rect.shrink(1.0), 4.0, Stroke::new(1.0, TEXT_DIM), egui::StrokeKind::Inside);
+        }
+        let arrow = if boxed { 0.0 } else { 14.0 };
+        let room = rect.width() - 12.0 - arrow;
+        let galley = egui::WidgetText::from(RichText::new(text).size(14.0).color(TEXT_DIM)).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            room,
+            egui::TextStyle::Button,
+        );
+        let x = if boxed { rect.center().x - galley.size().x / 2.0 } else { rect.left() + 6.0 };
+        p.galley(egui::pos2(x, rect.center().y - galley.size().y / 2.0), galley, TEXT_DIM);
+        if !boxed {
+            p.text(egui::pos2(rect.right() - 6.0, rect.center().y), egui::Align2::RIGHT_CENTER, "▾", egui::FontId::proportional(13.0), TEXT_DIM);
+        }
+    }
+    egui::Popup::menu(&resp).show(add);
+    resp
 }
 
 fn palette<'a>(ui: &mut Ui, colours: impl Iterator<Item = (&'a str, &'a str)>, mut pick: impl FnMut(&str)) {
