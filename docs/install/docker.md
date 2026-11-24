@@ -49,6 +49,10 @@ nobody else on your network can claim the server first:
 The owner then adds other people (avatar › People), or turns on sign-up. Everyone signs in with a
 username and password kept on your server.
 
+Already run a sign-in service such as Authelia, Authentik or Keycloak? Starbase can use it
+(single sign-on, `STARSHEETS_OIDC_*` settings): see
+[Single sign-on](../../starsheets/docs/oidc.md).
+
 ## Backups
 
 Starbase backs itself up once a day, encrypted, to a folder you mount as `/backups`:
@@ -86,6 +90,7 @@ through for live editing. Settings for proxies: [deploy.md, Security settings](.
 |---|---|
 | `STARSHEETS_PASSWORD` | Your own setup code for the owner's account (12+ characters) |
 | `STARSHEETS_AUTH=off` | No sign-in at all, for a private network you trust |
+| `STARSHEETS_OIDC_*` | Single sign-on through your own sign-in service ([details](../../starsheets/docs/oidc.md)) |
 | `STARSHEETS_PUBLIC_URL` | The address people use from outside, e.g. `https://office.example.com` |
 | `LOCATION` | How the apps tell people where files are kept ("Saved to …") |
 | `KEEP` | How many earlier versions of each file to keep (default 6) |
