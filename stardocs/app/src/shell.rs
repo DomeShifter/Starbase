@@ -614,7 +614,7 @@ struct Current {
     shown_as: Option<String>,
     /// Points; 0 when the selection mixes sizes.
     size: f64,
-    /// The caret paragraph's style name, as the style box shows it.
+    /// The caret paragraph's style name, as the style box shows it; blank when the selection mixes styles.
     style: String,
     bold: bool,
     italic: bool,
@@ -637,7 +637,11 @@ fn current(app: &mut WordApp) -> Current {
         font: f.get("font").and_then(Value::as_str).unwrap_or("").to_string(),
         shown_as: f.get("fontShownAs").and_then(Value::as_str).map(str::to_string),
         size: f.get("size").and_then(Value::as_f64).unwrap_or(0.0),
-        style: style_label(f.get("styleName").or_else(|| f.get("style")).and_then(Value::as_str).unwrap_or("Normal")),
+        // Paragraphs of different styles selected (null): an empty box, as Google Docs shows.
+        style: match f.get("styleName").or_else(|| f.get("style")) {
+            Some(Value::Null) => String::new(),
+            v => style_label(v.and_then(Value::as_str).unwrap_or("Normal")),
+        },
         bold: on("bold"),
         italic: on("italic"),
         underline: f.get("underline").is_some_and(|u| u.as_bool().unwrap_or(!u.is_null() && u != "none")),

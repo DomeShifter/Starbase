@@ -399,3 +399,60 @@ fn bullets_and_numbering_styles_and_restart_numbering() {
     let num = h.state().app.session.doc.numbering.nums.iter().find(|x| x.id == n.num).unwrap().clone();
     assert_eq!(num.start_overrides, vec![(0, 5)], "the list starts at 5");
 }
+
+fn comment_text(h: &mut Harness<'static, Win>, id: u32) -> String {
+    let doc = &h.state().app.session.doc;
+    doc.plain_text(wordcraft_doc::StoryRef::Part(doc.comments[&id].part))
+}
+
+#[test]
+fn add_comment_takes_the_keyboard_and_writes_as_it_is_typed() {
+    let mut h = window(1400.0);
+    type_text(&mut h, "Some words here");
+    h.state_mut().app.session.dirty = false;
+    click(&mut h, "Add comment (Ctrl+Alt+M)");
+    let id = *h.state().app.session.doc.comments.keys().next().expect("a comment was added");
+    type_text(&mut h, "A note");
+    assert_eq!(comment_text(&mut h, id), "A note", "typed into the new comment, written at once");
+    assert_eq!(body_text(&mut h), "Some words here", "not into the page");
+    assert!(h.state().app.session.dirty, "an unsaved change, so the page saves it");
+}
+
+#[test]
+fn style_is_null_when_the_selection_mixes_paragraph_styles() {
+    let mut h = window(1400.0);
+    let app = &mut h.state_mut().app;
+    app.run("text.insert", json!({"text": "Heading"})).unwrap();
+    app.run("para.style", json!({"style": "Heading1"})).unwrap();
+    app.run("text.newParagraph", json!({})).unwrap();
+    app.run("text.insert", json!({"text": "Body"})).unwrap();
+    app.run("para.style", json!({"style": "Normal"})).unwrap();
+    app.run("select.all", json!({})).unwrap();
+    let f = app.run("format.state", json!({})).unwrap();
+    assert!(f["style"].is_null(), "{f}");
+}
+
+#[test]
+fn style_box_is_empty_when_the_selection_mixes_paragraph_styles() {
+    let mut h = window(1400.0);
+    run(&mut h, "text.insert", json!({"text": "Heading"}));
+    run(&mut h, "para.style", json!({"style": "Heading1"}));
+    assert_eq!(h.state_mut().state()["toolbar"]["style"], "Heading 1");
+    run(&mut h, "text.newParagraph", json!({}));
+    run(&mut h, "text.insert", json!({"text": "Body"}));
+    run(&mut h, "para.style", json!({"style": "Normal"}));
+    assert_eq!(h.state_mut().state()["toolbar"]["style"], "Normal text");
+    run(&mut h, "select.all", json!({}));
+    assert_eq!(h.state_mut().state()["toolbar"]["style"], "", "Docs shows an empty style box");
+}
+
+#[test]
+fn the_mini_toolbar_is_off_while_the_comments_panel_is_open() {
+    let mut h = window(1400.0);
+    let app = &mut h.state_mut().app;
+    app.run("text.insert", json!({"text": "Some words"})).unwrap();
+    app.run("select.all", json!({})).unwrap();
+    assert!(wordcraft_ui_egui::mini_toolbar::visible(app), "a selection would show the bar");
+    app.run("view.commentsPane", json!({"value": true})).unwrap();
+    assert!(!wordcraft_ui_egui::mini_toolbar::visible(app), "not with the comments panel open");
+}
