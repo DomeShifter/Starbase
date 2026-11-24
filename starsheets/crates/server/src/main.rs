@@ -1115,7 +1115,7 @@ fn is_hashed(name: &str) -> bool {
     })
 }
 
-async fn serve_site(site: &Path, path: &str, headers: &HeaderMap) -> Response<Body> {
+async fn serve_site(site: &Path, path: &str, query: Option<&str>, headers: &HeaderMap) -> Response<Body> {
     let mut rel = PathBuf::new();
     let mut escapes = false;
     for c in Path::new(path.trim_start_matches('/')).components() {
@@ -1131,6 +1131,13 @@ async fn serve_site(site: &Path, path: &str, headers: &HeaderMap) -> Response<Bo
     let mut full = site.join(&rel);
     // A folder with its own page (StarDocs in docs/) serves that page.
     if !escapes && full.is_dir() && full.join("index.html").is_file() {
+        // `/docs` → `docs/`: the page's files are relative to its folder. The redirect is
+        // relative too, so a proxy serving everything under a path of its own still works.
+        if !path.ends_with('/') {
+            let name = rel.file_name().unwrap_or_default().to_string_lossy();
+            let to = format!("{name}/{}", query.map(|q| format!("?{q}")).unwrap_or_default());
+            return Response::builder().status(308).header(header::LOCATION, to).body(Body::empty()).unwrap();
+        }
         full = full.join("index.html");
     }
     if escapes || !full.is_file() {
@@ -1204,7 +1211,7 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
         // HEAD too (status checks use it); hyper leaves the body out of a HEAD reply.
         && (method == Method::GET || method == Method::HEAD)
     {
-        return serve_site(site, &path, &headers).await;
+        return serve_site(site, &path, uri.query(), &headers).await;
     }
     let parts: Vec<String> = path.split('/').filter(|x| !x.is_empty()).map(|x| percent_decode_str(x).decode_utf8_lossy().into_owned()).collect();
     if parts.first().map(String::as_str) != Some("api") {
@@ -1639,5 +1646,33 @@ mod tests {
         std::fs::write(&full, b"a longer document").unwrap();
         assert_eq!(send(&app, &ip, "GET", &url, "", &[], vec![]).await.status, 404);
         let _ = std::fs::remove_dir_all(&app.store.root);
+    }
+
+    #[tokio::test]
+    async fn a_second_app_in_a_folder_of_the_site() {
+        // The Starbase image: StarSheets at the top of SITE, StarDocs in SITE/docs.
+        let site = std::env::temp_dir().join(format!("starsheets-site-{}", store::random_hex(6)));
+        std::fs::create_dir_all(site.join("docs")).unwrap();
+        std::fs::write(site.join("index.html"), b"sheets").unwrap();
+        std::fs::write(site.join("docs/index.html"), b"docs").unwrap();
+        std::fs::write(site.join("docs/app-0123456789abcdef_bg.wasm"), b"\0asm").unwrap();
+        std::fs::write(site.join("docs/app-0123456789abcdef_bg.wasm.gz"), b"zipped").unwrap();
+        let none = HeaderMap::new();
+        let body = |r: Response<Body>| async move { axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap().to_vec() };
+
+        let r = serve_site(&site, "/docs", Some("file=1"), &none).await;
+        assert_eq!(r.status(), 308);
+        assert_eq!(r.headers()[header::LOCATION], "docs/?file=1");
+        assert_eq!(body(serve_site(&site, "/docs/", None, &none).await).await, b"docs");
+        assert_eq!(body(serve_site(&site, "/", None, &none).await).await, b"sheets");
+
+        let mut gzip = HeaderMap::new();
+        gzip.insert(header::ACCEPT_ENCODING, "gzip, br".parse().unwrap());
+        let r = serve_site(&site, "/docs/app-0123456789abcdef_bg.wasm", None, &gzip).await;
+        assert_eq!(r.headers()[header::CONTENT_TYPE], "application/wasm");
+        assert_eq!(r.headers()[header::CONTENT_ENCODING], "gzip");
+        assert!(r.headers()[header::CACHE_CONTROL].to_str().unwrap().contains("immutable"));
+        assert_eq!(body(r).await, b"zipped");
+        let _ = std::fs::remove_dir_all(&site);
     }
 }
