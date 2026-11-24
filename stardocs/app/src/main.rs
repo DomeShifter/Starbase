@@ -26,13 +26,13 @@ mod save_fallback;
 #[cfg(target_arch = "wasm32")]
 mod api;
 #[cfg(target_arch = "wasm32")]
-mod icons;
+mod host;
 #[cfg(target_arch = "wasm32")]
-mod shell;
+mod icons;
 #[cfg(target_arch = "wasm32")]
 mod server;
 #[cfg(target_arch = "wasm32")]
-mod host;
+mod shell;
 #[cfg(target_arch = "wasm32")]
 mod web;
 

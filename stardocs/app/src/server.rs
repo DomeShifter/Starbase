@@ -46,10 +46,12 @@ thread_local! {
 /// The page's `beforeunload` guard asks the browser to confirm leaving while this is true (the
 /// editor's own unsaved flag clears as soon as a save is handed over, before the server has it).
 pub fn unsaved() -> bool {
-    CURRENT.with(|c| c.borrow().as_ref().is_some_and(|s| {
-        let s = s.borrow();
-        s.busy || s.waiting.is_some() || s.retry.is_some()
-    }))
+    CURRENT.with(|c| {
+        c.borrow().as_ref().is_some_and(|s| {
+            let s = s.borrow();
+            s.busy || s.waiting.is_some() || s.retry.is_some()
+        })
+    })
 }
 
 /// What the title row says about saving.
@@ -164,7 +166,9 @@ impl Link {
         wasm_bindgen_futures::spawn_local(async move {
             match fetch("GET", &api(&format!("api/files/{id}")), None, None).await {
                 Ok((200, headers, bytes)) => {
-                    let name = header(&headers, "X-File-Name").map(|n| serde_json::from_str::<String>(&n).unwrap_or(n)).unwrap_or_else(|| "Document.docx".into());
+                    let name = header(&headers, "X-File-Name")
+                        .map(|n| serde_json::from_str::<String>(&n).unwrap_or(n))
+                        .unwrap_or_else(|| "Document.docx".into());
                     let folder = header(&headers, "X-Folder").map(|n| serde_json::from_str::<String>(&n).unwrap_or(n)).unwrap_or_default();
                     {
                         let mut s = link.state.borrow_mut();
@@ -457,7 +461,11 @@ async fn fetch(method: &str, url: &str, if_match: Option<&str>, body: Option<&[u
     }
     let req = web_sys::Request::new_with_str_and_init(url, &init).map_err(|e| format!("{e:?}"))?;
     let window = web_sys::window().ok_or("no window")?;
-    let resp: web_sys::Response = JsFuture::from(window.fetch_with_request(&req)).await.map_err(|_| "the network request failed".to_string())?.dyn_into().map_err(|_| "bad reply")?;
+    let resp: web_sys::Response = JsFuture::from(window.fetch_with_request(&req))
+        .await
+        .map_err(|_| "the network request failed".to_string())?
+        .dyn_into()
+        .map_err(|_| "bad reply")?;
     let buf = JsFuture::from(resp.array_buffer().map_err(|e| format!("{e:?}"))?).await.map_err(|e| format!("{e:?}"))?;
     Ok((resp.status(), resp.headers(), js_sys::Uint8Array::new(&buf).to_vec()))
 }

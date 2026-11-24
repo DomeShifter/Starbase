@@ -37,13 +37,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Cmd("New document", "file.new", NO, ""),
             Cmd("Open", "file.open", NO, "Ctrl+O"),
             Sep,
-            Sub(
-                "Download",
-                &[
-                    Cmd("Microsoft Word (.docx)", "stardocs.download", NO, ""),
-                    Cmd("PDF document (.pdf)", "file.exportPdf", NO, ""),
-                ],
-            ),
+            Sub("Download", &[Cmd("Microsoft Word (.docx)", "stardocs.download", NO, ""), Cmd("PDF document (.pdf)", "file.exportPdf", NO, "")]),
             Cmd("Rename", "stardocs.rename", NO, ""),
             Sep,
             Cmd("Page setup", "ui.dialog:pageSetup", NO, ""),
@@ -91,10 +85,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Sep,
             Cmd("Horizontal line", "insert.horizontalLine", NO, ""),
             Cmd("Page break", "insert.pageBreak", NO, "Ctrl+Enter"),
-            Sub(
-                "Headers and footers",
-                &[Cmd("Header", "insert.editHeader", NO, ""), Cmd("Footer", "insert.editFooter", NO, "")],
-            ),
+            Sub("Headers and footers", &[Cmd("Header", "insert.editHeader", NO, ""), Cmd("Footer", "insert.editFooter", NO, "")]),
             Cmd("Page numbers", "insert.pageNumber", NO, ""),
             Cmd("Footnote", "references.footnote", NO, "Ctrl+Alt+F"),
             Sep,
@@ -156,10 +147,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Cmd("Columns", "layout.columns", NO, ""),
             Sub(
                 "Bullets and numbering",
-                &[
-                    Cmd("Bulleted list", "para.bullets", NO, "Ctrl+Shift+8"),
-                    Cmd("Numbered list", "para.numbering", NO, "Ctrl+Shift+7"),
-                ],
+                &[Cmd("Bulleted list", "para.bullets", NO, "Ctrl+Shift+8"), Cmd("Numbered list", "para.numbering", NO, "Ctrl+Shift+7")],
             ),
             Sep,
             Cmd("Borders and shading", "ui.dialog:borders", NO, ""),
@@ -182,17 +170,31 @@ pub const MENUS: &[(&str, &[Item])] = &[
     ("Help", &[Cmd("Search the menus", "tools.search", NO, "Alt+/"), Cmd("About StarDocs", "ui.dialog:about", NO, "")]),
 ];
 
-const STYLES: &[(&str, &str)] =
-    &[("Normal text", "Normal"), ("Title", "Title"), ("Subtitle", "Subtitle"), ("Heading 1", "Heading 1"), ("Heading 2", "Heading 2"), ("Heading 3", "Heading 3")];
+const STYLES: &[(&str, &str)] = &[
+    ("Normal text", "Normal"),
+    ("Title", "Title"),
+    ("Subtitle", "Subtitle"),
+    ("Heading 1", "Heading 1"),
+    ("Heading 2", "Heading 2"),
+    ("Heading 3", "Heading 3"),
+];
 const SIZES: &[f64] = &[8.0, 9.0, 10.0, 11.0, 12.0, 14.0, 18.0, 24.0, 30.0, 36.0, 48.0, 60.0, 72.0, 96.0];
 const ZOOMS: &[u32] = &[50, 75, 90, 100, 125, 150, 200];
 /// Google Docs' first palette row and its brighter row, enough for a prototype.
 const COLOURS: &[&str] = &[
-    "000000", "434343", "666666", "999999", "B7B7B7", "CCCCCC", "D9D9D9", "EFEFEF", "F3F3F3", "FFFFFF", "980000", "FF0000", "FF9900", "FFFF00", "00FF00",
-    "00FFFF", "4A86E8", "0000FF", "9900FF", "FF00FF",
+    "000000", "434343", "666666", "999999", "B7B7B7", "CCCCCC", "D9D9D9", "EFEFEF", "F3F3F3", "FFFFFF", "980000", "FF0000", "FF9900", "FFFF00",
+    "00FF00", "00FFFF", "4A86E8", "0000FF", "9900FF", "FF00FF",
 ];
-const HIGHLIGHTS: &[(&str, &str)] =
-    &[("yellow", "FFFF00"), ("brightGreen", "00FF00"), ("turquoise", "00FFFF"), ("pink", "FF00FF"), ("blue", "0000FF"), ("red", "FF0000"), ("green", "008000"), ("lightGray", "C0C0C0")];
+const HIGHLIGHTS: &[(&str, &str)] = &[
+    ("yellow", "FFFF00"),
+    ("brightGreen", "00FF00"),
+    ("turquoise", "00FFFF"),
+    ("pink", "FF00FF"),
+    ("blue", "0000FF"),
+    ("red", "FF0000"),
+    ("green", "008000"),
+    ("lightGray", "C0C0C0"),
+];
 
 /// Our part of the window. Fonts are listed once from WordCraft (`font.list`).
 #[derive(Default)]
@@ -269,11 +271,13 @@ fn current(app: &mut WordApp) -> Current {
 impl Shell {
     /// Draws the title row, menus and toolbar above the page. Call before `WordApp::ui`.
     pub fn ui(&mut self, app: &mut WordApp, ui: &mut Ui, link: Option<&Link>) {
-        egui::Panel::top("stardocs_head").frame(egui::Frame::NONE.fill(PAGE).inner_margin(egui::Margin { left: 12, right: 16, top: 8, bottom: 6 })).show(ui, |ui| {
-            self.title_and_menus(app, ui, link);
-            ui.add_space(6.0);
-            self.toolbar(app, ui);
-        });
+        egui::Panel::top("stardocs_head")
+            .frame(egui::Frame::NONE.fill(PAGE).inner_margin(egui::Margin { left: 12, right: 16, top: 8, bottom: 6 }))
+            .show(ui, |ui| {
+                self.title_and_menus(app, ui, link);
+                ui.add_space(6.0);
+                self.toolbar(app, ui);
+            });
     }
 
     fn toolbar(&mut self, app: &mut WordApp, ui: &mut Ui) {
@@ -392,7 +396,13 @@ fn font_names(app: &mut WordApp) -> Vec<String> {
     let list = v.get("fonts").or_else(|| v.get("families")).unwrap_or(&v);
     let mut out: Vec<String> = list
         .as_array()
-        .map(|a| a.iter().filter_map(|f| f.as_str().map(str::to_string).or_else(|| f.get("family").or_else(|| f.get("name")).and_then(Value::as_str).map(str::to_string))).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|f| {
+                    f.as_str().map(str::to_string).or_else(|| f.get("family").or_else(|| f.get("name")).and_then(Value::as_str).map(str::to_string))
+                })
+                .collect()
+        })
         .unwrap_or_default();
     out.sort_by_key(|s| s.to_lowercase());
     out.dedup();
@@ -487,7 +497,9 @@ fn menu_items(app: &mut WordApp, ui: &mut Ui, items: &[Item], link: Option<&Link
     for item in items {
         match item {
             Cmd(label, id, p, keys) => {
-                let b = Button::new(RichText::new(*label).size(14.0).color(TEXT)).right_text(RichText::new(*keys).size(13.0).color(TEXT_DIM)).min_size(vec2(260.0, 30.0));
+                let b = Button::new(RichText::new(*label).size(14.0).color(TEXT))
+                    .right_text(RichText::new(*keys).size(13.0).color(TEXT_DIM))
+                    .min_size(vec2(260.0, 30.0));
                 if ui.add(b).clicked() {
                     run_menu(app, ui, link, id, params(p));
                     ui.close();

@@ -86,9 +86,11 @@ pub fn start() {
                     let control = crate::api::install(cc.egui_ctx.clone());
                     egui_extras::install_image_loaders(&cc.egui_ctx);
                     // Our own title row, menus and toolbar replace WordCraft's (shell.rs).
-                    let mut app = WordApp::new(session, services)
-                        .with_control(control)
-                        .with_chrome(HostChrome { title_bar: false, ribbon: false, status_bar: false });
+                    let mut app = WordApp::new(session, services).with_control(control).with_chrome(HostChrome {
+                        title_bar: false,
+                        ribbon: false,
+                        status_bar: false,
+                    });
                     // Pasted pictures wait apart from dropped files: the app inserts one only when the page is the edit target (#1349).
                     app.services.pasted = Some(pasted);
                     app.autosave = false;
