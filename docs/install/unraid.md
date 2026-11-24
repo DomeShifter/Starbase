@@ -29,14 +29,20 @@ Parameters*), so the files belong to `nobody:users` like your other shares, and 
 ## 3. First sign-in
 
 Click the container's icon › **Logs** to see the setup code, then **WebUI**. Make the owner's
-account with the code; add other people from your avatar › People. StarDocs is at `/docs/`.
+account with the code (the screen may still say StarSheets); add other people from your
+avatar › People. Starbase Docs is at `/docs/`.
 
 ## Backups
 
-Fill in the *Backups* path, then in the app: avatar › Backups…, turn them on and choose the hour.
+Fill in the *Backups* path (container already made without it? Docker › starbase › **Edit**, fill
+it in, **Apply**: Unraid recreates the container and your files stay put). Then in the app:
+avatar › Backups…, choose the hour, **Set up backups**. The first backup runs straight away, then
+daily at that hour, in the time zone Unraid passes to its containers (the dialog shows which).
 They are encrypted: keep the recovery key somewhere other than the server. The *Files* folder can
 also be copied by your usual Unraid backup (for example the Appdata Backup plugin, if it lives in
-appdata). Details: [Docker guide, Backups](docker.md#backups).
+appdata). Restoring, and rebuilding on a new server from a backup:
+[Docker guide, Backups](docker.md#backups); with this template the restored data folder must
+belong to `nobody:users` (`chown -R 99:100 …`).
 
 ## Updating
 

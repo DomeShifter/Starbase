@@ -1222,6 +1222,76 @@ fn rename_doc(app: &mut SheetApp, new: &str) {
     }
 }
 
+/// Does what choosing a menu entry with this id does: `panel:` and `ui:` ids open our panels and
+/// GridCraft's dialogs, Copy/Cut/Paste go through the clipboard, anything else runs as a command.
+/// The test hook's `run` takes this path too (testhook.rs), so tests do what the menus do.
+pub fn run_entry(app: &mut SheetApp, ctx: &egui::Context, id: &str) {
+    // "ui:<dialog>" opens one of GridCraft's dialogs (some, like conditional
+    // formatting, are then shown as our own side panel).
+    // "panel:dropdown" opens the data-validation panel on a new drop-down.
+    if id == "panel:customdate" {
+        ctx.data_mut(|m| m.insert_temp(egui::Id::unique(crate::customdate::REQUEST), true));
+    } else if id == "panel:settings" {
+        ctx.data_mut(|m| m.insert_temp(egui::Id::unique(crate::settings::REQUEST), true));
+    } else if id == "panel:note" {
+        ctx.data_mut(|m| m.insert_temp(egui::Id::unique(crate::notes::REQUEST), true));
+    } else if id == "panel:protect" {
+        ctx.data_mut(|m| m.insert_temp(egui::Id::unique(crate::protectpanel::REQUEST), -1i64));
+    } else if id == "panel:customnumber" {
+        ctx.data_mut(|m| m.insert_temp(egui::Id::unique(crate::customnumber::REQUEST), true));
+    } else if id == "panel:chart" {
+        ctx.data_mut(|m| m.insert_temp(egui::Id::unique(crate::chartpanel::REQUEST), true));
+    } else if id == "panel:dropdown" {
+        ctx.data_mut(|m| m.insert_temp(egui::Id::unique(crate::dvpanel::DROPDOWN_REQUEST), true));
+    } else if id == "panel:imageInCell" || id == "panel:imageOverCells" {
+        #[cfg(target_arch = "wasm32")]
+        crate::images::pick(if id == "panel:imageInCell" { "cell" } else { "overCells" });
+    } else if id == "panel:insertBelow" || id == "panel:insertRight" {
+        gridcraft_ui_egui::grid::insert_after(app, id == "panel:insertBelow");
+    } else if let Some(what) = id.strip_prefix("panel:") {
+        // File actions (files.rs reads this from egui memory).
+        ctx.data_mut(|m| m.insert_temp(egui::Id::unique("starsheets_files_request"), what.to_string()));
+    } else {
+        match id.strip_prefix("ui:") {
+            Some(dialog) => app.open_dialog(dialog, json!({})),
+            // Through the clipboard, as the cell menu does: Copy/Cut also fill the
+            // system clipboard, Paste takes the last copy (cells or text).
+            None if matches!(id, "edit.copy" | "edit.cut") => app.copy_to_clipboard(ctx, id),
+            None if id == "edit.paste" => app.paste_from_clipboard(),
+            None => app.run_or_alert(id, json!({})),
+        }
+    }
+}
+
+/// Every id the menus and toolbar use (`panel:` and `ui:` ones too), for the test hook.
+#[cfg(any(target_arch = "wasm32", test))]
+pub fn entry_ids() -> Vec<&'static str> {
+    fn walk(items: &[Item], out: &mut Vec<&'static str>) {
+        for item in items {
+            match item {
+                Cmd(_, id, _) | CmdWith(_, id, _, _) => out.push(id),
+                Sub(_, sub) => walk(sub, out),
+                Sep => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (_, items) in MENUS {
+        walk(items, &mut out);
+    }
+    for tool in TOOLBAR {
+        match tool {
+            Btn(_, _, id, _) | Txt(_, _, id, _) | Colour(_, _, id, _, _) => out.push(id),
+            Menu(_, _, items) => out.extend(items.iter().map(|(_, id, _)| *id).filter(|id| !id.is_empty())),
+            Borders => out.extend(BORDERS.iter().map(|(_, id, _)| *id)),
+            Font | FontSize | Zoom | Gap => {}
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[Item]) {
     let with_icons = items.iter().any(|i| match i {
         Cmd(l, ..) | CmdWith(l, ..) | Sub(l, _) => menu_icon(l).is_some(),
@@ -1239,41 +1309,7 @@ fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[Item]) {
             }
             Cmd(label, id, keys) => {
                 if ui.add_sized([width, 32.0], menu_row(label, keys, with_icons)).clicked() {
-                    // "ui:<dialog>" opens one of GridCraft's dialogs (some, like conditional
-                    // formatting, are then shown as our own side panel).
-                    // "panel:dropdown" opens the data-validation panel on a new drop-down.
-                    if *id == "panel:customdate" {
-                        ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(crate::customdate::REQUEST), true));
-                    } else if *id == "panel:settings" {
-                        ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(crate::settings::REQUEST), true));
-                    } else if *id == "panel:note" {
-                        ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(crate::notes::REQUEST), true));
-                    } else if *id == "panel:protect" {
-                        ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(crate::protectpanel::REQUEST), -1i64));
-                    } else if *id == "panel:customnumber" {
-                        ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(crate::customnumber::REQUEST), true));
-                    } else if *id == "panel:chart" {
-                        ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(crate::chartpanel::REQUEST), true));
-                    } else if *id == "panel:dropdown" {
-                        ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(crate::dvpanel::DROPDOWN_REQUEST), true));
-                    } else if *id == "panel:imageInCell" || *id == "panel:imageOverCells" {
-                        #[cfg(target_arch = "wasm32")]
-                        crate::images::pick(if *id == "panel:imageInCell" { "cell" } else { "overCells" });
-                    } else if *id == "panel:insertBelow" || *id == "panel:insertRight" {
-                        gridcraft_ui_egui::grid::insert_after(app, *id == "panel:insertBelow");
-                    } else if let Some(what) = id.strip_prefix("panel:") {
-                        // File actions (files.rs reads this from egui memory).
-                        ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique("starsheets_files_request"), what.to_string()));
-                    } else {
-                        match id.strip_prefix("ui:") {
-                            Some(dialog) => app.open_dialog(dialog, json!({})),
-                            // Through the clipboard, as the cell menu does: Copy/Cut also fill the
-                            // system clipboard, Paste takes the last copy (cells or text).
-                            None if matches!(*id, "edit.copy" | "edit.cut") => app.copy_to_clipboard(ui.ctx(), id),
-                            None if *id == "edit.paste" => app.paste_from_clipboard(),
-                            None => app.run_or_alert(id, json!({})),
-                        }
-                    }
+                    run_entry(app, ui.ctx(), id);
                     ui.close();
                 }
             }
