@@ -11,6 +11,10 @@ new features and the last one for fixes.
   Settings are now `STARBASE_*`; the old `STARSHEETS_*` names still work.
 
 ### Added
+- Drop-downs as in Google Sheets: "Allow multiple selections" (tick boxes in the list, the cell
+  holds "a, b"), and the Chip / Arrow / Plain text display styles, with chips drawn as coloured
+  pills. Excel opens such files as ordinary drop-downs.
+- Charts: Customise › Vertical axis sets a fixed Min and Max (empty for automatic); kept in .xlsx.
 - Single sign-on through your own sign-in service (Authelia, Authentik, Keycloak and other
   OpenID Connect services): a "Sign in with SSO" button, accounts made or linked on first
   sign-in, owners from a group, passwords still available. Set up with `STARSHEETS_OIDC_*`

@@ -86,7 +86,7 @@ Google's function list (support.google.com/docs/table/25273, downloaded and pars
 | Sheet tab menu: delete, duplicate, copy to, rename, colour, protect, hide, move | Sheet tab | Has | High | – | `bottom.rs`; "View comments" missing (no comments) |
 | Chart: line, area, column, bar (stacked, 100%), pie, doughnut, scatter, bubble, combo, histogram, radar, waterfall, treemap, candlestick, box plot | Insert › Chart | Has | High | – | `chartpanel.rs`, plus funnel and sunburst which Sheets lacks |
 | Chart: stepped area, gauge, geo, org chart, timeline, table chart, scorecard | Chart editor › Chart type | Missing | Low–Med | M each | Scorecard (one big number with change) is the most used of these on dashboards; geo needs map data |
-| Chart editor: trendlines, data labels, axis min/max, log scale, error bars, aggregate, "use row 1 as headers", switch rows/columns | Chart editor › Customise / Setup | Partly / Engine-only | Med | S–M | Panel has style, titles, slice colours, series colour, legend, gridlines. `chart.addElement`, `chart.switchRowColumn` exist |
+| Chart editor: trendlines, data labels, axis min/max, log scale, error bars, aggregate, "use row 1 as headers", switch rows/columns | Chart editor › Customise / Setup | Partly / Engine-only | Med | S–M | Panel has style, titles, slice colours, series colour, trendline options, legend, gridlines, vertical axis Min/Max (2026-11-25; no log scale). `chart.addElement`, `chart.switchRowColumn` exist |
 | Pivot table + editor | Insert › Pivot table | Has (GridCraft's Excel-style field pane) | High | S–M | `ui-egui/src/pivot_pane.rs`, `pivot.*`. Restyle it as Sheets' side panel ("Rows / Columns / Values / Filters", "Suggested") |
 | Pivot: calculated field, group by date/number, filter by condition, show as % of | Pivot editor | Engine-only | Med | S | `pivot.calculatedField`, `pivot.group`, `pivot.filter`, `pivot.valueSettings` |
 | Image in cell / over cells | Insert › Image | Has | Med | – | |
@@ -97,7 +97,7 @@ Google's function list (support.google.com/docs/table/25273, downloaded and pars
 | Link (Ctrl+K), link card | Insert › Link | Has | High | – | `linkcard.rs`; "link to a range / sheet" choice maybe missing (S) |
 | Tick box | Insert › Tick box | Has | High | – | `insert.checkbox` |
 | Drop-down (data validation) with coloured chips | Insert › Drop-down | Has | High | – | `dvpanel.rs` |
-| Drop-down: **multiple selections**, chip display style, data-range-driven colours | DV panel | Missing | Med–High | S–M | On the roadmap ("Data validation later") |
+| Drop-down: **multiple selections**, chip display style, data-range-driven colours | DV panel | Partly | Med–High | S | Multiple selections and Chip / Arrow / Plain text done (2026-11-25); colours from a data range missing |
 | Emoji | Insert › Emoji | Missing | Low | S | Picker UI only |
 | Smart chips: @person, @date, @file, place, finance, YouTube, ratings | Insert › Smart chips / type @ | Missing | Med | M | @date (date picker exists) and @person (server users) make sense; rating chip (★) is cheap; the rest are Google-tied |
 | Note (Shift+F2) | Insert › Note | Has | Med | – | `notes.rs` |
