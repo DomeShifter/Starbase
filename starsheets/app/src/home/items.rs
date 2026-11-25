@@ -248,6 +248,9 @@ impl Home {
         if resp.clicked() || resp.secondary_clicked() || resp.double_clicked() {
             *clicked_item = true;
         }
+        if let Item::File(id) = item {
+            self.tile_rects.insert(id.clone(), resp.rect);
+        }
         let order = self.order();
         self.select_click(ui, item, resp, &order);
         if resp.double_clicked() {

@@ -81,6 +81,17 @@ pub fn handles(name: &str) -> bool {
     kind(name).is_some()
 }
 
+/// Which view [`show`] uses for this name, as one word (for the test hook).
+pub fn view_label(name: &str) -> &'static str {
+    match kind(name) {
+        Some(Kind::Plain) | None => "plain",
+        Some(Kind::Markdown) => "markdown",
+        Some(Kind::Table(_)) => "table",
+        Some(Kind::Json) => "json",
+        Some(Kind::Code(_)) => "code",
+    }
+}
+
 /// The file's bytes as text.
 #[derive(Debug, Default, PartialEq)]
 struct Decoded {

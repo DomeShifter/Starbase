@@ -216,7 +216,7 @@ impl FilePreview {
         let content = match &self.content {
             Content::Loading => "loading".to_string(),
             Content::Image(t) => format!("image {}x{}", t.size()[0], t.size()[1]),
-            Content::Text(b) => format!("text {}", b.len()),
+            Content::Text(b) => format!("text {} {}", textpreview::view_label(&self.name), b.len()),
             Content::Element => "element".to_string(),
             Content::Nothing(_) => "none".to_string(),
         };
@@ -490,7 +490,8 @@ type Listener = wasm_bindgen::closure::Closure<dyn FnMut(web_sys::Event)>;
 struct Element {
     el: web_sys::HtmlElement,
     tag: String,
-    at: [i32; 4],
+    /// Left, top, width, height in CSS pixels, and 1 while hidden for an open menu.
+    at: [i32; 5],
     /// Set by the page-level Esc listeners; read (and cleared) by [`FilePreview::ui`].
     esc: Arc<AtomicBool>,
     /// Listeners added for this element (target, event; all capturing), removed with it.
@@ -572,7 +573,7 @@ impl FilePreview {
             if let Some(body) = doc.body() {
                 let _ = body.append_child(&el);
             }
-            let mut e = Element { el, tag: tag.into(), at: [0; 4], esc: Arc::default(), listeners: Vec::new() };
+            let mut e = Element { el, tag: tag.into(), at: [-1; 5], esc: Arc::default(), listeners: Vec::new() };
             // Keys in a film's or sound's controls stay on this page: hear Esc there.
             if let Some(w) = web_sys::window() {
                 e.listen_esc(w.into(), ctx);
@@ -611,7 +612,11 @@ impl FilePreview {
         if self.shown == Shown::Audio {
             r = Rect::from_center_size(area.center(), vec2(area.width().min(480.0), 54.0));
         }
-        let at = [r.left(), r.top(), r.width(), r.height()].map(|v| (v * z).round() as i32);
+        let [x, y, w, h] = [r.left(), r.top(), r.width(), r.height()].map(|v| (v * z).round() as i32);
+        // The page element sits above the canvas: while a menu is open (Open with drops into the
+        // content area) hide it, or the menu would be drawn underneath it.
+        let hidden = egui::Popup::is_any_open(ctx);
+        let at = [x, y, w, h, hidden as i32];
         if let Some(e) = self.element.as_mut()
             && e.at != at
         {
@@ -619,7 +624,10 @@ impl FilePreview {
             let bg = if self.shown == Shown::Pdf { "background:#fff;" } else { "background:#000;" };
             let _ = e.el.set_attribute(
                 "style",
-                &format!("position:fixed;left:{}px;top:{}px;width:{}px;height:{}px;border:0;z-index:10;{bg}", at[0], at[1], at[2], at[3]),
+                &format!(
+                    "position:fixed;left:{x}px;top:{y}px;width:{w}px;height:{h}px;border:0;z-index:10;{bg}{}",
+                    if hidden { "visibility:hidden;" } else { "" }
+                ),
             );
         }
     }
