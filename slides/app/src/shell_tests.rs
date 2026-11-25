@@ -212,3 +212,33 @@ fn a_viewer_gets_a_greyed_toolbar() {
     let new_slide = h.get_by_label("New slide (Ctrl+M)");
     assert!(new_slide.accesskit_node().is_disabled(), "New slide is greyed for a viewer");
 }
+
+#[test]
+fn the_default_slide_font_is_in_the_program() {
+    crate::fonts::add();
+    let families = crate::fonts::families();
+    assert!(families.iter().any(|f| f == "Inter"), "Inter is bundled: {families:?}");
+    let mut app = app_with(Services::default());
+    let f = app.session.execute("format.state", &json!({})).unwrap_or_default();
+    assert_eq!(f["font"], "Inter", "a new presentation's text is Inter");
+    let more = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fonts/more");
+    assert!(crate::fonts::MORE.iter().all(|f| more.join(f).is_file()), "every fetched face is in fonts/more");
+}
+
+#[test]
+fn presenter_view_asks_for_the_presenter_window_for_one_show() {
+    let mut h = harness();
+    {
+        let s = h.state_mut();
+        s.app.ui.presenter_view = false;
+        s.shell.command(&mut s.app, None, "slides.presenter", json!({})).unwrap_or_default();
+        assert!(s.shell.presenter_flag().get(), "the presenter window is asked for");
+        assert!(s.app.ui.presenter_view);
+    }
+    h.run_steps(3);
+    assert!(h.state().app.show.is_some(), "the show runs");
+    let _ = h.state_mut().app.run("show.end", json!({}));
+    h.run_steps(3);
+    assert!(h.state().app.show.is_none());
+    assert!(!h.state().shell.presenter_flag().get(), "only for that show: Slideshow shows the slides alone again");
+}

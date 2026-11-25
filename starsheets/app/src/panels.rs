@@ -1,10 +1,11 @@
 //! The side panels at the right of the sheet (conditional formatting, data validation, the chart
-//! editor, named ranges, protected ranges): one shape for all of them, and the rule that only one
+//! editor, named ranges, protected ranges, alternating colours): one shape for all of them, and the rule that only one
 //! shows at a time (the one that just opened wins).
 
 use egui::Ui;
 use gridcraft_ui_egui::SheetApp;
 
+use crate::altcolours::AltColoursPanel;
 use crate::cfpanel::CfPanel;
 use crate::chartpanel::ChartPanel;
 use crate::dvpanel::DvPanel;
@@ -63,6 +64,7 @@ side_panel!(DvPanel, |p, app, ctx| p.intercept(app, ctx));
 side_panel!(ChartPanel, |p, app, ctx| p.intercept(app, ctx));
 side_panel!(NamesPanel, |p, app, _| p.intercept(app));
 side_panel!(ProtectPanel, |p, app, ctx| p.intercept(app, ctx));
+side_panel!(AltColoursPanel, |p, app, ctx| p.intercept(app, ctx));
 
 /// All the side panels.
 #[derive(Default)]
@@ -72,22 +74,23 @@ pub struct SidePanels {
     pub chart: ChartPanel,
     pub names: NamesPanel,
     pub protect: ProtectPanel,
+    pub alternating: AltColoursPanel,
 }
 
 impl SidePanels {
     /// In the order they are drawn.
-    fn all(&mut self) -> [&mut dyn SidePanel; 5] {
-        [&mut self.cf, &mut self.dv, &mut self.chart, &mut self.names, &mut self.protect]
+    fn all(&mut self) -> [&mut dyn SidePanel; 6] {
+        [&mut self.cf, &mut self.dv, &mut self.chart, &mut self.names, &mut self.protect, &mut self.alternating]
     }
 
     /// Opens a panel in place of GridCraft's dialog; if one opened, the others close. When two
-    /// open in the same frame the chart editor wins, then named ranges, protected ranges, data
-    /// validation and conditional formatting.
+    /// open in the same frame the chart editor wins, then named ranges, protected ranges,
+    /// alternating colours, data validation and conditional formatting.
     pub fn intercept(&mut self, app: &mut SheetApp, ctx: &egui::Context) {
         for p in self.all() {
             p.intercept(app, ctx);
         }
-        const PRIORITY: [usize; 5] = [2, 3, 4, 1, 0];
+        const PRIORITY: [usize; 6] = [2, 3, 4, 5, 1, 0];
         let mut panels = self.all();
         let Some(winner) = PRIORITY.into_iter().find(|&i| panels[i].just_opened()) else { return };
         for (i, p) in panels.iter_mut().enumerate() {
