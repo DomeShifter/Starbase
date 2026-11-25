@@ -1,14 +1,14 @@
-StarSheets
-Copyright (c) 2026 the StarSheets contributors.
+Starbase Sheets
+Copyright (c) 2026 the Starbase contributors.
 Licensed under the MIT License or the Apache License, Version 2.0, at your option
 (LICENSE-MIT, LICENSE-APACHE).
 
-StarSheets is built on GridCraft (https://github.com/storytold/gridcraft):
+Starbase Sheets is built on GridCraft (https://github.com/storytold/gridcraft):
 Copyright (c) 2026 ArtCraft Team and the GridCraft contributors, MIT OR Apache-2.0.
 GridCraft's code is fetched at build time (scripts/fetch-upstream.sh) and is not redistributed
 in this repository, except app/src/web.rs and app/src/prefs.rs, which are adapted from
 GridCraft's apps/gridcraft-web and say so at the top. GridCraft's own NOTICE and
-ATTRIBUTION.md list the third-party material it bundles; built StarSheets sites include it.
+ATTRIBUTION.md list the third-party material it bundles; built Starbase Sheets sites include it.
 
 Bundled assets: Roboto fonts (app/fonts, SIL Open Font License 1.1) and Material Symbols icons
 (app/icons, Apache License 2.0); see the README in each folder. The web fonts in the font
@@ -17,7 +17,7 @@ licences (all SIL Open Font License 1.1): webfonts/NOTICE.txt and webfonts/<font
 every built site.
 
 The ArtCraft and GridCraft names and logos are trademarks of the ArtCraft Team and are not used
-by StarSheets. "Google Sheets" is a trademark of Google LLC; StarSheets is not affiliated with
+by Starbase Sheets. "Google Sheets" is a trademark of Google LLC; Starbase Sheets is not affiliated with
 or endorsed by Google.
 
 The spelling word list (dictionary/en-GB.txt in the web build) is made from SCOWL (Spell

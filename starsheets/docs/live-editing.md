@@ -2,7 +2,7 @@
 
 Goal: open the same spreadsheet in several tabs, or share it with other people, and see every
 change everywhere as it happens, like Google Sheets. This is a core feature, so the rest of
-StarSheets adapts to it rather than the other way round.
+Starbase Sheets adapts to it rather than the other way round.
 
 ## How it works
 
@@ -17,7 +17,7 @@ Why this design, and what was rejected: [decisions.md](decisions.md) (2026-11-22
 
 ## Rules
 
-- **Undo** only undoes your own changes. If someone has since changed the same cells, StarSheets
+- **Undo** only undoes your own changes. If someone has since changed the same cells, Starbase Sheets
   says so instead of undoing over their work.
 - **NOW(), RAND() and similar** are worked out in each tab, as in Google Sheets.
 - **Accounts** are local to your server (username and password, hashed with Argon2). No sign-in
@@ -70,7 +70,7 @@ Why this design, and what was rejected: [decisions.md](decisions.md) (2026-11-22
   when serialising, which non-self-describing formats can't read back, and packing already
   removes most of the size.
 - Saving runs on its own thread; the file lock is held only for the write, and the "changed
-  outside StarSheets" check waits while our own save is writing.
+  outside Starbase Sheets" check waits while our own save is writing.
 - The server finds an open file by its index entry and one file check, and lists the folder
   tree only when the file isn't there any more: listing a big tree on a network share every few
   seconds for each open file held up every other request.

@@ -1,4 +1,4 @@
-# StarSheets in one container: the web app and its server (crates/server).
+# Starbase Sheets in one container: the web app and its server (crates/server).
 # Built by CI on each release: the site comes from the release's web build (./site) and the server
 # program from the server build (./server-bin/<arch>/starsheets-server).
 #   docker run -p 8080:8080 -v starsheets:/data ghcr.io/domeshifter/starsheets

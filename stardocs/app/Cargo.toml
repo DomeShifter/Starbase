@@ -1,6 +1,6 @@
 [package]
 name = "stardocs"
-description = "StarDocs: a Google Docs-style word processor for the web on WordCraft's engine"
+description = "Starbase Docs: a Google Docs-style word processor for the web on WordCraft's engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

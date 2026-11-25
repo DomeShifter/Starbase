@@ -14,7 +14,7 @@
 #   python3 flatpak-cargo-generator.py starsheets/Cargo.lock -o packaging/linux/flatpak/cargo-sources-starsheets.json
 #   python3 flatpak-cargo-generator.py stardocs/Cargo.lock   -o packaging/linux/flatpak/cargo-sources-stardocs.json
 #   flatpak-builder --user --install --force-clean build-flatpak packaging/linux/flatpak/io.github.DomeShifter.Starbase.yml
-#   flatpak run io.github.DomeShifter.Starbase                 # StarDrive home
+#   flatpak run io.github.DomeShifter.Starbase                 # Starbase Drive home
 #   flatpak run --command=stardocs io.github.DomeShifter.Starbase
 #
 # The two generated cargo-sources-*.json files are not committed yet (they are regenerated on

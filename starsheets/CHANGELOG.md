@@ -1,10 +1,14 @@
 # Changelog
 
-Changes that people using StarSheets would notice, newest first. Versions follow
+Changes that people using Starbase Sheets (called StarSheets until November 2026) would notice, newest first. Versions follow
 [semantic versioning](https://semver.org): while we're below 1.0, the middle number goes up for
 new features and the last one for fixes.
 
 ## [Unreleased]
+
+### Changed
+- Renamed to Starbase Sheets (the home screen is Starbase Drive), part of the Starbase suite.
+  Settings are now `STARBASE_*`; the old `STARSHEETS_*` names still work.
 
 ### Added
 - Single sign-on through your own sign-in service (Authelia, Authentik, Keycloak and other

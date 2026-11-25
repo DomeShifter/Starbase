@@ -366,7 +366,7 @@ impl Files {
                 app.message = Some((
                     "Saved as a copy".into(),
                     format!(
-                        "Your latest changes couldn't be added to the file, because it was saved by someone else (or by StarSheets after it restarted) since this tab last had it. Nothing is lost: your changes were saved as \"{name}\", next to it."
+                        "Your latest changes couldn't be added to the file, because it was saved by someone else (or by Starbase after it restarted) since this tab last had it. Nothing is lost: your changes were saved as \"{name}\", next to it."
                     ),
                 ));
                 self.link = None;
@@ -708,7 +708,7 @@ impl Files {
             ("Formulas", formulas.to_string()),
             ("Charts", charts.to_string()),
             ("Notes", notes.to_string()),
-            ("StarSheets", env!("CARGO_PKG_VERSION").to_string()),
+            ("Starbase Sheets", env!("CARGO_PKG_VERSION").to_string()),
         ];
         let mut close = false;
         let mut done = false;

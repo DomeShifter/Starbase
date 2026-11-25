@@ -162,7 +162,7 @@ static MENU_ICONS: &[(&str, &str)] = &[
     // Help
     ("Search the menus", "search"),
     ("Keyboard shortcuts", "keyboard"),
-    ("About StarDocs", "info"),
+    ("About Starbase Docs", "info"),
 ];
 
 /// The Material Symbols name of the menu entry worded `label`, if Docs shows it with an icon.

@@ -1,7 +1,7 @@
 #!/bin/sh
 # AppRun for the Starbase AppImage: one AppImage, two programs. Picks the program to start:
 #
-#   Starbase.AppImage                      -> starsheets --home   (the StarDrive home)
+#   Starbase.AppImage                      -> starsheets --home   (the Starbase Drive home)
 #   Starbase.AppImage stardocs [args]      -> stardocs [args]
 #   Starbase.AppImage starsheets [args]    -> starsheets [args]
 #   Starbase.AppImage report.docx          -> stardocs report.docx   (by the first file's extension)

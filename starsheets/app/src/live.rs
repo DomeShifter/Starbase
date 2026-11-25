@@ -473,7 +473,7 @@ impl Live {
                 false
             }
             ToClient::Message { text } => {
-                app.message = Some(("StarSheets".into(), text));
+                app.message = Some(("Starbase Sheets".into(), text));
                 false
             }
             // Renamed or moved (here, in another tab, or by someone else): show the new name and

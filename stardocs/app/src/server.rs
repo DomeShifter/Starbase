@@ -8,7 +8,7 @@
 //!   while one is on its way waits, and only the newest waiting one is sent.
 //! - Changed elsewhere (409, someone edited the file outside StarDocs or in another tab): the
 //!   server's file is never overwritten. This version is kept as a new file beside it,
-//!   "<name> (StarDocs copy <date>)", and the page carries on with that copy, saying so.
+//!   "<name> (Starbase Docs copy <date>)", and the page carries on with that copy, saying so.
 //! - A new document is made on its first save: `POST api/files?folder=…&name=…`.
 //! - Not signed in (401): the page goes to the home screen, which asks to sign in.
 //! - Exports (PDF, pictures, other formats) still download in the browser.
@@ -505,7 +505,7 @@ impl Link {
             }
             Ok((409, ..)) => {
                 let (stem, ext) = split(&name);
-                let copy = format!("{stem} (StarDocs copy {}){ext}", stamp());
+                let copy = format!("{stem} (Starbase Docs copy {}){ext}", stamp());
                 match self.create(&folder, &copy, &bytes).await {
                     Ok((201 | 200, _, body)) => {
                         self.took(&body);
@@ -585,7 +585,7 @@ fn stamp() -> String {
 fn set_title(name: &str) {
     if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
         let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
-        doc.set_title(&format!("{stem} - StarDocs"));
+        doc.set_title(&format!("{stem} - Starbase Docs"));
     }
 }
 

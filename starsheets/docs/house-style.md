@@ -1,6 +1,6 @@
 # House style
 
-StarSheets should feel like Google Sheets. These are the sizes, colours and shapes every part of
+Starbase Sheets should feel like Google Sheets. These are the sizes, colours and shapes every part of
 the app uses. They live in `app/src/house.rs`: build new UI from its helpers, never with numbers of
 its own.
 
@@ -129,7 +129,7 @@ Drive: it only changes how the folder looks to the person who picked it.
 | Thing | Look |
 |---|---|
 | Tooltip | Dark grey (#3C4043), white text, 4 px corners, 8 px side padding |
-| Message ("Heads up") | A house dialog with an OK button, in StarSheets' words (never "GridCraft") |
+| Message ("Heads up") | A house dialog with an OK button, in Starbase Sheets' words (never "GridCraft") |
 
 ## Side panels
 

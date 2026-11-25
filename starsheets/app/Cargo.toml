@@ -1,6 +1,6 @@
 [package]
 name = "starsheets"
-description = "StarSheets: a Google Sheets-style spreadsheet for the web on GridCraft's engine"
+description = "Starbase Sheets: a Google Sheets-style spreadsheet for the web on GridCraft's engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

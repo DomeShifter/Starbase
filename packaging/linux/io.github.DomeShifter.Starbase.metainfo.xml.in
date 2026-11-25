@@ -13,15 +13,15 @@
   </developer>
   <description>
     <p>
-      Starbase is an open-source office suite: StarSheets for spreadsheets, StarDocs for
-      documents, and StarDrive, a home screen that lists your files and folders.
+      Starbase is an open-source office suite: Starbase Sheets for spreadsheets, Starbase Docs for
+      documents, and Starbase Drive, a home screen that lists your files and folders.
     </p>
     <p>
       Work on files in your Documents folder, or connect to your own Starbase server to share
       files and edit them together with other people at the same time.
     </p>
     <p>
-      StarSheets opens and saves Excel (.xlsx), OpenDocument (.ods) and CSV files. StarDocs
+      Starbase Sheets opens and saves Excel (.xlsx), OpenDocument (.ods) and CSV files. Starbase Docs
       opens and saves Word (.docx), OpenDocument (.odt) and RTF files.
     </p>
   </description>
@@ -49,7 +49,7 @@
        apps exist, e.g. images committed under docs/images/ and referenced by raw GitHub URL:
   <screenshots>
     <screenshot type="default">
-      <caption>StarDrive home with a folder of spreadsheets and documents</caption>
+      <caption>Starbase Drive home with a folder of spreadsheets and documents</caption>
       <image>https://raw.githubusercontent.com/DomeShifter/Starbase/main/docs/images/desktop-home.png</image>
     </screenshot>
   </screenshots>

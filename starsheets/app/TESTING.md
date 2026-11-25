@@ -1,9 +1,9 @@
-# Testing StarSheets with the test hook
+# Testing Starbase Sheets with the test hook
 
 Add `test` to the page address (`?test`, or `&test` after other parameters) and the page gets
 `window.starsheets`: a way for scripts and AI agents to run commands and read the app's state
 without clicking at screen positions. Without `test` it is not there. Code: `src/testhook.rs`
-(the home screen's part: `src/home/test.rs`). StarDocs has the same hook (`stardocs/app/TESTING.md`).
+(the home screen's part: `src/home/test.rs`). Starbase Docs has the same hook (`stardocs/app/TESTING.md`).
 
 | Call | What it does | Returns |
 |---|---|---|
@@ -44,7 +44,7 @@ Expected output: two `js: "{\"ok\":…}"` lines, then `js: "PASS"`. An answer li
 
 ## Single sign-on sessions without waiting
 
-`STARSHEETS_OIDC_SESSION_HOURS` is at least 1, so to test renewal (docs/oidc.md, Sessions) edit
+`STARBASE_OIDC_SESSION_HOURS` is at least 1, so to test renewal (docs/oidc.md, Sessions) edit
 the server's `.starsheets/sessions.json` instead (with `jq`, while it runs; each session is keyed
 by a hash of its cookie). Its `expires` (seconds since 1970) set to now − 1 ends a session: the
 open page's next request answers 401 with `"renew": true` and the page renews at a quiet moment.

@@ -39,9 +39,9 @@ def licence(family):
 def main():
     check = "--check" in sys.argv
     failed = []
-    notice = ["Fonts served with StarSheets", "",
+    notice = ["Fonts served with Starbase Sheets", "",
               "Each folder holds one font family from Google Fonts and its licence (LICENSE.txt).",
-              "The menu name is what StarSheets calls it; the family is the font actually used.", ""]
+              "The menu name is what Starbase Sheets calls it; the family is the font actually used.", ""]
     for line in open(os.path.join(ROOT, "webfonts.txt"), encoding="utf-8"):
         line = line.strip()
         if not line or line.startswith("#"):

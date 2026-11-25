@@ -1,16 +1,18 @@
-# StarSheets
+# Starbase Sheets
+
+(Called StarSheets until November 2026; the code still uses that name in places.)
 
 A spreadsheet that looks and feels like Google Sheets, that you can run yourself.
 
-![StarSheets showing a sales table with charts](docs/images/starsheets.png)
+![Starbase Sheets showing a sales table with charts](docs/images/starsheets.png)
 
 I wanted the spreadsheet I'm used to (Google Sheets' menus, shortcuts and side panels) without my
-files living in someone else's cloud. StarSheets is my attempt at that: it runs in your browser,
+files living in someone else's cloud. Starbase Sheets is my attempt at that: it runs in your browser,
 your spreadsheets are ordinary `.xlsx` files in a folder you choose, and it's free and open source.
 
 It stands on the shoulders of [GridCraft](https://github.com/storytold/gridcraft), a fast
 spreadsheet engine written in Rust by the ArtCraft team. GridCraft does the hard parts
-(formulas, files, the grid, charts); StarSheets puts a Google Sheets-style face on it and adds
+(formulas, files, the grid, charts); Starbase Sheets puts a Google Sheets-style face on it and adds
 the things Google Sheets users reach for.
 
 > **Status: early preview.** It's usable and I use it myself, but there are rough edges and
@@ -43,7 +45,7 @@ the things Google Sheets users reach for.
   code editor, the same in the cell and in the formula bar. Suggestions with a short description
   pop up as you type a function name.
 - **Your Google formulas survive Excel**: formulas Excel can't read are saved the way Google Sheets
-  saves them, so Excel shows their last results and StarSheets gets the formulas back unchanged.
+  saves them, so Excel shows their last results and Starbase Sheets gets the formulas back unchanged.
 
 ### Tidy, checked data
 - **Conditional formatting** in a Google-style side panel, previewed live as you choose: colour
@@ -81,7 +83,7 @@ spreadsheets are kept as `.xlsx` files in the `starsheets` volume. There's a rea
 
 - Open the same spreadsheet in several tabs, or with other people, and everyone sees every change
   as it happens, with each other's cursors.
-- On a private network you trust, `STARSHEETS_AUTH=off` turns sign-in off (everyone is a guest).
+- On a private network you trust, `STARBASE_AUTH=off` turns sign-in off (everyone is a guest).
 - Copy and paste work best over HTTPS (browsers limit the clipboard on plain `http://`), so a
   reverse proxy with a certificate is a good idea if you use it from other machines. Behind a
   proxy, or reachable from the internet, see the security settings in [docs/deploy.md](docs/deploy.md).
@@ -92,7 +94,7 @@ You need Rust (stable) with the `wasm32-unknown-unknown` target, [trunk](https:/
 Python 3.
 
 ```sh
-scripts/fetch-upstream.sh          # GridCraft at the pinned release, with StarSheets' patches
+scripts/fetch-upstream.sh          # GridCraft at the pinned release, with Starbase Sheets' patches
 python3 scripts/fetch-fonts.py     # the free fonts in the font menu
 cd app && trunk build --release    # the app, in dist/
 ```
@@ -115,7 +117,7 @@ Design choices and the reasons for them are in [docs/decisions.md](docs/decision
 ## Thanks
 
 To the ArtCraft team for GridCraft, to the [egui](https://github.com/emilk/egui) project, and to
-the designers of the fonts StarSheets uses (Roboto and the Google Fonts families listed in each
+the designers of the fonts Starbase Sheets uses (Roboto and the Google Fonts families listed in each
 build's `webfonts/NOTICE.txt`, all under the SIL Open Font License) and of Google's Material Symbols icons.
 
 ## Licence
@@ -123,5 +125,5 @@ build's `webfonts/NOTICE.txt`, all under the SIL Open Font License) and of Googl
 MIT or Apache-2.0, at your option ([LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE),
 [NOTICE](NOTICE)).
 
-StarSheets is not affiliated with or endorsed by Google or the ArtCraft team. "Google Sheets" is a
-trademark of Google LLC, mentioned only to describe the look StarSheets aims for.
+Starbase Sheets is not affiliated with or endorsed by Google or the ArtCraft team. "Google Sheets" is a
+trademark of Google LLC, mentioned only to describe the look Starbase Sheets aims for.

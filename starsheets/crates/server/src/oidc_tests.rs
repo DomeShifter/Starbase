@@ -705,7 +705,7 @@ async fn provider_unreachable() {
 #[test]
 fn settings_groups_and_pages() {
     let env = |pairs: &[(&str, &str)]| {
-        let m: HashMap<String, String> = pairs.iter().map(|(k, v)| (format!("STARSHEETS_OIDC_{k}"), v.to_string())).collect();
+        let m: HashMap<String, String> = pairs.iter().map(|(k, v)| (format!("STARBASE_OIDC_{k}"), v.to_string())).collect();
         Config::from(move |k| m.get(k).cloned())
     };
     assert_eq!(env(&[]), Ok(None));
@@ -717,7 +717,7 @@ fn settings_groups_and_pages() {
         ("openid profile email groups".into(), "Sign in with SSO", None, false, 60, 12)
     );
     assert!(c.warnings().is_empty());
-    assert_eq!(c.provider, "auth.example.com", "the provider's name: its host unless STARSHEETS_OIDC_LABEL says");
+    assert_eq!(c.provider, "auth.example.com", "the provider's name: its host unless STARBASE_OIDC_LABEL says");
     let mut named = base.to_vec();
     named.push(("LABEL", "Keycloak"));
     assert_eq!(env(&named).unwrap().unwrap().provider, "Keycloak");

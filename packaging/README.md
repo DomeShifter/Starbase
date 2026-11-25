@@ -6,9 +6,9 @@ deb/rpm, Windows and macOS come later.
 
 | Menu entry | App ID (desktop file, icon) | Runs | Opens |
 |---|---|---|---|
-| StarDrive (the home screen) | `io.github.DomeShifter.Starbase` | `starsheets --home` | nothing by double-click |
-| StarSheets | `io.github.DomeShifter.Starbase.Sheets` | `starsheets %F` | .xlsx .xlsm .xlsb .ods .csv .tsv |
-| StarDocs | `io.github.DomeShifter.Starbase.Docs` | `stardocs %F` | .docx .docm .dotx .dotm .doc .odt .rtf |
+| Starbase Drive (the home screen) | `io.github.DomeShifter.Starbase` | `starsheets --home` | nothing by double-click |
+| Starbase Sheets | `io.github.DomeShifter.Starbase.Sheets` | `starsheets %F` | .xlsx .xlsm .xlsb .ods .csv .tsv |
+| Starbase Docs | `io.github.DomeShifter.Starbase.Docs` | `stardocs %F` | .docx .docm .dotx .dotm .doc .odt .rtf |
 
 The package's ID is `io.github.DomeShifter.Starbase`. Flathub requires `io.github.<user>.<repo>`
 for apps hosted on GitHub, with at least 4 components, a lowercase domain part, and a repository
@@ -20,13 +20,13 @@ icon whose name starts with the app ID, which is why the other two entries are
 
 | File | What it is |
 |---|---|
-| `linux/io.github.DomeShifter.Starbase.desktop` | StarDrive menu entry. Also the AppImage's root desktop file. |
-| `linux/io.github.DomeShifter.Starbase.Sheets.desktop` | StarSheets menu entry, with the spreadsheet MIME types. |
-| `linux/io.github.DomeShifter.Starbase.Docs.desktop` | StarDocs menu entry, with the document MIME types. |
+| `linux/io.github.DomeShifter.Starbase.desktop` | Starbase Drive menu entry. Also the AppImage's root desktop file. |
+| `linux/io.github.DomeShifter.Starbase.Sheets.desktop` | Starbase Sheets menu entry, with the spreadsheet MIME types. |
+| `linux/io.github.DomeShifter.Starbase.Docs.desktop` | Starbase Docs menu entry, with the document MIME types. |
 | `linux/io.github.DomeShifter.Starbase.mime.xml` | shared-mime-info globs for the spreadsheet types, copied from GridCraft. They only matter on minimal systems; document types use the system's definitions, as in WordCraft. |
 | `linux/io.github.DomeShifter.Starbase.metainfo.xml.in` | AppStream metadata for the whole package (software centres, Flathub). One component that lists all three menu entries as launchables. The scripts substitute `@VERSION@` and `@DATE@`. |
 | `linux/icons.sh <dest>` | Builds the hicolor icon theme from the apps' own SVGs (nothing generated is committed). It pads non-square icons to a square and renders PNGs from 16 to 512 px with `rsvg-convert` or `resvg` when one of them is installed. |
-| `linux/AppRun` | AppImage entry point. It picks the program: no arguments starts the StarDrive home; `stardocs …`/`starsheets …` start that program; otherwise the first file's extension decides (Word/ODT/RTF go to StarDocs, everything else to StarSheets). A symlink named `stardocs` to the AppImage also works. |
+| `linux/AppRun` | AppImage entry point. It picks the program: no arguments starts the Starbase Drive home; `stardocs …`/`starsheets …` start that program; otherwise the first file's extension decides (Word/ODT/RTF go to Starbase Docs, everything else to Starbase Sheets). A symlink named `stardocs` to the AppImage also works. |
 | `linux/appimage.sh` | Builds `starbase-<version>-linux-<arch>.AppImage` (+ `.zsync`) from two built executables: `--starsheets <path> --stardocs <path> [--version v]`. It uses appimagetool 1.9.1 and the type2 runtime 20251108, both pinned by SHA-256 (same versions and sums as WordCraft). The embedded update information is `gh-releases-zsync\|DomeShifter\|Starbase\|latest\|starbase-*-linux-<arch>.AppImage.zsync`. |
 | `linux/flatpak/io.github.DomeShifter.Starbase.yml` | Flatpak manifest: org.freedesktop.Platform 25.08 plus the rust-stable SDK extension, and three modules (starsheets, stardocs, shared data). The header explains how to build it. |
 
@@ -65,10 +65,10 @@ python3 flatpak-cargo-generator.py stardocs/Cargo.lock   -o packaging/linux/flat
 
 1. **Native entry points.** The app crates are web-only today (plan jobs D1a/D1b), so no
    `starsheets`/`stardocs` desktop executables exist yet. The programs also need to accept
-   `--home` (StarSheets), `--new` and file paths (both).
-2. **StarDrive icon.** `icons.sh` and the Flatpak data module expect
+   `--home` (Starbase Sheets), `--new` and file paths (both).
+2. **Starbase Drive icon.** `icons.sh` and the Flatpak data module expect
    `starsheets/app/stardrive.svg`, which is on the `icons` branch. Until that branch is merged,
-   the StarSheets icon stands in (with a warning). Add the file as a source in the Flatpak data
+   the Starbase Sheets icon stands in (with a warning). Add the file as a source in the Flatpak data
    module when it lands.
 3. **Package version.** Starbase has no version of its own: the workspaces are 0.4.0 and 0.18.1.
    `appimage.sh` takes `--version`, `$STARBASE_VERSION` or the latest git tag. The Flatpak
@@ -86,5 +86,5 @@ python3 flatpak-cargo-generator.py stardocs/Cargo.lock   -o packaging/linux/flat
    `appimage.sh`, build the `.flatpak` bundle, then publish SHA256SUMS and a GPG signature.
    deb/rpm (nfpm) come later.
 8. AppImage desktop integration tools (Gear Lever, AppImageLauncher) install only the root
-   (StarDrive) entry. The StarSheets and StarDocs entries and their file associations work fully
+   (Starbase Drive) entry. The Starbase Sheets and Starbase Docs entries and their file associations work fully
    only in the Flatpak (and the later deb/rpm).

@@ -3,10 +3,10 @@
 //! same files on disk (see docs/server.md), as the base for live editing.
 //!
 //! Settings (environment): STORE (folder, default /data), KEEP (versions kept, 6), PORT (8080),
-//! LOCATION (how people are told where files are kept), STARSHEETS_AUTH (off = no login),
-//! STARSHEETS_PASSWORD, SITE (a built StarSheets site to serve), the security settings in
-//! guard.rs (STARSHEETS_PUBLIC_URL, STARSHEETS_ALLOWED_HOSTS, STARSHEETS_TRUSTED_PROXY,
-//! STARSHEETS_SECURE_COOKIE) and single sign-on's STARSHEETS_OIDC_* (oidc.rs, docs/oidc.md).
+//! LOCATION (how people are told where files are kept), STARBASE_AUTH (off = no login),
+//! STARBASE_PASSWORD, SITE (a built StarSheets site to serve), the security settings in
+//! guard.rs (STARBASE_PUBLIC_URL, STARBASE_ALLOWED_HOSTS, STARBASE_TRUSTED_PROXY,
+//! STARBASE_SECURE_COOKIE) and single sign-on's STARBASE_OIDC_* (oidc.rs, docs/oidc.md).
 
 // Request handlers return a ready HTTP response as their error (axum's usual way); boxing it to
 // make the error smaller would only add an allocation on the error path.
@@ -73,14 +73,27 @@ struct App {
     auth: bool,
     site: Option<PathBuf>,
     rooms: live::Rooms,
-    /// Single sign-on through the owner's identity provider (STARSHEETS_OIDC_ISSUER set).
+    /// Single sign-on through the owner's identity provider (STARBASE_OIDC_ISSUER set).
     oidc: Option<Arc<oidc::Oidc>>,
 }
 
 type Shared = Arc<App>;
 
 fn env(name: &str, default: &str) -> String {
-    std::env::var(name).unwrap_or_else(|_| default.to_string())
+    setting(name).unwrap_or_else(|| default.to_string())
+}
+
+/// A setting from the environment. Every `STARBASE_*` setting may also be given by its
+/// older name, `STARSHEETS_*`; when both are set the new name wins.
+pub(crate) fn setting(name: &str) -> Option<String> {
+    setting_from(name, |k| std::env::var(k).ok())
+}
+
+fn setting_from(name: &str, get: impl Fn(&str) -> Option<String>) -> Option<String> {
+    match name.strip_prefix("STARBASE_").or_else(|| name.strip_prefix("STARSHEETS_")) {
+        Some(rest) => get(&format!("STARBASE_{rest}")).or_else(|| get(&format!("STARSHEETS_{rest}"))),
+        None => get(name),
+    }
 }
 
 // ---------------------------------------------------------------- responses
@@ -446,7 +459,7 @@ async fn accounts(
             let found = blocking(app, move |app| auth::login_hash(&app.store, &username)).await.flatten();
             let (hash, user) = found.map_or((None, None), |(u, h)| (Some(h), Some(u)));
             let right = slow(move || auth::verify(&password, hash.as_deref())).await.unwrap_or(false);
-            // STARSHEETS_OIDC_ONLY: passwords only for owners (a way in when the provider is down).
+            // STARBASE_OIDC_ONLY: passwords only for owners (a way in when the provider is down).
             // A right password for anyone else gets exactly the answer a wrong one gets, so the
             // sign-in box can't be used to check passwords.
             let only = app.oidc.as_ref().is_some_and(|o| o.cfg.only);
@@ -552,7 +565,7 @@ async fn accounts(
                 return Some(please_sign_in(app, headers));
             }
             // The owner also sees whom each account is linked to at the identity provider.
-            // The provider by name (STARSHEETS_OIDC_LABEL, else its host) and what it calls the
+            // The provider by name (STARBASE_OIDC_LABEL, else its host) and what it calls the
             // person (email, else username, as at their last sign-in); the raw ids for a tooltip.
             let owner = me.as_ref().is_some_and(|u| u.owner);
             let (issuer, provider) = app.oidc.as_ref().map(|o| (o.cfg.issuer.clone(), o.cfg.provider.clone())).unwrap_or_default();
@@ -585,7 +598,7 @@ async fn accounts(
             let only = app.oidc.as_ref().is_some_and(|o| o.cfg.only);
             let r = blocking(app, move |app| {
                 let target = auth::users(&app.store).into_iter().find(|u| u.username == who);
-                // With STARSHEETS_OIDC_ONLY only owners may sign in with a password: anyone else
+                // With STARBASE_OIDC_ONLY only owners may sign in with a password: anyone else
                 // unlinked couldn't sign in at all.
                 if only && target.as_ref().is_some_and(|u| !u.owner) {
                     return Err(format!(
@@ -817,7 +830,7 @@ async fn sso(app: &Shared, path: &[&str], m: &str, q: &HashMap<String, String>, 
         }
         (["oidc", "unlink"], "POST") => {
             let Some(me) = me else { return please_sign_in(app, headers) };
-            // With STARSHEETS_OIDC_ONLY only owners may use passwords: anyone else unlinked
+            // With STARBASE_OIDC_ONLY only owners may use passwords: anyone else unlinked
             // couldn't sign in at all.
             if o.cfg.only && !me.owner {
                 return error(400, "This server signs people in through single sign-on only, so your account must stay linked.");
@@ -1101,7 +1114,7 @@ async fn storage(app: &Shared, m: &str, me: Option<auth::User>, body: &[u8], q: 
         match mode.as_str() {
             "use" => {
                 if !has_starsheets(&new) && auth::any_users(&app2.store) {
-                    return Err("There are no StarSheets files in that folder to switch to. Choose \"Move my files there\" instead.".into());
+                    return Err("There are no Starbase files in that folder to switch to. Choose \"Move my files there\" instead.".into());
                 }
             }
             _ => {
@@ -1110,7 +1123,7 @@ async fn storage(app: &Shared, m: &str, me: Option<auth::User>, body: &[u8], q: 
                 if let Ok(rest) = new.strip_prefix(&old) {
                     let first = rest.components().next().map(|c| c.as_os_str().to_string_lossy().into_owned()).unwrap_or_default();
                     if first.is_empty() || first.starts_with('.') || auth::users(&app2.store).iter().any(|u| u.username == first) {
-                        return Err("That folder belongs to StarSheets itself. Pick another one.".into());
+                        return Err("That folder belongs to Starbase itself. Pick another one.".into());
                     }
                 }
                 // Everything moves, or nothing: check for clashes first.
@@ -1765,16 +1778,16 @@ async fn main() {
     let store = Store {
         root,
         keep: env("KEEP", "6").parse().unwrap_or(6),
-        spaces: !matches!(env("STARSHEETS_AUTH", "on").trim().to_lowercase().as_str(), "off" | "false" | "0" | "no"),
+        spaces: !matches!(env("STARBASE_AUTH", "on").trim().to_lowercase().as_str(), "off" | "false" | "0" | "no"),
     };
     let port: u16 = env("PORT", "8080").parse().unwrap_or(8080);
-    let auth = !matches!(env("STARSHEETS_AUTH", "on").trim().to_lowercase().as_str(), "off" | "false" | "0" | "no");
+    let auth = !matches!(env("STARBASE_AUTH", "on").trim().to_lowercase().as_str(), "off" | "false" | "0" | "no");
     if let Some(why) = auth::given_setup_code().and_then(|c| auth::weak_setup_code(&c)) {
         eprintln!("{why}");
         std::process::exit(1);
     }
     let site = Some(env("SITE", "")).filter(|s| !s.is_empty()).map(PathBuf::from);
-    let oidc = match oidc::Config::from(|k| std::env::var(k).ok()) {
+    let oidc = match oidc::Config::from(setting) {
         Ok(c) => c.map(|c| Arc::new(oidc::Oidc::new(c))),
         Err(why) => {
             eprintln!("{why}");
@@ -1795,7 +1808,7 @@ async fn main() {
                 }
             });
         } else {
-            println!("Single sign-on is set, but sign-in is off (STARSHEETS_AUTH=off), so it isn't used.");
+            println!("Single sign-on is set, but sign-in is off (STARBASE_AUTH=off), so it isn't used.");
         }
     }
     let app =
@@ -1804,14 +1817,14 @@ async fn main() {
         eprintln!("Can't use the folder {}: {e}", app.store.root.display());
         std::process::exit(1);
     }
-    println!("StarSheets server {}: {} on :{port}, keeping {} versions", env!("CARGO_PKG_VERSION"), app.store.root.display(), app.store.keep);
+    println!("Starbase server {}: {} on :{port}, keeping {} versions", env!("CARGO_PKG_VERSION"), app.store.root.display(), app.store.keep);
     if !auth {
-        println!("Sign-in is OFF (STARSHEETS_AUTH=off): anyone who can reach this port can read and change every file.");
+        println!("Sign-in is OFF (STARBASE_AUTH=off): anyone who can reach this port can read and change every file.");
     } else if !auth::any_users(&app.store) {
         if auth::given_setup_code().is_some() {
-            println!("No accounts yet. Open StarSheets and create the owner account with the setup code set in STARSHEETS_PASSWORD.");
+            println!("No accounts yet. Open Starbase and create the owner account with the setup code set in STARBASE_PASSWORD.");
         } else {
-            println!("No accounts yet. Open StarSheets and create the owner account with this setup code: {}", auth::setup_code(&app.store));
+            println!("No accounts yet. Open Starbase and create the owner account with this setup code: {}", auth::setup_code(&app.store));
         }
     } else {
         println!("Sign-in is on ({} accounts).", auth::users(&app.store).len());
@@ -1842,6 +1855,20 @@ async fn main() {
 mod tests {
     use super::*;
     use tower::ServiceExt;
+
+    #[test]
+    fn settings_take_the_new_name_and_the_old_one() {
+        fn env(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+            move |k: &str| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string())
+        }
+        let old = env(&[("STARSHEETS_PASSWORD", "old")]);
+        assert_eq!(setting_from("STARBASE_PASSWORD", &old).as_deref(), Some("old"), "the old name still works");
+        let both = env(&[("STARSHEETS_PASSWORD", "old"), ("STARBASE_PASSWORD", "new")]);
+        assert_eq!(setting_from("STARBASE_PASSWORD", &both).as_deref(), Some("new"), "the new name wins");
+        assert_eq!(setting_from("STARSHEETS_PASSWORD", &both).as_deref(), Some("new"), "either name asks for the same setting");
+        assert_eq!(setting_from("PORT", env(&[("PORT", "1")])).as_deref(), Some("1"), "other names are read as they are");
+        assert_eq!(setting_from("STARBASE_AUTH", &both), None);
+    }
 
     fn app(auth: bool) -> Shared {
         let dir = std::env::temp_dir().join(format!("starsheets-main-{}", store::random_hex(6)));

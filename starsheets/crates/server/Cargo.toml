@@ -1,6 +1,6 @@
 [package]
 name = "starsheets-server"
-description = "StarSheets' server: stores spreadsheets as .xlsx files in a folder tree and serves the web app"
+description = "Starbase's server: stores spreadsheets as .xlsx files in a folder tree and serves the web app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

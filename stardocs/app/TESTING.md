@@ -1,4 +1,4 @@
-# Testing StarDocs with the test hook
+# Testing Starbase Docs with the test hook
 
 Add `test` to the page address (`?test`, or `&test` after other parameters) and the page gets
 `window.stardocs`: a way for scripts and AI agents to run commands and read the app's state
@@ -6,7 +6,7 @@ without clicking at screen positions. Without `test` it is not there. Code: `src
 
 | Call | What it does | Returns |
 |---|---|---|
-| `stardocs.run(id, params)` | Runs a command: a WordCraft id (`format.bold`, `insert.table` …), `ui.dialog:<name>`, or a StarDocs menu id (`stardocs.*`). `params` is a JSON string or an object; leave it out for `{}`. | request number |
+| `stardocs.run(id, params)` | Runs a command: a WordCraft id (`format.bold`, `insert.table` …), `ui.dialog:<name>`, or a Starbase Docs menu id (`stardocs.*`). `params` is a JSON string or an object; leave it out for `{}`. | request number |
 | `stardocs.state()` | Takes a snapshot: `shell` (what the window shows), `format`, `view`, `words`, `text` (first 100 KB, `textTruncated`), `dirty`, `status`, `theme` (system preference, interface theme, surround/ruler/hover/text box colours). | request number |
 | `stardocs.type(text)` | Types text at the caret (`text.insert`). | request number |
 | `stardocs.key(name)` | One key: Enter, Tab, Backspace, Delete, Left/Right/Up/Down, Home, End, ctrl+Home, ctrl+End. | request number |

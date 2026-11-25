@@ -72,7 +72,7 @@ for f in README.md LICENSE-MIT LICENSE-APACHE NOTICE; do
   if [[ -f "$ROOT/$f" ]]; then cp "$ROOT/$f" "$APPDIR/usr/share/doc/starbase/"; fi
 done
 
-# AppImage root: the dispatcher, the StarDrive menu entry (the one desktop integration tools
+# AppImage root: the dispatcher, the Starbase Drive menu entry (the one desktop integration tools
 # such as Gear Lever install) and its icon.
 install -Dm755 "$HERE/AppRun" "$APPDIR/AppRun"
 cp "$HERE/$ID.desktop" "$APPDIR/$ID.desktop"

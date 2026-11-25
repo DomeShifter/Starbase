@@ -1,6 +1,6 @@
 ## What this changes
 
-<!-- For someone using Starbase (StarSheets, StarDocs or the home screen): what's different after this? -->
+<!-- For someone using Starbase (Starbase Sheets, Starbase Docs or the home screen): what's different after this? -->
 
 ## Checklist
 

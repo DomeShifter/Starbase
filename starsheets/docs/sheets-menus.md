@@ -34,4 +34,4 @@ This replaces the "(from memory)" menu rows in sheets-reference.md.
 **Help:** Search the menus Alt+/ — Sheets Help · Training · Updates — Help Sheets improve · Report abuse — Privacy Policy · Terms of Service — Function list · Keyboard shortcuts Ctrl+/
 
 Not copied: Google-only items (Gemini, Extensions, Share/Email, Record video, Report abuse,
-Privacy/Terms, Data connectors, Smart chips) unless StarSheets gets an equivalent.
+Privacy/Terms, Data connectors, Smart chips) unless Starbase Sheets gets an equivalent.

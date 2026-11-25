@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Downloads the British English word list StarSheets spell-checks cell text with: SCOWL's word
+"""Downloads the British English word list Starbase Sheets spell-checks cell text with: SCOWL's word
 lists (sizes 10 to 70, the common English words plus the British spellings, with their plurals and
 other forms) from the wordlist-english package, into app/dictionary/en-GB.txt (one word per line),
 with SCOWL's copyright and permission notice beside it as LICENSE.txt. Run before `trunk build`."""
