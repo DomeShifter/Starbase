@@ -22,6 +22,7 @@ fn me_owning(own: &[u32]) -> Me {
         initials: "M".into(),
         date: "2026-11-25T10:00:00Z".into(),
         own: own.iter().map(|id| (*id, "2026-11-25T10:00:00Z".to_string())).collect(),
+        alias: BTreeMap::new(),
     }
 }
 
@@ -134,7 +135,7 @@ fn a_new_comment_lands_on_the_servers_text_with_the_servers_author() {
     let s = server(PLAIN, &[]);
     let u = sent(MARKED, &comment(5, "Ann (forged)", "Nice", "10000001"), r#"<w15:commentEx w15:paraId="10000001" w15:done="0"/>"#, &[]);
     let out = merged(&s, &u);
-    assert!(merge(&s, &u, &me()).unwrap().unwrap().renumbered, "sent as 5, the server's first id is 0");
+    assert_eq!(merge(&s, &u, &me()).unwrap().unwrap().ids, [(5, 0)].into_iter().collect(), "sent as 5, the server's first id is 0");
     let d = part(&out, "word/document.xml");
     // The run is split where the comment starts, both halves keep their bold.
     assert!(d.contains(r#"<w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">Hello </w:t></w:r><w:commentRangeStart w:id="0"/><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">world</w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r>"#), "{d}");
@@ -423,7 +424,7 @@ fn new_comments_get_the_servers_ids() {
         &[],
     );
     let m = merge(&s, &u, &me()).unwrap().unwrap();
-    assert!(m.renumbered);
+    assert_eq!(m.ids, [(4, 10), (9, 11)].into_iter().collect());
     let mut own: Vec<u32> = m.own.keys().copied().collect();
     own.sort_unstable();
     assert_eq!(own, vec![10, 11], "the server's ids are Mal's");
@@ -495,4 +496,58 @@ fn a_deleted_comment_leaves_no_entries_behind() {
     assert!(!x.contains("1111AAAA") && x.contains("2222BBBB"), "{x}");
     assert!(!p.contains("\"Mal\"") && p.contains("\"Ann\""), "{p}");
     assert!(!part(&out, "word/comments.xml").contains("Mine"));
+}
+
+/// Review of PR #56 (2nd, M1): a save that was already waiting when the first one's reply gave
+/// its comment a new id still uses the program's own ids. Named in `alias`, they are read as the
+/// server's: the first comment is edited (not deleted and added again), and a newer comment that
+/// happens to have the server's id is new, not taken for it.
+#[test]
+fn a_waiting_save_after_new_ids_keeps_every_comment() {
+    let s = server(PLAIN, &[]);
+    let first = merge(&s, &sent(MARKED, &comment(5, "Mal", "Nice", "10000001"), "", &[]), &me()).unwrap().unwrap();
+    assert_eq!(first.ids, [(5, 0)].into_iter().collect());
+    // The program still calls it 5; its next comment it called 0.
+    let body =
+        MARKED.replace("<w:r><w:t>Second</w:t></w:r>", r#"<w:commentRangeStart w:id="0"/><w:r><w:t>Second</w:t></w:r><w:commentRangeEnd w:id="0"/>"#);
+    let u = sent(&body, &format!("{}{}", comment(5, "Mal", "Nicer", "10000001"), comment(0, "Mal", "Two", "10000002")), "", &[]);
+    let later = Me { own: first.own.clone(), alias: [(5, 0)].into_iter().collect(), date: "2026-11-25T11:00:00Z".into(), ..me() };
+    let m = merge(&first.bytes, &u, &later).unwrap().unwrap();
+    assert_eq!(m.ids, [(0, 1)].into_iter().collect(), "its 0 is the server's 1");
+    let c = part(&m.bytes, "word/comments.xml");
+    assert!(c.contains(r#"w:id="0""#) && c.contains(">Nicer<") && c.contains(r#"w:id="1""#) && c.contains(">Two<"), "{c}");
+    assert!(c.contains(r#"w:date="2026-11-25T10:00:00Z""#) && c.contains(r#"w:date="2026-11-25T11:00:00Z""#), "the first keeps its date: {c}");
+    assert_eq!(m.own.len(), 2);
+    let d = part(&m.bytes, "word/document.xml");
+    assert_eq!(d.matches(r#"w:id="0""#).count(), 3, "{d}");
+    assert_eq!(d.matches(r#"w:id="1""#).count(), 3, "{d}");
+    // Without the alias the same file is read wrongly: the first comment would be added again
+    // as new (its date lost), and the newer one's text taken for the first.
+    let bad = merge(&first.bytes, &u, &Me { alias: BTreeMap::new(), ..later }).unwrap().unwrap();
+    assert!(bad.ids.contains_key(&5), "{:?}", bad.ids);
+    // Two ids named as one server id: refused.
+    let twice = Me { alias: [(5, 0), (6, 0)].into_iter().collect(), ..me() };
+    assert!(merge(&first.bytes, &u, &twice).is_err());
+}
+
+/// Review of PR #56 (2nd): Word reads comment ids as signed 32-bit numbers, and the largest id in
+/// use is looked for only in the parts that hold comments, at most 64 MiB of them.
+#[test]
+fn ids_stay_under_i32_max_and_the_id_scan_is_bounded() {
+    let header = |id: u32| format!(r#"<w:hdr {NS}><w:p><w:commentRangeStart w:id="{id}"/><w:r><w:t>Head</w:t></w:r></w:p></w:hdr>"#);
+    let u = sent(MARKED, &comment(5, "Mal", "Nice", "10000001"), "", &[]);
+    let ok = server(PLAIN, &[("word/header1.xml", &header(0x7FFF_FFFE))]);
+    assert_eq!(merge(&ok, &u, &me()).unwrap().unwrap().ids, [(5, 0x7FFF_FFFF)].into_iter().collect());
+    let full = server(PLAIN, &[("word/header1.xml", &header(0x7FFF_FFFF))]);
+    assert!(merge(&full, &u, &me()).is_err(), "past i32::MAX");
+    // A part that holds no comments isn't read for ids.
+    let other = server(PLAIN, &[("customXml/item1.xml", &header(900))]);
+    assert_eq!(merge(&other, &u, &me()).unwrap().unwrap().ids, [(5, 0)].into_iter().collect());
+    // Comment parts bigger than the limit together: refused.
+    let big = format!("<w:ftr {NS}>{}</w:ftr>", " ".repeat(33 << 20));
+    let huge = server(PLAIN, &[("word/footer1.xml", &big), ("word/footer2.xml", &big)]);
+    let e = merge(&huge, &u, &me()).unwrap_err();
+    assert!(e.contains("too large"), "{e}");
+    // ... but only looked at when there is a new comment.
+    assert!(merge(&huge, &sent(PLAIN, "", "", &[]), &me()).unwrap().is_none());
 }

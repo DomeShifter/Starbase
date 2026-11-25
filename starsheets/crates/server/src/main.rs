@@ -1869,6 +1869,7 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
             me.clone(),
             p[1].clone(),
             headers.get(header::IF_MATCH).and_then(|v| v.to_str().ok()).map(str::to_string),
+            headers.get("x-comment-ids").and_then(|v| v.to_str().ok()).map(str::to_string),
             body.clone(),
         )
         .await

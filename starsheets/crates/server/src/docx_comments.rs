@@ -21,10 +21,12 @@
 //!   hangs on it. An edited comment keeps its date, which is part of how the server knows it is
 //!   theirs (commenting.rs).
 //! - **Ids**: the server gives every new comment its own id, one past the largest comment id
-//!   used anywhere in the document (any part, marks included), whatever id the commenter's file
-//!   gave it, so a new comment can never take or touch someone else's. When the ids differ from
-//!   the sent ones, [`Merged::renumbered`] says so (the commenter's program opens the document
-//!   again, so its ids match the server's).
+//!   used in the document's text, comments, headers, footers and notes (marks included),
+//!   whatever id the commenter's file gave it, so a new comment can never take or touch someone
+//!   else's. Word reads ids as signed 32-bit numbers, so none goes past `i32::MAX`. The ids that
+//!   differ from the sent ones are in [`Merged::ids`] (sent → server); the commenter's program
+//!   keeps them and sends them with every later save ([`Me::alias`]), so its own ids never have
+//!   to change: a sent id named there is read as the server's.
 //!
 //! Everything else in the sent file is ignored, including changes to other people's comments.
 //! After building, the server's text is checked to be unchanged (a guard against a mistake here).
@@ -55,6 +57,10 @@ const MAX_PART: u64 = 64 * 1024 * 1024;
 const MAX_NODES: u32 = 4_000_000;
 const MAX_DEPTH: usize = 256;
 const MAX_NEW: usize = 500;
+/// Bytes read, all parts together, when looking for the largest comment id in use.
+const MAX_SCAN: u64 = 64 * 1024 * 1024;
+/// The largest comment id Word reads (a signed 32-bit number).
+const MAX_ID: u32 = 0x7FFF_FFFF;
 const MAX_COMMENT_CHARS: usize = 20_000;
 /// Paragraphs in one comment.
 const MAX_COMMENT_PARAS: usize = 200;
@@ -74,6 +80,9 @@ pub struct Me {
     /// The comments the server recorded this person adding to this document: id → the date
     /// the server gave it (an id alone can be used again for someone else's comment).
     pub own: HashMap<u32, String>,
+    /// The commenter's program's ids for comments the server gave other ids in earlier saves:
+    /// sent id → the server's (from earlier [`Merged::ids`]).
+    pub alias: BTreeMap<u32, u32>,
 }
 
 /// A rebuilt document, and the comments it added and deleted (for the record of whose they are).
@@ -82,8 +91,10 @@ pub struct Merged {
     pub bytes: Vec<u8>,
     /// This person's comments in the result: id → date (the new record of whose they are).
     pub own: HashMap<u32, String>,
-    /// A new comment got a different id from the one in the sent file.
-    pub renumbered: bool,
+    /// New comments whose id on the server isn't the one sent: sent id → the server's. The
+    /// sent id is the commenter's program's own (before [`Me::alias`]); an entry mapping an id to
+    /// itself means "no longer renamed".
+    pub ids: BTreeMap<u32, u32>,
 }
 
 /// The server's document with the commenter's comment changes from `sent`, or `None` when there
@@ -108,14 +119,6 @@ pub fn merge(server: &[u8], sent: &[u8], me: &Me) -> Result<Option<Merged>, Stri
         Some(n) => read(&mut szip, n)?,
         None => None,
     };
-    // The largest comment id used anywhere in the server's document (new ones go after it).
-    let mut used_max: Option<u32> = None;
-    let xml_parts: Vec<String> = szip.file_names().filter(|n| n.to_lowercase().ends_with(".xml")).map(str::to_string).collect();
-    for n in &xml_parts {
-        if let Some(b) = read(&mut szip, n)? {
-            used_max = used_max.max(max_comment_id(&b));
-        }
-    }
     // The sent file, as Starbase Docs writes it.
     let u_doc = read(&mut uzip, "word/document.xml")?.ok_or("not a document")?;
     let u_com = read(&mut uzip, "word/comments.xml")?;
@@ -139,6 +142,17 @@ pub fn merge(server: &[u8], sent: &[u8], me: &Me) -> Result<Option<Merged>, Stri
         Some(t) => comments(&parse(t)?),
         None => BTreeMap::new(),
     };
+    // The sent ids as the server's (`me.alias`), and back (for the reply).
+    let taken = s_comments.keys().next_back().copied();
+    let to_server = rename(&me.alias, u_comments.keys().copied().collect(), taken)?;
+    let targets: HashSet<u32> = me.alias.values().copied().collect();
+    // A mark whose comment isn't sent: named in the alias, or ignored if it has a server id.
+    let mark_id = |id: u32| match me.alias.get(&id) {
+        Some(t) => Some(*t),
+        None => (!targets.contains(&id)).then_some(id),
+    };
+    let back: HashMap<u32, u32> = to_server.iter().map(|(sent, id)| (*id, *sent)).collect();
+    let u_comments: BTreeMap<u32, Comment> = u_comments.into_iter().map(|(k, c)| (to_server.get(&k).copied().unwrap_or(k), c)).collect();
     let s_extra = match &s_ext {
         Some(t) => extended(&parse(t)?),
         None => HashMap::new(),
@@ -233,7 +247,8 @@ pub fn merge(server: &[u8], sent: &[u8], me: &Me) -> Result<Option<Merged>, Stri
     // Where each new comment goes: (paragraph, characters before) of its start and end.
     let mut first_mark: HashMap<(u32, bool), Option<Place>> = HashMap::new();
     for m in &u_marks {
-        first_mark.entry((m.id, m.start)).or_insert(m.para.map(|p| (p, m.off)));
+        let Some(id) = to_server.get(&m.id).copied().or_else(|| mark_id(m.id)) else { continue };
+        first_mark.entry((id, m.start)).or_insert(m.para.map(|p| (p, m.off)));
     }
     let mut places: BTreeMap<u32, (Place, Place)> = BTreeMap::new();
     for id in &new {
@@ -272,11 +287,13 @@ pub fn merge(server: &[u8], sent: &[u8], me: &Me) -> Result<Option<Merged>, Stri
             _ => {}
         }
     }
-    // The server's ids for the new comments: one past the largest used anywhere, in order.
+    // The server's ids for the new comments: one past the largest used, in order (looked for
+    // only when there are new comments: it reads several parts).
+    let used_max = if keep.is_empty() { None } else { largest_id(&mut szip)? };
     let mut sid_of: HashMap<u32, u32> = HashMap::new();
     let mut next = used_max.map_or(Some(0), |m| m.checked_add(1));
     for id in &keep {
-        let n = next.ok_or("no free comment id")?;
+        let n = next.filter(|n| *n <= MAX_ID).ok_or("no free comment id")?;
         sid_of.insert(*id, n);
         next = n.checked_add(1);
     }
@@ -591,8 +608,14 @@ pub fn merge(server: &[u8], sent: &[u8], me: &Me) -> Result<Option<Merged>, Stri
     // Whose comments these are now: the recorded ones still there, and the new ones.
     let mut own: HashMap<u32, String> = me.own.iter().filter(|(id, _)| mine(id) && !deleted.contains(id)).map(|(i, d)| (*i, d.clone())).collect();
     own.extend(keep.iter().map(|id| (sid(*id), me.date.clone())));
-    let renumbered = keep.iter().any(|id| sid(*id) != *id);
-    Ok(Some(Merged { bytes, own, renumbered }))
+    let ids: BTreeMap<u32, u32> = keep
+        .iter()
+        .filter_map(|id| {
+            let sent = back.get(id).copied().unwrap_or(*id);
+            (sent != sid(*id) || sent != *id).then_some((sent, sid(*id)))
+        })
+        .collect();
+    Ok(Some(Merged { bytes, own, ids }))
 }
 
 /// Takes the `deleted` comments out of commentsIds.xml and commentsExtensible.xml, and their
@@ -813,6 +836,63 @@ fn runs(w: &str, text: &str) -> String {
     }
     s.push_str(&format!("</{w}:r>"));
     s
+}
+
+/// The sent comments' ids as the server reads them (sent → read). An id `alias` names is the
+/// server's id it gives; a sent id that is one of those server ids without being named itself (a
+/// newer comment of the program's own that happens to have it) gets a free id past every other
+/// one, so it is new. `taken`: the server's largest comment id.
+fn rename(alias: &BTreeMap<u32, u32>, sent: BTreeSet<u32>, taken: Option<u32>) -> Result<BTreeMap<u32, u32>, String> {
+    if alias.len() > MAX_OWNED {
+        return Err("too many comment ids".into());
+    }
+    let targets: HashSet<u32> = alias.values().copied().collect();
+    if targets.len() != alias.len() {
+        return Err("two comments with one id".into());
+    }
+    let top = [taken, sent.last().copied(), targets.iter().max().copied()].into_iter().flatten().max();
+    let mut next = top.map_or(Some(0), |t| t.checked_add(1));
+    let mut map = BTreeMap::new();
+    for id in sent {
+        let to = match alias.get(&id) {
+            Some(t) => *t,
+            None if targets.contains(&id) => {
+                let n = next.ok_or("no free comment id")?;
+                next = n.checked_add(1);
+                n
+            }
+            None => id,
+        };
+        map.insert(id, to);
+    }
+    Ok(map)
+}
+
+/// The largest comment id used in the server's document: its text, comments, headers, footers
+/// and notes (any of those parts, by name), at most [`MAX_SCAN`] bytes of them in all.
+fn largest_id(zip: &mut zip::ZipArchive<Cursor<&[u8]>>) -> Result<Option<u32>, String> {
+    const KINDS: [&str; 6] = ["document", "comments", "header", "footer", "footnotes", "endnotes"];
+    let names: Vec<String> = zip
+        .file_names()
+        .filter(|n| {
+            let base = n.rsplit('/').next().unwrap_or(n).to_lowercase();
+            base.ends_with(".xml") && KINDS.iter().any(|k| base.starts_with(k))
+        })
+        .map(str::to_string)
+        .collect();
+    let mut left = MAX_SCAN;
+    let mut best = None;
+    for n in names {
+        let f = match zip.by_name(&n) {
+            Ok(f) => f,
+            Err(_) => return Err("a damaged part".into()),
+        };
+        let mut b = Vec::new();
+        f.take(left.saturating_add(1)).read_to_end(&mut b).map_err(|_| "a damaged part".to_string())?;
+        left = left.checked_sub(b.len() as u64).ok_or("the document is too large to comment on")?;
+        best = best.max(max_comment_id(&b));
+    }
+    Ok(best)
 }
 
 /// The largest comment id in a part: on any comment, commentRangeStart, commentRangeEnd or

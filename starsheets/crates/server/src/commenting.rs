@@ -22,7 +22,10 @@
 //!   or the file is deleted for good ([`forget_file`]), so a new account of the same name or a
 //!   new file can't inherit it.
 //! - New comments get the server's ids (docx_comments.rs); when those differ from the ones sent,
-//!   the reply says `"reopen": true` and the commenter's program opens the document again.
+//!   the reply's `"ids"` says which (`{"sent": server}`). The program keeps them and names them
+//!   in the `X-Comment-Ids` header of every later save (`sent=server,…`), so it never has to
+//!   change its own ids or open the document again (and a save already waiting to go out is
+//!   read right too).
 //! - A comment's author is the commenter's name with their username, so nobody can comment as
 //!   someone else by taking their display name. Invisible format characters (Unicode Cf, such as
 //!   U+202E, which turns text around) are taken out of the name.
@@ -100,7 +103,14 @@ fn log_path(a: &crate::App) -> std::path::PathBuf {
 
 /// A commenter's save of document `file`. `None` when `me` isn't a commenter on it: the request
 /// then goes the usual way (and is refused there if they may only view).
-pub(crate) async fn put(app: &Shared, me: Option<auth::User>, file: String, if_match: Option<String>, body: Bytes) -> Option<Response<Body>> {
+pub(crate) async fn put(
+    app: &Shared,
+    me: Option<auth::User>,
+    file: String,
+    if_match: Option<String>,
+    ids: Option<String>,
+    body: Bytes,
+) -> Option<Response<Body>> {
     if !app.auth {
         return None;
     }
@@ -148,7 +158,11 @@ pub(crate) async fn put(app: &Shared, me: Option<auth::User>, file: String, if_m
     let shown = clean_name(&me.name);
     let user = clean_name(&me.username);
     let name = if shown.is_empty() || shown == user { user } else { format!("{shown} ({user})") };
-    let who = crate::docx_comments::Me { initials: initials(&name), name, date: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(), own };
+    let Some(alias) = parse_ids(ids.as_deref().unwrap_or("")) else {
+        return Some(error(400, "bad X-Comment-Ids"));
+    };
+    let who =
+        crate::docx_comments::Me { initials: initials(&name), name, date: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(), own, alias };
     let merged = tokio::task::spawn_blocking(move || crate::docx_comments::merge(&old, &body, &who)).await;
     drop(turn);
     let merged = match merged {
@@ -197,13 +211,27 @@ pub(crate) async fn put(app: &Shared, me: Option<auth::User>, file: String, if_m
         all.insert("owned".into(), Value::Object(owned));
         let _ = a.store.save_json(&log, &Value::Object(all));
         let _ = spaces::note_changed(&a.store, &file, &me.username);
-        if merged.renumbered {
-            return send_json(&json!({"version": version, "name": name, "folder": folder, "reopen": true}), 200);
+        if !merged.ids.is_empty() {
+            let ids: serde_json::Map<String, Value> = merged.ids.iter().map(|(sent, id)| (sent.to_string(), json!(id))).collect();
+            return send_json(&json!({"version": version, "name": name, "folder": folder, "ids": ids}), 200);
         }
         send_json(&json!({"version": version, "name": name, "folder": folder}), 200)
     })
     .await;
     Some(r.unwrap_or_else(|| error(500, "server error")))
+}
+
+/// The `X-Comment-Ids` header: `sent=server` pairs, comma-separated (`None`: not readable, or more
+/// than a commenter can own).
+fn parse_ids(h: &str) -> Option<std::collections::BTreeMap<u32, u32>> {
+    let mut out = std::collections::BTreeMap::new();
+    for pair in h.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        let (a, b) = pair.split_once('=')?;
+        if out.insert(a.trim().parse().ok()?, b.trim().parse().ok()?).is_some() || out.len() > crate::docx_comments::MAX_OWNED {
+            return None;
+        }
+    }
+    Some(out)
 }
 
 /// Takes `keep` out of the record (under the store lock), and saves it if anything went.

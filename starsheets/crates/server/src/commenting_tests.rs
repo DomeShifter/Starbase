@@ -64,9 +64,17 @@ struct Got {
 }
 
 async fn send(app: &Shared, method: &str, uri: &str, cookie: &str, if_match: Option<&str>, body: Vec<u8>) -> Got {
+    send_ids(app, method, uri, cookie, if_match, "", body).await
+}
+
+/// [`send`] with an `X-Comment-Ids` header (when `ids` isn't empty).
+async fn send_ids(app: &Shared, method: &str, uri: &str, cookie: &str, if_match: Option<&str>, ids: &str, body: Vec<u8>) -> Got {
     use axum::http::header;
     use tower::ServiceExt;
     let mut b = axum::http::Request::builder().method(method).uri(uri).header(header::HOST, "192.168.1.5:8080");
+    if !ids.is_empty() {
+        b = b.header("X-Comment-Ids", ids);
+    }
     if !cookie.is_empty() {
         b = b.header(header::COOKIE, cookie);
     }
@@ -200,26 +208,27 @@ async fn a_commenters_saves_share_one_version_for_ten_minutes() {
     let _ = std::fs::remove_dir_all(&app.store.root);
 }
 
-/// Review of PR #56: new comments get the server's ids (the reply asks the program to open the
-/// document again when they differ), an edited own comment stays theirs, and the record of
-/// whose comments are whose goes with the account.
+/// Review of PR #56: new comments get the server's ids (the reply says which, and the program
+/// names them in later saves instead of opening the document again), an edited own comment
+/// stays theirs, and the record of whose comments are whose goes with the account.
 #[tokio::test]
 async fn server_ids_edits_stay_yours_and_the_record_goes_with_the_account() {
     let (app, boss, ann, _vic, id, _sheet) = setup().await;
     let v = send(&app, "GET", &format!("/api/files/{id}"), &ann, None, vec![]).await.etag;
-    // Sent as comment 7: the server's first id is 0, and the program is asked to open it again.
+    // Sent as comment 7: the server's first id is 0, and the reply says so.
     let g = send(&app, "PUT", &format!("/api/files/{id}"), &ann, Some(&v), commented(7, "Nice")).await;
     assert_eq!(g.status, 200, "{:?}", g.json);
-    assert_eq!(g.json["reopen"], true);
+    assert_eq!(g.json["ids"], json!({"7": 0}));
+    assert!(g.json.get("reopen").is_none(), "{:?}", g.json);
     let now = send(&app, "GET", &format!("/api/files/{id}"), &boss, None, vec![]).await;
     let c = part(&now.bytes, "word/comments.xml");
     assert!(c.contains(r#"w:id="0""#) && !c.contains(r#"w:id="7""#), "{c}");
-    // Opened again: edited twice, still hers each time, no reopen needed.
+    // Her program still calls it 7 and says so: edited twice, still hers each time.
     let mut v = now.etag;
     for text in ["Nicer", "Nicest"] {
-        let g = send(&app, "PUT", &format!("/api/files/{id}"), &ann, Some(&v), commented(0, text)).await;
+        let g = send_ids(&app, "PUT", &format!("/api/files/{id}"), &ann, Some(&v), "7=0", commented(7, text)).await;
         assert_eq!(g.status, 200, "{:?}", g.json);
-        assert!(g.json.get("reopen").is_none(), "{:?}", g.json);
+        assert!(g.json.get("ids").is_none(), "{:?}", g.json);
         v = g.json["version"].as_str().unwrap().to_string();
         let c = part(&send(&app, "GET", &format!("/api/files/{id}"), &boss, None, vec![]).await.bytes, "word/comments.xml");
         assert!(c.contains(&format!(">{text}<")), "{text}: {c}");
@@ -231,6 +240,51 @@ async fn server_ids_edits_stay_yours_and_the_record_goes_with_the_account() {
     assert_eq!(g.status, 200, "{:?}", g.json);
     assert!(log().get("owned").and_then(|o| o.get(&id)).and_then(|f| f.get("ann")).is_none(), "{:?}", log());
     let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+/// Review of PR #56 (2nd): a comment's record goes when its file is deleted for good, and a new
+/// account named like a removed one can't change the removed one's comment.
+#[tokio::test]
+async fn a_new_ann_cant_change_the_old_anns_comment_and_the_record_goes_with_the_file() {
+    let (app, boss, ann, _vic, id, _sheet) = setup().await;
+    let v = send(&app, "GET", &format!("/api/files/{id}"), &ann, None, vec![]).await.etag;
+    let g = send(&app, "PUT", &format!("/api/files/{id}"), &ann, Some(&v), commented(0, "Old Ann")).await;
+    assert_eq!(g.status, 200, "{:?}", g.json);
+    let log = || app.store.load_json(&app.store.meta().join("commenting.json"));
+    assert!(log()["owned"][&id].get("ann").is_some());
+    // Ann's account goes; a new "ann" is made and given commenting again.
+    assert_eq!(send(&app, "DELETE", "/api/users?username=ann", &boss, None, vec![]).await.status, 200);
+    let g = send(&app, "POST", "/api/users", &boss, None, js(json!({"username": "ann", "name": "Ann Two", "password": "annpassword2"}))).await;
+    assert_eq!(g.status, 200, "{:?}", g.json);
+    let ann2 = send(&app, "POST", "/api/login", "", None, js(json!({"username": "ann", "password": "annpassword2"}))).await.cookie;
+    let g = send(&app, "POST", &format!("/api/files/{id}/sharing"), &boss, None, js(json!({"people": {"ann": "comment"}}))).await;
+    assert_eq!(g.status, 200, "{:?}", g.json);
+    let v = send(&app, "GET", &format!("/api/files/{id}"), &ann2, None, vec![]).await.etag;
+    let g = send(&app, "PUT", &format!("/api/files/{id}"), &ann2, Some(&v), commented(0, "New Ann")).await;
+    assert_eq!(g.status, 200, "{:?}", g.json);
+    let c = part(&send(&app, "GET", &format!("/api/files/{id}"), &boss, None, vec![]).await.bytes, "word/comments.xml");
+    assert!(c.contains(">Old Ann<") && !c.contains("New Ann"), "{c}");
+    // A new comment of hers is recorded; the file deleted for good, the record goes.
+    let v = send(&app, "GET", &format!("/api/files/{id}"), &ann2, None, vec![]).await.etag;
+    let both = docx(
+        r#"<w:p><w:commentRangeStart w:id="0"/><w:commentRangeStart w:id="1"/><w:r><w:t>Hello world</w:t></w:r><w:commentRangeEnd w:id="0"/><w:commentRangeEnd w:id="1"/></w:p>"#,
+        r#"<w:comment w:id="0" w:author="x"><w:p><w:r><w:t>Old Ann</w:t></w:r></w:p></w:comment><w:comment w:id="1" w:author="x"><w:p><w:r><w:t>Hers</w:t></w:r></w:p></w:comment>"#,
+    );
+    let g = send(&app, "PUT", &format!("/api/files/{id}"), &ann2, Some(&v), both).await;
+    assert_eq!(g.status, 200, "{:?}", g.json);
+    assert!(log()["owned"][&id].get("ann").is_some(), "{:?}", log());
+    crate::commenting::forget_file(&app.store, &id);
+    assert!(log().get("owned").and_then(|o| o.get(&id)).is_none(), "{:?}", log());
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn comment_id_headers() {
+    assert_eq!(parse_ids(""), Some(std::collections::BTreeMap::new()));
+    assert_eq!(parse_ids("7=0, 9=12"), Some([(7, 0), (9, 12)].into_iter().collect()));
+    assert_eq!(parse_ids("7=0,7=1"), None, "one id twice");
+    assert_eq!(parse_ids("7"), None);
+    assert_eq!(parse_ids("-1=2"), None);
 }
 
 #[test]
