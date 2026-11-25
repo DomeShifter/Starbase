@@ -236,6 +236,7 @@ async fn change(app: &Shared, me: Option<auth::User>, id: String, act: String, b
         let mut all = load(a, &me);
         let at = all.iter().position(|al| al["id"] == id.as_str()).ok_or_else(|| error(404, "no such album"))?;
         let ids: Vec<String> = b["files"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
+        let mut added = 0;
         match act.as_str() {
             "delete" => {
                 all.remove(at);
@@ -244,7 +245,6 @@ async fn change(app: &Shared, me: Option<auth::User>, id: String, act: String, b
             "add" => {
                 let mut files = files_of(&all[at]);
                 let have: HashSet<String> = files.iter().cloned().collect();
-                let mut added = 0;
                 for f in ids.iter().filter(|f| !have.contains(*f)) {
                     // Only pictures I may see (no hint about files I may not).
                     if seen(a, &acc, f).is_some() && files.len() < MAX_FILES && !files[files.len().saturating_sub(added)..].contains(f) {
@@ -263,7 +263,8 @@ async fn change(app: &Shared, me: Option<auth::User>, id: String, act: String, b
         let out = if act == "delete" {
             json!({"deleted": true})
         } else {
-            json!({"id": all[at]["id"], "name": all[at]["name"], "count": files_of(&all[at]).len()})
+            // `added`: how many were new (pictures already in the album aren't added twice).
+            json!({"id": all[at]["id"], "name": all[at]["name"], "count": files_of(&all[at]).len(), "added": added})
         };
         save(a, &me, all)?;
         Ok(out)

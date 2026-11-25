@@ -383,6 +383,27 @@ impl Home {
         }
     }
 
+    /// What Photos asked for (its menu and selection bar): stars, the bin (with Undo), Details.
+    pub(super) fn photo_outs(&mut self, ctx: &egui::Context) {
+        for o in std::mem::take(&mut self.photos.out) {
+            match o {
+                photos::Out::Star(ids) => {
+                    // Like Google Photos: any not yet a favourite → all become one; else all stop.
+                    let on = !ids.iter().all(|id| self.file(id).is_some_and(|f| f.starred));
+                    for id in &ids {
+                        call(&self.store, &self.inbox, ctx, Method::Post, format!("api/files/{id}/star"), Some(format!("{{\"on\":{on}}}").into_bytes()), refresh_after);
+                    }
+                    let n = ids.len();
+                    let what = if n == 1 { "1 picture".to_string() } else { format!("{n} pictures") };
+                    let text = if on { format!("{what} added to Starred") } else { format!("{what} taken out of Starred") };
+                    self.photos.say(ctx, text, None);
+                }
+                photos::Out::Delete(ids) => self.delete(ctx, ids.into_iter().map(Item::File).collect()),
+                photos::Out::Info(id) => self.show_details(ctx, Item::File(id)),
+            }
+        }
+    }
+
     pub(super) fn show_details(&mut self, ctx: &egui::Context, item: Item) {
         self.details = Some((item.clone(), None));
         if self.accounts && !matches!(&item, Item::Folder(p) if !p.contains('/')) {

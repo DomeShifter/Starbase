@@ -99,6 +99,7 @@ impl Home {
         }
         if let Some(folder) = self.photo_folder() {
             self.photos.ui(ui, &self.store, &folder);
+            self.photo_outs(ui.ctx());
             return;
         }
         let (folders, files) = self.contents();
