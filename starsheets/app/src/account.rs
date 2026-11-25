@@ -695,8 +695,8 @@ impl Account {
     /// Renews a single sign-on session while the page stays open: shortly before it ends, or
     /// when a request found it ended (files.rs `fetch`, or the live connection can't get back
     /// in). It goes to the provider without asking and comes back to the same page, so it waits
-    /// for a quiet moment: nothing waiting to be saved or on its way, no cell being typed in, no
-    /// dialog open, and no input for a few seconds. If changes can't be saved for a minute
+    /// for a quiet moment: nothing waiting to be saved or on its way, no cell or text field being
+    /// typed in, no dialog open, and no input for a few seconds. If changes can't be saved for a minute
     /// because the session has ended, the sign-in box is shown instead (as before).
     fn renew_in_background(&mut self, ctx: &egui::Context) {
         let now = now_ms();
@@ -727,7 +727,11 @@ impl Account {
         let since = *self.renew_waiting.get_or_insert(now);
         let unsaved = web_sys::window().and_then(|w| js_sys::Reflect::get(&w, &"__ssUnsaved".into()).ok()).is_some_and(|v| v.is_truthy());
         let typing = TYPING.with(|t| *t.borrow());
+        // Any text field with focus (share, rename, new folder ...) or any dialog open: the
+        // renewal leaves the page, so what was typed there would be lost.
+        let busy = ctx.memory(|m| m.focused().is_some() || m.top_modal_layer().is_some());
         let quiet = !unsaved
+            && !busy
             && !crate::files::writes_in_flight()
             && !typing
             && self.dialog == Dialog::None

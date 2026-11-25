@@ -582,8 +582,17 @@ async fn accounts(
                 return Some(error(403, "Only the owner can do that."));
             }
             let who = q.get("username").cloned().unwrap_or_default();
+            let only = app.oidc.as_ref().is_some_and(|o| o.cfg.only);
             let r = blocking(app, move |app| {
-                if auth::users(&app.store).iter().any(|u| u.username == who) && !auth::has_password(&app.store, &who) {
+                let target = auth::users(&app.store).into_iter().find(|u| u.username == who);
+                // With STARSHEETS_OIDC_ONLY only owners may sign in with a password: anyone else
+                // unlinked couldn't sign in at all.
+                if only && target.as_ref().is_some_and(|u| !u.owner) {
+                    return Err(format!(
+                        "This server signs people in through single sign-on only, so {who}'s account must stay linked: without the link they couldn't sign in at all."
+                    ));
+                }
+                if target.is_some() && !auth::has_password(&app.store, &who) {
                     return Err(format!(
                         "{who} has no password, so they sign in only through single sign-on: removing the link would lock them out. They can set a password themselves first (Your name and colour › Set a password), then the link can go."
                     ));

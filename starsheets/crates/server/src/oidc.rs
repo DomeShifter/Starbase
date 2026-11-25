@@ -343,7 +343,8 @@ pub struct Identity {
     /// What they are called at the provider (preferred_username, else the start of their email).
     pub username: String,
     pub name: String,
-    /// Their email at the provider ("" when it gives none). Only shown, never used to match.
+    /// Their email at the provider ("" when it gives none or hasn't verified it). Only shown,
+    /// never used to match.
     pub email: String,
     pub groups: Vec<String>,
 }
@@ -377,6 +378,8 @@ pub struct Pending {
     nonce: String,
     verifier: String,
     made: Instant,
+    /// When it started, on the wall clock (seconds): a fresh sign-in must come after it.
+    made_at: i64,
     pub start: Start,
 }
 
@@ -455,7 +458,7 @@ impl Oidc {
         }
         let (url, state, nonce) = req.url();
         let binding = random_hex(32);
-        let p = Pending { binding: binding.clone(), nonce: nonce.secret().clone(), verifier: verifier.secret().clone(), made: Instant::now(), start };
+        let p = Pending { binding: binding.clone(), nonce: nonce.secret().clone(), verifier: verifier.secret().clone(), made: Instant::now(), made_at: chrono::Utc::now().timestamp(), start };
         self.keep(state.secret().clone(), p);
         Ok((url.to_string(), binding))
     }
@@ -530,8 +533,11 @@ impl Oidc {
             let at = claims
                 .auth_time()
                 .ok_or("the identity provider didn't say when the person signed in (auth_time), so a fresh sign-in can't be confirmed")?;
-            if (chrono::Utc::now() - at).num_seconds() > FRESH_SECS + self.cfg.skew as i64 {
-                return Err("the identity provider didn't ask the person to sign in again (auth_time is too old)".into());
+            // After this sign-in started (allowing for clock skew), not merely recently: a
+            // provider that ignored prompt=login and max_age=0 must not count as fresh.
+            let skew = self.cfg.skew as i64;
+            if at.timestamp() < p.made_at - skew || (chrono::Utc::now() - at).num_seconds() > FRESH_SECS + skew {
+                return Err("the identity provider didn't ask the person to sign in again (auth_time is before this sign-in started)".into());
             }
         }
         if let Some(expected) = claims.access_token_hash() {
@@ -553,6 +559,10 @@ impl Oidc {
         };
         let std = info.as_ref().map(|i| i.standard_claims());
         let email = std.and_then(|s| s.email()).map(|e| e.to_string()).or_else(|| id_str("email"));
+        // Shown in People only when the provider vouches for it: anyone can type any address.
+        let verified = std.and_then(|s| s.email_verified()).or_else(|| {
+            from_id.get("email_verified").and_then(|v| v.as_bool().or_else(|| v.as_str().map(|s| s.eq_ignore_ascii_case("true"))))
+        }) == Some(true);
         let username = std
             .and_then(|s| s.preferred_username())
             .map(|u| u.to_string())
@@ -570,7 +580,7 @@ impl Oidc {
             Some(g) => groups(Some(g)),
             None => groups(from_id.get(claim)),
         };
-        let email = email.unwrap_or_default();
+        let email = email.filter(|_| verified).unwrap_or_default();
         Ok((Identity { issuer, subject: subject.to_string(), username, name, email, groups }, raw))
     }
 

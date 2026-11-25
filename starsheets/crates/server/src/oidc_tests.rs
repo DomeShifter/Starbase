@@ -32,10 +32,12 @@ struct Person {
     groups: Vec<String>,
     /// Groups only in userinfo, as Authelia does.
     groups_in_userinfo_only: bool,
+    /// The provider hasn't checked their email (email_verified false).
+    email_unverified: bool,
 }
 
 fn person(sub: &str, username: &str, groups: &[&str]) -> Person {
-    Person { sub: sub.into(), username: username.into(), groups: groups.iter().map(|g| g.to_string()).collect(), groups_in_userinfo_only: false }
+    Person { sub: sub.into(), username: username.into(), groups: groups.iter().map(|g| g.to_string()).collect(), groups_in_userinfo_only: false, email_unverified: false }
 }
 
 struct Fake {
@@ -132,7 +134,7 @@ async fn userinfo(State(f): State<F>, headers: HeaderMap) -> axum::response::Res
     match f.tokens.lock().unwrap().get(bearer) {
         Some(p) => {
             let email = format!("{}@example.org", p.username.to_lowercase().replace(' ', "."));
-            axum::Json(json!({ "sub": p.sub, "preferred_username": p.username, "name": format!("{} (full name)", p.username), "email": email, "groups": p.groups }))
+            axum::Json(json!({ "sub": p.sub, "preferred_username": p.username, "name": format!("{} (full name)", p.username), "email": email, "email_verified": !p.email_unverified, "groups": p.groups }))
                 .into_response()
         }
         None => axum::response::Response::builder().status(401).body(Body::empty()).unwrap(),
@@ -513,6 +515,11 @@ async fn an_account_with_no_password_links_only_after_a_fresh_sign_in() {
     assert_eq!(g.status, 200, "{:?}", g.json);
     // A provider that didn't really ask again (an old auth_time): the sign-in fails.
     *f.auth_ago.lock().unwrap() = 3600;
+    let g = trip(&app, &f, "/api/oidc/login?fresh=1", "", &ann, None).await;
+    assert!(g.location.ends_with("sso=failed"), "{}", g.location);
+    // Nor one from a few minutes before this sign-in started (still "recent", but the provider
+    // ignored prompt=login and max_age=0).
+    *f.auth_ago.lock().unwrap() = 300;
     let g = trip(&app, &f, "/api/oidc/login?fresh=1", "", &ann, None).await;
     assert!(g.location.ends_with("sso=failed"), "{}", g.location);
     *f.auth_ago.lock().unwrap() = 0;
@@ -898,6 +905,12 @@ async fn only_single_sign_on_keeps_everyone_but_owners_linked() {
     let s = session(&sign_in(&app, &f, &person("sub-ann", "ann", &[])).await);
     assert_eq!(send(&app, "POST", "/api/oidc/unlink", &s, Value::Null).await.status, 400);
     assert!(auth::is_linked(&app.store, "ann"));
+    // Nor may the owner take the link away, though ann has a password: she couldn't use it.
+    let boss = send(&app, "POST", "/api/login", "", json!({"username": "boss", "password": "bosspassword"})).await.cookie(crate::COOKIE).unwrap();
+    let g = send(&app, "DELETE", "/api/users/sso?username=ann", &boss, Value::Null).await;
+    assert_eq!(g.status, 400);
+    assert!(g.json["error"].as_str().unwrap().contains("must stay linked"), "{:?}", g.json);
+    assert!(auth::is_linked(&app.store, "ann"));
     let _ = std::fs::remove_dir_all(&app.store.root);
 }
 
@@ -921,5 +934,10 @@ async fn people_shows_the_provider_and_what_it_calls_each_person() {
     let bob = send(&app, "POST", "/api/login", "", json!({"username": "bob", "password": "bobpassword"})).await.cookie(crate::COOKIE).unwrap();
     link_trip(&app, &f, &bob, "bobpassword", &person("sub-bob", "Bob B", &[])).await;
     assert_eq!(sso_of(&send(&app, "GET", "/api/users", &boss, Value::Null).await.json, "bob")["who"], "bob.b@example.org");
+    // An email the provider hasn't verified is never shown (anyone can type boss@corp): the
+    // provider's username is, instead.
+    let carl = Person { email_unverified: true, ..person("sub-carl", "carl", &[]) };
+    sign_in(&app, &f, &carl).await;
+    assert_eq!(sso_of(&send(&app, "GET", "/api/users", &boss, Value::Null).await.json, "carl")["who"], "carl");
     let _ = std::fs::remove_dir_all(&app.store.root);
 }
