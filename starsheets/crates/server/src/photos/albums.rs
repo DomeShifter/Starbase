@@ -98,9 +98,12 @@ fn clean_name(v: &Value) -> Result<String, Response<Body>> {
 }
 
 /// A picture I may see (id, path, whether its position may be given to me).
-type Seen = (String, String, bool);
+pub(super) type Seen = (String, String, bool);
 
-fn seen(a: &App, acc: &sharing::Access, id: &str) -> Option<Seen> {
+/// A picture as listed: id, index row, whether its position may be given.
+pub(super) type Pic = (String, Row, bool);
+
+pub(super) fn seen(a: &App, acc: &sharing::Access, id: &str) -> Option<Seen> {
     let path = acc.file_paths.get(id)?;
     if media_of(path).is_none() || acc.file_role(id) < sharing::Role::View || a.store.safe_file(path).is_none() {
         return None;
@@ -110,7 +113,7 @@ fn seen(a: &App, acc: &sharing::Access, id: &str) -> Option<Seen> {
 }
 
 /// Pictures as the listing shows them, newest first, and how many are still being read.
-fn rows_of(a: &Shared, seen: Vec<Seen>) -> (Vec<(String, Row, bool)>, u64) {
+pub(super) fn rows_of(a: &Shared, seen: Vec<Seen>) -> (Vec<(String, Row, bool)>, u64) {
     let Some(svc) = service(&a.store) else { return (Vec::new(), 0) };
     let mut out: Vec<(String, Row, bool)> = seen.into_iter().filter_map(|(id, path, gps)| svc.row(&path).map(|r| (id, r, gps))).collect();
     let key = |r: &Row| r.meta.taken.clone().map(|t| t.chars().take(19).collect::<String>()).unwrap_or_default();
@@ -119,7 +122,7 @@ fn rows_of(a: &Shared, seen: Vec<Seen>) -> (Vec<(String, Row, bool)>, u64) {
     (out, (q + w) as u64)
 }
 
-fn cover(rows: &[(String, Row, bool)]) -> Value {
+pub(super) fn cover(rows: &[(String, Row, bool)]) -> Value {
     rows.iter()
         .find_map(|(id, r, g)| photo_json(r, id, *g).get("v").filter(|v| v.is_string()).map(|v| json!({"id": id, "v": v})))
         .unwrap_or(Value::Null)
@@ -146,6 +149,7 @@ pub async fn route(
         (Some("albums"), "GET", Some(id), None, 3) => open_album(app, me, id).await,
         (Some("albums"), "POST", Some(id), Some(act @ ("rename" | "add" | "remove" | "delete")), 4) => change(app, me, id, act.to_string(), b).await,
         (Some("places"), "GET", None, _, 2) => places(app, me, q.get("place").cloned()).await,
+        (Some("events"), "GET", None, _, 2) => super::events::events(app, me, q.get("event").cloned()).await,
         _ => error(404, "not found"),
     }
 }
@@ -284,7 +288,7 @@ async fn places(app: &Shared, me: Option<auth::User>, place: Option<String>) -> 
     let (groups, waiting) = tokio::task::spawn_blocking(move || {
         let (rows, waiting) = rows_of(&app, mine);
         let mut cache: HashMap<(i64, i64), String> = HashMap::new();
-        let mut groups: Vec<(String, Vec<(String, Row, bool)>)> = Vec::new();
+        let mut groups: Vec<(String, Vec<Pic>)> = Vec::new();
         for x in rows {
             let Some((lat, lon)) = x.1.meta.lat.zip(x.1.meta.lon) else { continue };
             let name = cache.entry(((lat * 20.0).round() as i64, (lon * 20.0).round() as i64)).or_insert_with(|| place_name(lat, lon)).clone();

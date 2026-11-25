@@ -32,6 +32,7 @@ pub mod albums;
 pub mod crs;
 pub mod decode;
 pub mod edits;
+mod events;
 pub mod export;
 pub mod index;
 pub mod model;

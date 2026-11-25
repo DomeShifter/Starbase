@@ -19,6 +19,7 @@ pub(in crate::home) enum Tab {
     Photos,
     Albums,
     Places,
+    Events,
 }
 
 impl Tab {
@@ -28,6 +29,7 @@ impl Tab {
             Tab::Photos => "photos",
             Tab::Albums => "albums",
             Tab::Places => "places",
+            Tab::Events => "events",
         }
     }
 }
@@ -57,8 +59,10 @@ pub(in crate::home) struct Albums {
     pub tab: Tab,
     albums: Vec<Card>,
     places: Vec<Card>,
+    events: Vec<Card>,
     asked: bool,
     asked_places: bool,
+    asked_events: bool,
     /// The album or place opened.
     pub open: Option<Card>,
     pub selecting: bool,
@@ -136,12 +140,17 @@ impl Albums {
             self.asked_places = true;
             get(ctx, store, inbox, "api/photos/places", |v| Got::Cards(Tab::Places, v));
         }
+        if self.tab == Tab::Events && !self.asked_events {
+            self.asked_events = true;
+            get(ctx, store, inbox, "api/photos/events", |v| Got::Cards(Tab::Events, v));
+        }
     }
 
     pub fn take_cards(&mut self, t: Tab, v: &Json) {
         match t {
             Tab::Albums => self.albums = cards(v, "albums"),
             Tab::Places => self.places = cards(v, "places"),
+            Tab::Events => self.events = cards(v, "events"),
             Tab::Photos => {}
         }
     }
@@ -170,7 +179,7 @@ impl Albums {
         let mut sel: Vec<&String> = self.selected.iter().collect();
         sel.sort();
         json!({
-            "tab": self.tab.name(), "albums": c(&self.albums), "places": c(&self.places),
+            "tab": self.tab.name(), "albums": c(&self.albums), "places": c(&self.places), "events": c(&self.events),
             "open": self.open.as_ref().map(|c| json!({"id": c.id, "name": c.name})),
             "selecting": self.selecting, "selected": sel,
         })
@@ -197,9 +206,12 @@ impl PhotoMode {
     /// Left nav.
     pub(super) fn nav_ui(&mut self, ui: &mut Ui, _store: &Backend) {
         ui.add_space(house::S);
-        for (t, label, icon) in
-            [(Tab::Photos, "Photos", "photo_library"), (Tab::Albums, "Albums", "collections"), (Tab::Places, "Places", "location_on")]
-        {
+        for (t, label, icon) in [
+            (Tab::Photos, "Photos", "photo_library"),
+            (Tab::Albums, "Albums", "collections"),
+            (Tab::Places, "Places", "location_on"),
+            (Tab::Events, "Events", "event"),
+        ] {
             let on = self.alb.tab == t;
             let b = egui::Button::new(RichText::new(format!("  {label}")).size(house::BODY).color(theme::TEXT))
                 .fill(if on { theme::SHARE } else { Color32::TRANSPARENT })
@@ -239,7 +251,11 @@ impl PhotoMode {
         self.alb.ask = Ask::None;
         self.loading = true;
         let t = self.alb.tab;
-        let url = if t == Tab::Albums { format!("api/photos/albums/{}", c.id) } else { format!("api/photos/places?place={}", enc(&c.id)) };
+        let url = match t {
+            Tab::Albums => format!("api/photos/albums/{}", c.id),
+            Tab::Events => format!("api/photos/events?event={}", enc(&c.id)),
+            _ => format!("api/photos/places?place={}", enc(&c.id)),
+        };
         let key = c.id.clone();
         self.alb.open = Some(c);
         get(ctx, store, &self.inbox, &url, move |v| Got::Opened(t, key, v));
@@ -259,7 +275,14 @@ impl PhotoMode {
         let t = self.alb.tab;
         if let Some(c) = self.alb.open.clone() {
             ui.horizontal(|ui| {
-                if ui.add(link(if t == Tab::Albums { "‹ Albums" } else { "‹ Places" })).clicked() {
+                if ui
+                    .add(link(match t {
+                        Tab::Albums => "‹ Albums",
+                        Tab::Events => "‹ Events",
+                        _ => "‹ Places",
+                    }))
+                    .clicked()
+                {
                     self.alb.open = None;
                     self.alb.selecting = false;
                     self.alb.selected.clear();
@@ -273,6 +296,9 @@ impl PhotoMode {
                 if !self.pics.is_empty() && self.pill(ui, if self.alb.selecting { "Done selecting" } else { "Select" }, self.alb.selecting) {
                     self.alb.selecting = !self.alb.selecting;
                     self.alb.selected.clear();
+                }
+                if t == Tab::Events && !self.pics.is_empty() && self.pill(ui, "Save as album", false) {
+                    self.create(ui.ctx(), store, &c.name, true);
                 }
                 if t == Tab::Albums {
                     if self.pill(ui, "Rename", false) {
@@ -311,15 +337,21 @@ impl PhotoMode {
             });
             self.pick_ui(ui, store);
         } else {
-            ui.label(RichText::new("Places").size(house::TITLE).color(theme::TEXT));
+            ui.label(RichText::new(if t == Tab::Events { "Events" } else { "Places" }).size(house::TITLE).color(theme::TEXT));
             self.alb.boot_cards(&ctx, store, &self.inbox);
         }
         ui.add_space(house::S);
-        let list = if t == Tab::Albums { self.alb.albums.clone() } else { self.alb.places.clone() };
+        let list = match t {
+            Tab::Albums => self.alb.albums.clone(),
+            Tab::Events => self.alb.events.clone(),
+            _ => self.alb.places.clone(),
+        };
         if list.is_empty() {
             ui.add_space(house::XL);
             let text = if t == Tab::Albums {
                 "No albums yet."
+            } else if t == Tab::Events {
+                "No events yet: five or more pictures taken close together in time show up here."
             } else {
                 "No places yet: pictures with a position (GPS) from folders you can edit show up here."
             };
@@ -396,7 +428,7 @@ impl PhotoMode {
                                 self.rename(&ctx, store, &c.id, &name);
                             }
                         } else {
-                            self.create(&ctx, store, &name);
+                            self.create(&ctx, store, &name, false);
                         }
                         self.alb.ask = Ask::None;
                     }
@@ -457,8 +489,8 @@ impl PhotoMode {
         self.alb.selecting = false;
     }
 
-    fn create(&mut self, ctx: &egui::Context, store: &Backend, name: &str) {
-        let files = self.selection();
+    fn create(&mut self, ctx: &egui::Context, store: &Backend, name: &str, all: bool) {
+        let files = if all { self.pics.iter().map(|p| p.id.clone()).collect() } else { self.selection() };
         post(ctx, store, &self.inbox, "api/photos/albums", json!({"name": name, "files": files}));
         self.alb.selected.clear();
         self.alb.selecting = false;
@@ -491,7 +523,8 @@ impl PhotoMode {
                     "photos" => Tab::Photos,
                     "albums" => Tab::Albums,
                     "places" => Tab::Places,
-                    _ => return Err("tab is photos, albums or places".into()),
+                    "events" => Tab::Events,
+                    _ => return Err("tab is photos, albums, places or events".into()),
                 };
                 self.go(t);
             }
@@ -510,7 +543,7 @@ impl PhotoMode {
             }
             "home:photos:album:new" => {
                 let n = s("name");
-                self.create(ctx, store, &n);
+                self.create(ctx, store, &n, false);
             }
             "home:photos:album:open" => {
                 let c = find(&self.alb.albums, &s("album")).ok_or("no such album")?;
@@ -522,6 +555,16 @@ impl PhotoMode {
                 self.alb.boot_cards(ctx, store, &self.inbox);
                 let c = find(&self.alb.places, &s("place")).ok_or("no such place (yet)")?;
                 self.open_card(ctx, store, c);
+            }
+            "home:photos:event:open" => {
+                self.alb.tab = Tab::Events;
+                self.alb.boot_cards(ctx, store, &self.inbox);
+                let c = find(&self.alb.events, &s("event")).ok_or("no such event (yet)")?;
+                self.open_card(ctx, store, c);
+            }
+            "home:photos:event:save" => {
+                let c = self.alb.open.clone().filter(|_| self.alb.tab == Tab::Events).ok_or("no event is open")?;
+                self.create(ctx, store, &c.name, true);
             }
             "home:photos:album:back" => {
                 self.alb.open = None;
