@@ -178,6 +178,9 @@ impl Home {
                 if house::menu_row(ui, Some("description"), "New document", "", true) {
                     self.new_file(&into, true);
                 }
+                if self.store.has_slides() && house::menu_row(ui, Some("slideshow"), "New presentation", "", true) {
+                    self.store.new_presentation(&into);
+                }
                 if house::menu_row(ui, Some("create_new_folder"), "New folder", "", true) {
                     if here.is_none() {
                         self.navigate(View::Mine(self.space.clone()));
@@ -331,7 +334,7 @@ impl Home {
 
     pub(super) fn file_card(&mut self, ui: &mut Ui, ctx: &egui::Context, f: &FileRow, clicked_item: &mut bool) {
         let item = Item::File(f.id.clone());
-        let kind = if crate::store::is_doc(&f.name) { "stardocs" } else { "starsheets" };
+        let kind = crate::store::app_icon(&f.name);
         let (r, resp) = ui.allocate_exact_size(vec2(CARD_W, CARD_H), Sense::click_and_drag());
         if ui.is_rect_visible(r) {
             self.want_thumb(ctx, f);
@@ -430,7 +433,7 @@ impl Home {
                 Item::File(id) => self.file(id).map(|f| ListRow {
                     item: item.clone(),
                     name: f.name.clone(),
-                    icon: if crate::store::is_doc(&f.name) { "stardocs" } else { "starsheets" },
+                    icon: crate::store::app_icon(&f.name),
                     owner: f.owner.clone(),
                     modified: f.modified,
                     size: Some(f.size),
@@ -578,11 +581,11 @@ struct ListRow {
     starred: bool,
 }
 
-/// A file's name as Drive shows it: without `.xlsx` or `.docx` (the icon says which it is; the
+/// A file's name as Drive shows it: without `.xlsx`, `.docx` or `.pptx` (the icon says which it is; the
 /// full name shows on hover). Other extensions (.csv, .odt) stay.
 fn shown_name(name: &str) -> &str {
     let lower = name.to_ascii_lowercase();
-    if (lower.ends_with(".xlsx") || lower.ends_with(".docx")) && name.len() > 5 { &name[..name.len() - 5] } else { name }
+    if (lower.ends_with(".xlsx") || lower.ends_with(".docx") || lower.ends_with(".pptx")) && name.len() > 5 { &name[..name.len() - 5] } else { name }
 }
 
 /// `text` on one line, at most `width` wide: cut short with "…" when longer (as Drive does).

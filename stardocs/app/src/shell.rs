@@ -1803,7 +1803,7 @@ fn has_icons(items: &[Item]) -> bool {
 
 /// A menu row: the icon column (an icon, a tick, or the same space blank), the label, and the
 /// shortcut in grey at the right.
-fn menu_row(icon: Option<&str>, column: bool, label: &str, keys: &str, width: f32) -> Button<'static> {
+pub(crate) fn menu_row(icon: Option<&str>, column: bool, label: &str, keys: &str, width: f32) -> Button<'static> {
     let b = row_start(icon, column, label);
     // The shortcut's stretch keeps the label at the left; without one an empty growing space
     // does (an empty shortcut text would add a space to the entry's name).
@@ -1890,6 +1890,10 @@ fn menu_items(app: &mut WordApp, ui: &mut Ui, flags: &mut Flags, items: &[Item],
                 {
                     recent_menu(ui, link, width, column);
                     server_menu(ui, link, width, column);
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                if *id == "ui.dialog:about" && link.is_some() {
+                    crate::updates::menu(app, ui, width, column);
                 }
             }
             Toggle(_, id, key, _) => {

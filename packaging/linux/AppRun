@@ -18,6 +18,8 @@ export STARBASE_APPDIR="$HERE"
 case "$(basename "${ARGV0:-}")" in
   stardocs*) exec "$BIN/stardocs" "$@" ;;
   starsheets*) exec "$BIN/starsheets" "$@" ;;
+  # STARBASE-OPEN HANDLER (reserved, enable when the starbase-open program is on main):
+  # starbase-open*) exec "$BIN/starbase-open" "$@" ;;
 esac
 
 case "${1:-}" in
@@ -27,6 +29,7 @@ case "${1:-}" in
     "$BIN/starsheets" --version
     exec "$BIN/stardocs" --version
     ;;
+  # STARBASE-OPEN HANDLER (reserved): add starbase-open to this program-name list.
   stardocs | starsheets)
     prog="$1"
     shift
