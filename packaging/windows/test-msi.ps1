@@ -31,9 +31,11 @@ function Value([string] $key, [string] $name) {
   if ($null -eq $item) { return $null }
   return $item.$name
 }
+# Installed Starbase products, from Windows Installer itself (per-user MSIs don't write the
+# HKCU ...\Uninstall key the Settings page reads for other installers).
 function Entries() {
-  @(Get-ChildItem "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall" -ErrorAction SilentlyContinue |
-    ForEach-Object { Get-ItemProperty $_.PSPath } | Where-Object { $_.DisplayName -eq "Starbase" })
+  $wi = New-Object -ComObject WindowsInstaller.Installer
+  @($wi.ProductsEx("", "", 7) | Where-Object { $_.InstallProperty("ProductName") -eq "Starbase" })
 }
 # Starts a program (or a shortcut), checks its process is still there after 15 s, stops it.
 function Starts([string] $what, [string] $process, [string] $file, [string[]] $arguments = @()) {

@@ -9,7 +9,7 @@
      LICENSE-APACHE, NOTICE). -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <!-- Never change the UpgradeCode: it is how a new version finds and replaces the old one. -->
-  <Package Name="Starbase" Manufacturer="Starbase" Version="$(var.Version)" UpgradeCode="921E99DB-A58B-4B2C-9DAB-5616EDA8D9EA" Scope="perUser" Compressed="yes" Language="1033">
+  <Package Name="Starbase" Manufacturer="Starbase" Version="$(var.Version)" UpgradeCode="921E99DB-A58B-4B2C-9DAB-5616EDA8D9EA" Scope="perUserOrMachine" Compressed="yes" Language="1033">
     <SummaryInformation Description="Starbase: Drive, Sheets and Docs" Manufacturer="Starbase" />
     <!-- Upgrade in place. Same-version upgrades let development builds of one a.b.c replace each
          other (Windows Installer compares only the first three fields). -->
@@ -24,7 +24,9 @@
     <Property Id="ARPHELPLINK" Value="https://github.com/DomeShifter/Starbase/issues" />
     <Property Id="ARPNOMODIFY" Value="1" />
 
-    <!-- Per-user: Windows Installer puts this in %LOCALAPPDATA%\Programs\Starbase. -->
+    <!-- Per-user by default (perUserOrMachine = ALLUSERS=2 + MSIINSTALLPERUSER=1, no administrator):
+         only then does Windows Installer redirect ProgramFiles64Folder to %LOCALAPPDATA%\Programs\Starbase.
+         A plain Scope="perUser" (ALLUSERS empty) leaves it at C:\Program Files (CI 2026-11-25). -->
     <StandardDirectory Id="ProgramFiles64Folder">
       <Directory Id="INSTALLFOLDER" Name="Starbase" />
     </StandardDirectory>
