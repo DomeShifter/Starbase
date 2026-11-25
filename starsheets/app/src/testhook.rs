@@ -188,12 +188,21 @@ fn run(ctx: &egui::Context, app: &mut SheetApp, home: &mut Home, id: &str, param
         return Err(format!("`{id}` needs a spreadsheet open (this is the home screen)"));
     }
     let entry = id.starts_with("panel:") || id.starts_with("ui:") || matches!(id, "edit.copy" | "edit.cut" | "edit.paste");
+    // Menu entries that run engine commands themselves (Sort sheet, Freeze…) answer like commands.
+    if crate::menuactions::handles(id) {
+        crate::shell::run_entry_with(app, ctx, id, params);
+        return match app.message.take() {
+            Some((title, text)) if title != "Trim whitespace" => Err(text),
+            Some((_, text)) => Ok(json!({ "done": id, "message": text })),
+            None => Ok(json!({ "done": id })),
+        };
+    }
     if entry {
         // Panels, dialogs and the clipboard: the menus' own path (they answer nothing back).
         if !crate::shell::entry_ids().contains(&id) && !id.starts_with("edit.") {
             return Err(format!("`{id}` is not on any menu or toolbar"));
         }
-        crate::shell::run_entry(app, ctx, id);
+        crate::shell::run_entry_with(app, ctx, id, params);
         return Ok(json!({ "opened": id }));
     }
     // An engine command, with parameters as the toolbar passes them; errors come back as text
@@ -311,6 +320,7 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
         "sheets": sheets,
         "active": active.a1(),
         "selection": ranges.join(","),
+        "freeze": wb.active().and_then(|s| s.freeze).map(|(r, c)| json!({ "rows": r, "cols": c })),
         "cell": cell,
         "format": format,
         "saved": saving == "Saved",

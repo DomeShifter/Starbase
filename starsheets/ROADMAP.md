@@ -28,7 +28,8 @@
 - [x] Enter edits, no selection animation, Backspace only clears (patch 0004)
 - [ ] Cell interactions list, remaining rows (docs/sheets-reference.md §4b)
 - [x] Sheets keyboard shortcuts that differ from Excel (patch 0011; Ctrl+Shift+F and Alt+1 in the app)
-- [ ] Still to do from §5: Ctrl+/ shortcut list, Alt+/ tool finder, Alt+Shift+K sheet list, comment navigation keys
+- [x] Ctrl+/ shortcut list, Alt+/ menu search, Ctrl+Shift+V paste values
+- [ ] Still to do from §5: Alt+Shift+K sheet list, comment navigation keys
 - [ ] Side panels instead of dialogs (conditional formatting, data validation, charts)
 - [x] Default text size 10 pt
 - [x] Default 21 px rows and 100 px columns for new sheets only (patch 0010; opened files keep their sizes)
@@ -38,7 +39,8 @@
 - [x] Sheets-style menus: icons, 32 px rows, grey shortcuts, ▸ submenus, dividers, rounded panel with shadow (docs/sheets-menus.md); Sheets-blue links (patch 0014); link card under its cell
 - [x] Menu contents matched to docs/sheets-menus.md where GridCraft has the command (Number, Rotation, Font size, Function, Zoom submenus; UK wording)
 - [x] Right-click menus (cell, row and column headers, sheet tab + its ▾) and toolbar dropdowns (icon strips, number formats with examples) in the Sheets look (patch 0015)
-- [ ] Still missing from Sheets menus: Clip wrapping, Help › Keyboard shortcuts (Ctrl+/), Search the menus (Alt+/), Hidden sheets, Full screen, Version history (phase 2)
+- [x] Sheets menu batch 1 (docs/research/google-sheets-gap.md items 2-6, 9): Paste special sub-menu, Move column, Freeze 2 rows/columns, Sort sheet, Randomise range, Trim whitespace, Custom currency, Keyboard shortcuts, Search the menus
+- [ ] Still missing from Sheets menus: Clip wrapping, Hidden sheets, Full screen, Version history (phase 2), Edit › Move row up/down, Paste special › Conditional formatting only, Alternating colours (all need engine work)
 - [x] Named ranges suggested while typing formulas (patch 0016); sheet tabs: ▾ opens the menu, drag to reorder
 - [x] Conditional formatting side panel: single colour (19 Sheets conditions, style, presets) and colour scales with configurable points (docs/sheets-cf.md, patch 0017); tab colour bar inside the tab
 - [x] Data validation side panel: Sheets' 25 criteria, drop-down items with colours, help text, warning or reject, arrow or plain (docs/sheets-dv.md, patch 0018)

@@ -611,3 +611,115 @@ fn comment_cards_reply_resolve_and_delete_are_reachable() {
         assert!(h.query_all(By::new().label(label)).next().is_some(), "the comments panel shows {label}");
     }
 }
+
+#[test]
+fn viewing_mode_refuses_edits_for_this_session_only() {
+    let mut h = window(1400.0);
+    type_text(&mut h, "Draft");
+    click(&mut h, "Editing");
+    click_containing(&mut h, "Read or print the final document");
+    assert_eq!(h.state_mut().state()["mode"], "viewing");
+    assert_eq!(h.state_mut().view("viewing"), true);
+    assert_eq!(h.state_mut().view("showMarkup"), false, "Viewing shows the final document");
+    type_text(&mut h, " more");
+    assert_eq!(body_text(&mut h).trim_end(), "Draft", "typing is refused while viewing");
+    assert!(h.state().app.session.doc.settings.protection.is_none(), "nothing is written into the document");
+    assert!(h.get(By::new().label("Bold (Ctrl+B)")).accesskit_node().is_disabled(), "the toolbar is greyed");
+    // The mode box and View › Mode still work.
+    menu(&mut h, &["View", "Mode", "Editing: edit the document directly"]);
+    assert_eq!(h.state_mut().state()["mode"], "editing");
+    assert_eq!(h.state_mut().view("showMarkup"), true);
+    type_text(&mut h, "!");
+    assert_eq!(body_text(&mut h).trim_end(), "Draft!");
+    menu(&mut h, &["View", "Mode", "Viewing: read or print the final document"]);
+    assert_eq!(h.state_mut().state()["mode"], "viewing");
+}
+
+fn checklist_items(h: &Harness<'static, Win>) -> usize {
+    let doc = &h.state().app.session.doc;
+    let body = wordcraft_doc::StoryRef::Body;
+    doc.para_paths(body).iter().filter(|p| wordcraft_engine::cmd::checklist::item_box(doc, body, p).is_some()).count()
+}
+
+#[test]
+fn checklist_from_the_menu_and_ctrl_shift_9() {
+    let mut h = window(1400.0);
+    type_text(&mut h, "Milk");
+    keys(&mut h, Modifiers::COMMAND | Modifiers::SHIFT, Key::Num9);
+    assert_eq!(checklist_items(&h), 1, "Ctrl+Shift+9 makes a checklist");
+    keys(&mut h, Modifiers::NONE, Key::Enter);
+    type_text(&mut h, "Eggs");
+    assert_eq!(checklist_items(&h), 2, "Enter starts the next item");
+    run(&mut h, "select.all", json!({}));
+    menu(&mut h, &["Format", "Bullets and numbering", "Checklist"]);
+    assert_eq!(checklist_items(&h), 0, "Checklist again takes the boxes away");
+    assert_eq!(body_text(&mut h).trim_end().replace('\r', "\n"), "Milk\nEggs");
+}
+
+#[test]
+fn a_pictures_right_click_menu_offers_format_image() {
+    let mut h = window(1400.0);
+    run(&mut h, "insert.picture", json!({"data": PNG, "width": 100}));
+    if selected_picture(&h).is_none() {
+        run(&mut h, "select.all", json!({}));
+    }
+    assert!(selected_picture(&h).is_some());
+    // Shift+F10 opens the page's right-click menu, as a right-click on the picture does.
+    h.state_mut().app.canvas.context_menu_from_keys = true;
+    steps(&mut h, 3);
+    let labels: Vec<String> =
+        h.query_all(By::new().role(Role::Button)).map(|n| n.accesskit_node().label().unwrap_or_default().trim().to_string()).collect();
+    assert!(!labels.iter().any(|l| l.starts_with("Size and Crop")), "not WordCraft's item, which opens a hidden ribbon tab: {labels:?}");
+    for label in ["Crop image", "Size and rotation", "Text wrapping", "Alt text", "Replace image", "Reset image"] {
+        assert!(labels.iter().any(|l| l == label), "Format › Image's {label} is in the menu: {labels:?}");
+    }
+    click_containing(&mut h, "Size and rotation");
+    assert_eq!(h.state_mut().state()["dialogs"]["wordcraft"], true, "Size and rotation opens WordCraft's size dialog");
+}
+
+#[test]
+fn every_menu_icon_is_bundled() {
+    fn walk(items: &[crate::shell::Item], bad: &mut Vec<String>) {
+        use crate::shell::Item::{Cmd, Sub};
+        for item in items {
+            if let Cmd(label, ..) | Sub(label, _) = item
+                && let Some(name) = crate::icons::menu_icon_name(label)
+                && crate::icons::icon(name).is_none()
+            {
+                bad.push(format!("{label}: {name}"));
+            }
+            if let Sub(_, sub) = item {
+                walk(sub, bad);
+            }
+        }
+    }
+    let mut bad = Vec::new();
+    for (_, items) in crate::shell::MENUS {
+        walk(items, &mut bad);
+    }
+    assert!(bad.is_empty(), "menu icons missing from icons.rs: {bad:?}");
+}
+
+/// Docs' menus: every row the same height, and every row (so every label after the icon
+/// column) starting at the same place.
+#[test]
+fn menu_rows_are_even_and_line_up() {
+    let mut h = window(1400.0);
+    for menu in ["File", "Edit", "View", "Insert", "Format", "Tools", "Help"] {
+        click(&mut h, menu);
+        let toolbar = h.state().toolbar.clone();
+        let named: Vec<(String, egui::Rect)> = h
+            .query_all(By::new().role(Role::Button))
+            .map(|n| (n.accesskit_node().label().unwrap_or_default(), n.rect()))
+            .filter(|(_, r)| !toolbar.contains(r))
+            .collect();
+        let rows: Vec<egui::Rect> = named.iter().map(|(_, r)| *r).collect();
+        assert!(rows.len() >= 3, "{menu} opened: {rows:?}");
+        for r in &rows {
+            assert!((r.height() - 32.0).abs() < 0.6, "{menu}: a {}-px row in {named:?}", r.height());
+        }
+        let lefts: Vec<f32> = rows.iter().map(|r| r.left()).collect();
+        assert!(lefts.iter().all(|l| (l - lefts[0]).abs() < 0.6), "{menu}: rows start together {lefts:?}");
+        close_menus(&mut h);
+    }
+}

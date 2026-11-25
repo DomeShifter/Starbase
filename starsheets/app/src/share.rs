@@ -202,13 +202,24 @@ impl Share {
         let mut save = false;
         let owner = self.you == "owner";
         let title = format!("Share \"{}\"", self.name);
-        house::dialog(ctx, "starsheets_share", 520.0, &title, Some(&mut close), |ui| {
+        // Google's (and Starbase Docs') share dialog: blue buttons, no ✕ (Cancel and Done close it).
+        house::dialog(ctx, "starsheets_share", 520.0, &title, None, |ui| {
             if !self.loaded {
                 house::note(ui, "Loading…");
+                if let Some(e) = &self.error {
+                    ui.label(RichText::new(e).size(house::NOTE).color(house::ERROR));
+                }
+                if house::actions_in(ui, &["Close"], house::BLUE).is_some() {
+                    close = true;
+                }
                 return;
             }
             // Add people: everyone with an account here who isn't on the list yet.
             let others: Vec<Me> = self.users.iter().filter(|u| !self.people.iter().any(|p| p.username == u.username)).cloned().collect();
+            if owner && others.is_empty() {
+                house::label(ui, "Add people", "Everyone with an account on this server is on the list below.");
+                house::gap(ui);
+            }
             if owner && !others.is_empty() {
                 house::label(ui, "Add people", "");
                 ui.horizontal(|ui| {
@@ -217,7 +228,7 @@ impl Share {
                     self.add = self.add.min(refs.len().saturating_sub(1));
                     house::select(ui, "starsheets_share_add", 250.0, &mut self.add, &refs, &[]);
                     house::select(ui, "starsheets_share_add_role", 110.0, &mut self.add_role, &ROLES[..2], &[]);
-                    if ui.add(house::secondary("Add")).clicked()
+                    if ui.add(house::secondary_in("Add", house::BLUE)).clicked()
                         && let Some(u) = others.get(self.add)
                     {
                         self.people.push(Person {
@@ -237,6 +248,8 @@ impl Share {
                     avatar(ui, &p.name, &p.colour, 30.0);
                     ui.add_space(house::S);
                     ui.vertical(|ui| {
+                        // Name and user name close together, as in Docs.
+                        ui.spacing_mut().item_spacing.y = 0.0;
                         ui.label(RichText::new(&p.name).size(house::BODY).color(theme::TEXT));
                         house::note(ui, &p.username);
                     });
@@ -263,19 +276,25 @@ impl Share {
             house::gap(ui);
             ui.horizontal(|ui| {
                 let mut url = self.link_url();
-                ui.add(egui::TextEdit::singleline(&mut url).desired_width(360.0).margin(vec2(house::S, house::XS + 2.0)));
-                if ui.add(house::secondary(if self.copied { "Copied" } else { "Copy link" })).clicked() {
+                // The link box fills the row beside Copy link and is as tall as the buttons.
+                let width = ui.available_width() - 104.0 - house::S;
+                ui.add_sized(vec2(width, house::FIELD_HEIGHT), house::field(&mut url, house::BODY));
+                let copy = house::secondary_in(if self.copied { "Copied" } else { "Copy link" }, house::BLUE);
+                if ui.add(copy.min_size(vec2(104.0, house::BUTTON_HEIGHT))).clicked() {
                     if let Some(w) = web_sys::window() {
                         let _ = w.navigator().clipboard().write_text(&url);
                     }
                     self.copied = true;
                 }
             });
+            if self.copied {
+                house::note(ui, "Link copied. Anyone you send it to signs in here first.");
+            }
             if let Some(e) = &self.error {
                 ui.label(RichText::new(e).size(house::NOTE).color(house::ERROR));
             }
             let labels: &[&str] = if owner { &["Cancel", "Done"] } else { &["Done"] };
-            match house::actions(ui, labels) {
+            match house::actions_in(ui, labels, house::BLUE) {
                 Some(i) if owner && i == 1 => save = true,
                 Some(_) => cancel = true,
                 None => {}

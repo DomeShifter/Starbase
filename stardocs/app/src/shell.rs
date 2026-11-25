@@ -35,6 +35,43 @@ use Item::{Cmd, Flip, Sep, Sub, TableGrid, Toggle};
 
 const NO: &str = "{}";
 
+/// Format › Image, which the page's right-click menu also shows for a selected picture
+/// ([`picture_menu`]).
+pub const IMAGE: &[Item] = &[
+    Cmd("Crop image", "ui.crop", NO, ""),
+    Cmd("Size and rotation", "picture.size", NO, ""),
+    Sub(
+        "Rotate",
+        &[
+            Cmd("Rotate clockwise 90°", "arrange.rotate", r#"{"direction":"right"}"#, ""),
+            Cmd("Rotate anticlockwise 90°", "arrange.rotate", r#"{"direction":"left"}"#, ""),
+            Cmd("Flip horizontally", "arrange.rotate", r#"{"direction":"flipHorizontal"}"#, ""),
+            Cmd("Flip vertically", "arrange.rotate", r#"{"direction":"flipVertical"}"#, ""),
+        ],
+    ),
+    Sub(
+        "Text wrapping",
+        &[
+            Cmd("In line with text", "arrange.wrap", r#"{"wrap":"inline"}"#, ""),
+            Cmd("Wrap text", "arrange.wrap", r#"{"wrap":"square"}"#, ""),
+            Cmd("Break text", "arrange.wrap", r#"{"wrap":"topAndBottom"}"#, ""),
+            Cmd("Behind text", "arrange.wrap", r#"{"wrap":"behindText"}"#, ""),
+            Cmd("In front of text", "arrange.wrap", r#"{"wrap":"inFrontOfText"}"#, ""),
+        ],
+    ),
+    Sep,
+    Cmd("Alt text", "view.altTextPane", r#"{"value":true}"#, ""),
+    Cmd("Replace image", "ui.changePicture", NO, ""),
+    Cmd("Reset image", "picture.reset", NO, ""),
+];
+
+/// The page's right-click menu for a selected picture: Format › Image's items in place of
+/// WordCraft's own, whose Size and Crop would open a ribbon tab StarDocs hides (fork change
+/// StarDocs 0007, `WordApp::set_picture_menu`). They are all WordCraft commands.
+pub fn picture_menu(app: &mut WordApp, ui: &mut Ui) {
+    menu_items(app, ui, &mut Flags::default(), IMAGE, None);
+}
+
 /// The menus, in Google Docs' order and wording. An id starting `ui.dialog:` opens that
 /// WordCraft dialog.
 pub const MENUS: &[(&str, &[Item])] = &[
@@ -86,6 +123,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
                 &[
                     Cmd("Editing: edit the document directly", "stardocs.editing", NO, ""),
                     Cmd("Suggesting: edits become suggestions", "stardocs.suggesting", NO, ""),
+                    Cmd("Viewing: read or print the final document", "stardocs.viewing", NO, ""),
                 ],
             ),
             Sep,
@@ -310,6 +348,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
                 &[
                     Cmd("Bulleted list", "para.bullets", NO, "Ctrl+Shift+8"),
                     Cmd("Numbered list", "para.numbering", NO, "Ctrl+Shift+7"),
+                    Cmd("Checklist", "list.checklist", NO, "Ctrl+Shift+9"),
                     Sep,
                     Sub(
                         "Bullet style",
@@ -360,36 +399,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
                     Cmd("Table properties", "table.properties", NO, ""),
                 ],
             ),
-            Sub(
-                "Image",
-                &[
-                    Cmd("Crop image", "ui.crop", NO, ""),
-                    Cmd("Size and rotation", "picture.size", NO, ""),
-                    Sub(
-                        "Rotate",
-                        &[
-                            Cmd("Rotate clockwise 90°", "arrange.rotate", r#"{"direction":"right"}"#, ""),
-                            Cmd("Rotate anticlockwise 90°", "arrange.rotate", r#"{"direction":"left"}"#, ""),
-                            Cmd("Flip horizontally", "arrange.rotate", r#"{"direction":"flipHorizontal"}"#, ""),
-                            Cmd("Flip vertically", "arrange.rotate", r#"{"direction":"flipVertical"}"#, ""),
-                        ],
-                    ),
-                    Sub(
-                        "Text wrapping",
-                        &[
-                            Cmd("In line with text", "arrange.wrap", r#"{"wrap":"inline"}"#, ""),
-                            Cmd("Wrap text", "arrange.wrap", r#"{"wrap":"square"}"#, ""),
-                            Cmd("Break text", "arrange.wrap", r#"{"wrap":"topAndBottom"}"#, ""),
-                            Cmd("Behind text", "arrange.wrap", r#"{"wrap":"behindText"}"#, ""),
-                            Cmd("In front of text", "arrange.wrap", r#"{"wrap":"inFrontOfText"}"#, ""),
-                        ],
-                    ),
-                    Sep,
-                    Cmd("Alt text", "view.altTextPane", r#"{"value":true}"#, ""),
-                    Cmd("Replace image", "ui.changePicture", NO, ""),
-                    Cmd("Reset image", "picture.reset", NO, ""),
-                ],
-            ),
+            Sub("Image", IMAGE),
             Cmd("Borders and shading", "ui.dialog:borders", NO, ""),
             Cmd("Clear formatting", "format.clear", NO, "Ctrl+\\"),
         ],
@@ -638,10 +648,38 @@ pub fn greyed(app: &WordApp, id: &str) -> bool {
     }
 }
 
-/// Editing or suggesting: Docs' mode switch, which is WordCraft's track changes.
-fn set_suggesting(app: &mut WordApp, on: bool) {
-    if app.session.doc.settings.track_changes != on {
-        run(app, "review.trackChanges", json!({ "value": on }));
+/// Docs' three modes (the mode box and View › Mode).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Mode {
+    Editing,
+    Suggesting,
+    Viewing,
+}
+
+impl Mode {
+    pub fn of(app: &WordApp) -> Mode {
+        if app.session.view.viewing {
+            Mode::Viewing
+        } else if app.session.doc.settings.track_changes {
+            Mode::Suggesting
+        } else {
+            Mode::Editing
+        }
+    }
+}
+
+/// Switches mode. Editing or suggesting is WordCraft's track changes; Viewing is its read-only
+/// state for this session (`view.viewing`, fork change StarDocs 0005, never saved in the
+/// document), showing the document as it would print: no suggestions marked up.
+pub fn set_mode(app: &mut WordApp, mode: Mode) {
+    let viewing = mode == Mode::Viewing;
+    if app.session.view.viewing != viewing {
+        run(app, "view.viewing", json!({ "value": viewing }));
+        run(app, "review.markup", json!({ "value": if viewing { "noMarkup" } else { "all" } }));
+    }
+    let suggesting = mode == Mode::Suggesting;
+    if !viewing && app.session.doc.settings.track_changes != suggesting {
+        run(app, "review.trackChanges", json!({ "value": suggesting }));
     }
 }
 
@@ -654,6 +692,7 @@ fn is_own(id: &str) -> bool {
             | "stardocs.shortcuts"
             | "stardocs.editing"
             | "stardocs.suggesting"
+            | "stardocs.viewing"
             | "stardocs.download"
             | "stardocs.downloadAs"
             | "stardocs.rename"
@@ -668,8 +707,11 @@ fn run_menu(app: &mut WordApp, ctx: &egui::Context, flags: &mut Flags, link: Opt
         ("stardocs.compact", _) => flags.compact = !flags.compact,
         ("stardocs.shortcuts", _) => flags.shortcuts = true,
         ("stardocs.restartNumbering", _) => flags.restart = true,
-        ("stardocs.editing", _) => set_suggesting(app, false),
-        ("stardocs.suggesting", _) => set_suggesting(app, true),
+        // Someone who may only view the document stays in Viewing.
+        ("stardocs.editing" | "stardocs.suggesting", Some(link)) if link.view_only() => app.status("You can view this document but not change it"),
+        ("stardocs.editing", _) => set_mode(app, Mode::Editing),
+        ("stardocs.suggesting", _) => set_mode(app, Mode::Suggesting),
+        ("stardocs.viewing", _) => set_mode(app, Mode::Viewing),
         ("stardocs.download", Some(link)) => {
             link.download_next();
             run(app, "file.save", json!({}));
@@ -834,7 +876,12 @@ impl Shell {
             "saved": saved,
             "notice": link.and_then(Link::notice),
             "viewOnly": link.is_some_and(Link::view_only),
-            "mode": if link.is_some_and(Link::view_only) { "viewing" } else if app.session.doc.settings.track_changes { "suggesting" } else { "editing" },
+            "mode": match Mode::of(app) {
+                _ if link.is_some_and(Link::view_only) => "viewing",
+                Mode::Viewing => "viewing",
+                Mode::Suggesting => "suggesting",
+                Mode::Editing => "editing",
+            },
             "compact": self.flags.compact,
             "wordCountShown": self.flags.words,
             "renaming": self.renaming,
@@ -862,10 +909,13 @@ impl Shell {
     pub fn ui(&mut self, app: &mut WordApp, ui: &mut Ui, link: Option<&Link>) {
         self.ctx = Some(ui.ctx().clone());
         crate::theme::keep_light(app);
+        crate::theme::install(ui.ctx());
         let before = self.flags;
         if !self.flags.loaded {
             // Docs has no floating mini toolbar over selected text.
             app.ui.mini_toolbar = false;
+            // A selected picture's right-click menu: Format › Image's items.
+            app.set_picture_menu(Some(picture_menu));
         }
         self.flags.sync(before);
         self.keys(app, ui.ctx());
@@ -877,9 +927,10 @@ impl Shell {
                     self.title_and_menus(app, ui, link);
                     ui.add_space(6.0);
                 }
-                // A view-only document: the toolbar is shown greyed, like Google Docs' viewer.
-                let editable = !link.is_some_and(Link::view_only);
-                self.toolbar(app, ui, editable);
+                // A view-only document, or Viewing chosen: the toolbar is shown greyed, like
+                // Google Docs' viewer. Only someone who may edit can leave Viewing.
+                let may_edit = !link.is_some_and(Link::view_only);
+                self.toolbar(app, ui, may_edit);
             });
         self.share.ui(ui.ctx());
         self.custom_colour(app, ui.ctx());
@@ -914,12 +965,14 @@ impl Shell {
         });
         // Docs' text size up and down by one point (WordCraft's keys step through Word's size
         // list), and Headings 4 to 6, which WordCraft has no keys for.
-        let more: [(Modifiers, Key, &str, Value); 5] = [
+        let more: [(Modifiers, Key, &str, Value); 6] = [
             (ctrl_shift, Key::Period, "format.growFont1", json!({})),
             (ctrl_shift, Key::Comma, "format.shrinkFont1", json!({})),
             (ctrl_alt, Key::Num4, "para.style", json!({"style": "Heading 4"})),
             (ctrl_alt, Key::Num5, "para.style", json!({"style": "Heading 5"})),
             (ctrl_alt, Key::Num6, "para.style", json!({"style": "Heading 6"})),
+            // Docs' checklist (fork change StarDocs 0006).
+            (ctrl_shift, Key::Num9, "list.checklist", json!({})),
         ];
         for (m, k, id, p) in more {
             if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(m, k))) {
@@ -940,7 +993,8 @@ impl Shell {
         }
     }
 
-    fn toolbar(&mut self, app: &mut WordApp, ui: &mut Ui, editable: bool) {
+    fn toolbar(&mut self, app: &mut WordApp, ui: &mut Ui, may_edit: bool) {
+        let editable = may_edit && Mode::of(app) != Mode::Viewing;
         let cur = current(app);
         let fonts = self.fonts.get_or_insert_with(|| font_names(app)).clone();
         let flags = &mut self.flags;
@@ -1012,7 +1066,7 @@ impl Shell {
                     if icon_button(ui, icon, false).on_hover_text(tip).clicked() {
                         flags.compact = !flags.compact;
                     }
-                    mode_switch(tools.app, ui, editable);
+                    mode_switch(tools.app, ui, may_edit);
                     start - ui.cursor().right()
                 });
                 *right_end = end.inner;
@@ -1117,7 +1171,7 @@ enum Group {
 }
 const GROUPS: [Group; 9] =
     [Group::History, Group::Zoom, Group::Style, Group::Font, Group::Size, Group::Text, Group::Insert, Group::Align, Group::Lists];
-pub const GUESSED_WIDTHS: [f32; 9] = [151.0, 79.0, 117.0, 109.0, 99.0, 151.0, 95.0, 151.0, 140.0];
+pub const GUESSED_WIDTHS: [f32; 9] = [151.0, 79.0, 129.0, 109.0, 99.0, 151.0, 95.0, 151.0, 140.0];
 /// Room kept for the mode box and the compact-mode arrow, and for the ⋮ button.
 const RIGHT_END: f32 = 170.0;
 const MORE: f32 = 34.0;
@@ -1159,7 +1213,7 @@ impl Tools<'_> {
                 });
             }
             Group::Style => {
-                drop_menu(ui, &cur.style, 104.0, |ui| {
+                drop_menu(ui, &cur.style, 116.0, |ui| {
                     ui.set_min_width(180.0);
                     for (label, name) in STYLES {
                         let size = match *name {
@@ -1256,39 +1310,45 @@ impl Tools<'_> {
     }
 }
 
-/// Docs' mode box at the right of the toolbar: Editing or Suggesting (WordCraft's track
-/// changes), or a fixed "Viewing" for a view-only document.
-fn mode_switch(app: &mut WordApp, ui: &mut Ui, editable: bool) {
-    let suggesting = app.session.doc.settings.track_changes;
-    let (icon, label) = match (editable, suggesting) {
-        (false, _) => ("visibility", "Viewing"),
-        (true, true) => ("rate_review", "Suggesting"),
-        (true, false) => ("edit", "Editing"),
+/// Docs' mode box at the right of the toolbar: Editing, Suggesting or Viewing ([`set_mode`]),
+/// or a fixed "Viewing" for someone who may only view the document.
+fn mode_switch(app: &mut WordApp, ui: &mut Ui, may_edit: bool) {
+    let mode = if may_edit { Mode::of(app) } else { Mode::Viewing };
+    let (icon, label) = match mode {
+        Mode::Viewing => ("visibility", "Viewing"),
+        Mode::Suggesting => ("rate_review", "Suggesting"),
+        Mode::Editing => ("edit", "Editing"),
     };
     let text = RichText::new(label).size(14.0).color(TEXT_DIM);
     let button = match icons::icon(icon) {
         Some(img) => Button::image_and_text(img, text),
         None => Button::new(text),
     };
-    if !editable {
+    if !may_edit {
         ui.add_enabled(false, button).on_disabled_hover_text("You can view this document but not change it");
         return;
     }
     let r = ui.add(button.corner_radius(4.0).min_size(vec2(116.0, 28.0)));
-    let tip = if suggesting { "Suggesting: your edits show as suggestions others can accept" } else { "Editing: you change the document directly" };
+    let tip = match mode {
+        Mode::Viewing => "Viewing: read or print the final document",
+        Mode::Suggesting => "Suggesting: your edits show as suggestions others can accept",
+        Mode::Editing => "Editing: you change the document directly",
+    };
     let r = r.on_hover_text(tip);
     egui::Popup::menu(&r).show(|ui| {
         ui.set_min_width(300.0);
-        for (on, icon, title, about) in
-            [(false, "edit", "Editing", "Edit the document directly"), (true, "rate_review", "Suggesting", "Edits become suggestions")]
-        {
+        for (to, icon, title, about) in [
+            (Mode::Editing, "edit", "Editing", "Edit the document directly"),
+            (Mode::Suggesting, "rate_review", "Suggesting", "Edits become suggestions"),
+            (Mode::Viewing, "visibility", "Viewing", "Read or print the final document"),
+        ] {
             let text = RichText::new(format!("{title}\n{about}")).size(14.0).color(TEXT);
             let item = match icons::icon(icon) {
                 Some(img) => Button::image_and_text(img, text),
                 None => Button::new(text),
             };
-            if ui.add(item.selected(on == suggesting).min_size(vec2(300.0, 44.0))).clicked() {
-                set_suggesting(app, on);
+            if ui.add(item.selected(to == mode).min_size(vec2(300.0, 44.0))).clicked() {
+                set_mode(app, to);
                 ui.close();
             }
         }
@@ -1335,7 +1395,7 @@ impl Shell {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     ui.spacing_mut().button_padding = vec2(7.0, 2.0);
                     for (title, items) in MENUS {
-                        ui.menu_button(RichText::new(*title).size(14.0).color(TEXT), |ui| menu_items(app, ui, &mut self.flags, items, link));
+                        menu_bar_menu(ui, title, |ui| menu_items(app, ui, &mut self.flags, items, link));
                     }
                 });
             });
@@ -1381,7 +1441,21 @@ impl Shell {
             self.renaming = Some(stem.clone());
         }
         if let (Some(text), Some(link)) = (&mut self.renaming, link) {
-            let edit = ui.add(egui::TextEdit::singleline(text).font(egui::FontId::proportional(18.0)).desired_width(320.0));
+            // Docs' rename box hugs the name (it grows as you type), with a 2 px blue outline and
+            // 4 px corners.
+            let font = egui::FontId::proportional(18.0);
+            let width = ui.painter().layout_no_wrap(text.clone(), font.clone(), TEXT).size().x + 18.0; // the 6 px margins, and room for the caret
+            let edit = ui
+                .scope(|ui| {
+                    let v = ui.visuals_mut();
+                    v.selection.stroke = Stroke::new(2.0, BLUE);
+                    for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active] {
+                        w.bg_stroke = Stroke::new(2.0, BLUE);
+                        w.corner_radius = egui::CornerRadius::same(4);
+                    }
+                    ui.add(egui::TextEdit::singleline(text).font(font).margin(vec2(6.0, 0.0)).desired_width(width.clamp(40.0, 600.0)))
+                })
+                .inner;
             if asked {
                 edit.request_focus();
             }
@@ -1422,49 +1496,172 @@ impl Shell {
     }
 }
 
+/// Docs' menu rows: 32 px tall whatever they hold, 16 px from the sides.
+const ROW: f32 = 32.0;
+const ROW_INSET: f32 = 16.0;
+/// The icon column: 20 px icons (or ticks), 12 px before the label.
+const ICON: f32 = 20.0;
+const ICON_GAP: f32 = 12.0;
+/// Shortcuts and submenu arrows: Docs' grey.
+const KEYS_GREY: Color32 = Color32::from_rgb(0x5F, 0x63, 0x68);
+/// Menu dividers.
+const MENU_LINE: Color32 = Color32::from_rgb(0xDA, 0xDC, 0xE0);
+
+/// Sets a menu's `Ui` up the Docs way: flat full-width one-line rows, 32 px tall, grey on
+/// hover (the frame round it is [`docs_menu_style`]).
+fn menu_look(ui: &mut Ui) {
+    let st = ui.style_mut();
+    // One line per row, always (a wrapped label made a taller row).
+    st.wrap_mode = Some(egui::TextWrapMode::Extend);
+    st.spacing.button_padding = vec2(ROW_INSET, 6.0);
+    st.spacing.item_spacing = vec2(ICON_GAP, 0.0);
+    st.spacing.icon_spacing = ICON_GAP;
+    st.spacing.interact_size.y = ROW;
+    let w = &mut st.visuals.widgets;
+    for (state, fill) in [
+        (&mut w.inactive, Color32::TRANSPARENT),
+        (&mut w.hovered, crate::theme::MENU_HOVER),
+        (&mut w.active, crate::theme::HOVER),
+        (&mut w.open, crate::theme::MENU_HOVER),
+    ] {
+        state.bg_stroke = Stroke::NONE;
+        state.weak_bg_fill = fill;
+        state.corner_radius = egui::CornerRadius::ZERO;
+        state.expansion = 0.0;
+    }
+}
+
+/// The frame of our menus (and of their submenus, which inherit it): 8 px top and bottom, none at
+/// the sides so rows and dividers reach the edges, 8 px corners. A pop-up's frame takes the
+/// window's style (WordCraft's 6 px all round) plus this.
+fn docs_menu_style() -> egui::style::StyleModifier {
+    egui::style::StyleModifier::new(|s: &mut egui::Style| {
+        egui::containers::menu::menu_style(s);
+        s.spacing.menu_margin = egui::Margin::symmetric(0, 8);
+        s.visuals.menu_corner_radius = egui::CornerRadius::same(8);
+    })
+}
+
+/// One of the menu bar's menus with [`docs_menu_style`].
+fn menu_bar_menu(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
+    let config = egui::containers::menu::MenuConfig::new().style(docs_menu_style());
+    let _ = egui::containers::menu::MenuButton::new(RichText::new(title).size(14.0).color(TEXT)).config(config).ui(ui, add);
+}
+
+/// The wording a menu entry shows, and its shortcut.
+fn wording<'a>(app: &mut WordApp, flags: &Flags, item: &'a Item) -> (&'a str, &'a str) {
+    match item {
+        Cmd(label, _, _, keys) | Toggle(label, _, _, keys) => (*label, *keys),
+        Flip(off, on, _, key) => (if is_on(app, flags, key) { *on } else { *off }, ""),
+        Sub(label, _) => (*label, ""),
+        Sep | TableGrid => ("", ""),
+    }
+}
+
+/// Whether a menu has the icon column (any icon or tick in it): then every label lines up after it.
+fn has_icons(items: &[Item]) -> bool {
+    items.iter().any(|i| match i {
+        Toggle(..) => true,
+        Cmd(label, ..) | Sub(label, _) => icons::menu_icon_name(label).is_some(),
+        _ => false,
+    })
+}
+
+/// A menu row: the icon column (an icon, a tick, or the same space blank), the label, and the
+/// shortcut in grey at the right.
+fn menu_row(icon: Option<&str>, column: bool, label: &str, keys: &str, width: f32) -> Button<'static> {
+    let text = RichText::new(label.to_string()).size(14.0).color(TEXT);
+    let b = match icon.and_then(|n| icons::icon_px(n, ICON)) {
+        Some(img) if column => Button::image_and_text(img, text),
+        // Keeps the label lined up with its iconed neighbours.
+        _ if column => match icons::icon_px("check", ICON) {
+            Some(blank) => Button::image_and_text(blank.tint(Color32::TRANSPARENT), text),
+            None => Button::new(text),
+        },
+        _ => Button::new(text),
+    };
+    // The shortcut's stretch keeps the label at the left; without one an empty growing space
+    // does (an empty shortcut text would add a space to the entry's name).
+    let b =
+        if keys.is_empty() { b.right_text(egui::Atom::grow()) } else { b.shortcut_text(RichText::new(keys.to_string()).size(13.0).color(KEYS_GREY)) };
+    b.min_size(vec2(width, ROW))
+}
+
+/// How wide a menu is: its longest label plus shortcut, the icon column and the padding (at
+/// least 240 px, as Docs' shortest menus).
+fn menu_width(app: &mut WordApp, ui: &Ui, flags: &Flags, items: &[Item], column: bool) -> f32 {
+    let measure = |t: &str, size: f32| ui.painter().layout_no_wrap(t.to_string(), egui::FontId::proportional(size), TEXT).size().x;
+    let widest = items
+        .iter()
+        .map(|i| {
+            let (label, keys) = wording(app, flags, i);
+            let keys = if keys.is_empty() { 0.0 } else { 32.0 + measure(keys, 13.0) };
+            measure(label, 14.0) + keys + if matches!(i, Sub(..)) { ICON + ICON_GAP + 8.0 } else { 0.0 }
+        })
+        .fold(0.0_f32, f32::max);
+    (widest + 2.0 * ROW_INSET + if column { ICON + ICON_GAP } else { 0.0 } + 8.0).max(240.0).ceil()
+}
+
+/// A menu divider: a light line with 8 px above and below, the menu's full width.
+fn menu_sep(ui: &mut Ui, width: f32) {
+    ui.add_space(8.0);
+    let (r, _) = ui.allocate_exact_size(vec2(width, 1.0), egui::Sense::hover());
+    ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0, MENU_LINE));
+    ui.add_space(8.0);
+}
+
 fn menu_items(app: &mut WordApp, ui: &mut Ui, flags: &mut Flags, items: &[Item], link: Option<&Link>) {
-    ui.set_min_width(260.0);
+    menu_look(ui);
+    let column = has_icons(items);
+    let width = menu_width(app, ui, flags, items, column);
+    ui.set_min_width(width);
+    ui.set_max_width(width);
     for item in items {
+        let (label, keys) = wording(app, flags, item);
         match item {
-            Cmd(label, id, p, keys) => {
-                let b = Button::new(RichText::new(*label).size(14.0).color(TEXT))
-                    .right_text(RichText::new(*keys).size(13.0).color(TEXT_DIM))
-                    .min_size(vec2(260.0, 30.0));
+            Cmd(_, id, p, _) => {
+                let b = menu_row(icons::menu_icon_name(label), column, label, keys, width);
                 if ui.add_enabled(!greyed(app, id), b).clicked() {
                     run_menu(app, ui.ctx(), flags, link, id, params(p));
                     ui.close();
                 }
             }
-            Toggle(label, id, key, keys) => {
-                // A tick in the margin when it is on, as Docs' View menu shows.
-                let on = is_on(app, flags, key);
-                let tick = if on { icons::icon("check") } else { None };
-                let text = RichText::new(*label).size(14.0).color(TEXT);
-                let b = match tick {
-                    Some(img) => Button::image_and_text(img, text),
-                    None => Button::new(RichText::new(format!("      {label}")).size(14.0).color(TEXT)),
+            Toggle(_, id, key, _) => {
+                // A tick in the icon column when it is on, as Docs' View menu shows.
+                let tick = is_on(app, flags, key).then_some("check");
+                if ui.add_enabled(!greyed(app, id), menu_row(tick, column, label, keys, width)).clicked() {
+                    run_menu(app, ui.ctx(), flags, link, id, json!({}));
+                    ui.close();
+                }
+            }
+            Flip(_, _, id, _) => {
+                if ui.add_enabled(!greyed(app, id), menu_row(None, column, label, "", width)).clicked() {
+                    run_menu(app, ui.ctx(), flags, link, id, json!({}));
+                    ui.close();
+                }
+            }
+            TableGrid => {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(ROW_INSET);
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 4.0;
+                        table_grid(app, ui);
+                    });
+                });
+                ui.add_space(4.0);
+            }
+            Sub(_, sub) => {
+                // Docs' submenu arrow: `arrow_right` the size of the icons (a picture, so the
+                // entry is still named just by its wording).
+                let b = menu_row(icons::menu_icon_name(label), column, label, "", width);
+                let b = match icons::icon_px("arrow_right", ICON) {
+                    Some(arrow) => b.right_text(arrow),
+                    None => b.right_text(egui::containers::menu::SubMenuButton::arrow_atom(Some(KEYS_GREY))),
                 };
-                let b = b.right_text(RichText::new(*keys).size(13.0).color(TEXT_DIM)).min_size(vec2(260.0, 30.0));
-                if ui.add_enabled(!greyed(app, id), b).clicked() {
-                    run_menu(app, ui.ctx(), flags, link, id, json!({}));
-                    ui.close();
-                }
+                egui::containers::menu::SubMenuButton::from_button(b).ui(ui, |ui| menu_items(app, ui, flags, sub, link));
             }
-            Flip(off, on, id, key) => {
-                let label = if is_on(app, flags, key) { on } else { off };
-                let b = Button::new(RichText::new(*label).size(14.0).color(TEXT)).min_size(vec2(260.0, 30.0));
-                if ui.add_enabled(!greyed(app, id), b).clicked() {
-                    run_menu(app, ui.ctx(), flags, link, id, json!({}));
-                    ui.close();
-                }
-            }
-            TableGrid => table_grid(app, ui),
-            Sub(label, sub) => {
-                ui.menu_button(RichText::new(*label).size(14.0).color(TEXT), |ui| menu_items(app, ui, flags, sub, link));
-            }
-            Sep => {
-                ui.separator();
-            }
+            Sep => menu_sep(ui, width),
         }
     }
 }
@@ -1511,13 +1708,18 @@ fn tight(ui: &mut Ui) {
     s.button_padding = vec2(4.0, 2.0);
 }
 
-/// Toolbar buttons are flat until hovered, as in Docs.
+/// Toolbar and menu bar buttons are flat until hovered, as in Docs: a rounded 4 px grey on hover
+/// ([`HOVER`](crate::theme::HOVER)), darker while pressed or while its menu is open. (StarSheets'
+/// toolbar uses the same colours.) A button that is on (Bold in bold text) is light blue ([`ON`]).
 fn flat(ui: &mut Ui) {
+    use crate::theme::{HOVER, PRESSED};
     let w = &mut ui.visuals_mut().widgets;
-    w.inactive.weak_bg_fill = Color32::TRANSPARENT;
-    w.inactive.bg_stroke = Stroke::NONE;
-    w.hovered.bg_stroke = Stroke::NONE;
-    w.active.bg_stroke = Stroke::NONE;
+    for (state, fill) in [(&mut w.inactive, Color32::TRANSPARENT), (&mut w.hovered, HOVER), (&mut w.active, PRESSED), (&mut w.open, PRESSED)] {
+        state.bg_stroke = Stroke::NONE;
+        state.weak_bg_fill = fill;
+        state.corner_radius = egui::CornerRadius::same(4);
+        state.expansion = 0.0;
+    }
 }
 
 fn bar(ui: &mut Ui) {
@@ -1532,7 +1734,9 @@ fn icon_button(ui: &mut Ui, name: &str, on: bool) -> egui::Response {
         Some(img) => Button::image(img),
         None => Button::new(name),
     };
-    ui.add(b.fill(if on { ON } else { Color32::TRANSPARENT }).corner_radius(4.0).min_size(vec2(26.0, 28.0)))
+    // A set fill would also replace the hover and pressed fills: only a button that is on has one.
+    let b = if on { b.fill(ON) } else { b };
+    ui.add(b.corner_radius(4.0).min_size(vec2(26.0, 28.0)))
 }
 
 fn tool(app: &mut WordApp, ui: &mut Ui, icon: &str, tip: &str, id: &str, p: Value, on: bool) {
@@ -1559,17 +1763,24 @@ fn named(ui: &Ui, r: &egui::Response, name: &str) {
     r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, name));
 }
 
-/// A toolbar box of a fixed `width` showing `text` (cut short with "…" when too long) and a ▾
-/// that opens a menu, as Docs' zoom, style and font boxes do.
+/// The drop-down arrow after Docs' zoom, style and font boxes: Material's `arrow_drop_down` at
+/// 20 px (a 10 × 5 triangle) in #444746.
+const ARROW: f32 = 20.0;
+
+/// A toolbar box of a fixed `width` showing `text` (cut short with "…" when too long) and a
+/// drop-down arrow that opens a menu, as Docs' zoom, style and font boxes do. The menu's rows
+/// are flat and full width.
 fn drop_menu(ui: &mut Ui, text: &str, width: f32, add: impl FnOnce(&mut Ui)) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 28.0), egui::Sense::click());
     if ui.is_rect_visible(rect) {
         let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
         let p = ui.painter();
-        if resp.hovered() || open {
-            p.rect_filled(rect, 4.0, ui.visuals().widgets.hovered.weak_bg_fill);
+        if open || resp.is_pointer_button_down_on() {
+            p.rect_filled(rect, 4.0, crate::theme::PRESSED);
+        } else if resp.hovered() {
+            p.rect_filled(rect, 4.0, crate::theme::HOVER);
         }
-        let room = rect.width() - 12.0 - 14.0;
+        let room = rect.width() - 6.0 - ARROW - 2.0;
         let galley = egui::WidgetText::from(RichText::new(text).size(14.0).color(TEXT_DIM)).into_galley(
             ui,
             Some(egui::TextWrapMode::Truncate),
@@ -1577,9 +1788,15 @@ fn drop_menu(ui: &mut Ui, text: &str, width: f32, add: impl FnOnce(&mut Ui)) -> 
             egui::TextStyle::Button,
         );
         p.galley(egui::pos2(rect.left() + 6.0, rect.center().y - galley.size().y / 2.0), galley, TEXT_DIM);
-        p.text(egui::pos2(rect.right() - 6.0, rect.center().y), egui::Align2::RIGHT_CENTER, "▾", egui::FontId::proportional(13.0), TEXT_DIM);
+        if let Some(arrow) = icons::icon_px("arrow_drop_down", ARROW) {
+            let at = egui::Rect::from_center_size(egui::pos2(rect.right() - 2.0 - ARROW / 2.0, rect.center().y), vec2(ARROW, ARROW));
+            arrow.paint_at(ui, at);
+        }
     }
-    egui::Popup::menu(&resp).show(add);
+    egui::Popup::menu(&resp).style(docs_menu_style()).show(|ui| {
+        menu_look(ui);
+        ui.with_layout(Layout::top_down_justified(Align::LEFT), add);
+    });
     resp
 }
 
@@ -1636,15 +1853,23 @@ fn size_box(app: &mut WordApp, ui: &mut Ui, size: f64) {
             _ => {}
         }
     }
-    egui::Popup::from_response(&r).id(list).open_memory(None).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-        ui.set_min_width(60.0);
-        for s in SIZES {
-            if ui.button(format!("{s}")).clicked() {
-                run(app, "format.size", json!({ "size": s }));
-                ui.close();
-            }
-        }
-    });
+    egui::Popup::from_response(&r)
+        .id(list)
+        .open_memory(None)
+        .style(docs_menu_style())
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            menu_look(ui);
+            ui.set_min_width(60.0);
+            ui.with_layout(Layout::top_down_justified(Align::LEFT), |ui| {
+                for s in SIZES {
+                    if ui.button(format!("{s}")).clicked() {
+                        run(app, "format.size", json!({ "size": s }));
+                        ui.close();
+                    }
+                }
+            });
+        });
 }
 
 fn palette<'a>(ui: &mut Ui, colours: impl Iterator<Item = (&'a str, &'a str)>, mut pick: impl FnMut(&str)) {

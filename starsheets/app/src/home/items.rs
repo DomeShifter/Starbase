@@ -47,7 +47,7 @@ impl Home {
                     && r.contains_pointer()
                     && let Some(f) = folder
                 {
-                    ui.painter().rect_stroke(r.rect, 6, Stroke::new(2.0, GREEN), egui::StrokeKind::Outside);
+                    ui.painter().rect_stroke(r.rect, 6, Stroke::new(2.0, ACCENT), egui::StrokeKind::Outside);
                     ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique("home_drop"), f));
                 }
                 if r.clicked()
@@ -95,7 +95,10 @@ impl Home {
         let ctx = ui.ctx().clone();
         let mut clicked_item = false;
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            if folders.is_empty() && files.is_empty() {
+            let a_folder = matches!(self.view, Some(View::Mine(_) | View::Everyone(_) | View::Shared(Some(_))));
+            if folders.is_empty() && files.is_empty() && a_folder && !self.loading && self.search.trim().is_empty() {
+                empty_folder(ui, self.here().is_some());
+            } else if folders.is_empty() && files.is_empty() {
                 let empty = if self.loading {
                     "Loading…"
                 } else if !self.search.trim().is_empty() {
@@ -107,14 +110,14 @@ impl Home {
                         }
                         Some(View::Starred) => "Nothing starred yet. Right-click a file or folder and choose Star to keep it here.",
                         Some(View::Recent) => "Files you open show here.",
-                        _ => "This folder is empty. Use New, or drop spreadsheets from your computer here.",
+                        _ => "Nothing here yet.",
                     }
                 };
                 ui.add_space(house::XL);
                 ui.label(RichText::new(empty).size(house::BODY).color(theme::TEXT_DIM));
             }
             let order = self.shown(&folders, &files);
-            if self.list {
+            if self.list && !order.is_empty() {
                 self.list_ui(ui, &order, &mut clicked_item);
             } else if self.mixed && self.view != Some(View::Recent) {
                 // Folders mixed in with files: everything as cards, in the sort's order.
@@ -137,7 +140,7 @@ impl Home {
                 });
             } else {
                 if !folders.is_empty() {
-                    house::caps(ui, "Folders");
+                    house::label(ui, "Folders", "");
                     ui.add_space(house::S);
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing = vec2(house::M, house::M);
@@ -148,7 +151,7 @@ impl Home {
                     ui.add_space(house::XL);
                 }
                 if !files.is_empty() {
-                    house::caps(ui, "Files");
+                    house::label(ui, "Files", "");
                     ui.add_space(house::S);
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing = vec2(house::M, house::M);
@@ -243,7 +246,7 @@ impl Home {
             && self.dragging.as_ref().is_some_and(|d| !d.contains(item))
             && resp.contains_pointer()
         {
-            ui.painter().rect_stroke(resp.rect, 8, Stroke::new(2.0, GREEN), egui::StrokeKind::Inside);
+            ui.painter().rect_stroke(resp.rect, 8, Stroke::new(2.0, ACCENT), egui::StrokeKind::Inside);
             ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique("home_drop"), f.clone()));
         }
         resp.context_menu(|ui| {
@@ -316,9 +319,8 @@ impl Home {
         let line = Rect::from_min_max(egui::pos2(r.left() + 8.0, r.top() + PIC_H), r.max - vec2(8.0, 4.0));
         folder_icon(ui, f, Rect::from_center_size(egui::pos2(line.left() + 10.0, line.top() + 16.0), vec2(18.0, 18.0)));
         if !self.renaming_ui(ui, &item, Rect::from_min_size(egui::pos2(line.left() + 26.0, line.top() + 4.0), vec2(line.width() - 30.0, 26.0))) {
-            let name = p.layout_no_wrap(self.folder_label(&f.path), FontId::proportional(14.0), theme::TEXT);
-            let clip = Rect::from_min_size(egui::pos2(line.left() + 28.0, line.top() + 6.0), vec2(line.width() - 52.0, 20.0));
-            p.with_clip_rect(clip).galley(clip.min, name, theme::TEXT);
+            let name = one_line(&p, self.folder_label(&f.path), 14.0, theme::TEXT, line.width() - 52.0);
+            p.galley(egui::pos2(line.left() + 28.0, line.top() + 6.0), name, theme::TEXT);
         }
         let (newest, _) = self.folder_stats(&f.path);
         let sub = if newest > 0 { format!("Folder · {}", ago(newest)) } else { "Folder".into() };
@@ -373,9 +375,8 @@ impl Home {
             img.paint_at(ui, Rect::from_center_size(egui::pos2(line.left() + 10.0, line.top() + 16.0), vec2(18.0, 18.0)));
         }
         if !self.renaming_ui(ui, &item, Rect::from_min_size(egui::pos2(line.left() + 26.0, line.top() + 4.0), vec2(line.width() - 30.0, 26.0))) {
-            let name = p.layout_no_wrap(f.name.clone(), FontId::proportional(14.0), theme::TEXT);
-            let clip = Rect::from_min_size(egui::pos2(line.left() + 28.0, line.top() + 6.0), vec2(line.width() - 52.0, 20.0));
-            p.with_clip_rect(clip).galley(clip.min, name, theme::TEXT);
+            let name = one_line(&p, shown_name(&f.name).to_string(), 14.0, theme::TEXT, line.width() - 52.0);
+            p.galley(egui::pos2(line.left() + 28.0, line.top() + 6.0), name, theme::TEXT);
         }
         if f.starred
             && let Some(img) = crate::icons::icon("star_fill")
@@ -454,12 +455,21 @@ impl Home {
                     }
                 }
             }
+            let mut resp = resp;
             if !self.renaming_ui(ui, &item, Rect::from_min_size(r.min + vec2(40.0, 5.0), vec2(w * 0.5 - 48.0, ROW - 10.0))) {
-                let mut shown = name.clone();
-                if starred {
-                    shown.push_str("  ★");
+                // Cut short with "…" before the next column (the full name on hover), ★ after it.
+                let room = if self.accounts { w * 0.52 } else { w * 0.70 } - 44.0 - house::L - if starred { 24.0 } else { 0.0 };
+                let shown = if matches!(item, Item::File(_)) { shown_name(&name) } else { &name };
+                let galley = one_line(&p, shown.to_string(), 14.0, theme::TEXT, room);
+                let at = r.left_center() + vec2(44.0, -galley.size().y / 2.0);
+                let end = at.x + galley.size().x;
+                if galley.elided {
+                    resp = resp.on_hover_text(&name);
                 }
-                p.text(r.left_center() + vec2(44.0, 0.0), Align2::LEFT_CENTER, shown, FontId::proportional(14.0), theme::TEXT);
+                p.galley(at, galley, theme::TEXT);
+                if starred {
+                    p.text(egui::pos2(end + 8.0, r.center().y), Align2::LEFT_CENTER, "★", FontId::proportional(14.0), theme::TEXT);
+                }
             }
             if self.accounts {
                 p.text(r.left_center() + vec2(w * 0.52, 0.0), Align2::LEFT_CENTER, self.person(&owner), FontId::proportional(13.0), theme::TEXT_DIM);
@@ -564,4 +574,54 @@ struct ListRow {
     modified: i64,
     size: Option<u64>,
     starred: bool,
+}
+
+/// A file's name as Drive shows it: without `.xlsx` or `.docx` (the icon says which it is; the
+/// full name shows on hover). Other extensions (.csv, .odt) stay.
+fn shown_name(name: &str) -> &str {
+    let lower = name.to_ascii_lowercase();
+    if (lower.ends_with(".xlsx") || lower.ends_with(".docx")) && name.len() > 5 { &name[..name.len() - 5] } else { name }
+}
+
+/// `text` on one line, at most `width` wide: cut short with "…" when longer (as Drive does).
+fn one_line(p: &egui::Painter, text: String, size: f32, colour: Color32, width: f32) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(text, FontId::proportional(size), colour);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(1.0));
+    p.layout_job(job)
+}
+
+/// An empty folder, as in Google Drive: a round picture, "Drop files here" and how else to add
+/// something; for a folder you can only view, just that it is empty.
+fn empty_folder(ui: &mut Ui, can_add: bool) {
+    ui.vertical_centered(|ui| {
+        ui.add_space(64.0);
+        let (r, _) = ui.allocate_exact_size(vec2(120.0, 120.0), Sense::hover());
+        ui.painter().circle_filled(r.center(), 60.0, theme::TOOLBAR);
+        if let Some(img) = crate::icons::icon(if can_add { "upload" } else { "folder_open" }) {
+            img.fit_to_exact_size(vec2(56.0, 56.0)).paint_at(ui, Rect::from_center_size(r.center(), vec2(56.0, 56.0)));
+        }
+        ui.add_space(house::L);
+        let (head, sub) = if can_add {
+            ("Drop files here", "or use the New button to make a spreadsheet, a document or a folder")
+        } else {
+            ("This folder is empty", "Files and folders added here will show up here.")
+        };
+        ui.label(RichText::new(head).size(house::TITLE).color(theme::TEXT));
+        ui.add_space(house::XS);
+        ui.label(RichText::new(sub).size(house::BODY).color(theme::TEXT_DIM));
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shown_name;
+
+    #[test]
+    fn drive_hides_only_its_own_file_extensions() {
+        assert_eq!(shown_name("Budget.xlsx"), "Budget");
+        assert_eq!(shown_name("Letter.DOCX"), "Letter");
+        assert_eq!(shown_name("data.csv"), "data.csv");
+        assert_eq!(shown_name("notes.odt"), "notes.odt");
+        assert_eq!(shown_name(".xlsx"), ".xlsx");
+    }
 }

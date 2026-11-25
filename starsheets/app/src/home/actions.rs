@@ -304,7 +304,7 @@ impl Home {
                     }
                 });
             });
-            choice = house::actions(ui, &["Cancel", "Move here"]);
+            choice = house::actions_in(ui, &["Cancel", "Move here"], ACCENT);
         });
         let mv = self.move_to.as_mut().expect("open");
         mv.target = target.clone();
@@ -459,7 +459,7 @@ impl Home {
             });
             let can_share = self.accounts && self.role_of(&item) == "owner" && !matches!(&item, Item::Folder(p) if !p.contains('/'));
             let labels: &[&str] = if can_share { &["Share…", "Close"] } else { &["Close"] };
-            match house::actions(ui, labels) {
+            match house::actions_in(ui, labels, ACCENT) {
                 Some(0) if can_share => share = true,
                 Some(_) => done = true,
                 None => {}
@@ -490,7 +490,7 @@ impl Home {
         let mut choice = None;
         house::dialog(ctx, "home_move_ask", 420.0, "Change who owns it?", Some(&mut close), |ui| {
             house::text(ui, &text);
-            choice = house::actions(ui, &["Cancel", "Move"]);
+            choice = house::actions_in(ui, &["Cancel", "Move"], ACCENT);
         });
         if close || choice == Some(0) {
             self.pending_move = None;
