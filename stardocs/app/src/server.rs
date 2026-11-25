@@ -8,7 +8,7 @@
 //!   while one is on its way waits, and only the newest waiting one is sent.
 //! - Changed elsewhere (409, someone edited the file outside StarDocs or in another tab): the
 //!   server's file is never overwritten. This version is kept as a new file beside it,
-//!   "<name> (Starbase Docs copy <date>)", and the page carries on with that copy, saying so.
+//!   "<name> (conflicted copy)" (as in Starbase Sheets), and the page carries on with that copy, saying so.
 //! - A new document is made on its first save: `POST api/files?folder=…&name=…`.
 //! - Not signed in (401): the page goes to the home screen, which asks to sign in.
 //! - Exports (PDF, pictures, other formats) still download in the browser.
@@ -702,7 +702,8 @@ impl Link {
             }
             Ok((409, ..)) => {
                 let (stem, ext) = split(&name);
-                let copy = format!("{stem} (Starbase Docs copy {}){ext}", stamp());
+                // The same name Starbase Sheets uses; the server makes it free.
+                let copy = format!("{stem} (conflicted copy){ext}");
                 match self.create(&folder, &copy, &bytes).await {
                     Ok((201 | 200, _, body)) => {
                         self.took(&body);
@@ -771,12 +772,6 @@ fn split(name: &str) -> (String, String) {
         Some((s, e)) if !s.is_empty() => (s.to_string(), format!(".{e}")),
         _ => (name.to_string(), ".docx".to_string()),
     }
-}
-
-/// "2026-11-24 14.05", local time, for copy names.
-fn stamp() -> String {
-    let d = js_sys::Date::new_0();
-    format!("{}-{:02}-{:02} {:02}.{:02}", d.get_full_year(), d.get_month() + 1, d.get_date(), d.get_hours(), d.get_minutes())
 }
 
 fn set_title(name: &str) {

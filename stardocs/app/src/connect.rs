@@ -119,10 +119,20 @@ impl ConnectDialog {
                     ui.add_space(6.0);
                     let r = ui.add(egui::TextEdit::singleline(&mut self.address).hint_text("https://files.example.org").desired_width(f32::INFINITY));
                     r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Server address"));
-                    if std::mem::take(&mut self.focus) {
+                    // Asked until it has it (the first frames of a new dialog can't take it yet).
+                    if self.focus {
                         r.request_focus();
+                        self.focus = !r.has_focus();
                     }
                     let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if self.address.trim().to_lowercase().starts_with("http://") {
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new("http:// isn't encrypted: it works only for a server on your own network, never one on the internet.")
+                                .size(13.0)
+                                .color(TEXT_DIM),
+                        );
+                    }
                     if let Some(why) = why {
                         ui.add_space(6.0);
                         ui.label(RichText::new(why).size(13.0).color(Color32::from_rgb(0xb3, 0x26, 0x1e)));

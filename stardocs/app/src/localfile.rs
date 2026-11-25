@@ -7,7 +7,7 @@
 //!   to a temporary file beside it and renamed over it, so a crash never leaves half a file.
 //! - Changed elsewhere (another program saved the file since we read or wrote it, spotted by its
 //!   modification time and size): the file is never overwritten. This version is kept as a new
-//!   file beside it, "<name> (Starbase Docs copy <date>)", and the window carries on with that
+//!   file beside it, "<name> (conflicted copy)" (as in Starbase Sheets), and the window carries on with that
 //!   copy, saying so: the same rule as the server's 409.
 //! - A new document is made in `~/Documents/Starbase` on its first save, named after its first
 //!   words as WordCraft suggests.
@@ -215,11 +215,6 @@ fn split(name: &str) -> (String, String) {
 fn is_document(name: &str) -> bool {
     let lower = name.to_lowercase();
     [".docx", ".docm", ".dotx", ".dotm", ".odt"].iter().any(|e| lower.ends_with(e))
-}
-
-/// "2026-11-24 14.05", local time, for copy names.
-fn stamp() -> String {
-    chrono::Local::now().format("%Y-%m-%d %H.%M").to_string()
 }
 
 /// The folders local mode uses.
@@ -624,13 +619,14 @@ impl Link {
             Err(WriteError::ChangedElsewhere) => {
                 let old = self.name();
                 let (stem, ext) = split(&old);
-                let copy = format!("{stem} (Starbase Docs copy {}){ext}", stamp());
+                // The same name Starbase Sheets uses; keep_copy makes it free.
+                let copy = format!("{stem} (conflicted copy){ext}");
                 let kept = self.state.borrow_mut().store.keep_copy(&copy, &bytes);
                 match kept {
                     Ok(()) => {
                         let shown = self.name();
                         self.news(format!(
-                            "\"{old}\" was changed by another program while you were editing. That version is untouched; yours is kept as \"{shown}\", which is open now."
+                            "\"{old}\" was changed elsewhere while you were editing. Yours is saved as \"{shown}\", open now. Nothing is lost."
                         ));
                         self.remember();
                         None

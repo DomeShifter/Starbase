@@ -314,7 +314,9 @@ impl Desktop {
         let stored = prefs_path().and_then(|p| std::fs::read_to_string(p).ok());
         let server = starbase_connect::saved();
         let (link, open) = match (&server_file, &server, &file) {
-            (Some((id, name)), Some(s), _) => (Link::new(Box::new(ServerDoc::new(Box::new(s.clone()), id, name)), folders.clone()), true),
+            (Some((id, name)), Some(s), _) => {
+                (Link::new(Box::new(ServerDoc::new(Box::new(starbase_connect::Renewing::new(s.clone())), id, name)), folders.clone()), true)
+            }
             (None, _, Some(f)) => (Link::new(Box::new(LocalFile::open(f.clone())), folders.clone()), true),
             _ => (Link::new(Box::new(LocalFile::new_in(folders.documents.clone())), folders.clone()), false),
         };
@@ -409,6 +411,12 @@ impl eframe::App for Desktop {
         }
         self.app.logic(ctx);
         self.link.tick(&mut self.app, ctx);
+        // The connection was forgotten (disconnected, or the server removed this device): the
+        // File menu offers "Connect to a server…" again.
+        if starbase_connect::take_changed() {
+            self.server = starbase_connect::saved();
+            self.link.set_server(self.server.as_ref().map(|s| s.url.clone()));
+        }
         for r in self.link.take_requests() {
             match r {
                 Request::Open(path) => self.open(path),

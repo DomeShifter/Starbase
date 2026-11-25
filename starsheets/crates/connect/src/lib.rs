@@ -15,7 +15,9 @@
 //! The token is never logged or shown: [`Server`]'s Debug leaves it out.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, channel};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -401,6 +403,7 @@ pub fn saved() -> Option<Server> {
 
 /// Forgets the connection here (the keyring entry, the files).
 pub fn forget() {
+    CHANGED.store(true, Ordering::SeqCst);
     let Some(dir) = config_dir() else { return };
     if let Ok(v) = serde_json::from_slice::<Value>(&std::fs::read(dir.join("server.json")).unwrap_or_default())
         && let Some(url) = v.get("url").and_then(Value::as_str)
@@ -410,6 +413,67 @@ pub fn forget() {
     }
     let _ = std::fs::remove_file(dir.join("token"));
     let _ = std::fs::remove_file(dir.join("server.json"));
+}
+
+/// Set when this program forgot the connection (disconnected, or the server said the device was
+/// removed): the windows look again at what they are connected to ([`take_changed`]).
+static CHANGED: AtomicBool = AtomicBool::new(false);
+
+/// Whether the connection was forgotten since the last time this was asked.
+pub fn take_changed() -> bool {
+    CHANGED.swap(false, Ordering::SeqCst)
+}
+
+impl Server {
+    /// The sign-in kept now for the same server, when it is a newer one than this (the person
+    /// connected again while this window was open).
+    pub fn renewed(&self) -> Option<Server> {
+        saved().filter(|s| s.url == self.url && s.token != self.token)
+    }
+
+    /// The server said this token no longer works (the device was removed there): forget it here
+    /// too, unless a newer sign-in has replaced it meanwhile.
+    pub fn forget_if_current(&self) {
+        if saved().is_some_and(|s| s.url == self.url && s.token == self.token) {
+            forget();
+        }
+    }
+}
+
+/// A connection for something that stays open (a document's window): when the server refuses its
+/// token, it takes up a newer sign-in made meanwhile (connected again) and tries once more; with
+/// none, it forgets the removed one, so the menus offer "Connect to a server…" again.
+#[derive(Clone)]
+pub struct Renewing(Arc<Mutex<Server>>);
+
+impl Renewing {
+    pub fn new(server: Server) -> Renewing {
+        Renewing(Arc::new(Mutex::new(server)))
+    }
+
+    /// The connection as it is now.
+    pub fn server(&self) -> Server {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// As [`Server::call`]; a 401 that a newer sign-in can't fix comes back as it is.
+    pub fn call(&self, method: &str, path: &str, body: Option<&[u8]>, if_match: Option<&str>) -> Result<Reply, String> {
+        let server = self.server();
+        let r = server.call(method, path, body, if_match)?;
+        if r.status != 401 {
+            return Ok(r);
+        }
+        match server.renewed() {
+            Some(newer) => {
+                *self.0.lock().unwrap_or_else(|e| e.into_inner()) = newer.clone();
+                newer.call(method, path, body, if_match)
+            }
+            None => {
+                server.forget_if_current();
+                Ok(r)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -466,6 +530,17 @@ mod tests {
         let s = saved().unwrap();
         assert_eq!((s.url.as_str(), s.username(), s.name()), ("https://example.org", "ann".to_string(), "Ann".to_string()));
         assert!(!format!("{s:?}").contains("sbd_secret"), "never shown");
+        // Connected again while a window had the old sign-in: it takes up the new one, and a
+        // refusal of the old one doesn't forget the new.
+        assert!(s.renewed().is_none());
+        keep("https://example.org", "sbd_newer", &json!({ "username": "ann" })).unwrap();
+        let newer = s.renewed().unwrap();
+        let _ = take_changed();
+        s.forget_if_current();
+        assert!(saved().is_some() && !take_changed(), "the newer sign-in stays");
+        newer.forget_if_current();
+        assert!(saved().is_none() && take_changed(), "a removed device is forgotten here too");
+        keep("https://example.org", "sbd_secret", &json!({ "username": "ann" })).unwrap();
         forget();
         assert!(saved().is_none() && !dir.join("token").exists());
         let _ = std::fs::remove_dir_all(&dir);

@@ -1611,13 +1611,15 @@ impl Shell {
                 Saved::Done => (link.saved_text(), TEXT_DIM),
                 Saved::Failed(why) => (why, Color32::from_rgb(0xb3, 0x26, 0x1e)),
             };
+            // Both stay on the title row, cut short to fit the window (the whole text on hover).
             if !text.is_empty() {
                 ui.add_space(10.0);
-                ui.label(RichText::new(text).size(13.0).color(colour));
+                ui.add(egui::Label::new(RichText::new(&text).size(13.0).color(colour)).truncate()).on_hover_text(&text);
             }
             if let Some(notice) = link.notice() {
                 ui.add_space(10.0);
-                ui.label(RichText::new(notice).size(13.0).color(Color32::from_rgb(0x8a, 0x5a, 0x00)));
+                ui.add(egui::Label::new(RichText::new(&notice).size(13.0).color(Color32::from_rgb(0x8a, 0x5a, 0x00))).truncate())
+                    .on_hover_text(&notice);
                 ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
             }
         }

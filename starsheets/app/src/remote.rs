@@ -18,7 +18,7 @@ use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use egui::{RichText, Ui, vec2};
-use starbase_connect::{Server, Step};
+use starbase_connect::{Renewing, Server, Step};
 
 use crate::localstore::{LocalStore, launch};
 use crate::store::{Answer, Backend, Done, Method, Store, enc, is_doc};
@@ -43,14 +43,14 @@ fn method_name(m: Method) -> &'static str {
     }
 }
 
-/// What a 401 means here: the device was removed on the server.
+/// What a 401 means here: the device was removed on the server (and is forgotten here).
 const DISCONNECTED: &str =
-    "This computer is no longer connected to the server (it was removed from Your devices there). Disconnect, then connect again.";
+    "This computer is no longer connected to the server (it was removed from Your devices there). Connect to the server again to carry on.";
 
 // ------------------------------------------------------------ the Drive over the server
 
 pub(crate) struct RemoteStore {
-    server: Server,
+    server: Renewing,
     tx: Sender<(u64, Answer)>,
     rx: Receiver<(u64, Answer)>,
     waiting: RefCell<HashMap<u64, Done>>,
@@ -62,13 +62,20 @@ pub(crate) struct RemoteStore {
 impl RemoteStore {
     pub fn new(server: Server) -> RemoteStore {
         let (tx, rx) = channel();
-        RemoteStore { server, tx, rx, waiting: RefCell::default(), next: Cell::new(1), local: LocalStore::new(crate::localstore::default_root()) }
+        RemoteStore {
+            server: Renewing::new(server),
+            tx,
+            rx,
+            waiting: RefCell::default(),
+            next: Cell::new(1),
+            local: LocalStore::new(crate::localstore::default_root()),
+        }
     }
 }
 
 impl Store for RemoteStore {
     fn server(&self) -> Option<Server> {
-        Some(self.server.clone())
+        Some(self.server.server())
     }
 
     fn call(&self, ctx: &egui::Context, method: Method, url: &str, body: Option<Vec<u8>>, done: Done) {
@@ -97,6 +104,10 @@ impl Store for RemoteStore {
     }
 
     fn open(&self, id: &str, name: &str) -> Result<(), String> {
+        // Still connected? (Else the window would only say so, over an empty spreadsheet.)
+        if self.server.call("GET", "api/devices", None, None)?.status == 401 {
+            return Err(DISCONNECTED.into());
+        }
         let program = if is_doc(name) { "stardocs" } else { "starsheets" };
         launch(program, &["--server-file".as_ref(), id.as_ref(), "--name".as_ref(), name.as_ref()])
     }
@@ -139,7 +150,7 @@ impl Store for RemoteStore {
 /// A spreadsheet opened from the server: where it is there, and the version this window's
 /// copy is based on.
 pub(crate) struct RemoteDoc {
-    server: Server,
+    server: Renewing,
     pub id: String,
     pub name: String,
     pub folder: String,
@@ -155,6 +166,17 @@ fn cache_dir() -> PathBuf {
     base.unwrap_or_else(std::env::temp_dir).join("starbase").join("opening")
 }
 
+/// "Budget.csv" → ".csv" ("" without one).
+fn ext(name: &str) -> String {
+    name.rsplit_once('.').map_or(String::new(), |(_, e)| format!(".{e}"))
+}
+
+/// Where changes made over someone else's go: "Budget.csv" → "Budget (conflicted copy).csv"
+/// (the same name in Starbase Sheets and Docs, on disk and on the server).
+pub(crate) fn conflict_name(name: &str) -> String {
+    format!("{} (conflicted copy){}", stem(name), ext(name))
+}
+
 /// "Budget.xlsx" → "Budget".
 pub(crate) fn stem(name: &str) -> String {
     name.rsplit_once('.').map_or(name, |(s, _)| s).to_string()
@@ -165,6 +187,7 @@ impl RemoteDoc {
     /// open (the caller removes it).
     pub fn fetch(id: &str) -> Result<(RemoteDoc, PathBuf), String> {
         let server = starbase_connect::saved().ok_or("This computer isn't connected to a server. Connect from Starbase Drive first.")?;
+        let server = Renewing::new(server);
         let r = server.call("GET", &format!("api/files/{}", enc(id)), None, None)?;
         if r.status == 401 {
             return Err(DISCONNECTED.into());
@@ -183,16 +206,23 @@ impl RemoteDoc {
 
     /// The server, for the save status ("Saved to files.example.org").
     pub fn host(&self) -> String {
-        let u = &self.server.url;
+        let u = self.url();
         u.split_once("://").map_or(u.as_str(), |(_, r)| r).to_string()
     }
 
-    pub fn url(&self) -> &str {
-        &self.server.url
+    pub fn url(&self) -> String {
+        self.server.server().url
     }
 
-    /// Saves over the version last read or saved. Changed on the server since: saved as a
-    /// conflicted copy beside it instead, which this window carries on with (`Ok(Some(name))`).
+    /// The workbook as the file's own format (a .csv stays a .csv, as the server itself saves
+    /// it): never other bytes under its name.
+    pub fn bytes(&self, wb: &gridcraft_engine::model::Workbook) -> Result<Vec<u8>, String> {
+        crate::store::xlsx(wb, &self.name)
+    }
+
+    /// Saves over the version last read or saved (`bytes` from [`RemoteDoc::bytes`]). Changed on
+    /// the server since: saved as a conflicted copy beside it instead, which this window carries
+    /// on with (`Ok(Some(name))`).
     pub fn save(&mut self, bytes: &[u8]) -> Result<Option<String>, String> {
         let r = self.server.call("PUT", &format!("api/files/{}", enc(&self.id)), Some(bytes), self.etag.as_deref())?;
         match r.status {
@@ -201,7 +231,7 @@ impl RemoteDoc {
                 Ok(None)
             }
             409 => {
-                let want = format!("{} (conflicted copy).xlsx", stem(&self.name));
+                let want = conflict_name(&self.name);
                 let r = self.server.call("POST", &format!("api/files?name={}&folder={}", enc(&want), enc(&self.folder)), Some(bytes), None)?;
                 if !r.ok() {
                     return Err(r.error());
@@ -219,8 +249,12 @@ impl RemoteDoc {
 
     /// A new name (`stem`; the server keeps the extension and makes it free in its folder).
     pub fn rename(&mut self, stem_wanted: &str) -> Result<(), String> {
-        let r =
-            self.server.call("POST", &format!("api/files/{}/rename?name={}", enc(&self.id), enc(&format!("{stem_wanted}.xlsx"))), Some(&[]), None)?;
+        let r = self.server.call(
+            "POST",
+            &format!("api/files/{}/rename?name={}", enc(&self.id), enc(&format!("{stem_wanted}{}", ext(&self.name)))),
+            Some(&[]),
+            None,
+        )?;
         if !r.ok() {
             return Err(r.error());
         }
@@ -311,12 +345,12 @@ impl Connect {
                         house::note(ui, &format!("{} on {}", s.username(), s.url));
                     });
                     house::menu_sep(ui);
-                    if house::menu_row(ui, Some(""), "Open in the browser", "", true)
+                    if house::menu_row(ui, None, "Open in the browser", "", true)
                         && let Err(e) = starbase_connect::open_browser(&s.url)
                     {
                         self.error = Some(e);
                     }
-                    if house::menu_row(ui, Some(""), "Disconnect", "", true) {
+                    if house::menu_row(ui, None, "Disconnect", "", true) {
                         disconnect = true;
                     }
                 });
@@ -342,6 +376,16 @@ impl Connect {
     /// the connection changed (connected, or disconnected).
     pub fn ui(&mut self, ctx: &egui::Context) -> Option<Backend> {
         let mut changed = None;
+        // The server refused this computer's token (the device was removed there): it was
+        // forgotten, so the Drive shows this computer's files again and says why.
+        if starbase_connect::take_changed() && self.leaving.is_none() {
+            let b = backend();
+            if b.server().is_none() {
+                self.error = Some(DISCONNECTED.into());
+                self.dialog = Dialog::Done(String::new());
+            }
+            changed = Some(b);
+        }
         if let Some(rx) = &self.leaving
             && let Ok(r) = rx.try_recv()
         {
@@ -400,6 +444,9 @@ impl Connect {
                         self.focused = true;
                     }
                     go |= (r.lost_focus() || r.has_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if self.address.trim().to_lowercase().starts_with("http://") {
+                        house::note(ui, "http:// isn't encrypted: it works only for a server on your own network, never one on the internet.");
+                    }
                     if let Some(e) = &self.error {
                         ui.label(RichText::new(e).size(house::NOTE).color(house::ERROR));
                     }
@@ -469,6 +516,17 @@ impl Connect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn conflicted_copies_keep_the_files_own_type() {
+        assert_eq!(conflict_name("Budget.csv"), "Budget (conflicted copy).csv");
+        assert_eq!(conflict_name("Plan.xlsx"), "Plan (conflicted copy).xlsx");
+        // A csv is saved as csv, never as a zip (an .xlsx) under its name.
+        let wb = gridcraft_engine::model::Workbook::new();
+        let csv = crate::store::xlsx(&wb, "Budget.csv").unwrap();
+        assert!(!csv.starts_with(b"PK"), "{csv:?}");
+        assert!(crate::store::xlsx(&wb, "Plan.xlsx").unwrap().starts_with(b"PK"));
+    }
 
     #[test]
     fn names_without_their_extension() {

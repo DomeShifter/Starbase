@@ -28,6 +28,8 @@ use crate::store::{has_data, is_doc, xlsx};
 
 /// Quiet time after the last change before saving (ms), as on the web.
 const SAVE_AFTER: f64 = 1500.0;
+/// A save to the server that failed is tried again this long after (ms).
+const RETRY_AFTER: f64 = 10_000.0;
 pub const SHEETS_ID: &str = "io.github.DomeShifter.Starbase.Sheets";
 pub const DRIVE_ID: &str = "io.github.DomeShifter.Starbase";
 
@@ -528,7 +530,8 @@ impl LocalFiles {
     pub fn save_active(&mut self, app: &mut SheetApp) {
         let Some(d) = app.session.active() else { return };
         let (doc, sent) = (d.uid, d.wb.clone());
-        let bytes = match xlsx(&sent, "book.xlsx") {
+        // A file from the server is saved in its own format (a .csv stays a .csv).
+        let bytes = match self.remote.get(&doc).map_or_else(|| xlsx(&sent, "book.xlsx"), |r| r.bytes(&sent)) {
             Ok(b) => b,
             Err(e) => {
                 self.error = Some(e);
@@ -552,7 +555,11 @@ impl LocalFiles {
                         d.title = crate::remote::stem(&r.name);
                     }
                 }
-                Err(e) => self.error = Some(e),
+                Err(e) => {
+                    self.error = Some(e);
+                    // Tried again in a while (connected again meanwhile, say), not every frame.
+                    self.changed_at = gridcraft_ui_egui::monotonic_ms() + RETRY_AFTER;
+                }
             }
             return;
         }

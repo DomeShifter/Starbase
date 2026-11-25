@@ -27,9 +27,11 @@ pub trait Api {
     fn call(&self, method: &str, path: &str, body: Option<&[u8]>, if_match: Option<&str>) -> Result<Reply, String>;
 }
 
-impl Api for starbase_connect::Server {
+/// The connected server: on a refused token it takes up a newer sign-in (connected again while
+/// this window was open), else forgets the removed one so File offers "Connect to a server…".
+impl Api for starbase_connect::Renewing {
     fn call(&self, method: &str, path: &str, body: Option<&[u8]>, if_match: Option<&str>) -> Result<Reply, String> {
-        starbase_connect::Server::call(self, method, path, body, if_match)
+        starbase_connect::Renewing::call(self, method, path, body, if_match)
     }
 }
 

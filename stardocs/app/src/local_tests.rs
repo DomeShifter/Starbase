@@ -162,8 +162,8 @@ fn a_file_changed_by_another_program_is_kept_and_ours_saved_as_a_copy() {
     wait_for_save(&mut h, &clock);
     assert_eq!(std::fs::read(&path).unwrap(), theirs, "never overwritten");
     let name = h.state().link.name();
-    assert!(name.starts_with("Report (Starbase Docs copy ") && name.ends_with(".docx"), "{name}");
-    assert!(h.state().link.notice().is_some_and(|n| n.contains("changed by another program")));
+    assert_eq!(name, "Report (conflicted copy).docx");
+    assert!(h.state().link.notice().is_some_and(|n| n.contains("changed elsewhere")));
     assert_eq!(files_in(&dir).len(), 3, "the file, our copy, and home");
     let copy = window(&dir, Some(dir.join(&name)), &clock);
     assert!(body_text(&copy).contains("Mine"));
