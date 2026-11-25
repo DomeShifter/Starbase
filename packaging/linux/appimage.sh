@@ -64,7 +64,10 @@ for entry in "$ID" "$ID.Sheets" "$ID.Docs"; do
 done
 install -Dm644 "$HERE/$ID.mime.xml" "$APPDIR/usr/share/mime/packages/$ID.xml"
 mkdir -p "$APPDIR/usr/share/metainfo"
+# The AppImage is built on Ubuntu 22.04, whose appstreamcli (0.15) rejects the newer
+# vcs-browser and contribute URL types that Flathub asks for, so the AppImage copy drops them.
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$BUILD_DATE/g" \
+  -e '/<url type="vcs-browser">/d' -e '/<url type="contribute">/d' \
   "$HERE/$ID.metainfo.xml.in" >"$APPDIR/usr/share/metainfo/$ID.metainfo.xml"
 "$HERE/icons.sh" "$APPDIR/usr/share/icons"
 # The package version, for `Starbase.AppImage --version` (AppRun).

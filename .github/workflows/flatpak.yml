@@ -110,11 +110,13 @@ jobs:
           dbus-run-session -- flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest "$MANIFEST" > lint-manifest.json
           echo "exit code $?"; cat lint-manifest.json
       # --mirror-screenshots-url fetches the metainfo screenshots after the (offline) build, as
-      # Flathub's builders do; the ostree commit puts them in the repo for the repo lint.
+      # Flathub's builders do, and --compose-url-policy=full writes full dl.flathub.org/media URLs
+      # into the catalog (the linter's appstream-external-screenshot-url and
+      # appstream-remote-icon-not-mirrored checks); the ostree commit puts them in the repo.
       - name: Build (offline, as Flathub builds)
         run: |
           dbus-run-session -- flatpak run org.flatpak.Builder --user --install-deps-from=flathub --force-clean \
-            --disable-rofiles-fuse --mirror-screenshots-url=https://dl.flathub.org/media/ \
+            --disable-rofiles-fuse --compose-url-policy=full --mirror-screenshots-url=https://dl.flathub.org/media \
             --repo=repo build-flatpak "$MANIFEST"
           mkdir -p build-flatpak/files/share/app-info/media
           ostree commit --repo=repo --canonical-permissions --branch=screenshots/x86_64 \
