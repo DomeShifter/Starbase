@@ -144,7 +144,10 @@ impl Emoji {
             ui.add_space(8.0);
             // Only emoji the interface fonts AND the page's fonts can draw: egui refuses a missing glyph, and the page would show a box.
             let font = egui::FontId::proportional(22.0);
-            let found: Vec<&str> = matching(&self.filter).into_iter().filter(|e| ui.fonts_mut(|f| f.has_glyphs(&font, e)) && crate::bundled_fonts::body_can_draw(e)).collect();
+            let found: Vec<&str> = matching(&self.filter)
+                .into_iter()
+                .filter(|e| ui.fonts_mut(|f| f.has_glyphs(&font, e)) && crate::bundled_fonts::body_can_draw(e))
+                .collect();
             if found.is_empty() {
                 ui.label(RichText::new("No emoji found").color(TEXT_DIM));
             }
