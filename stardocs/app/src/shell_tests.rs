@@ -666,6 +666,25 @@ fn checklist_from_the_menu_and_ctrl_shift_9() {
 }
 
 #[test]
+fn checklist_toolbar_button_and_click_to_tick() {
+    let mut h = window(1400.0);
+    type_text(&mut h, "Milk");
+    click_containing(&mut h, "Checklist (Ctrl+Shift+9)");
+    assert_eq!(checklist_items(&h), 1, "the toolbar button makes a checklist item");
+    let doc = &h.state().app.session.doc;
+    let body = wordcraft_doc::StoryRef::Body;
+    let p = doc.para_paths(body)[0].clone();
+    let ticked = |h: &Harness<'static, Win>| {
+        let doc = &h.state().app.session.doc;
+        wordcraft_engine::cmd::checklist::item_box(doc, body, &p)
+            .is_some_and(|r| matches!(r.control.kind, wordcraft_doc::ControlKind::CheckBox { checked: true, .. }))
+    };
+    assert!(!ticked(&h));
+    run(&mut h, "developer.toggleCheckBox", json!({"control": wordcraft_engine::cmd::checklist::TAG}));
+    assert!(ticked(&h), "ticking the box marks the item done");
+}
+
+#[test]
 fn a_pictures_right_click_menu_offers_format_image() {
     let mut h = window(1400.0);
     run(&mut h, "insert.picture", json!({"data": PNG, "width": 100}));

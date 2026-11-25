@@ -25,6 +25,8 @@ use axum::http::Response;
 use serde_json::{Map, Value, json};
 
 use super::index::Row;
+
+type Seen3 = (String, Row, bool);
 use super::routes::photo_json;
 use super::{media_of, service};
 use crate::{App, Shared, auth, blocking, error, send_json, sharing};
@@ -284,7 +286,7 @@ async fn places(app: &Shared, me: Option<auth::User>, place: Option<String>) -> 
     let (groups, waiting) = tokio::task::spawn_blocking(move || {
         let (rows, waiting) = rows_of(&app, mine);
         let mut cache: HashMap<(i64, i64), String> = HashMap::new();
-        let mut groups: Vec<(String, Vec<(String, Row, bool)>)> = Vec::new();
+        let mut groups: Vec<(String, Vec<Seen3>)> = Vec::new();
         for x in rows {
             let Some((lat, lon)) = x.1.meta.lat.zip(x.1.meta.lon) else { continue };
             let name = cache.entry(((lat * 20.0).round() as i64, (lon * 20.0).round() as i64)).or_insert_with(|| place_name(lat, lon)).clone();
