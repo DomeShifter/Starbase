@@ -8,7 +8,9 @@
 #            committed; see the manifest header) and checks the engine commits in the manifest
 #            equal the upstream.pin files.
 #   build:   flatpak-builder (Flathub's own org.flatpak.Builder app, which also carries
-#            flatpak-builder-lint and appstreamcli), then a .flatpak bundle.
+#            flatpak-builder-lint and appstreamcli), then a .flatpak bundle. The screenshots are
+#            mirrored into the repo the way Flathub's builders do it, and flatpak-builder-lint
+#            (manifest, builddir, repo) must report no errors: this is the Flathub gate.
 #   smoke:   installs the bundle the way a user would, and checks --version, that each program
 #            stays up for 15 s under a headless X server, and that the sandbox can create, write
 #            and read ~/Documents/Starbase but sees nothing else in ~/Documents.
@@ -87,7 +89,7 @@ jobs:
           path: packaging/linux/flatpak
       - name: Flatpak and Flathub's builder
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq flatpak dbus
+          sudo apt-get update -qq && sudo apt-get install -y -qq flatpak dbus ostree
           # Ubuntu 24.04 stops unprivileged user namespaces, which bubblewrap (the sandbox) needs.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
@@ -102,31 +104,49 @@ jobs:
           echo "STARBASE_VERSION=$v" >> "$GITHUB_ENV"
           sed -i "s/version=0.0.0-dev;/version=$v;/" "$MANIFEST"
           grep -n "version=$v;" "$MANIFEST"
-      - name: Lint the manifest (Flathub's flatpak-builder-lint, informational)
+      - name: Lint the manifest (Flathub's flatpak-builder-lint; errors fail the build step below)
         run: |
           set +e
-          dbus-run-session -- flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest "$MANIFEST" | tee lint-manifest.json
-          echo "exit code $?"
+          dbus-run-session -- flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest "$MANIFEST" > lint-manifest.json
+          echo "exit code $?"; cat lint-manifest.json
+      # --mirror-screenshots-url fetches the metainfo screenshots after the (offline) build, as
+      # Flathub's builders do; the ostree commit puts them in the repo for the repo lint.
       - name: Build (offline, as Flathub builds)
         run: |
           dbus-run-session -- flatpak run org.flatpak.Builder --user --install-deps-from=flathub --force-clean \
-            --disable-rofiles-fuse --repo=repo build-flatpak "$MANIFEST"
+            --disable-rofiles-fuse --mirror-screenshots-url=https://dl.flathub.org/media/ \
+            --repo=repo build-flatpak "$MANIFEST"
+          mkdir -p build-flatpak/files/share/app-info/media
+          ostree commit --repo=repo --canonical-permissions --branch=screenshots/x86_64 \
+            build-flatpak/files/share/app-info/media
           df -h /
       - name: Check the metainfo (appstreamcli)
         run: |
           dbus-run-session -- flatpak run --command=appstreamcli org.flatpak.Builder validate --no-net --explain \
             "build-flatpak/files/share/metainfo/$APP_ID.metainfo.xml"
-      - name: Lint the build and repo (Flathub's flatpak-builder-lint, informational)
+      - name: Lint the build and repo (Flathub's flatpak-builder-lint; errors fail the job)
         run: |
           set +e
-          dbus-run-session -- flatpak run --command=flatpak-builder-lint org.flatpak.Builder builddir build-flatpak | tee lint-builddir.json
-          dbus-run-session -- flatpak run --command=flatpak-builder-lint org.flatpak.Builder repo repo | tee lint-repo.json
+          dbus-run-session -- flatpak run --command=flatpak-builder-lint org.flatpak.Builder builddir build-flatpak > lint-builddir.json
+          dbus-run-session -- flatpak run --command=flatpak-builder-lint org.flatpak.Builder repo repo > lint-repo.json
+          set -e
           {
             echo "### flatpak-builder-lint"
             for f in lint-manifest.json lint-builddir.json lint-repo.json; do
               echo "**$f**"; echo '```'; cat "$f"; echo '```'
             done
           } >> "$GITHUB_STEP_SUMMARY"
+          # Errors fail the job; warnings and info are only shown. An empty file is a clean run.
+          python3 - lint-manifest.json lint-builddir.json lint-repo.json <<'PY'
+          import json, sys
+          bad = 0
+          for f in sys.argv[1:]:
+              text = open(f).read().strip()
+              errors = json.loads(text).get("errors", []) if text else []
+              print(f"{f}: {errors or 'no errors'}")
+              bad += len(errors)
+          sys.exit(1 if bad else 0)
+          PY
       - name: Bundle
         run: |
           mkdir -p dist
