@@ -1549,6 +1549,8 @@ async fn add_sheets(app: &Shared, me: Option<auth::User>, file: String, q: &Hash
 /// GET /api/files/ID/thumb: the file's preview picture (thumbs.rs), drawn if there isn't one for
 /// this version yet (a document's is the one StarDocs sent, if it shows this version). Outside the store lock while drawing. 404: no picture (the app shows an icon).
 async fn thumb(app: &Shared, me: Option<auth::User>, file: String, headers: &HeaderMap) -> Response<Body> {
+    /// Draws one picture (run on a blocking thread).
+    type DrawJob = Box<dyn FnOnce(&App) -> Result<Vec<u8>, String> + Send>;
     enum Got {
         Have(Vec<u8>, String),
         Draw(String, Vec<u8>, String),
@@ -1598,7 +1600,7 @@ async fn thumb(app: &Shared, me: Option<auth::User>, file: String, headers: &Hea
         Ok(Got::Have(png, v)) => (png, v),
         Ok(got) => {
             let (store_root, f3) = (app.clone(), file.clone());
-            let (job, v): (Box<dyn FnOnce(&App) -> Result<Vec<u8>, String> + Send>, String) = match got {
+            let (job, v): (DrawJob, String) = match got {
                 Got::Draw(name, bytes, v) => (Box::new(move |_| thumbs::from_bytes(&name, &bytes)), v),
                 Got::Photo(path, v) => (Box::new(move |a| thumbs::tile(&photos::drive_thumb(&a.store, &path)?)), v),
                 Got::Pdf(bytes, v) => (Box::new(move |_| thumbs::from_pdf(bytes)), v),
