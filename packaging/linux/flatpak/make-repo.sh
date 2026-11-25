@@ -13,8 +13,11 @@
 #   starbase.flatpakref     install file: `flatpak install --from <url>/starbase.flatpakref`
 #   starbase.flatpakrepo    remote file:  `flatpak remote-add starbase <url>/starbase.flatpakrepo`
 #   starbase-release-signing.asc, index.html
-# The repository is rebuilt from scratch each release and holds only the newest version: users
-# update from any older version all the same (Flatpak fetches what it is missing).
+# Each release ADDS to the published repository: the current version is fetched from <public-url>
+# (signature checked against our key), the new commit is made on top of it, and the repository
+# keeps the newest two versions, with a static delta from the previous one, so an update
+# downloads only what changed. The very first run (nothing published yet) starts empty.
+# PREVIOUS_REPO_URL overrides where the published repository is fetched from (tests).
 set -euo pipefail
 
 [ $# -eq 5 ] || { sed -n '2,8p' "$0" >&2; exit 2; }
@@ -39,13 +42,27 @@ rm -rf "$site"
 mkdir -p "$site"
 ostree init --mode=archive-z2 --repo="$site/repo"
 gpg --dearmor < "$pubkey" > "$tmp/key.gpg"
+prev=${PREVIOUS_REPO_URL:-$url/repo}
+code=$(curl -sS -o /dev/null -w '%{http_code}' "${prev%/}/config" || echo 000)
+if [ "$code" = 200 ]; then
+  # A failed fetch stops the release: publishing without it would drop users' update path.
+  ostree remote add --repo="$site/repo" --gpg-import="$tmp/key.gpg" published "${prev%/}/"
+  ostree pull --repo="$site/repo" --mirror --depth=1 published "app/$APP_ID/$arch/$BRANCH"
+  ostree remote delete --repo="$site/repo" published
+  echo "published version: $(ostree rev-parse --repo="$site/repo" "app/$APP_ID/$arch/$BRANCH")"
+elif [ "$code" = 404 ]; then
+  echo "nothing published at $prev yet: starting an empty repository"
+else
+  echo "cannot tell whether $prev exists (HTTP $code): stopping rather than replacing it" >&2
+  exit 1
+fi
 sign=(--gpg-sign="$key" --gpg-homedir="$GNUPGHOME")
 flatpak build-commit-from --src-repo="$tmp/src" --src-ref="$src_ref" "${sign[@]}" \
   --no-update-summary "$site/repo" "app/$APP_ID/$arch/$BRANCH"
 flatpak build-update-repo "${sign[@]}" --gpg-import="$tmp/key.gpg" \
   --title="Starbase" --comment="Starbase: spreadsheets and documents, familiar to Google Workspace users" \
   --homepage="https://github.com/DomeShifter/Starbase" --default-branch="$BRANCH" \
-  --generate-static-deltas --prune "$site/repo"
+  --generate-static-deltas --prune --prune-depth=1 "$site/repo"
 # The lock file is not part of the repository (and Pages leaves out dotfiles anyway).
 rm -f "$site/repo/.lock"
 
@@ -97,6 +114,9 @@ flatpak remote-ls --user check --columns=application,branch,arch | tee "$tmp/ls"
 grep -q "^${APP_ID}[[:space:]]*${BRANCH}" "$tmp/ls"
 # Pulling the app checks the commit's signature too (no runtime needed: --no-deps).
 flatpak install --user -y --noninteractive --no-deps --no-related check "$APP_ID//$BRANCH"
-flatpak info --user "$APP_ID//$BRANCH" | grep -E 'Commit|Branch|Origin'
+flatpak info --user "$APP_ID//$BRANCH" | grep -E 'Commit|Parent|Branch|Origin'
+# The appstream branch (software centres) is signed too: this pull verifies it.
+flatpak update --user --appstream check
+ostree log --repo="$site/repo" "app/$APP_ID/$arch/$BRANCH" | grep -E '^commit|Version|Date'
 ostree static-delta list --repo="$site/repo"
 du -sh "$site"

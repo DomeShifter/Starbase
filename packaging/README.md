@@ -136,9 +136,17 @@ How it is made (`.github/workflows/release.yml`):
 | `flatpak-repo-check` | On a clean runner, installs from the published `.flatpakref` and runs both programs' `--version`. |
 
 Why deploy-pages and not a `gh-pages` branch: an OSTree repository is thousands of binary
-objects; committing them to git on every release would grow the repository for ever. The Pages
-artifact is rebuilt each release and holds only the newest version (Flatpak updates from any
-older one all the same). Pull requests never build or publish it.
+objects; committing them to git on every release would grow the repository for ever. Each
+release instead **adds to the published repository**: `make-repo.sh` fetches the current version
+from Pages (`ostree pull --mirror`, signature checked against our key), commits the new one on
+top of it, and keeps the newest two versions with a static delta between them, so `flatpak
+update` downloads only what changed. If Pages answers anything but the repository or a 404, the
+job stops instead of replacing it. Pull requests never build or publish it.
+
+Limits (GitHub Pages): 1 GB per site, soft 100 GB/month bandwidth, 10-minute deployments. Two
+versions of a ~31 MB bundle plus deltas stay far below that. OSTree's object files
+(`objects/xx/….commit`, `.dirtree`, `.filez`) are not dotfiles, so the Pages artifact keeps
+them; deploy-pages publishes the files as they are (no Jekyll).
 
 One-time setup in the repository settings (an admin does this once):
 1. Settings > Pages > Build and deployment > Source: **GitHub Actions**.
