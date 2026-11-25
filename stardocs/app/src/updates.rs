@@ -8,10 +8,8 @@ use wordcraft_ui_egui::WordApp;
 use wordcraft_ui_egui::craft_update::app::App;
 
 /// Starbase as the update check knows it: its releases, its name, its settings folder.
-pub static APP: App = App {
-    developer: "Starbase",
-    ..App::new("starbase", "Starbase", "Docs, Sheets and Drive for your own server", starbase_connect::RELEASES_REPO)
-};
+pub static APP: App =
+    App { developer: "Starbase", ..App::new("starbase", "Starbase", "Docs, Sheets and Drive for your own server", starbase_connect::RELEASES_REPO) };
 
 /// Points the updater at Starbase's releases. No check starts here.
 pub fn setup(app: &mut WordApp) {

@@ -7,10 +7,8 @@ use gridcraft_ui_egui::SheetApp;
 use gridcraft_ui_egui::craft_update::app::App;
 
 /// Starbase as the update check knows it: its releases, its name, its settings folder.
-pub static APP: App = App {
-    developer: "Starbase",
-    ..App::new("starbase", "Starbase", "Docs, Sheets and Drive for your own server", starbase_connect::RELEASES_REPO)
-};
+pub static APP: App =
+    App { developer: "Starbase", ..App::new("starbase", "Starbase", "Docs, Sheets and Drive for your own server", starbase_connect::RELEASES_REPO) };
 
 /// Points the updater at Starbase's releases, and starts the check at start only when `on`
 /// (the person's setting, [`starbase_connect::update_check_on`]).

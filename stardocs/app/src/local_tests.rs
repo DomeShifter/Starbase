@@ -202,7 +202,7 @@ fn there_is_no_share_button_for_a_local_document() {
 /// and Help offers the check (off) and Check for updates now.
 #[test]
 fn no_update_check_starts_at_launch() {
-    use egui_kittest::kittest::Queryable;
+    use egui_kittest::kittest::{NodeT, Queryable};
     let dir = temp_dir("updates");
     let clock = Clock::default();
     let mut h = window(&dir, None, &clock);
