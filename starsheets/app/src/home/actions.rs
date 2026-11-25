@@ -16,6 +16,14 @@ impl Home {
             self.activate(ui.ctx(), item);
             ui.close();
         }
+        if let Item::File(id) = item
+            && self.file(id).is_some_and(|f| super::items::opens_as(&f.name) != super::items::Opens::Editor)
+            && row(ui, "visibility", "Preview", "", single)
+        {
+            let id = id.clone();
+            self.preview(ui.ctx(), &id);
+            ui.close();
+        }
         house::menu_sep(ui);
         if self.accounts && row(ui, "person_add", "Share…", "", single && !is_space) {
             let (folder, key) = match item {

@@ -589,8 +589,8 @@ impl Home {
             }
             // Files always open in a new tab, as from Google Drive, so the file browser stays
             // where it was (to-do 2 row 5; the separate "Open in new tab" entry went with it).
-            // Other files: a preview in a new tab (pictures, PDFs, sound, films, text), else a
-            // download.
+            // Other files: Drive's preview over the list (pictures, PDFs, sound, films, text; else
+            // "No preview available" with Download).
             Item::File(id) => {
                 let name = self.file(id).map(|f| f.name.clone()).unwrap_or_default();
                 // This computer's own files open where they belong: Sheets, Docs, else the
@@ -602,8 +602,8 @@ impl Home {
                             self.error = Some(e);
                         }
                     }
-                    Opens::Preview => self.preview(ctx, id, &name),
-                    Opens::Download => self.download(ctx, id, &name),
+                    // Anything else: Drive's preview ("No preview available" for unknown types).
+                    Opens::Preview | Opens::Download => self.preview(ctx, id),
                 }
             }
         }
@@ -662,7 +662,7 @@ pub(super) fn kind_icon(name: &str) -> &'static str {
 pub(super) enum Opens {
     /// Starbase Sheets or Docs.
     Editor,
-    /// The server's preview page, in a new tab.
+    /// Drive's preview over the file list (filepreview.rs).
     Preview,
     Download,
 }

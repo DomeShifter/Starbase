@@ -74,6 +74,8 @@ impl Drop for Ticket {
     }
 }
 
+/// A PDF's raw bytes: framed only by this site's own pages (the Drive preview), nothing else.
+pub const PDF_CSP: &str = "frame-ancestors 'self'; base-uri 'none'";
 /// The CSP of the preview page and of raw media.
 pub const SANDBOX: &str = "sandbox allow-same-origin allow-downloads; default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'";
 
@@ -288,7 +290,12 @@ async fn serve_raw(f: Found, headers: &HeaderMap) -> Response<Body> {
         (header::CACHE_CONTROL, "no-store".to_string()),
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
     ];
-    if k != Kind::Pdf {
+    if k == Kind::Pdf {
+        // Drive's own preview shows a PDF in a frame over the file list: this site only, never
+        // another site's frame.
+        extra.push((header::X_FRAME_OPTIONS, "SAMEORIGIN".to_string()));
+        extra.push((header::CONTENT_SECURITY_POLICY, PDF_CSP.to_string()));
+    } else {
         extra.push((header::CONTENT_SECURITY_POLICY, SANDBOX.to_string()));
     }
     stream(f, headers, &extra).await
