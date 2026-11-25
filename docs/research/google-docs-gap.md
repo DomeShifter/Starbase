@@ -107,17 +107,17 @@ _Research only, 2026-11-24. Sources: `stardocs/app/src/shell.rs` (MENUS + toolba
 ## 2. Top 15 to build next (value ÷ size)
 
 **Cheap wins: the engine has it, it just needs a menu entry or small dialog (S):**
-1. **Format › Table sub-menu + right-click table items**: insert/delete rows and columns, merge/split, delete table, table properties, pin header row (`table.*`). Everyday users hit this as soon as they make a table.
-2. **Image options**: wrap text, alt text, crop, size and rotate, replace and reset image, shown in a sub-menu and in a small toolbar when an image is selected (`arrange.wrap`, `picture.*`).
-3. **List options**: bullet and numbering styles, restart numbering, set the start number (`para.bullets {kind}`, `para.defineNumber`, `para.restartNumbering`, `para.setNumberingValue`).
-4. **Suggestions one at a time**: accept/reject this one, next/previous (`review.accept/reject/nextChange/previousChange`), plus a **Viewing** mode in the mode box.
-5. **Download as .odt, .rtf, .txt, .html, .md** (`file.saveAs` through the `formats` crate).
-6. **Capitalization + text size up/down**, with Docs' keys Ctrl+Shift+. and Ctrl+Shift+, (`format.changeCase`, `format.growFont1/shrinkFont1`).
-7. **Headings 4–6** + "Update style to match" + "Save as my default styles" (`para.style`, `styles.updateToMatch`, `design.setDefault`).
-8. **Insert › Break**: section break (next page / continuous) and column break (`layout.break`, `text.columnBreak`); **headers/footers options**: different first page, odd/even, page-number format (`layout.*`).
-9. **Paragraph spacing quick items**: add/remove space before/after, keep with next, keep lines together (`para.addSpaceBefore`, `para.removeSpaceAfter`, `para.keepNext`, `para.keepLines`).
-10. **Comment cards complete**: reply, resolve, edit, delete reachable in StarDocs (`review.reply/resolveComment/editComment/deleteComment`); TOC update/remove (`references.updateToc/removeToc`); link to a heading or bookmark (`link.targets`).
-11. **Citations** menu for students (`references.citation/bibliography/citationStyle/sources`).
+1. ~~**Format › Table sub-menu + right-click table items**: insert/delete rows and columns, merge/split, delete table, table properties, pin header row (`table.*`). Everyday users hit this as soon as they make a table.~~ Done: Format › Table and the page's right-click menu (menu batch 1).
+2. ~~**Image options**: wrap text, alt text, crop, size and rotate, replace and reset image, shown in a sub-menu and in a small toolbar when an image is selected (`arrange.wrap`, `picture.*`).~~ Done: Format › Image + a picture's right-click menu (menu batch 2); the picture tools in the toolbar while a picture is selected (gap batch 3).
+3. ~~**List options**: bullet and numbering styles, restart numbering, set the start number (`para.bullets {kind}`, `para.defineNumber`, `para.restartNumbering`, `para.setNumberingValue`).~~ Done: Format › Bullets and numbering: bullet and numbering styles, List options › Restart numbering with a start number (menu batch 1).
+4. ~~**Suggestions one at a time**: accept/reject this one, next/previous (`review.accept/reject/nextChange/previousChange`), plus a **Viewing** mode in the mode box.~~ Done: Tools › Review suggested edits, and Viewing in the mode box and View › Mode (menu batch 2, docs-engine-3).
+5. **Download as .odt, .rtf, .txt, .html, .md** (`file.saveAs` through the `formats` crate). _Already in File › Download on main; left out of gap batch 3 (the File menu was being changed in PR #31)._
+6. ~~**Capitalization + text size up/down**, with Docs' keys Ctrl+Shift+. and Ctrl+Shift+, (`format.changeCase`, `format.growFont1/shrinkFont1`).~~ Done: Format › Text › Size and Capitalisation, Ctrl+Shift+. and Ctrl+Shift+, (menu batch 1).
+7. ~~**Headings 4–6** + "Update style to match" + "Save as my default styles" (`para.style`, `styles.updateToMatch`, `design.setDefault`).~~ Done: Headings 4–6 with Ctrl+Alt+4–6 and Update to match (menu batch 1); Format › Paragraph styles › Options and the style box's Options: Save as my default styles, Use my default styles, Reset styles (gap batch 3; WordCraft's `design.setDefault` only shows a message, so StarDocs keeps the styles itself, in the browser).
+8. ~~**Insert › Break**: section break (next page / continuous) and column break (`layout.break`, `text.columnBreak`); **headers/footers options**: different first page, odd/even, page-number format (`layout.*`).~~ Done: Insert › Break, Headers and footers (different first page, odd/even), Page numbers › Number format (menu batch 2).
+9. ~~**Paragraph spacing quick items**: add/remove space before/after, keep with next, keep lines together (`para.addSpaceBefore`, `para.removeSpaceAfter`, `para.keepNext`, `para.keepLines`).~~ Done: Format › Line and paragraph spacing (menu batch 1).
+10. ~~**Comment cards complete**: reply, resolve, edit, delete reachable in StarDocs (`review.reply/resolveComment/editComment/deleteComment`); TOC update/remove (`references.updateToc/removeToc`); link to a heading or bookmark (`link.targets`).~~ Done: comment cards (WordCraft's), Insert › Table of contents › Update/Delete (menu batch 2); headings and bookmarks are in Insert › Link's own tab (WordCraft's link dialog).
+11. ~~**Citations** menu for students (`references.citation/bibliography/citationStyle/sources`).~~ Done: Tools › Citations (menu batch 2).
 
 **Medium jobs (M), high value:**
 12. ~~**Version history kept on the server**: snapshots on save, named versions, restore, make a copy.~~ Done: File › Version history.
