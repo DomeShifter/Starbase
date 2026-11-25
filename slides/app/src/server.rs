@@ -15,7 +15,7 @@
 //!   is on its way waits, and only the newest waiting one is sent.
 //! - Changed elsewhere (409): the server's file is never overwritten. This version is kept as a
 //!   new file beside it, "<name> (conflicted copy).pptx", and the page carries on with that copy.
-//! - Not signed in (401): the page goes to the home screen, which asks to sign in.
+//! - Not signed in (401): the page goes to the home screen's sign-in, which comes back to this link.
 //! - Exports (PDF, pictures, outlines) still download in the browser.
 //!
 //! The page saves by itself ([`Link::tick`]) a couple of seconds after the last change, and the
@@ -209,7 +209,7 @@ impl Link {
                 self.state.borrow_mut().opened.push((name, bytes));
                 self.state.borrow_mut().saved = Saved::Done;
             }
-            Ok((401, ..)) => go_home(""),
+            Ok((401, ..)) => sign_in_and_return(),
             Ok((code, _, body)) => self.fail(&format!("Couldn't make the presentation ({})", reason(code, &body))),
             Err(e) => self.fail(&format!("Couldn't reach the server: {e}")),
         }
@@ -233,7 +233,7 @@ impl Link {
                 set_title(&name);
                 self.ask_role(id);
             }
-            Ok((401, ..)) => go_home(""),
+            Ok((401, ..)) => sign_in_and_return(),
             Ok((code, _, body)) => {
                 self.state.borrow_mut().view_only = true;
                 self.fail(&format!("Couldn't open the presentation ({})", reason(code, &body)));
@@ -493,6 +493,16 @@ fn set_title(name: &str) {
     if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
         let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
         doc.set_title(&format!("{stem} - Starbase Slides"));
+    }
+}
+
+/// Not signed in: the home screen's sign-in page, which brings the person back to this link
+/// (`?next=`, as Docs does) instead of leaving them on the file list.
+fn sign_in_and_return() {
+    if let Some(w) = web_sys::window() {
+        let loc = w.location();
+        let here = format!("{}{}", loc.pathname().unwrap_or_default(), loc.search().unwrap_or_default());
+        let _ = loc.replace(&format!("../?next={}", enc(&here)));
     }
 }
 
