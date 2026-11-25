@@ -102,17 +102,15 @@
         <RegistryValue Root="HKMU" Key="Software\RegisteredApplications" Name="Starbase Docs" Value="Software\Starbase\Docs\Capabilities" Type="string" />
       </Component>
 
-      <!-- File-type icons and the licences, beside the programs. -->
-      <Component Id="Icons">
-        <File Id="SheetsIco" Source="$(var.IconDir)\sheets.ico" KeyPath="yes" />
-        <File Id="DocsIco" Source="$(var.IconDir)\docs.ico" />
-        <File Id="DriveIco" Source="$(var.IconDir)\drive.ico" />
-      </Component>
-      <Component Id="Licences">
-        <File Id="LicenceMit" Source="$(var.DocDir)\LICENSE-MIT" Name="LICENSE-MIT.txt" KeyPath="yes" />
-        <File Id="LicenceApache" Source="$(var.DocDir)\LICENSE-APACHE" Name="LICENSE-APACHE.txt" />
-        <File Id="Notice" Source="$(var.DocDir)\NOTICE" Name="NOTICE.txt" />
-      </Component>
+      <!-- File-type icons and the licences, beside the programs. One file per component: WiX only
+           generates a component GUID for a multi-file component when its key file is versioned
+           (error WIX0367), and .ico/.txt files have no version. -->
+      <Component Id="SheetsIcoC"><File Id="SheetsIco" Source="$(var.IconDir)\sheets.ico" KeyPath="yes" /></Component>
+      <Component Id="DocsIcoC"><File Id="DocsIco" Source="$(var.IconDir)\docs.ico" KeyPath="yes" /></Component>
+      <Component Id="DriveIcoC"><File Id="DriveIco" Source="$(var.IconDir)\drive.ico" KeyPath="yes" /></Component>
+      <Component Id="LicenceMitC"><File Id="LicenceMit" Source="$(var.DocDir)\LICENSE-MIT" Name="LICENSE-MIT.txt" KeyPath="yes" /></Component>
+      <Component Id="LicenceApacheC"><File Id="LicenceApache" Source="$(var.DocDir)\LICENSE-APACHE" Name="LICENSE-APACHE.txt" KeyPath="yes" /></Component>
+      <Component Id="NoticeC"><File Id="Notice" Source="$(var.DocDir)\NOTICE" Name="NOTICE.txt" KeyPath="yes" /></Component>
     </ComponentGroup>
   </Fragment>
 </Wix>
