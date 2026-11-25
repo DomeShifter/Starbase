@@ -8,10 +8,13 @@
 //! cells: StarSheets draws its cells itself (on a canvas), so there is no text box for them to read.
 
 use std::collections::HashSet;
+#[cfg(target_arch = "wasm32")]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 static WORDS: OnceLock<HashSet<String>> = OnceLock::new();
+/// The list was asked for (web only: the desktop app has no list yet).
+#[cfg(target_arch = "wasm32")]
 static ASKED: AtomicBool = AtomicBool::new(false);
 /// Words added with "Add to dictionary" (this browser's localStorage, `starsheets_words`).
 static MINE: Mutex<Option<HashSet<String>>> = Mutex::new(None);
@@ -165,27 +168,24 @@ pub fn word_at(text: &str, at: usize) -> Option<(usize, usize)> {
 }
 
 /// Fills the list from the file's text.
+#[cfg(any(target_arch = "wasm32", test))]
 fn load(text: &str) {
     let _ = WORDS.set(text.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect());
 }
 
 /// Call each frame: fetches the list once, when a cell is first edited.
+#[cfg(target_arch = "wasm32")]
 pub fn logic(app: &gridcraft_ui_egui::SheetApp, ctx: &egui::Context) {
     if app.editor.is_none() || ASKED.swap(true, Ordering::Relaxed) {
         return;
     }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let ctx = ctx.clone();
-        wasm_bindgen_futures::spawn_local(async move {
-            if let Ok((200, _, bytes)) = crate::files::get_bytes("dictionary/en-GB.txt").await {
-                load(&String::from_utf8_lossy(&bytes));
-                ctx.request_repaint();
-            }
-        });
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    let _ = ctx;
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Ok((200, _, bytes)) = crate::files::get_bytes("dictionary/en-GB.txt").await {
+            load(&String::from_utf8_lossy(&bytes));
+            ctx.request_repaint();
+        }
+    });
 }
 
 /// Suggestions for a misspelt word clicked while editing: where to show them, which letters of

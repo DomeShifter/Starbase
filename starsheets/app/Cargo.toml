@@ -26,9 +26,10 @@ regex = "1"
 png = "0.18"
 
 # The desktop app (native.rs): GridCraft's own native window setup, local mode over a folder on
-# disk (localstore.rs), the system's file dialogs and Trash.
+# disk (localstore.rs), the system's file dialogs and Trash; persistence remembers each
+# program's window size and place; glow is the renderer when wgpu can't start (native.rs).
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11", "clipboard"] }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "glow", "accesskit", "wayland", "x11", "clipboard", "persistence"] }
 rfd = { workspace = true }
 starsheets-sync = { path = "../crates/sync", features = ["thumbs"] }
 trash = "5"

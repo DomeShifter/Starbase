@@ -349,6 +349,7 @@ pub fn dialog<R>(ctx: &egui::Context, id: &str, width: f32, title: &str, close: 
 
 /// A window's title row in the house style (title left, ✕ right), for windows drawn without
 /// egui's own title bar. Returns true when ✕ was clicked.
+#[cfg(target_arch = "wasm32")]
 pub fn title_row(ui: &mut Ui, title: &str) -> bool {
     let mut close = false;
     ui.horizontal(|ui| {
@@ -382,6 +383,7 @@ pub fn note(ui: &mut Ui, text: &str) {
 }
 
 /// A note with more detail when the pointer is over it.
+#[cfg(target_arch = "wasm32")]
 pub fn note_with_tip(ui: &mut Ui, text: &str, tip: &str) {
     ui.label(RichText::new(text).size(NOTE).color(theme::TEXT_DIM)).on_hover_text(tip);
 }

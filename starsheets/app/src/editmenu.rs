@@ -18,6 +18,7 @@ thread_local! {
 }
 
 /// Remembers text StarSheets just copied (web.rs: every copy, any route).
+#[cfg(target_arch = "wasm32")]
 pub fn remember_copy(text: &str) {
     LAST_COPY.with(|c| *c.borrow_mut() = Some(text.replace("\r\n", "\n")));
 }
@@ -28,6 +29,7 @@ pub fn last_copy() -> Option<String> {
 }
 
 /// The tab lost the focus: something else may have been copied meanwhile.
+#[cfg(target_arch = "wasm32")]
 pub fn forget_copy() {
     LAST_COPY.with(|c| *c.borrow_mut() = None);
 }
