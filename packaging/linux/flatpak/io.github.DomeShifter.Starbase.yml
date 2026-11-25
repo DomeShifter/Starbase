@@ -75,8 +75,10 @@ modules:
     build-commands:
       # Unused [patch] entries break the vendored build; see prune-patches.py.
       - python3 ../packaging/linux/flatpak/prune-patches.py Cargo.toml Cargo.lock
-      - cargo --offline build --release --locked -p starsheets
+      # starbase-open: the file manager's "open" handler (starsheets/crates/open), same workspace.
+      - cargo --offline build --release --locked -p starsheets -p starbase-open
       - install -Dm755 target/release/starsheets /app/bin/starsheets
+      - install -Dm755 target/release/starbase-open /app/bin/starbase-open
     sources:
       - type: dir
         path: ../../..
@@ -147,19 +149,13 @@ modules:
     buildsystem: simple
     build-commands:
       - >-
-        for entry in io.github.DomeShifter.Starbase io.github.DomeShifter.Starbase.Sheets io.github.DomeShifter.Starbase.Docs; do
+        for entry in io.github.DomeShifter.Starbase io.github.DomeShifter.Starbase.Sheets io.github.DomeShifter.Starbase.Docs
+        io.github.DomeShifter.Starbase.Open; do
         install -Dm644 packaging/linux/$entry.desktop /app/share/applications/$entry.desktop; done
-      # ---- STARBASE-OPEN HANDLER (reserved) -------------------------------------------------------
-      # The `starbase-open` handler ("Open in Starbase" in the file manager) is added in a separate
-      # change. Enable once it is on main:
-      #   in the starsheets module (or its own module), after the starsheets build:
-      #     cargo --offline build --release --locked -p starbase-open
-      #     install -Dm755 target/release/starbase-open /app/bin/starbase-open
-      #   here:
-      #     install -Dm644 -t /app/share/applications packaging/linux/io.github.DomeShifter.Starbase.Open.desktop
-      # Its desktop file name starts with the app ID, so Flatpak exports it. If it is a menu-less
-      # handler (NoDisplay=true), the metainfo keeps its single launchable (Flathub allows one).
-      # ---- end STARBASE-OPEN HANDLER ---------------------------------------------------------------
+      # The .Open entry is the `starbase-open` handler (built in the starsheets module): no menu
+      # entry (NoDisplay=true), only an "Open with" choice for the sheet and document types, so the
+      # metainfo keeps its single launchable (Flathub allows one). Its name starts with the app ID,
+      # so Flatpak exports it.
       - install -Dm644 packaging/linux/io.github.DomeShifter.Starbase.mime.xml /app/share/mime/packages/io.github.DomeShifter.Starbase.xml
       - packaging/linux/icons.sh /app/share/icons
       # The metainfo lists real releases by hand (newest first, from CHANGELOG.md), so the

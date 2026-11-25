@@ -9,6 +9,7 @@
 
 #[cfg(target_arch = "wasm32")]
 mod account;
+mod altcolours;
 mod autolink;
 mod bottom;
 mod calcpreview;
@@ -62,6 +63,7 @@ mod share;
 mod sheets_formulas;
 mod shell;
 mod shortcuts;
+mod smartfill;
 mod spelling;
 mod store;
 #[cfg(target_arch = "wasm32")]

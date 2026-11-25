@@ -116,6 +116,11 @@ const ICONS: &[(&str, &[u8])] = &[
     ("wrap_text", include_bytes!("../icons/wrap_text.svg")),
     ("zoom_in", include_bytes!("../icons/zoom_in.svg")),
     ("drive_file_move", include_bytes!("../icons/drive_file_move.svg")),
+    // The Drive's icons for files that aren't spreadsheets or documents (home/items.rs).
+    ("draft", include_bytes!("../icons/draft.svg")),
+    ("movie", include_bytes!("../icons/movie.svg")),
+    ("music_note", include_bytes!("../icons/music_note.svg")),
+    ("picture_as_pdf", include_bytes!("../icons/picture_as_pdf.svg")),
     ("arrow_back", include_bytes!("../icons/arrow_back.svg")),
     ("arrow_forward", include_bytes!("../icons/arrow_forward.svg")),
     ("create_new_folder", include_bytes!("../icons/create_new_folder.svg")),

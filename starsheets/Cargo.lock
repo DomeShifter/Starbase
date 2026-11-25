@@ -6189,6 +6189,7 @@ dependencies = [
 name = "starbase-open"
 version = "0.4.0"
 dependencies = [
+ "libc",
  "rfd",
  "serde_json",
  "starbase-connect",
@@ -6231,9 +6232,11 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "form_urlencoded",
+ "futures-util",
  "gridcraft-engine",
  "hex",
  "jiff 0.2.46",
+ "libc",
  "mime_guess",
  "openidconnect",
  "percent-encoding",

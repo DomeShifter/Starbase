@@ -54,7 +54,8 @@ two programs (`starsheets`, `stardocs`).
 LibreOffice's: `io.github.DomeShifter.Starbase.desktop` (Drive, `starsheets --home`, the metainfo
 launchable), `….Starbase.Sheets.desktop` (spreadsheet MIME types) and `….Starbase.Docs.desktop`
 (document MIME types). All names start with the app ID, so Flatpak exports them. A fourth,
-hidden desktop file for the `starbase-open` handler is planned (marked spot in the manifest).
+`….Starbase.Open.desktop`, is the `starbase-open` handler: hidden from the menu (NoDisplay=true),
+only an "Open with" choice for the same types, so it is not a second launchable.
 
 | Permission | Why |
 |---|---|
@@ -91,9 +92,8 @@ tag once it exists.
 
 1. Decide whether to submit now, given the two blockers above (recommended: wait).
 2. Optional: replace the screenshots with desktop-window captures (see Quality notes).
-3. Merge this branch; enable the `starbase-open` lines at the marked spots (manifest, `AppRun`,
-   `appimage.sh`) when that
-   work lands; tag the release to submit; check the Flatpak CI run on the tag is green
+3. Tag the release to submit (the `starbase-open` handler is in the manifest, `AppRun` and
+   `appimage.sh` since its own change); check the Flatpak CI run on the tag is green
    (lint included).
 4. Decide on aarch64: add a CI build, or plan an `only-arches` `flathub.json`.
 5. By hand: write the Flathub manifest (git source with the tag and commit, the engine `git`

@@ -24,10 +24,54 @@ use std::time::SystemTime;
 
 use serde_json::{Value as Json, json};
 
-use crate::store::{Answer, Done, Method, Store, dec, enc, is_doc};
+use crate::store::{Answer, Done, Method, Store, dec, enc};
 
-/// Files the home screen lists (others in the folder are left alone and not shown).
-const LISTED: &[&str] = &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "docx", "odt"];
+/// Spreadsheets: open in Starbase Sheets (and get a preview picture).
+const SHEETS: &[&str] = &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv"];
+/// Documents: open in Starbase Docs (the list AppRun uses).
+const DOCS: &[&str] = &["docx", "docm", "dotx", "dotm", "doc", "odt", "rtf"];
+/// Never handed to the system's default app from the Drive: it would run them (programs,
+/// scripts, launchers). They are listed; open them from the file manager if meant.
+const RUNS: &[&str] = &[
+    "desktop",
+    "sh",
+    "bash",
+    "zsh",
+    "fish",
+    "csh",
+    "run",
+    "bin",
+    "appimage",
+    "flatpakref",
+    "jar",
+    "py",
+    "pl",
+    "rb",
+    "exe",
+    "msi",
+    "com",
+    "bat",
+    "cmd",
+    "ps1",
+    "vbs",
+    "vbe",
+    "js",
+    "jse",
+    "wsf",
+    "wsh",
+    "scr",
+    "lnk",
+    "pif",
+    "cpl",
+    "hta",
+    "reg",
+    "app",
+    "command",
+    "pkg",
+    "dmg",
+    "deb",
+    "rpm",
+];
 /// Files bigger than this get no preview picture (the home screen shows a plain icon).
 const THUMB_MAX: u64 = 8 * 1024 * 1024;
 
@@ -118,11 +162,19 @@ fn clean_name(name: &str) -> String {
 }
 
 /// A path inside the root, from the home screen's relative form ("Work/2026"); refuses anything
-/// that would leave it.
+/// that would leave it, and anything reached through a link (links are never followed, as the
+/// listing doesn't: a link could point anywhere on the computer).
 fn rel(root: &Path, path: &str) -> Result<PathBuf, (u16, String)> {
     let p = Path::new(path);
     if p.components().any(|c| !matches!(c, Component::Normal(_))) {
         return Err((400, "That isn't a place in your files.".into()));
+    }
+    let mut at = root.to_path_buf();
+    for c in p.components() {
+        at.push(c);
+        if fs::symlink_metadata(&at).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err((404, "That isn't there any more.".into()));
+        }
     }
     Ok(root.join(p))
 }
@@ -399,10 +451,75 @@ fn passwd_name(passwd: &str, uid: u32) -> Option<String> {
     })
 }
 
-/// Opens a file in the right program: documents in Starbase Docs, spreadsheets in Starbase Sheets.
+/// Where a file on this computer opens.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OpensWith {
+    Sheets,
+    Docs,
+    /// The system's default app for its type (pictures, PDFs, presentations: there is no Slides
+    /// program on the desktop yet).
+    System,
+    /// Not from the Drive: a program, script or launcher (or a file marked runnable).
+    Refused,
+}
+
+/// Where a file named `name` opens; `runnable`: marked as a program (Unix execute bit).
+pub(crate) fn opens_with(name: &str, runnable: bool) -> OpensWith {
+    let ext = name.rsplit_once('.').map_or(String::new(), |(_, e)| e.to_ascii_lowercase());
+    if SHEETS.contains(&ext.as_str()) {
+        OpensWith::Sheets
+    } else if DOCS.contains(&ext.as_str()) {
+        OpensWith::Docs
+    } else if runnable || RUNS.contains(&ext.as_str()) {
+        OpensWith::Refused
+    } else {
+        OpensWith::System
+    }
+}
+
+/// Whether the file is marked as a program.
+fn runnable(m: &fs::Metadata) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        m.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = m;
+        false
+    }
+}
+
+/// Opens a file in the right program: spreadsheets in Starbase Sheets, documents in Starbase Docs,
+/// anything else in the system's default app for it (never a program or script, never through a
+/// link).
 pub(crate) fn open_in_program(path: &Path) -> Result<(), String> {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    launch(if is_doc(&name) { "stardocs" } else { "starsheets" }, &[path.as_os_str()])
+    let m = fs::symlink_metadata(path).map_err(|_| format!("{name} isn't there any more."))?;
+    if !m.is_file() {
+        return Err(format!("{name} can't be opened here."));
+    }
+    match opens_with(&name, runnable(&m)) {
+        OpensWith::Sheets => launch("starsheets", &[path.as_os_str()]),
+        OpensWith::Docs => launch("stardocs", &[path.as_os_str()]),
+        OpensWith::Refused => {
+            Err(format!("{name} is a program or script, so Starbase doesn't open it. Open it from your file manager if you meant to."))
+        }
+        OpensWith::System => start_detached(system_open(path)).map(|_| ()).map_err(|e| format!("Couldn't open {name}: {e}")),
+    }
+}
+
+/// The system's "open this file with its default app", the path as one argument (no shell).
+fn system_open(path: &Path) -> std::process::Command {
+    #[cfg(target_os = "windows")]
+    let mut cmd = std::process::Command::new("explorer");
+    #[cfg(target_os = "macos")]
+    let mut cmd = std::process::Command::new("open");
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let mut cmd = std::process::Command::new("xdg-open");
+    cmd.arg(path);
+    cmd
 }
 
 /// A new, empty Word document (the smallest .docx Word and Starbase Docs open).
@@ -485,8 +602,13 @@ impl Store for LocalStore {
 
     fn open(&self, id: &str, _name: &str) -> Result<(), String> {
         let path = rel(&self.root, &dec(id)).map_err(|(_, e)| e)?;
+        open_in_program(&path)?;
         note_opened(&self.data, &path);
-        open_in_program(&path)
+        Ok(())
+    }
+
+    fn opens_any_file(&self) -> bool {
+        true
     }
 
     fn new_file(&self, folder: &str, document: bool) -> Result<(), String> {
@@ -502,7 +624,8 @@ impl Store for LocalStore {
     }
 
     fn pick_files(&self, got: Box<dyn Fn(String, Vec<u8>)>) {
-        let picked = rfd::FileDialog::new().add_filter("Spreadsheets and documents", LISTED).pick_files().unwrap_or_default();
+        // The Drive keeps any kind of file, as on a server.
+        let picked = rfd::FileDialog::new().pick_files().unwrap_or_default();
         for p in picked {
             let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             if let Ok(bytes) = fs::read(&p) {
@@ -558,8 +681,11 @@ fn modified(m: &fs::Metadata) -> i64 {
     m.modified().ok().and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs() as i64)
 }
 
+/// Whether the home screen lists a file: every kind (as the server's Drive), except hidden ones
+/// (our own temporary files among them), Office's lock files and the systems' folder clutter.
 fn listed(name: &str) -> bool {
-    !name.starts_with('.') && name.rsplit_once('.').is_some_and(|(_, e)| LISTED.contains(&e.to_ascii_lowercase().as_str()))
+    let lower = name.to_ascii_lowercase();
+    !name.starts_with('.') && !name.starts_with("~$") && !matches!(lower.as_str(), "desktop.ini" | "thumbs.db")
 }
 
 /// The relative form of a path under the root ("Work/2026"), with '/' between parts.
@@ -638,7 +764,9 @@ pub(crate) fn answer(root: &Path, data: &Path, method: Method, url: &str, body: 
                 return refuse(404, "That folder isn't there any more.");
             }
             let (stem, ext) = split_name(&clean_name(&qs("name")));
-            let ext = if ext.is_empty() { ".xlsx".to_string() } else { ext };
+            // An upload keeps its own name (`as_is`: README stays README); a new workbook saved
+            // without an extension becomes .xlsx.
+            let ext = if ext.is_empty() && !q.contains_key("as_is") { ".xlsx".to_string() } else { ext };
             let path = match claim_file(&dir, &stem, &ext, None) {
                 Ok(p) => p,
                 Err(e) => return io(e),
@@ -664,7 +792,7 @@ pub(crate) fn answer(root: &Path, data: &Path, method: Method, url: &str, body: 
                     Err(e) => refuse(500, &format!("Couldn't move it to the Trash: {e}")),
                 },
                 (Method::Get, ["thumb"]) => {
-                    if is_doc(&name) || m.len() > THUMB_MAX {
+                    if opens_with(&name, false) != OpensWith::Sheets || m.len() > THUMB_MAX {
                         return refuse(404, "no picture");
                     }
                     let drawn = fs::read(&path)
@@ -827,21 +955,85 @@ mod tests {
     }
 
     #[test]
-    fn lists_folders_and_spreadsheets() {
+    fn lists_folders_and_every_kind_of_file() {
         let root = temp("list");
         fs::create_dir_all(root.join("Work/2026")).unwrap();
         fs::write(root.join("Budget.xlsx"), b"x").unwrap();
         fs::write(root.join("Work/2026/Plan.csv"), b"a,b").unwrap();
-        fs::write(root.join("Work/notes.txt"), b"not listed").unwrap();
+        fs::write(root.join("Work/notes.txt"), b"text").unwrap();
+        fs::write(root.join("Photo.JPG"), b"jpg").unwrap();
+        fs::write(root.join("README"), b"no extension").unwrap();
         fs::write(root.join(".hidden.xlsx"), b"not listed").unwrap();
+        fs::write(root.join("~$Budget.xlsx"), b"Office's lock file: not listed").unwrap();
+        fs::write(root.join("desktop.ini"), b"not listed").unwrap();
+        #[cfg(unix)]
+        {
+            // Links are never listed or followed: not the file, not the folder.
+            std::os::unix::fs::symlink(root.join("Budget.xlsx"), root.join("Link.xlsx")).unwrap();
+            std::os::unix::fs::symlink(root.join("Work"), root.join("LinkedFolder")).unwrap();
+        }
         let (s, v) = call(&root, Method::Get, "api/files", None);
         assert_eq!(s, 200);
         assert_eq!(v["folders"], json!(["Work", "Work/2026"]));
         let mut names: Vec<(String, String)> =
             v["files"].as_array().unwrap().iter().map(|f| (f["folder"].as_str().unwrap().into(), f["name"].as_str().unwrap().into())).collect();
         names.sort();
-        assert_eq!(names, vec![("".into(), "Budget.xlsx".into()), ("Work/2026".into(), "Plan.csv".into())]);
+        let want = [("", "Budget.xlsx"), ("", "Photo.JPG"), ("", "README"), ("Work", "notes.txt"), ("Work/2026", "Plan.csv")];
+        assert_eq!(names, want.map(|(a, b)| (a.to_string(), b.to_string())));
         assert!(v.get("space").is_none(), "no accounts locally");
+        #[cfg(unix)]
+        {
+            for id in ["Link.xlsx", "LinkedFolder/notes.txt"] {
+                assert_eq!(call(&root, Method::Get, &format!("api/files/{}", enc(id)), None).0, 404, "{id}: never through a link");
+            }
+            assert!(LocalStore::with_data(root.clone(), root.join(".data")).open(&enc("Link.xlsx"), "Link.xlsx").is_err());
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn each_kind_opens_in_its_place() {
+        use OpensWith::*;
+        for (name, want) in [
+            ("Budget.xlsx", Sheets),
+            ("data.TSV", Sheets),
+            ("old.xlsb", Sheets),
+            ("Letter.docx", Docs),
+            ("notes.rtf", Docs),
+            ("Talk.pptx", System),
+            ("Photo.jpg", System),
+            ("scan.pdf", System),
+            ("README", System),
+            ("setup.sh", Refused),
+            ("Game.AppImage", Refused),
+            ("x.desktop", Refused),
+            ("Setup.exe", Refused),
+            ("run.bat", Refused),
+        ] {
+            assert_eq!(opens_with(name, false), want, "{name}");
+        }
+        assert_eq!(opens_with("tool", true), Refused, "marked runnable");
+        assert_eq!(opens_with("Budget.xlsx", true), Sheets, "a workbook with the execute bit (some shares set it) still opens in Sheets");
+        let cmd = system_open(Path::new("/tmp/a b; rm -rf x.jpg"));
+        assert_eq!(cmd.get_args().collect::<Vec<_>>(), ["/tmp/a b; rm -rf x.jpg"], "one argument, no shell");
+        // A program is refused before anything starts.
+        let root = temp("refuse");
+        fs::write(root.join("setup.sh"), b"echo hi").unwrap();
+        let e = LocalStore::with_data(root.clone(), root.join(".data")).open(&enc("setup.sh"), "setup.sh").unwrap_err();
+        assert!(e.contains("program or script"), "{e}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn uploads_keep_their_own_name() {
+        let root = temp("upload");
+        let (s, v) = call(&root, Method::Post, "api/files?name=README&folder=&as_is=1", Some(b"hello"));
+        assert_eq!((s, v["name"].as_str()), (201, Some("README")));
+        let (_, v) = call(&root, Method::Post, "api/files?name=Photo.jpg&folder=&as_is=1", Some(b"jpg"));
+        assert_eq!(v["name"].as_str(), Some("Photo.jpg"));
+        let (_, v) = call(&root, Method::Post, "api/files?name=Untitled&folder=", Some(b"x"));
+        assert_eq!(v["name"].as_str(), Some("Untitled.xlsx"), "a new workbook without an extension is still .xlsx");
+        assert_eq!(call(&root, Method::Get, &format!("api/files/{}/thumb", enc("Photo.jpg")), None).0, 404, "pictures of sheets only");
         let _ = fs::remove_dir_all(&root);
     }
 

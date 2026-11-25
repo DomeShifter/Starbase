@@ -57,6 +57,11 @@ pub(crate) trait Store {
     }
     /// Starts a new presentation (a named .pptx) in `folder`, in Starbase Slides.
     fn new_presentation(&self, _folder: &str) {}
+    /// Whether [`Store::open`] opens every kind of file itself (this computer's own files: Sheets,
+    /// Docs, else the system's default app), instead of the Drive's preview or download.
+    fn opens_any_file(&self) -> bool {
+        false
+    }
     /// The Starbase server the desktop app is connected to (remote.rs); None on this computer's
     /// own files.
     #[cfg(not(target_arch = "wasm32"))]
@@ -216,8 +221,8 @@ impl Store for ServerStore {
 
     fn pick_files(&self, got: Box<dyn Fn(String, Vec<u8>)>) {
         wasm_bindgen_futures::spawn_local(async move {
-            let Some(picked) = rfd::AsyncFileDialog::new().add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "csv", "ods"]).pick_files().await
-            else {
+            // The Drive keeps any kind of file.
+            let Some(picked) = rfd::AsyncFileDialog::new().pick_files().await else {
                 return;
             };
             for f in picked {

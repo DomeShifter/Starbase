@@ -197,7 +197,8 @@ def walk():
         for d in dirs:
             folders.append(join(here, d))
         for n in names:
-            if n.lower().endswith(EXTS) and not n.startswith("."):
+            # Since the any-file Drive (2026-11) every file is listed, not only spreadsheets.
+            if not n.startswith(".") and os.path.isfile(os.path.join(root, n)):
                 files.append(join(here, n))
     return files, folders
 
