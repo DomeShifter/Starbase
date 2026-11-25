@@ -450,13 +450,27 @@ fn page_copy(text: &str, html: Option<&str>) -> bool {
     f.call2(&JsValue::NULL, &JsValue::from_str(text), &html).is_ok_and(|v| v.is_truthy())
 }
 
+/// Text for menu Paste: what the page read from the real clipboard (index.html `__ssMenuClip`, with
+/// its HTML left for `take_paste_html`), the same data Ctrl+V gets; else StarSheets' own last copy
+/// (plain http, or the browser refused); else None (the "use Ctrl+V" hint).
+fn menu_paste_text() -> Option<String> {
+    let w = web_sys::window()?;
+    let from_page = js_sys::Reflect::get(&w, &"__ssMenuClip".into())
+        .ok()
+        .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
+        .and_then(|f| f.call0(&JsValue::NULL).ok())
+        .and_then(|v| v.as_string())
+        .filter(|t| !t.is_empty());
+    from_page.or_else(crate::editmenu::last_copy)
+}
+
 fn services(inbox: Inbox, ctx: egui::Context) -> Services {
     let open_inbox = inbox.clone();
     let picture_ctx = ctx.clone();
     Services {
         copy_html: Some(Box::new(copy_html)),
-        // Menu Paste: StarSheets' own last copy (the page can't read the clipboard on http).
-        paste_text: Some(Box::new(crate::editmenu::last_copy)),
+        // Menu Paste: the real clipboard (read ahead by the page), else StarSheets' own last copy.
+        paste_text: Some(Box::new(menu_paste_text)),
         // The HTML that came with this paste (index.html keeps it from the browser's paste event).
         paste_html: Some(Box::new(take_paste_html)),
         open_async: Some(Box::new(move || {
@@ -517,6 +531,15 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
 const MAX_PASTE_HTML: u32 = 8 * 1024 * 1024;
 
 /// The clipboard HTML of the paste being handled, taken so a later paste never sees it.
+/// Our own copy replaces the clipboard: drop what the page read ahead of it.
+fn forget_page_clip() {
+    if let Some(w) = web_sys::window()
+        && let Ok(f) = js_sys::Reflect::get(&w, &"__ssClipForget".into()).and_then(|f| f.dyn_into::<js_sys::Function>())
+    {
+        let _ = f.call0(&JsValue::NULL);
+    }
+}
+
 fn take_paste_html() -> Option<String> {
     let w = web_sys::window()?;
     let value = js_sys::Reflect::get(&w, &"__ssPasteHtml".into()).ok()?;
@@ -532,6 +555,7 @@ fn take_paste_html() -> Option<String> {
 /// Start inside the copy gesture; deferring `write` can lose browser user activation.
 fn copy_html(html: &str, text: &str) -> Result<(), String> {
     crate::editmenu::remember_copy(text);
+    forget_page_clip();
     let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
     let window = web_sys::window().ok_or("no window")?;
     // The page's copy bridge first (see index.html), on https too: it fills the browser's own
