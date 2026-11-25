@@ -112,6 +112,18 @@ impl Store for RemoteStore {
         launch(program, &["--server-file".as_ref(), id.as_ref(), "--name".as_ref(), name.as_ref()])
     }
 
+    fn has_slides(&self) -> bool {
+        self.local.has_slides()
+    }
+
+    /// Starbase Slides makes the presentation on the server, then opens it.
+    fn new_presentation(&self, folder: &str) -> Result<(), String> {
+        if self.server.call("GET", "api/devices", None, None)?.status == 401 {
+            return Err(DISCONNECTED.into());
+        }
+        launch("starslides", &["--server-new".as_ref(), folder.as_ref()])
+    }
+
     fn new_file(&self, folder: &str, document: bool) -> Result<(), String> {
         // Made on the server straight away (an empty file), then opened from there.
         let (name, bytes) = if document {

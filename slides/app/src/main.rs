@@ -14,6 +14,9 @@
 //! - The presenter view opens as a same-origin popup window (`presenter`).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
+// The desktop program on Windows: no console window beside it (as Sheets and Docs);
+// `--version`/`--help` join the terminal that started them (starbase_connect::attach_terminal).
+#![cfg_attr(all(windows, not(debug_assertions), not(test)), windows_subsystem = "windows")]
 
 mod fonts;
 mod icons;

@@ -26,12 +26,17 @@ starslides: Starbase Slides, presentations
 
 USAGE:
   starslides [FILE]
+  starslides --new DIR
   starslides --server-file ID [--name NAME]
+  starslides --server-new FOLDER
 
   FILE                a presentation to open (.pptx, .potx, .ppsx); without one, a new
                       presentation is made in Documents/Starbase when you first change it
+  --new DIR           a new presentation, made in DIR (instead of Documents/Starbase)
   --server-file ID    the presentation ID on the Starbase server this computer is connected
                       to (File › Connect to a server); --name NAME is shown until it opens
+  --server-new FOLDER a new presentation, made on the connected server in FOLDER (the
+                      desktop Drive's New presentation; an empty FOLDER is your own)
   --version           print the version
   -h, --help          print this help
 ";
@@ -43,6 +48,10 @@ pub struct Args {
     pub files: Vec<PathBuf>,
     /// `--server-file <id> [--name <name>]`.
     pub server_file: Option<(String, String)>,
+    /// `--new <dir>`: a new presentation made in that folder.
+    pub new_in: Option<PathBuf>,
+    /// `--server-new <folder>`: a new presentation made on the connected server.
+    pub server_new: Option<String>,
     pub version: bool,
     pub help: bool,
 }
@@ -64,6 +73,12 @@ pub fn parse_args(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<
                     out.server_file = Some((value, String::new()));
                 }
             }
+            Some("--new") => {
+                let dir = it.next().filter(|v| !v.is_empty()).ok_or("--new needs a folder")?;
+                out.new_in = Some(std::path::absolute(PathBuf::from(&dir)).unwrap_or_else(|_| PathBuf::from(&dir)));
+            }
+            // The server's folder may be empty: the person's own.
+            Some("--server-new") => out.server_new = Some(it.next().and_then(|v| v.into_string().ok()).ok_or("--server-new needs a folder")?),
             Some(s) if s.starts_with("--") => return Err(format!("unknown option {s}")),
             _ => out.files.push(std::path::absolute(PathBuf::from(&a)).unwrap_or_else(|_| PathBuf::from(&a))),
         }
@@ -80,10 +95,14 @@ pub fn main() -> std::process::ExitCode {
     let args = match parse_args(std::env::args_os().skip(1)) {
         Ok(a) => a,
         Err(e) => {
+            starbase_connect::attach_terminal();
             let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("starslides: {e}\n\n{USAGE}"));
             return std::process::ExitCode::from(2);
         }
     };
+    if args.version || args.help {
+        starbase_connect::attach_terminal();
+    }
     if args.version {
         let _ = std::io::Write::write_fmt(&mut std::io::stdout(), format_args!("starslides {}\n", env!("CARGO_PKG_VERSION")));
         return std::process::ExitCode::SUCCESS;
@@ -92,14 +111,26 @@ pub fn main() -> std::process::ExitCode {
         let _ = std::io::Write::write_all(&mut std::io::stdout(), USAGE.as_bytes());
         return std::process::ExitCode::SUCCESS;
     }
-    let server_file = args.server_file;
+    let mut server_file = args.server_file;
+    // The desktop Drive's New presentation on a server: made there first, then opened like any.
+    let mut start_error = None;
+    if let Some(folder) = &args.server_new {
+        match new_on_server(folder) {
+            Ok(made) => server_file = Some(made),
+            Err(e) => start_error = Some(format!("Couldn't make the presentation on the server: {e}")),
+        }
+    }
     let mut files = args.files.into_iter();
     // A server presentation takes this window; local files open in windows of their own.
     let file = if server_file.is_some() { None } else { files.next() };
     for more in files {
         spawn(Some(&more));
     }
-    let folders = Folders::of_user().unwrap_or_else(|| Folders { documents: PathBuf::from("Starbase"), data: PathBuf::from(".starbase") });
+    let mut folders = Folders::of_user().unwrap_or_else(|| Folders { documents: PathBuf::from("Starbase"), data: PathBuf::from(".starbase") });
+    // The desktop Drive's New presentation in one of its folders.
+    if let Some(dir) = args.new_in {
+        folders.documents = dir;
+    }
     if let Err(e) = std::fs::create_dir_all(&folders.documents) {
         log::warn!("{}: {e}", folders.documents.display());
     }
@@ -120,7 +151,11 @@ pub fn main() -> std::process::ExitCode {
             egui_extras::install_image_loaders(&cc.egui_ctx);
             deckcraft_ui_egui::install_ime_pass_hooks(&cc.egui_ctx);
             let kept = cc.storage.and_then(|s| s.get_string(WINDOW_KEY)).is_some();
-            Ok(Box::new(Desktop::new(&cc.egui_ctx, file, server_file, folders, !kept)))
+            let mut desktop = Desktop::new(&cc.egui_ctx, file, server_file, folders, !kept);
+            if let Some(why) = start_error {
+                desktop.app.set_status(why);
+            }
+            Ok(Box::new(desktop))
         }),
     );
     match run {
@@ -198,6 +233,17 @@ fn icon() -> Option<egui::IconData> {
     .map_err(|e| log::warn!("window icon: {e}"))
     .ok()?;
     Some(egui::IconData { rgba: img.as_raw().to_vec(), width: img.width() as u32, height: img.height() as u32 })
+}
+
+/// Makes "Untitled presentation.pptx" (an empty presentation) in `folder` on the connected server:
+/// its id and name there.
+fn new_on_server(folder: &str) -> Result<(String, String), String> {
+    let server = starbase_connect::saved().ok_or("this computer isn't connected to a Starbase server")?;
+    let mut app = SlideApp::new(Session::new(), Services::default());
+    app.run("file.new", serde_json::json!({}))?;
+    let doc = app.session.active().map(|d| d.doc.clone()).ok_or("no presentation")?;
+    let bytes = deckcraft_engine::cmd::file::save_bytes(&doc, "pptx").map_err(|e| e.to_string())?;
+    crate::serverfile::create(&starbase_connect::Renewing::new(server), folder, localfile::NEW_NAME, &bytes)
 }
 
 /// Starts another window of this program, on `file` or on a new presentation.
@@ -449,6 +495,10 @@ mod tests {
         let b = parse_args(["/tmp/a.pptx", "/tmp/b.pptx"].map(std::ffi::OsString::from)).unwrap();
         assert_eq!(b.files.len(), 2);
         assert!(parse_args(["--nope"].map(std::ffi::OsString::from)).is_err());
+        let c = parse_args(["--new", "/tmp/Plans"].map(std::ffi::OsString::from)).unwrap();
+        assert_eq!(c.new_in, Some(PathBuf::from("/tmp/Plans")));
+        let d = parse_args(["--server-new", ""].map(std::ffi::OsString::from)).unwrap();
+        assert_eq!(d.server_new.as_deref(), Some(""), "an empty folder is your own");
         assert!(parse_args(["--server-file"].map(std::ffi::OsString::from)).is_err());
         assert_eq!(title(Some("Plan.pptx")), "Plan - Starbase Slides");
         assert_eq!(title(None), "Untitled presentation - Starbase Slides");

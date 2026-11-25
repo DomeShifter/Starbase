@@ -50,13 +50,15 @@ pub(crate) trait Store {
     fn start_dir(&self) -> Option<String> {
         None
     }
-    /// Whether presentations can be made here: Starbase Slides runs in the browser only, so the
-    /// desktop app offers no "New presentation".
+    /// Whether presentations can be made here ("New presentation"): in the browser, and on the
+    /// desktop with Starbase Slides beside the Drive.
     fn has_slides(&self) -> bool {
         false
     }
     /// Starts a new presentation (a named .pptx) in `folder`, in Starbase Slides.
-    fn new_presentation(&self, _folder: &str) {}
+    fn new_presentation(&self, _folder: &str) -> Result<(), String> {
+        Err("Presentations can't be made here.".into())
+    }
     /// Whether [`Store::open`] opens every kind of file itself (this computer's own files: Sheets,
     /// Docs, else the system's default app), instead of the Drive's preview or download.
     fn opens_any_file(&self) -> bool {
@@ -225,10 +227,11 @@ impl Store for ServerStore {
         true
     }
 
-    fn new_presentation(&self, folder: &str) {
+    fn new_presentation(&self, folder: &str) -> Result<(), String> {
         if let Some(w) = web_sys::window() {
             let _ = w.location().set_href(&crate::files::slides_url("", &format!("&folder={}", enc(folder))));
         }
+        Ok(())
     }
 
     fn pick_files(&self, got: Box<dyn Fn(String, Vec<u8>)>) {

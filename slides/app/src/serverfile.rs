@@ -36,6 +36,18 @@ impl Api for starbase_connect::Renewing {
     }
 }
 
+/// Makes a new file `name` (made unique by the server) in `folder` on the server: its id and name.
+pub fn create(api: &dyn Api, folder: &str, name: &str, bytes: &[u8]) -> Result<(String, String), String> {
+    let r = api.call("POST", &format!("api/files?folder={}&name={}", enc(folder), enc(name)), Some(bytes), None)?;
+    if !r.ok() {
+        return Err(reason(&r));
+    }
+    let v = r.json();
+    let id = v.get("id").and_then(Value::as_str).ok_or("the server didn't say where the file is")?.to_string();
+    let made = v.get("name").and_then(Value::as_str).unwrap_or(name).to_string();
+    Ok((id, made))
+}
+
 /// A presentation on the server.
 pub struct ServerDoc {
     api: Box<dyn Api>,
@@ -205,6 +217,17 @@ mod tests {
 
     fn reply(status: u16, etag: Option<&str>, body: &str) -> Reply {
         Reply { status, etag: etag.map(str::to_string), body: body.as_bytes().to_vec(), ..Default::default() }
+    }
+
+    #[test]
+    fn a_new_presentation_is_made_on_the_server() {
+        let fake = Fake::default();
+        fake.answers
+            .borrow_mut()
+            .extend([reply(201, None, r#"{"id":"n1","name":"Untitled presentation (2).pptx"}"#), reply(403, None, r#"{"error":"no"}"#)]);
+        assert_eq!(create(&fake, "Team", "Untitled presentation.pptx", b"PK").unwrap(), ("n1".into(), "Untitled presentation (2).pptx".into()));
+        assert_eq!(fake.asked.borrow()[0].1, "api/files?folder=Team&name=Untitled%20presentation.pptx");
+        assert!(create(&fake, "", "x.pptx", b"PK").is_err(), "a refusal says why");
     }
 
     #[test]

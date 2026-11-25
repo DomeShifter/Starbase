@@ -632,6 +632,16 @@ impl Store for LocalStore {
         }
     }
 
+    fn has_slides(&self) -> bool {
+        program("starslides").is_some() || std::env::var_os("APPIMAGE").is_some()
+    }
+
+    /// Starbase Slides makes "Untitled presentation.pptx" in the folder on its first change.
+    fn new_presentation(&self, folder: &str) -> Result<(), String> {
+        let dir = rel(&self.root, folder).map_err(|(_, e)| e)?;
+        launch("starslides", &["--new".as_ref(), dir.as_os_str()])
+    }
+
     fn pick_files(&self, got: Box<dyn Fn(String, Vec<u8>)>) {
         // The Drive keeps any kind of file, as on a server.
         let picked = rfd::FileDialog::new().pick_files().unwrap_or_default();

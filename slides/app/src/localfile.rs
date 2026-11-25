@@ -223,7 +223,8 @@ impl Folders {
         let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).filter(|h| !h.is_empty()).map(PathBuf::from)?;
         let data = std::env::var_os("XDG_DATA_HOME").filter(|d| !d.is_empty()).map_or_else(|| home.join(".local/share"), PathBuf::from);
         let config = std::env::var_os("XDG_CONFIG_HOME").filter(|d| !d.is_empty()).map_or_else(|| home.join(".config"), PathBuf::from);
-        let docs = documents_dir(&home, &config).unwrap_or_else(|| home.join("Documents"));
+        // Windows and macOS say where Documents is (OneDrive's included); Linux: user-dirs.dirs.
+        let docs = starbase_connect::system_documents_dir().or_else(|| documents_dir(&home, &config)).unwrap_or_else(|| home.join("Documents"));
         Some(Self { documents: docs.join("Starbase"), data: data.join("starbase") })
     }
 }
