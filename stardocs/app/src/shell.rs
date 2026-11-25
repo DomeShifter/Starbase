@@ -1629,16 +1629,18 @@ impl Shell {
                 _ if link.view_only() => ("View only".to_string(), TEXT_DIM),
                 Saved::Nothing => (String::new(), TEXT_DIM),
                 Saved::Saving => ("Saving…".to_string(), TEXT_DIM),
-                Saved::Done => (Link::SAVED.to_string(), TEXT_DIM),
+                Saved::Done => (link.saved_text(), TEXT_DIM),
                 Saved::Failed(why) => (why, Color32::from_rgb(0xb3, 0x26, 0x1e)),
             };
+            // Both stay on the title row, cut short to fit the window (the whole text on hover).
             if !text.is_empty() {
                 ui.add_space(10.0);
-                ui.label(RichText::new(text).size(13.0).color(colour));
+                ui.add(egui::Label::new(RichText::new(&text).size(13.0).color(colour)).truncate()).on_hover_text(&text);
             }
             if let Some(notice) = link.notice() {
                 ui.add_space(10.0);
-                ui.label(RichText::new(notice).size(13.0).color(Color32::from_rgb(0x8a, 0x5a, 0x00)));
+                ui.add(egui::Label::new(RichText::new(&notice).size(13.0).color(Color32::from_rgb(0x8a, 0x5a, 0x00))).truncate())
+                    .on_hover_text(&notice);
                 ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
             }
         }
@@ -1804,6 +1806,7 @@ fn menu_items(app: &mut WordApp, ui: &mut Ui, flags: &mut Flags, items: &[Item],
                     && let Some(link) = link
                 {
                     recent_menu(ui, link, width, column);
+                    server_menu(ui, link, width, column);
                 }
             }
             Toggle(_, id, key, _) => {
@@ -1842,6 +1845,20 @@ fn menu_items(app: &mut WordApp, ui: &mut Ui, flags: &mut Flags, items: &[Item],
     if used > width + 0.5 {
         ui.data_mut(|d| d.insert_temp(grown, used));
         ui.ctx().request_repaint();
+    }
+}
+
+/// File › Connect to a server… / Disconnect from <server> (desktop, native.rs's dialog).
+#[cfg(not(target_arch = "wasm32"))]
+fn server_menu(ui: &mut Ui, link: &Link, width: f32, column: bool) {
+    let server = link.server();
+    let label = match &server {
+        Some(url) => format!("Disconnect from {}", url.split_once("://").map_or(url.as_str(), |(_, h)| h)),
+        None => "Connect to a server…".to_string(),
+    };
+    if ui.add(menu_row(None, column, &label, "", width)).clicked() {
+        link.ask_connect(server.is_none());
+        ui.close();
     }
 }
 

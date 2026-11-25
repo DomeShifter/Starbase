@@ -162,8 +162,8 @@ fn a_file_changed_by_another_program_is_kept_and_ours_saved_as_a_copy() {
     wait_for_save(&mut h, &clock);
     assert_eq!(std::fs::read(&path).unwrap(), theirs, "never overwritten");
     let name = h.state().link.name();
-    assert!(name.starts_with("Report (Starbase Docs copy ") && name.ends_with(".docx"), "{name}");
-    assert!(h.state().link.notice().is_some_and(|n| n.contains("changed by another program")));
+    assert_eq!(name, "Report (conflicted copy).docx");
+    assert!(h.state().link.notice().is_some_and(|n| n.contains("changed elsewhere")));
     assert_eq!(files_in(&dir).len(), 3, "the file, our copy, and home");
     let copy = window(&dir, Some(dir.join(&name)), &clock);
     assert!(body_text(&copy).contains("Mine"));
@@ -255,6 +255,23 @@ fn calibri_and_cambria_resolve_to_carlito_and_caladea() {
             assert!(!r.synth_bold && !r.synth_italic, "{font}: {twin} has its own bold and italic faces");
         }
     }
+}
+
+#[test]
+fn the_command_line_opens_local_files_or_a_server_document() {
+    use crate::native::{Args, parse_args};
+    let os = |v: &[&str]| v.iter().map(std::ffi::OsString::from).collect::<Vec<_>>();
+    let a = parse_args(os(&["--server-file", "abc123", "--name", "Report.docx"])).unwrap();
+    assert_eq!(a.server_file, Some(("abc123".to_string(), "Report.docx".to_string())));
+    assert!(a.files.is_empty());
+    let a = parse_args(os(&["--name", "N.docx", "--server-file", "x"])).unwrap();
+    assert_eq!(a.server_file, Some(("x".to_string(), "N.docx".to_string())), "in either order");
+    let a = parse_args(os(&["/tmp/a.docx", "/tmp/b.odt"])).unwrap();
+    assert_eq!(a.files, vec![PathBuf::from("/tmp/a.docx"), PathBuf::from("/tmp/b.odt")]);
+    assert_eq!(parse_args(os(&["--version"])).unwrap(), Args { version: true, ..Default::default() });
+    assert!(parse_args(os(&["--server-file"])).is_err(), "needs an id");
+    assert!(parse_args(os(&["--server-file", ""])).is_err());
+    assert!(parse_args(os(&["--bogus"])).is_err());
 }
 
 #[test]

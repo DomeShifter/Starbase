@@ -56,7 +56,7 @@ pub fn ask_sign_in() {
 /// Opens one of the avatar menu's dialogs, as the menu does (the test hook: `account:profile`,
 /// `account:password`, `account:people`).
 pub fn request(ctx: &egui::Context, what: &str) -> Result<(), String> {
-    if !matches!(what, "profile" | "password" | "people" | "storage" | "backups") {
+    if !matches!(what, "profile" | "password" | "people" | "storage" | "backups" | "devices") {
         return Err(format!("no account dialog `{what}`"));
     }
     ctx.data_mut(|m| m.insert_temp(egui::Id::unique(REQUEST), what.to_string()));
@@ -141,6 +141,9 @@ pub fn me_ui(ui: &mut Ui) {
         } else if house::menu_row(ui, Some("lock"), "Set a password…", "", true) {
             ask(ui, "profile");
         }
+        if house::menu_row(ui, Some(""), "Your devices…", "", true) {
+            ask(ui, "devices");
+        }
         if me.owner && house::menu_row(ui, Some("folder"), "Where files are kept…", "", true) {
             ask(ui, "storage");
         }
@@ -216,6 +219,10 @@ enum Reply {
     BackupKey(String),
     /// Settings saved, a backup started or a restore done: say so and look again.
     BackupDone(String),
+    /// The desktop apps connected to an account (GET /api/devices).
+    Devices(Vec<Json>),
+    /// A desktop app was removed: say so and look again.
+    DeviceGone(String),
 }
 
 /// What the server says about single sign-on (GET /api/info `sso`).
@@ -381,6 +388,7 @@ enum Dialog {
     People,
     Storage,
     Backups,
+    Devices,
 }
 
 #[derive(Default)]
@@ -453,6 +461,11 @@ pub struct Account {
     /// ({name, account}), and the choice (0 = your own, then each other person, then everyone).
     backup_people: Vec<Json>,
     backup_whose: usize,
+    /// Your devices (or, for the owner from People, someone else's): whose ("" = your own), the
+    /// list (None = loading) and the one a "Remove" was clicked on once.
+    devices_of: String,
+    devices: Option<Vec<Json>>,
+    device_armed: Option<String>,
 }
 
 fn me_from(v: &Json) -> Option<Me> {
@@ -483,6 +496,21 @@ fn call(
         inbox.borrow_mut().push(reply);
         ctx.request_repaint();
     });
+}
+
+/// How long ago, in words ("just now", "5 minutes ago", "3 days ago").
+fn ago(secs: f64) -> String {
+    let s = secs.max(0.0);
+    let (n, unit) = if s < 120.0 {
+        return "just now".into();
+    } else if s < 7200.0 {
+        ((s / 60.0) as u64, "minute")
+    } else if s < 172_800.0 {
+        ((s / 3600.0) as u64, "hour")
+    } else {
+        ((s / 86_400.0) as u64, "day")
+    };
+    format!("{n} {unit}s ago")
 }
 
 fn signup_reply(v: Json) -> Reply {
@@ -647,6 +675,12 @@ impl Account {
                     self.signup_on = on;
                     self.signup_secret = code;
                 }
+                Reply::Devices(list) => self.devices = Some(list),
+                Reply::DeviceGone(msg) => {
+                    self.done = Some(msg);
+                    self.error = None;
+                    self.load_devices(ctx);
+                }
                 Reply::Error(e) => self.error = Some(e),
                 Reply::Done(msg) => {
                     self.done = Some(msg);
@@ -675,6 +709,11 @@ impl Account {
                     self.backup_people.clear();
                     self.backup_whose = 0;
                     call(&self.inbox, ctx, Method::Get, "api/backup", None, Reply::Backup);
+                }
+                "devices" => {
+                    self.open(Dialog::Devices);
+                    self.devices_of.clear();
+                    self.load_devices(ctx);
                 }
                 "people" => {
                     self.open(Dialog::People);
@@ -781,6 +820,7 @@ impl Account {
         self.password2.clear();
         self.current.clear();
         self.remove_armed = None;
+        self.device_armed = None;
         // Your own name only in "Your name and colour": People's "Their name" shares the field.
         match me().filter(|_| self.dialog == Dialog::Profile) {
             Some(me) => {
@@ -834,6 +874,7 @@ impl Account {
             Dialog::People => self.people(ctx),
             Dialog::Storage => self.storage_ui(ctx),
             Dialog::Backups => self.backups_ui(ctx),
+            Dialog::Devices => self.devices_ui(ctx),
         }
         self.restarting_ui(ctx);
     }
@@ -1466,6 +1507,83 @@ impl Account {
         }
     }
 
+    fn load_devices(&mut self, ctx: &egui::Context) {
+        self.devices = None;
+        let url = if self.devices_of.is_empty() {
+            "api/devices".to_string()
+        } else {
+            format!("api/devices?username={}", crate::files::enc(&self.devices_of))
+        };
+        call(&self.inbox, ctx, Method::Get, &url, None, |v| Reply::Devices(v.as_array().cloned().unwrap_or_default()));
+    }
+
+    /// Your devices: the desktop apps connected to your account ("Connect to a server…" in
+    /// Starbase Sheets and Docs), when each was last used, and Remove (it stops working at once).
+    fn devices_ui(&mut self, ctx: &egui::Context) {
+        let mut close = false;
+        let mut done = false;
+        let mut remove = None;
+        let mine = self.devices_of.is_empty();
+        let title = if mine { "Your devices".to_string() } else { format!("{}'s devices", self.devices_of) };
+        let now = js_sys::Date::now() / 1000.0;
+        house::dialog(ctx, "starsheets_devices", 440.0, &title, Some(&mut close), |ui| {
+            house::note(
+                ui,
+                if mine {
+                    "Desktop apps connected to your account. Remove one you no longer use, or don't recognise: it stops working at once."
+                } else {
+                    "Desktop apps connected to this account. Removing one stops it working at once."
+                },
+            );
+            house::gap(ui);
+            match &self.devices {
+                None => house::note(ui, "Loading…"),
+                Some(list) if list.is_empty() => {
+                    house::note(ui, "None. Connect one from Starbase Sheets or Docs on your computer: Connect to a server…")
+                }
+                Some(list) => {
+                    for d in list.clone() {
+                        let id = d["id"].as_str().unwrap_or("").to_string();
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                let name = d["name"].as_str().unwrap_or("A desktop app");
+                                ui.label(RichText::new(name).size(house::BODY).color(theme::TEXT));
+                                let used = d["used"].as_f64().map_or_else(String::new, |t| ago(now - t));
+                                let this = if d["current"].as_bool() == Some(true) { " · this app" } else { "" };
+                                house::note(ui, &format!("Last used {used}{this}"));
+                            });
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let armed = self.device_armed.as_deref() == Some(id.as_str());
+                                if ui.add(house::link(if armed { "Click again to remove" } else { "Remove" })).clicked() {
+                                    if armed {
+                                        remove = Some((id.clone(), d["name"].as_str().unwrap_or("").to_string()));
+                                    } else {
+                                        self.device_armed = Some(id.clone());
+                                    }
+                                }
+                            });
+                        });
+                        ui.add_space(house::XS);
+                    }
+                }
+            }
+            self.messages(ui);
+            if house::actions(ui, &["Close"]).is_some() {
+                done = true;
+            }
+        });
+        if close || done {
+            self.dialog = Dialog::None;
+        } else if let Some((id, name)) = remove {
+            self.device_armed = None;
+            let mut url = format!("api/devices?id={}", crate::files::enc(&id));
+            if !mine {
+                url.push_str(&format!("&username={}", crate::files::enc(&self.devices_of)));
+            }
+            call(&self.inbox, ctx, Method::Delete, &url, None, move |_| Reply::DeviceGone(format!("Removed {name}.")));
+        }
+    }
+
     fn people(&mut self, ctx: &egui::Context) {
         let mut close = false;
         let mut cancel = false;
@@ -1473,6 +1591,7 @@ impl Account {
         let mut remove = None;
         let mut unlink: Option<String> = None;
         let mut save_signup = false;
+        let mut devices_of = None;
         let me = me().unwrap_or_default();
         house::dialog(ctx, "starsheets_people", 460.0, "People", Some(&mut close), |ui| {
             house::note(ui, "Everyone with an account on this server. Each person sees only their own files and the ones shared with them.");
@@ -1483,7 +1602,12 @@ impl Account {
                     ui.add_space(house::S);
                     ui.vertical(|ui| {
                         ui.label(RichText::new(&p.name).size(house::BODY).color(theme::TEXT));
-                        house::note(ui, &if p.owner { format!("{} · owner", p.username) } else { p.username.clone() });
+                        ui.horizontal(|ui| {
+                            house::note(ui, &if p.owner { format!("{} · owner", p.username) } else { p.username.clone() });
+                            if ui.add(house::link("Devices")).on_hover_text("The desktop apps connected to this account").clicked() {
+                                devices_of = Some(p.username.clone());
+                            }
+                        });
                         if let Some((shown, ids)) = &linked {
                             ui.horizontal(|ui| {
                                 house::note_with_tip(ui, &format!("Single sign-on: {shown}"), ids);
@@ -1547,7 +1671,11 @@ impl Account {
                 None => {}
             }
         });
-        if close || cancel {
+        if let Some(who) = devices_of {
+            self.open(Dialog::Devices);
+            self.devices_of = who;
+            self.load_devices(ctx);
+        } else if close || cancel {
             self.dialog = Dialog::None;
         } else if add && !self.busy {
             self.busy = true;
