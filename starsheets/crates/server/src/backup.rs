@@ -29,9 +29,10 @@ use serde_json::{Map, Value, json};
 
 /// Inside a backup, the files folder is called this (restic shows it as a folder `starbase`).
 const AS_PATH: &str = "/starbase";
-/// Files never worth keeping: half-written saves, a move in progress, and these settings (they
-/// hold the recovery key; they sit inside the files folder when that is the top of STORE).
-const SKIP: &[&str] = &["!*.tmp", "!.moving-*", "!.starsheets-backup.json"];
+/// Files never worth keeping: half-written saves, a move in progress, these settings (they
+/// hold the recovery key; they sit inside the files folder when that is the top of STORE) and
+/// the photo index with its thumbnails (photos/: made again from the pictures).
+const SKIP: &[&str] = &["!*.tmp", "!.moving-*", "!.starsheets-backup.json", "!**/.starsheets/photos-cache"];
 /// The name backups are made under (restic's "host"). A container's own name changes whenever it
 /// is made again, and restic compares a backup with the last one from the same host.
 const HOST: &str = "starbase";
@@ -438,6 +439,8 @@ mod tests {
         std::fs::write(root.join("james/Budget/2026.xlsx"), b"spreadsheet bytes").unwrap();
         std::fs::write(root.join("james/half.tmp"), b"half a save").unwrap();
         std::fs::write(root.join(".starsheets/users.json"), b"{}").unwrap();
+        std::fs::create_dir_all(root.join(".starsheets/photos-cache/thumbs/ab")).unwrap();
+        std::fs::write(root.join(".starsheets/photos-cache/thumbs/ab/ab12-r1-256.jpg"), b"thumbnail").unwrap();
         std::fs::write(root.join(".starsheets-backup.json"), b"{\"key\": \"secret\"}").unwrap();
         let to = base.join("backups");
         let key = new_key();

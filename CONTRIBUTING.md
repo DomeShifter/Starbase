@@ -42,6 +42,7 @@ and on release tags, never on pull requests:
 | Web builds | without `wasm-opt` (bigger, same code) | with `wasm-opt` |
 | Desktop programs | debug build, starts under a headless X server | release build (ubuntu-22.04), release tests, starts |
 | AppImage and Flatpak packages | only when `packaging/**` or their workflow changes | always |
+| Docs co-editing engine (`stardocs/coedit`, ~18 min in full) | only when `stardocs/coedit/**` or its workflow changes, 1,000 cases | full counts, and weekly |
 | Windows and macOS builds and tests | only when platform code changes (`starsheets/crates/connect`, `localstore.rs`, `localfile.rs`, `packaging/windows`, `packaging/macos`) or their workflow | always, and weekly |
 
 Build caches are saved only by `main` (GitHub keeps 10 GB per repository; pull-request caches
