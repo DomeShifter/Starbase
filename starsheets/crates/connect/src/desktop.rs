@@ -117,7 +117,8 @@ mod tests {
             None => reg(&["delete", KEY, "/v", "Personal", "/f"]),
         };
         let out = String::from_utf8_lossy(&probe.stdout).into_owned();
-        let found = out.lines().find_map(|l| l.strip_prefix("DOCUMENTS=")).unwrap_or_else(|| panic!("no answer from the probe: {out}"));
+        let found = out.lines().find_map(|l| l.split_once("DOCUMENTS=").map(|(_, p)| p.trim()));
+        let found = found.unwrap_or_else(|| panic!("no answer from the probe: {out}"));
         // Both sides in long form (the temp folder can come as RUNNER~1).
         let same = |p: &str| std::fs::canonicalize(p).unwrap_or_else(|e| panic!("{p}: {e}"));
         assert_eq!(same(found), same(&moved_s));
