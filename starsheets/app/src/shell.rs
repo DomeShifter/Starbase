@@ -76,7 +76,15 @@ pub const MENUS: &[(&str, &[Item])] = &[
                 ],
             ),
             Sep,
-            Sub("Move", &[Cmd("Column left", "panel:moveColumnLeft", ""), Cmd("Column right", "panel:moveColumnRight", "")]),
+            Sub(
+                "Move",
+                &[
+                    Cmd("Row up", "panel:moveRowUp", ""),
+                    Cmd("Row down", "panel:moveRowDown", ""),
+                    Cmd("Column left", "panel:moveColumnLeft", ""),
+                    Cmd("Column right", "panel:moveColumnRight", ""),
+                ],
+            ),
             Sub(
                 "Delete",
                 &[
