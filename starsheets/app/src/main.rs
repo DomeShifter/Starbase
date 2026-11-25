@@ -64,6 +64,10 @@ mod store;
 #[cfg(target_arch = "wasm32")]
 mod testhook;
 mod theme;
+// File › Version history: the web app's (files keep their versions on the server); also built
+// for its tests.
+#[cfg(any(target_arch = "wasm32", test))]
+mod versions;
 #[cfg(target_arch = "wasm32")]
 mod web;
 

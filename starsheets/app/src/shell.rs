@@ -7,7 +7,7 @@ use egui::{Align, Button, Frame, Layout, Margin, RichText, Sense, Stroke, Ui, ve
 use gridcraft_ui_egui::SheetApp;
 use serde_json::json;
 
-use crate::{icons, theme};
+use crate::{house, icons, theme};
 
 pub mod filterviews;
 
@@ -991,8 +991,18 @@ fn title_and_menus(app: &mut SheetApp, ui: &mut Ui, title_draft: &mut Option<Str
                     ui.add_space(8.0);
                 }
             }
-            let share =
-                Button::new(RichText::new("Share").size(14.0).color(theme::TEXT)).fill(theme::SHARE).corner_radius(18.0).min_size(vec2(84.0, 36.0));
+            // Share with a lock, as in Sheets.
+            #[cfg(target_arch = "wasm32")]
+            let share = {
+                let label = RichText::new("Share").size(14.0).color(theme::TEXT);
+                match icons::icon("lock") {
+                    Some(img) => Button::image_and_text(img.fit_to_exact_size(vec2(18.0, 18.0)), label),
+                    None => Button::new(label),
+                }
+                .fill(theme::SHARE)
+                .corner_radius(18.0)
+                .min_size(vec2(96.0, 36.0))
+            };
             // Files: back to the home screen (the file organiser), in this file's folder. The
             // logo at the left does the same.
             #[cfg(target_arch = "wasm32")]
@@ -1007,16 +1017,14 @@ fn title_and_menus(app: &mut SheetApp, ui: &mut Ui, title_draft: &mut Option<Str
                 .corner_radius(18.0)
                 .min_size(vec2(92.0, 36.0))
             };
-            #[cfg(target_arch = "wasm32")]
-            let can = crate::share::can_share();
-            #[cfg(not(target_arch = "wasm32"))]
-            let can = false;
-            if ui.add_enabled(can, share).on_disabled_hover_text("Sharing needs sign-in on the server").clicked() {
-                #[cfg(target_arch = "wasm32")]
-                ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(crate::share::REQUEST), ()));
-            }
+            // The desktop app has nothing to share with (its files are on this computer), so it
+            // shows no Share button, as desktop Docs doesn't.
             #[cfg(target_arch = "wasm32")]
             {
+                let can = crate::share::can_share();
+                if ui.add_enabled(can, share).on_disabled_hover_text("Sharing needs sign-in on the server").clicked() {
+                    ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(crate::share::REQUEST), ()));
+                }
                 ui.add_space(8.0);
                 if ui.add(files_button).on_hover_text("Your files and folders, in a new tab").clicked() {
                     ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique("starsheets_files_request"), "home_tab".to_string()));
@@ -1028,19 +1036,71 @@ fn title_and_menus(app: &mut SheetApp, ui: &mut Ui, title_draft: &mut Option<Str
     });
 }
 
+/// Where the open file's saving stands, for the save symbol and the test hook. The words differ
+/// by place ("Saved", "Saved to this computer") but the state doesn't, so nothing matches on the
+/// words (looks review 2 item 4: desktop showed a red dot on a saved file).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// The live editing states are only made in the web app (live.rs); the desktop app has none.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code, reason = "live editing states are web-only"))]
+pub enum SaveState {
+    Saved,
+    Saving,
+    /// Live editing: this person may only read the file.
+    ViewOnly,
+    /// Live editing: not connected yet, nothing waiting to be sent.
+    Connecting,
+    /// Live editing: not connected, with changes waiting to be sent.
+    Offline,
+    /// Not saved, or no access any more.
+    Problem,
+}
+
+/// The state and the words the save symbol shows (files.rs, live.rs and native.rs set it).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SaveStatus {
+    pub state: SaveState,
+    pub text: String,
+}
+
+impl SaveStatus {
+    pub fn new(state: SaveState, text: impl Into<String>) -> SaveStatus {
+        SaveStatus { state, text: text.into() }
+    }
+}
+
+/// The egui memory key holding a [`SaveStatus`].
+pub const SAVE_STATUS: &str = "starsheets_save_status";
+
+/// Sets the save symbol's status; `None` leaves it to the workbook's own changed flag.
+pub fn set_save_status(ctx: &egui::Context, status: Option<SaveStatus>) {
+    let id = egui::Id::unique(SAVE_STATUS);
+    ctx.data_mut(|m| {
+        if let Some(s) = status {
+            m.insert_temp(id, s);
+        } else {
+            m.remove::<SaveStatus>(id);
+        }
+    });
+}
+
+/// The save symbol's status: what was set, else saved or not by the workbook's changed flag.
+pub fn save_status(ctx: &egui::Context, dirty: bool) -> SaveStatus {
+    let set = ctx.data(|m| m.get_temp::<SaveStatus>(egui::Id::unique(SAVE_STATUS)));
+    set.unwrap_or_else(|| if dirty { SaveStatus::new(SaveState::Problem, "Not saved") } else { SaveStatus::new(SaveState::Saved, "Saved") })
+}
+
 /// The save and change-tracking symbol left of Files (to-do 3 row 8; replaces the "Saved" text
 /// beside the title). A dot shows the state: blue while saving, red when something isn't saved
 /// or the connection is down; none when all is saved. Hover: who changed the file last and when,
 /// then where it is saved. A click opens version history, as Sheets' clock does.
 fn save_symbol(ui: &mut Ui, dirty: bool) {
     let get = |key: &str| ui.ctx().data(|m| m.get_temp::<String>(egui::Id::unique(key))).unwrap_or_default();
-    let status =
-        Some(get("starsheets_save_status")).filter(|s| !s.is_empty()).unwrap_or_else(|| (if dirty { "Not saved" } else { "Saved" }).to_string());
+    let status = save_status(ui.ctx(), dirty);
     let (last_edit, tip) = (get("starsheets_last_edit"), get("starsheets_save_status_tip"));
-    let dot = match status.as_str() {
-        "Saved" | "View only" => None,
-        "Saving…" => Some(theme::BLUE),
-        _ => Some(crate::house::ERROR),
+    let dot = match status.state {
+        SaveState::Saved | SaveState::ViewOnly => None,
+        SaveState::Saving => Some(theme::BLUE),
+        SaveState::Connecting | SaveState::Offline | SaveState::Problem => Some(crate::house::ERROR),
     };
     let button = match icons::icon("history") {
         Some(img) => Button::image(img.fit_to_exact_size(vec2(24.0, 24.0))),
@@ -1054,8 +1114,8 @@ fn save_symbol(ui: &mut Ui, dirty: bool) {
     // The live state in words first (the save tip below already covers saving and errors), then
     // who and when, then where.
     let mut lines: Vec<String> = Vec::new();
-    if matches!(status.as_str(), "View only" | "Connecting…") || status.starts_with("Offline") {
-        lines.push(status.clone());
+    if matches!(status.state, SaveState::ViewOnly | SaveState::Connecting | SaveState::Offline) {
+        lines.push(status.text.clone());
     }
     if !last_edit.is_empty() {
         lines.push(last_edit);
@@ -1129,6 +1189,11 @@ pub const MENU_ICONS: &[(&str, &str)] = &[
     ("Rotation", "text_rotation_angleup"),
     ("Font size", "format_size"),
     ("Sort range", "sort"),
+    ("Sort sheet", "sort_by_alpha"),
+    ("Remove filter", "filter_alt"),
+    ("Filter views", "filter_list"),
+    ("Create new filter view", "add"),
+    ("Save as filter view", "filter_alt"),
     ("Data clean-up", "cleaning_services"),
     ("Calculation controls", "functions"),
     ("Tick box", "check_box"),
@@ -1210,8 +1275,14 @@ pub fn menu_style_width(ui: &mut Ui, width: f32) {
 /// A toolbar drop-down list in the house style (docs/house-style.md, "Drop-down lists"): 32 px
 /// rows, 16 px side padding, a ✓ by the current entry. Closes the menu on a pick.
 pub fn pick_rows(ui: &mut Ui, width: f32, items: &[String], current: Option<usize>) -> Option<usize> {
+    pick_rows_from(ui, width, items, current, 40.0)
+}
+
+/// [`pick_rows`] with the labels starting `text_x` from the left: 48 lines them up with the
+/// labels of a menu with icons (Data › Filter views lists its views under two such rows).
+pub fn pick_rows_from(ui: &mut Ui, width: f32, items: &[String], current: Option<usize>, text_x: f32) -> Option<usize> {
     menu_style_width(ui, width);
-    ui.spacing_mut().button_padding.x = 40.0;
+    ui.spacing_mut().button_padding.x = text_x;
     let mut hit = None;
     for (i, label) in items.iter().enumerate() {
         let r = ui.add(
@@ -1248,15 +1319,64 @@ pub const MENU_LOOK: gridcraft_ui_egui::MenuLook = gridcraft_ui_egui::MenuLook {
     list_style,
     // The empty shortcut's stretch keeps the label at the left (as in menu_row).
     list_row: |label| Button::new(RichText::new(label.to_string()).size(14.0).color(theme::TEXT)).shortcut_text(""),
+    list_item: Some(list_item),
 };
 
 /// A data-validation drop-down list: only as wide as its longest choice, plus the 16 px row
 /// padding each side and room for the scroll bar (James, to-do row 75).
 fn list_style(ui: &mut Ui, items: &[String]) -> f32 {
-    // "Edit rule" sits under the choices (patch 0074): the list is at least as wide as it.
-    let width = crate::house::fit_width(ui, items.iter().map(String::as_str).chain(["Edit rule"]), false);
+    // "Edit rule" sits under the choices (patch 0074): the list is at least as wide as it. Room
+    // too for a tick box and a chip's padding (list_item).
+    let width = crate::house::fit_width(ui, items.iter().map(String::as_str).chain(["Edit rule"]), false) + LIST_EXTRA;
     menu_style_width(ui, width);
     width
+}
+
+/// What a drop-down row needs beyond its text: a tick box and the gap after it, and a chip's
+/// padding.
+const LIST_EXTRA: f32 = LIST_TICK + house::M + 2.0 * LIST_CHIP_PAD;
+const LIST_TICK: f32 = 20.0;
+const LIST_CHIP_PAD: f32 = 10.0;
+const LIST_CHIP_HEIGHT: f32 = 24.0;
+/// Google's grey for a choice without a colour of its own (GridCraft's chips use the same).
+const CHIP_GREY: egui::Color32 = egui::Color32::from_rgb(0xE8, 0xEA, 0xED);
+
+/// One drop-down choice, as in Google Sheets: for multiple selections a tick box (blue when
+/// ticked), then the choice as its coloured chip (grey without a colour). A choice of a rule
+/// without chips and without a colour is plain text. Grey behind the row on hover or keyboard.
+fn list_item(ui: &mut Ui, it: &gridcraft_ui_egui::ListItem<'_>) -> egui::Response {
+    let (rect, r) = ui.allocate_exact_size(it.size, egui::Sense::click());
+    if r.hovered() || it.selected {
+        ui.painter().rect_filled(rect, 0.0, theme::MENU_HOVER);
+    }
+    let mut x = rect.left() + f32::from(house::MENU_INSET);
+    if let Some(ticked) = it.ticked {
+        let tick = egui::Rect::from_min_size(egui::pos2(x, rect.center().y - LIST_TICK / 2.0), vec2(LIST_TICK, LIST_TICK));
+        let icon = if ticked { icons::icon_in("check_box", house::BLUE) } else { icons::icon("check_box_outline_blank") };
+        if let Some(img) = icon {
+            img.paint_at(ui, tick);
+        }
+        x += LIST_TICK + house::M;
+    }
+    let p = ui.painter().with_clip_rect(rect);
+    let font = egui::FontId::proportional(house::BODY);
+    if it.chips || it.color.is_some() {
+        let fill = it.color.unwrap_or(CHIP_GREY);
+        // Dark text on a light chip, white on a dark one.
+        let light = 0.299 * f32::from(fill.r()) + 0.587 * f32::from(fill.g()) + 0.114 * f32::from(fill.b()) >= 150.0;
+        let ink = if light { theme::TEXT } else { egui::Color32::WHITE };
+        let galley = p.layout_no_wrap(it.text.to_string(), font, ink);
+        let pill = egui::Rect::from_min_size(
+            egui::pos2(x, rect.center().y - LIST_CHIP_HEIGHT / 2.0),
+            vec2(galley.size().x + 2.0 * LIST_CHIP_PAD, LIST_CHIP_HEIGHT),
+        );
+        p.rect_filled(pill, LIST_CHIP_HEIGHT / 2.0, fill);
+        p.galley(egui::pos2(pill.left() + LIST_CHIP_PAD, pill.center().y - galley.size().y / 2.0), galley, ink);
+    } else {
+        p.text(egui::pos2(x, rect.center().y), egui::Align2::LEFT_CENTER, it.text, font, theme::TEXT);
+    }
+    r.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, it.ticked.unwrap_or(it.selected), it.text));
+    r
 }
 
 /// The spreadsheet's name: click it to rename, like Sheets (Enter keeps, Esc cancels).

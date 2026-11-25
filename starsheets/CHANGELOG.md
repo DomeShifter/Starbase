@@ -90,6 +90,10 @@ new features and the last one for fixes.
   `COUNTUNIQUE`, `FLATTEN`, `ISEMAIL`, `ISURL`, `TO_TEXT` and the operator functions (`ADD`,
   `MINUS`, `MULTIPLY`, `DIVIDE`, `POW`, `EQ`, `NE`, `GT`, `GTE`, `LT`, `LTE`, `UMINUS`, `UPLUS`,
   `UNARY_PERCENT`). Saved .xlsx files keep them the way Google Sheets saves them.
+- More Google Sheets functions: `ARRAY_CONSTRAIN`, `ISBETWEEN`, `ISDATE`, `EPOCHTODATE`,
+  `AVERAGE.WEIGHTED`, `MARGINOFERROR`, `TO_DATE`, `TO_DOLLARS`, `TO_PERCENT`, `TO_PURE_NUMBER`,
+  `IMLOG`, `IMTANH` and `IMCOTH`. `REGEXEXTRACT` and `REGEXREPLACE` typed in StarSheets follow
+  Google's rules (REGEXEXTRACT gives the bracketed part); the ones in Excel files keep Excel's.
 - Right-click inside a cell (or the formula bar) while typing: Cut, Copy, Paste, Delete and
   Select all for the text.
 - Share works on a new, empty spreadsheet: it is saved first, then the share box opens.

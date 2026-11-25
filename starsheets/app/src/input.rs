@@ -27,6 +27,11 @@ pub fn note_modal(ctx: &Context) {
     ctx.data_mut(|d| d.insert_temp(Id::unique(MODAL_FRAME), frame));
 }
 
+/// Whether a house dialog showed in this frame or the last (cards hide behind no dialog).
+pub fn modal_showing(ctx: &Context) -> bool {
+    modal_frame(ctx).is_some_and(|f| f + 1 >= ctx.cumulative_frame_nr())
+}
+
 /// The last frame a modal dialog was shown in.
 fn modal_frame(ctx: &Context) -> Option<u64> {
     ctx.data(|d| d.get_temp::<u64>(Id::unique(MODAL_FRAME)))

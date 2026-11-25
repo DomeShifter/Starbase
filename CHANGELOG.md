@@ -10,6 +10,16 @@ number goes up for new features and the last one for fixes.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-25
+
+The first public release: an **early preview**. It works and we use it every day, but expect rough
+edges; keep your own backups (Starbase's built-in backups help) and please report what breaks.
+
+Highlights: Google-Sheets-style spreadsheets, Google-Docs-style documents and a Drive-style home
+screen in one Docker image; live editing for spreadsheets; sharing; version history; scheduled
+encrypted backups (restic format) with restore; sign-in with your own login service (OIDC:
+Authelia, Authentik, Keycloak); install guides for Docker, Proxmox, TrueNAS and Unraid.
+
 ### Changed
 - Renamed: the suite is **Starbase**, and its apps are **Starbase Drive** (the home screen),
   **Starbase Sheets** and **Starbase Docs** (were StarDrive, StarSheets and StarDocs). Settings
