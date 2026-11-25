@@ -78,10 +78,14 @@ pub fn main() -> std::process::ExitCode {
     let args = match parse_args(std::env::args_os().skip(1)) {
         Ok(a) => a,
         Err(e) => {
+            starbase_connect::attach_terminal();
             let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("stardocs: {e}\n\n{USAGE}"));
             return std::process::ExitCode::from(2);
         }
     };
+    if args.version || args.help {
+        starbase_connect::attach_terminal();
+    }
     if args.version {
         let _ = std::io::Write::write_fmt(&mut std::io::stdout(), format_args!("stardocs {}\n", env!("CARGO_PKG_VERSION")));
         return std::process::ExitCode::SUCCESS;
@@ -112,17 +116,19 @@ pub fn main() -> std::process::ExitCode {
     }
     // eframe keeps the window's size and place (`persist_window`) for the next start, in
     // ~/.local/share/starbasedocs.
+    // Drawn with OpenGL (glow), as in the browser (WebGL2). A computer without OpenGL 2.0+
+    // (Windows' basic display driver in a virtual machine or over remote desktop, no GPU driver)
+    // gets one more try with wgpu, which has software renderers (WARP on Windows), as Starbase
+    // Sheets does the other way round; eframe reuses its event loop for the second run.
     let options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Glow, centered: true, persist_window: true, ..Default::default() };
-    let run = eframe::run_native(
-        "Starbase Docs",
-        options,
-        Box::new(move |cc| {
-            egui_extras::install_image_loaders(&cc.egui_ctx);
-            // No size kept from an earlier start: the first frames size the window to the screen.
-            let kept = cc.storage.and_then(|s| s.get_string(WINDOW_KEY)).is_some();
-            Ok(Box::new(Desktop::new(&cc.egui_ctx, file, server_file, folders, !kept)))
-        }),
-    );
+    let wgpu = eframe::NativeOptions { renderer: eframe::Renderer::Wgpu, ..options.clone() };
+    let run = match eframe::run_native("Starbase Docs", options, creator(file.clone(), server_file.clone(), folders.clone())) {
+        Err(e @ (eframe::Error::OpenGL(_) | eframe::Error::Glutin(_) | eframe::Error::NoGlutinConfigs(..))) => {
+            log::error!("graphics: OpenGL didn't start ({e}); trying wgpu");
+            eframe::run_native("Starbase Docs", wgpu, creator(file, server_file, folders))
+        }
+        result => result,
+    };
     match run {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
@@ -130,6 +136,16 @@ pub fn main() -> std::process::ExitCode {
             std::process::ExitCode::FAILURE
         }
     }
+}
+
+/// Makes the window's app once eframe has a window: the same for either renderer.
+fn creator(file: Option<PathBuf>, server_file: Option<(String, String)>, folders: Folders) -> eframe::AppCreator<'static> {
+    Box::new(move |cc| {
+        egui_extras::install_image_loaders(&cc.egui_ctx);
+        // No size kept from an earlier start: the first frames size the window to the screen.
+        let kept = cc.storage.and_then(|s| s.get_string(WINDOW_KEY)).is_some();
+        Ok(Box::new(Desktop::new(&cc.egui_ctx, file, server_file, folders, !kept)))
+    })
 }
 
 /// Warnings and errors to standard error (eframe and WordCraft log through `log`).
@@ -222,10 +238,10 @@ fn spawn(file: Option<&Path>) {
 
 /// Where the editor's preferences (theme, interface size, editing options…) are kept, as the
 /// web app keeps them in `localStorage`.
+/// In Starbase's settings folder: `~/.config/starbase`, `%APPDATA%\Starbase` (Windows has no
+/// `HOME`, so they weren't kept there before), `~/Library/Application Support/Starbase`.
 fn prefs_path() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from)?;
-    let config = std::env::var_os("XDG_CONFIG_HOME").filter(|d| !d.is_empty()).map_or_else(|| home.join(".config"), PathBuf::from);
-    Some(config.join("starbase").join("docs-ui.json"))
+    Some(starbase_connect::config_dir()?.join("docs-ui.json"))
 }
 
 /// WordCraft's own file dialogs (Insert › Image, Add font…): the system's, on a thread of their
