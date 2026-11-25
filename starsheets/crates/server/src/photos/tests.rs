@@ -223,19 +223,29 @@ fn a_child_that_hangs_or_crashes_is_one_failed_picture() {
     let t = Instant::now();
     let mut sleep = std::process::Command::new("sleep");
     sleep.arg("30");
-    let e = decode::run_child(sleep, b"x", Duration::from_millis(300)).err().unwrap();
+    let e = decode::run_child(sleep, decode::Input::Bytes(b"x".to_vec()), Duration::from_millis(300)).err().unwrap();
     assert!(e.contains("stopped"), "{e}");
     assert!(t.elapsed() < Duration::from_secs(5), "killed, not waited for");
     let mut crash = std::process::Command::new("sh");
-    crash.args(["-c", "kill -SEGV $$"]);
-    let e = decode::run_child(crash, b"x", Duration::from_secs(5)).err().unwrap();
+    crash.args(["-c", "ulimit -c 0; kill -SEGV $$"]);
+    let e = decode::run_child(crash, decode::Input::Bytes(b"x".to_vec()), Duration::from_secs(5)).err().unwrap();
     assert!(e.contains("signal"), "{e}");
     let mut nonsense = std::process::Command::new("echo");
     nonsense.arg("{not json");
-    assert!(decode::run_child(nonsense, b"", Duration::from_secs(5)).is_err());
+    assert!(decode::run_child(nonsense, decode::Input::Bytes(Vec::new()), Duration::from_secs(5)).is_err());
 }
 
-/// A store with pictures: (store, service). Rescans only when asked.
+fn config(workers: usize, watch: bool) -> Config {
+    Config { workers, child_memory: decode::CHILD_MEMORY, rescan: Some(86_400), cache: None, cache_cap: 1 << 30, watch }
+}
+
+/// A scan of everything Photos is on for, through the scanner thread, waited for.
+fn rescan(svc: &Photos) {
+    let t = svc.request_scan("", true, true);
+    assert!(svc.wait_scan(t, Duration::from_secs(30)), "scan didn't finish");
+}
+
+/// A store with pictures, Photos on for ann/Trip and bob: (store, service).
 fn with_pictures() -> (Store, Arc<Photos>) {
     let root = tmp("store");
     let s = Store { root: root.clone(), keep: 3, spaces: true };
@@ -251,27 +261,45 @@ fn with_pictures() -> (Store, Arc<Photos>) {
     put("ann/Trip/broken.jpg", b"\xFF\xD8\xFF\xE0 this is not really a jpeg");
     put("ann/Trip/notes.txt", b"not a picture");
     put("ann/Trip/.hidden.jpg", &jpeg(&halves(8, 8)));
+    put("ann/Private/me.jpg", &jpeg(&halves(8, 8)));
     put("ann/.bin/old.jpg", &jpeg(&halves(8, 8)));
     put("bob/me.gif", &encoded(&image::DynamicImage::ImageRgb8(halves(30, 30)), image::ImageFormat::Gif));
     std::os::unix::fs::symlink(s.full("bob/me.gif"), s.full("ann/Trip/link.gif")).unwrap();
-    std::os::unix::fs::symlink(s.full("bob"), s.full("ann/linked-folder")).unwrap();
-    let cfg = Config { workers: 2, rescan: Some(86_400), cache: None, watch: false };
-    let svc = Photos::start(&s, cfg).unwrap();
+    std::os::unix::fs::symlink(s.full("ann/Private"), s.full("ann/Trip/linked-folder")).unwrap();
+    let svc = Photos::start(&s, config(2, false)).unwrap();
     (s, svc)
 }
 
 fn settle(svc: &Photos) {
     let t = Instant::now();
     while svc.queued() != (0, 0) || svc.db().counts().unwrap()[0] > 0 {
-        assert!(t.elapsed() < Duration::from_secs(60), "still working: {:?}", svc.status(true));
+        assert!(t.elapsed() < Duration::from_secs(60), "still working: {:?}", svc.status());
         std::thread::sleep(Duration::from_millis(20));
     }
 }
 
 #[test]
+fn nothing_is_indexed_until_photos_is_turned_on() {
+    let (s, svc) = with_pictures();
+    rescan(&svc);
+    assert!(svc.rows("", true).is_empty(), "off by default: nothing read");
+    assert!(!svc.covers("ann/Trip") && !svc.hurry("ann/Trip/beach.jpg"));
+    svc.enable("ann/Trip", "ann").unwrap();
+    rescan(&svc);
+    settle(&svc);
+    assert!(svc.covers("ann/Trip/Day 2/x.jpg"), "a folder inside is covered too");
+    assert!(svc.rows("ann/Private", true).is_empty(), "other folders stay out");
+    assert_eq!(svc.status()["folders"], json!(["ann/Trip"]));
+    svc.stop();
+    let _ = std::fs::remove_dir_all(&s.root);
+}
+
+#[test]
 fn the_index_and_thumbnails_of_a_store() {
     let (s, svc) = with_pictures();
-    svc.full_scan();
+    svc.enable("ann/Trip", "ann").unwrap();
+    svc.enable("bob", "bob").unwrap();
+    rescan(&svc);
     settle(&svc);
     let rows: HashMap<String, index::Row> = svc.rows("", true).into_iter().map(|r| (r.path.clone(), r)).collect();
     let mut paths: Vec<&str> = rows.keys().map(String::as_str).collect();
@@ -279,7 +307,7 @@ fn the_index_and_thumbnails_of_a_store() {
     assert_eq!(
         paths,
         ["ann/Trip/beach.jpg", "ann/Trip/broken.jpg", "ann/Trip/iphone.heic", "ann/Trip/map.png", "ann/Trip/sunset.JPG", "bob/me.gif"],
-        "no hidden files, bins, text, or anything through a link"
+        "no hidden files, bins, text, anything through a link, or folders Photos is off for"
     );
     let beach = &rows["ann/Trip/beach.jpg"];
     assert_eq!((beach.state, beach.meta.width, beach.meta.taken.as_deref()), (State::Ready, 1600, Some("2024-07-14T18:30:05+01:00")));
@@ -304,25 +332,84 @@ fn the_index_and_thumbnails_of_a_store() {
     // A rename keeps the row (and its id); a copy reuses the thumbnails; a change is read again.
     let id = beach.id;
     std::fs::rename(s.full("ann/Trip/beach.jpg"), s.full("ann/Trip/beach 2024.jpg")).unwrap();
-    std::fs::copy(s.full("ann/Trip/map.png"), s.full("ann/map copy.png")).unwrap();
+    std::fs::copy(s.full("ann/Trip/map.png"), s.full("ann/Trip/map copy.png")).unwrap();
     let made_before = svc.made.load(Ordering::Relaxed);
-    svc.full_scan();
+    rescan(&svc);
     settle(&svc);
     let moved = svc.row("ann/Trip/beach 2024.jpg").unwrap();
     assert_eq!((moved.id, moved.state), (id, State::Ready), "renamed: same row");
-    assert_eq!(svc.row("ann/map copy.png").unwrap().state, State::Ready);
+    assert_eq!(svc.row("ann/Trip/map copy.png").unwrap().state, State::Ready);
     assert_eq!(svc.made.load(Ordering::Relaxed), made_before, "nothing decoded again");
     std::fs::write(s.full("ann/Trip/map.png"), encoded(&image::DynamicImage::ImageRgb8(halves(50, 40)), image::ImageFormat::Png)).unwrap();
-    svc.look_at("ann/Trip", false);
+    let t = svc.look_at("ann/Trip", false).unwrap();
+    assert!(svc.wait_scan(t, Duration::from_secs(10)));
     settle(&svc);
     assert_eq!(svc.row("ann/Trip/map.png").unwrap().meta.width, 50, "changed: read again");
+    // A deleted picture leaves the index, and its thumbnails go at once.
+    let gif = rows["bob/me.gif"].hash.clone().unwrap();
     std::fs::remove_file(s.full("bob/me.gif")).unwrap();
-    svc.full_scan();
+    rescan(&svc);
     assert!(svc.row("bob/me.gif").is_none(), "deleted: gone from the index");
-    let st = svc.status(true);
-    assert_eq!(st["pictures"]["unsupported"], 1, "{st}");
+    assert!(svc.thumb_file(&gif, 256).is_none(), "and its thumbnails");
+    // Turned off: the folder's pictures and their thumbnails are forgotten.
+    let sunset = rows["ann/Trip/sunset.JPG"].hash.clone().unwrap();
+    assert!(!svc.disable("ann/Trip").unwrap());
+    assert!(svc.rows("ann", true).is_empty() && svc.thumb_file(&sunset, 1024).is_none());
+    assert_eq!(svc.status()["pictures"]["unsupported"], 0);
     svc.stop();
     let _ = std::fs::remove_dir_all(&s.root);
+}
+
+#[test]
+fn the_cache_keeps_to_its_size() {
+    let (s, svc) = with_pictures();
+    svc.enable("ann/Trip", "ann").unwrap();
+    rescan(&svc);
+    settle(&svc);
+    svc.clear_unused();
+    let full = svc.cache_bytes.load(Ordering::Relaxed);
+    assert!(full > 0, "the cache's size is counted");
+    // A cap below what is there: the least recently shown go, down to 90% of the cap.
+    let small = Photos { cfg: Config { cache_cap: full / 2, ..svc.cfg.clone() }, ..clone_for_test(&svc) };
+    small.clear_unused();
+    assert!(small.cache_bytes.load(Ordering::Relaxed) <= full / 2, "{} of {full}", small.cache_bytes.load(Ordering::Relaxed));
+    svc.stop();
+    let _ = std::fs::remove_dir_all(&s.root);
+}
+
+/// A second service over the same store and cache, without threads (for a different setting).
+fn clone_for_test(p: &Photos) -> Photos {
+    Photos {
+        store: Store { root: p.store.root.clone(), keep: 3, spaces: p.store.spaces },
+        cache: p.cache.clone(),
+        db: Mutex::new(Index::open(&tmp("other-index").join("i.sqlite")).unwrap()),
+        queue: Mutex::default(),
+        wake: Condvar::new(),
+        cfg: p.cfg.clone(),
+        network: false,
+        enabled: Mutex::default(),
+        scans: Mutex::default(),
+        scans_wake: Condvar::new(),
+        watching: Mutex::new(String::new()),
+        watcher: Mutex::new(None),
+        dirty: Mutex::default(),
+        looked: Mutex::default(),
+        last_scan: Mutex::new(None),
+        scanning: AtomicBool::new(false),
+        made: AtomicU64::new(0),
+        cache_bytes: AtomicU64::new(0),
+        stop: AtomicBool::new(true),
+    }
+}
+
+#[test]
+fn workers_and_memory_fit_the_server() {
+    let gb = 1024 * 1024 * 1024;
+    assert_eq!(fit_memory(2, decode::CHILD_MEMORY, None), (2, decode::CHILD_MEMORY), "no limit: as asked");
+    assert_eq!(fit_memory(2, decode::CHILD_MEMORY, Some(8 * gb)), (2, decode::CHILD_MEMORY), "plenty");
+    assert_eq!(fit_memory(2, decode::CHILD_MEMORY, Some(2 * gb)), (2, 512 * 1024 * 1024), "less memory per child first");
+    assert_eq!(fit_memory(4, decode::CHILD_MEMORY, Some(gb + gb / 2)), (1, decode::MIN_CHILD_MEMORY), "then fewer workers");
+    assert_eq!(fit_memory(2, decode::CHILD_MEMORY, Some(gb / 4)), (1, decode::MIN_CHILD_MEMORY), "never below one");
 }
 
 #[test]
@@ -330,19 +417,19 @@ fn inotify_sees_a_new_picture() {
     let root = tmp("watch");
     let s = Store { root: root.clone(), keep: 3, spaces: false };
     std::fs::create_dir_all(s.full("Camera")).unwrap();
-    let svc = Photos::start(&s, Config { workers: 1, rescan: Some(86_400), cache: None, watch: true }).unwrap();
-    let t = Instant::now();
-    while svc.last_scan.lock().unwrap().is_none() {
-        assert!(t.elapsed() < Duration::from_secs(10));
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    assert_eq!(svc.status(true)["watching"], "inotify");
+    std::fs::create_dir_all(s.full("Elsewhere")).unwrap();
+    let svc = Photos::start(&s, config(1, true)).unwrap();
+    svc.enable("Camera", "").unwrap();
+    rescan(&svc);
+    assert_eq!(svc.status()["watching"], "inotify");
     std::fs::write(s.full("Camera/new.jpg"), jpeg(&halves(20, 10))).unwrap();
+    std::fs::write(s.full("Elsewhere/other.jpg"), jpeg(&halves(20, 10))).unwrap();
     let t = Instant::now();
     while svc.row("Camera/new.jpg").is_none_or(|r| r.state != State::Ready) {
         assert!(t.elapsed() < Duration::from_secs(15), "not seen");
         std::thread::sleep(Duration::from_millis(50));
     }
+    assert!(svc.row("Elsewhere/other.jpg").is_none(), "only folders Photos is on for");
     svc.stop();
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -363,8 +450,12 @@ mod http {
         bytes: Vec<u8>,
     }
 
-    async fn get(app: &Shared, uri: &str, who: Option<&str>, extra: &[(header::HeaderName, &str)]) -> Got {
-        let mut b = axum::http::Request::builder().method("GET").uri(uri).header(header::HOST, "192.168.1.5:8080");
+    async fn ask(app: &Shared, method: &str, uri: &str, who: Option<&str>, extra: &[(header::HeaderName, &str)]) -> Got {
+        let mut b = axum::http::Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::HOST, "192.168.1.5:8080")
+            .header(header::ORIGIN, "http://192.168.1.5:8080");
         if let Some(u) = who {
             let token = auth::new_session(&app.store, u).unwrap();
             b = b.header(header::COOKIE, format!("{}={token}", crate::COOKIE));
@@ -381,6 +472,10 @@ mod http {
         Got { status, headers, json: serde_json::from_slice(&bytes).unwrap_or(Value::Null), bytes }
     }
 
+    async fn get(app: &Shared, uri: &str, who: Option<&str>, extra: &[(header::HeaderName, &str)]) -> Got {
+        ask(app, "GET", uri, who, extra).await
+    }
+
     #[tokio::test]
     async fn only_people_who_may_see_a_picture_get_it() {
         let root = tmp("http");
@@ -393,7 +488,7 @@ mod http {
             std::fs::write(s.full(p), b).unwrap();
         };
         put("ann/Trip/b.jpg", with_exif(&jpeg(&halves(600, 400)), &exif_block(1, "2024:07:14 18:30:05", None)));
-        put("ann/Trip/a.jpg", with_exif(&jpeg(&halves(600, 400)), &exif_block(1, "2021:01:01 00:00:00", None)));
+        put("ann/Trip/a.jpg", with_exif(&jpeg(&halves(600, 400)), &exif_block(1, "2021:01:01 00:00:00", Some(((51, 30, 0), 'N', (0, 7, 0), 'W')))));
         put("ann/Trip/Day 2/c.png", encoded(&image::DynamicImage::ImageRgb8(halves(30, 20)), image::ImageFormat::Png));
         put("ann/Trip/plan.xlsx", b"x".to_vec());
         put("ann/Private/secret.jpg", jpeg(&halves(30, 20)));
@@ -408,6 +503,18 @@ mod http {
             rooms: crate::live::Rooms::default(),
             oidc: None,
         });
+        let a = &ids["ann/Trip/a.jpg"];
+
+        // Off until turned on: listed as off, nothing read, no thumbnails.
+        let g = get(&app, "/api/photos?folder=ann/Trip", Some("ann"), &[]).await;
+        assert_eq!((g.status, g.json["enabled"].as_bool(), g.json["can_enable"].as_bool()), (200, Some(false), Some(true)), "{}", g.json);
+        assert_eq!(g.json["photos"], json!([]));
+        let g = get(&app, &format!("/api/photos/thumb/{a}/256"), Some("ann"), &[]).await;
+        assert_eq!((g.status, g.json["state"].as_str()), (404, Some("off")));
+        assert_eq!(get(&app, "/api/photos/enable?folder=ann/Trip", Some("ann"), &[]).await.status, 405, "a GET changes nothing");
+        assert_eq!(ask(&app, "POST", "/api/photos/enable?folder=ann/Trip", Some("bob"), &[]).await.status, 403, "not Bob's");
+        let g = ask(&app, "POST", "/api/photos/enable?folder=ann/Trip", Some("ann"), &[]).await;
+        assert_eq!((g.status, g.json["enabled"].as_bool()), (200, Some(true)), "{}", g.json);
 
         let g = get(&app, "/api/photos?folder=ann/Trip", Some("ann"), &[]).await;
         assert_eq!(g.status, 200, "{}", g.json);
@@ -424,6 +531,7 @@ mod http {
         let names: Vec<&str> = g.json["photos"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap()).collect();
         assert_eq!(names, ["a.jpg", "b.jpg"], "by date taken; no spreadsheets; not the folder inside");
         assert_eq!(g.json["photos"][0]["taken"], "2021-01-01T00:00:00+01:00");
+        assert!(g.json["photos"][0]["gps"]["lat"].as_f64().is_some(), "the owner sees where: {}", g.json);
         // With the folders inside (rescanned in the background: asked again until it's there).
         let t = Instant::now();
         loop {
@@ -442,7 +550,6 @@ mod http {
         assert_eq!(get(&app, "/api/photos?folder=ann/Nowhere", Some("ann"), &[]).await.status, 404);
 
         // The thumbnail: waited for (a few seconds at most), then kept by the browser by hash.
-        let a = &ids["ann/Trip/a.jpg"];
         let g = get(&app, &format!("/api/photos/thumb/{a}/256"), Some("ann"), &[]).await;
         assert_eq!(g.status, 200, "{}", g.json);
         assert_eq!(g.headers[header::CONTENT_TYPE], "image/jpeg");
@@ -463,7 +570,8 @@ mod http {
         let x = &ids["ann/Trip/plan.xlsx"];
         assert_eq!(get(&app, &format!("/api/photos/thumb/{x}/256"), Some("ann"), &[]).await.status, 404, "not a picture");
 
-        // Shared with Bob (view): the folder and its pictures, nothing else of Ann's.
+        // Shared with Bob (view): the folder and its pictures (not where they were taken), nothing
+        // else of Ann's; he can't turn Photos on or off.
         let folder_id = app.store.synced_folders().unwrap().into_iter().find(|(_, p)| p == "ann/Trip").unwrap().0;
         sharing::set(
             &app.store,
@@ -473,18 +581,27 @@ mod http {
         .unwrap();
         let g = get(&app, &format!("/api/photos?folder_id={folder_id}"), Some("bob"), &[]).await;
         assert_eq!((g.status, g.json["photos"].as_array().map(Vec::len)), (200, Some(2)), "{}", g.json);
+        assert!(g.json["photos"].as_array().unwrap().iter().all(|p| p["gps"].is_null()), "no places for viewers: {}", g.json);
+        assert_eq!(g.json["can_enable"], false);
         assert_eq!(get(&app, &format!("/api/photos/thumb/{a}/256"), Some("bob"), &[]).await.status, 200);
         let secret = &ids["ann/Private/secret.jpg"];
         assert_eq!(get(&app, &format!("/api/photos/thumb/{secret}/256"), Some("bob"), &[]).await.status, 403);
         assert_eq!(get(&app, "/api/photos?folder=ann/Private", Some("bob"), &[]).await.status, 403);
+        assert_eq!(ask(&app, "POST", "/api/photos/disable?folder=ann/Trip", Some("bob"), &[]).await.status, 403);
 
-        // Status: counts of the whole store for the owner only.
+        // Status: the server's owner only.
         let g = get(&app, "/api/photos/status", Some("boss"), &[]).await;
         assert_eq!(g.status, 200);
-        assert!(g.json["pictures"]["ready"].as_u64().is_some(), "{}", g.json);
-        let g = get(&app, "/api/photos/status", Some("bob"), &[]).await;
-        assert!(g.json["queued"].is_u64() && g.json["pictures"].is_null(), "{}", g.json);
+        assert!(g.json["pictures"]["ready"].as_u64().is_some() && g.json["cache"]["bytes"].as_u64().is_some(), "{}", g.json);
+        assert_eq!(get(&app, "/api/photos/status", Some("bob"), &[]).await.status, 403);
+        assert_eq!(get(&app, "/api/photos/status", Some("ann"), &[]).await.status, 403);
+
+        // Ann turns it off: forgotten.
+        let g = ask(&app, "POST", "/api/photos/disable?folder=ann/Trip", Some("ann"), &[]).await;
+        assert_eq!((g.status, g.json["enabled"].as_bool()), (200, Some(false)), "{}", g.json);
+        assert_eq!(get(&app, &format!("/api/photos/thumb/{a}/256"), Some("ann"), &[]).await.json["state"], "off");
         if let Some(svc) = service(&app.store) {
+            assert!(svc.rows("ann", true).is_empty());
             svc.stop();
         }
         let _ = std::fs::remove_dir_all(&root);

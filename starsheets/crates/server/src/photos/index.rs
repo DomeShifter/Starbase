@@ -132,6 +132,13 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             CREATE INDEX photos_hash ON photos(hash);
             CREATE INDEX photos_state ON photos(state);
             CREATE INDEX photos_taken ON photos(taken);
+            -- Folders Photos is turned on for (with everything inside them): only these are
+            -- indexed. Who turned it on, and when.
+            CREATE TABLE folders(
+                path TEXT PRIMARY KEY,
+                enabled_by TEXT NOT NULL,
+                enabled_at INTEGER NOT NULL
+            );
             PRAGMA user_version = 1;
             COMMIT;",
         )?;
@@ -149,8 +156,67 @@ impl Index {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        let ok: String = conn.query_row("PRAGMA quick_check", [], |r| r.get(0))?;
+        if ok != "ok" {
+            return Err(rusqlite::Error::SqliteFailure(rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CORRUPT), Some(ok)));
+        }
         migrate(&conn)?;
         Ok(Index { conn })
+    }
+
+    /// [`Self::open`], and when the file can't be used (damaged, or not a database at all), it is
+    /// moved aside (`index.sqlite.broken-<time>`, with its journal) and a new one started: the
+    /// index is only a cache. Returns the index and the name it was moved to, if it was.
+    pub fn open_or_rebuild(path: &Path) -> rusqlite::Result<(Index, Option<std::path::PathBuf>)> {
+        match Index::open(path) {
+            Ok(ix) => Ok((ix, None)),
+            Err(e) => {
+                let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+                let aside = path.with_extension(format!("sqlite.broken-{stamp}"));
+                if std::fs::rename(path, &aside).is_err() {
+                    return Err(e);
+                }
+                for ext in ["-wal", "-shm", "-journal"] {
+                    let mut side = path.as_os_str().to_owned();
+                    side.push(ext);
+                    let _ = std::fs::remove_file(std::path::PathBuf::from(side));
+                }
+                Ok((Index::open(path)?, Some(aside)))
+            }
+        }
+    }
+
+    /// Turns Photos on for `folder` (and everything inside it).
+    pub fn enable(&self, folder: &str, by: &str) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "INSERT INTO folders(path, enabled_by, enabled_at) VALUES (?1, ?2, strftime('%s','now')) ON CONFLICT(path) DO NOTHING",
+            params![folder, by],
+        )?;
+        Ok(())
+    }
+
+    /// Turns Photos off for `folder` and every folder inside it, and forgets their pictures.
+    /// Returns the content hashes that were in use there (their thumbnails may now go).
+    pub fn disable(&self, folder: &str) -> rusqlite::Result<Vec<String>> {
+        let (lo, hi) = (format!("{folder}/"), format!("{folder}0"));
+        let inside = if folder.is_empty() { "1" } else { "(path = ?1 OR (path >= ?2 AND path < ?3))" };
+        self.conn.execute(&format!("DELETE FROM folders WHERE {inside}"), params![folder, lo, hi])?;
+        let inside = if folder.is_empty() { "1" } else { "(folder = ?1 OR (folder >= ?2 AND folder < ?3))" };
+        let mut s = self.conn.prepare(&format!("SELECT DISTINCT hash FROM photos WHERE hash IS NOT NULL AND {inside}"))?;
+        let hashes: Vec<String> = s.query_map(params![folder, lo, hi], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        self.conn.execute(&format!("DELETE FROM photos WHERE {inside}"), params![folder, lo, hi])?;
+        Ok(hashes)
+    }
+
+    /// The folders Photos is on for.
+    pub fn enabled(&self) -> rusqlite::Result<Vec<String>> {
+        let mut s = self.conn.prepare_cached("SELECT path FROM folders ORDER BY path")?;
+        s.query_map([], |r| r.get(0))?.collect()
+    }
+
+    /// Whether any picture still has this content (its thumbnails are still wanted).
+    pub fn hash_used(&self, hash: &str) -> rusqlite::Result<bool> {
+        self.conn.query_row("SELECT EXISTS(SELECT 1 FROM photos WHERE hash = ?1)", params![hash], |r| r.get(0))
     }
 
     /// Pictures made with another renderer (an older server) are made again; failed ones too,
@@ -336,6 +402,23 @@ mod tests {
         drop(ix);
         let ix = Index::open(&dir.join("index.sqlite")).unwrap();
         assert_eq!(ix.pending().unwrap(), vec!["ann/Trip/Best/a.jpg".to_string()], "kept across restarts");
+        ix.enable("ann/Trip", "ann").unwrap();
+        ix.enable("ann/Trip", "boss").unwrap();
+        ix.enable("ann/Other", "ann").unwrap();
+        assert_eq!(ix.enabled().unwrap(), ["ann/Other", "ann/Trip"]);
+        assert!(ix.done("ann/Trip/Best/a.jpg", 12, 2, "h2", &Meta::default(), "r1").unwrap());
+        assert!(ix.hash_used("h2").unwrap());
+        assert_eq!(ix.disable("ann/Trip").unwrap(), ["h2"]);
+        assert_eq!(ix.enabled().unwrap(), ["ann/Other"], "off, with what was in it");
+        assert!(!ix.hash_used("h2").unwrap());
+        assert_eq!(ix.in_folder("ann", true).unwrap().len(), 0);
+        drop(ix);
+        // A damaged index is moved aside and started again.
+        std::fs::write(dir.join("index.sqlite"), b"this is not a database, just some bytes that are long enough to look like a header..........")
+            .unwrap();
+        let (ix, aside) = Index::open_or_rebuild(&dir.join("index.sqlite")).unwrap();
+        assert!(aside.is_some_and(|a| a.is_file()), "the broken file is kept aside");
+        assert_eq!(ix.enabled().unwrap().len(), 0);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

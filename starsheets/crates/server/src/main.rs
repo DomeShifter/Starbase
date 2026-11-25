@@ -2082,8 +2082,16 @@ async fn serve() {
         Ok(exe) => photos::use_child_processes(exe),
         Err(e) => eprintln!("Photos: pictures are read in this process ({e})"),
     }
-    if photos::service(&app.store).is_some() {
-        println!("Photos: index in {}.", photos::Config::from_env().cache.unwrap_or_else(|| app.store.meta().join("photos-cache")).display());
+    if let Some(p) = photos::service(&app.store) {
+        if p.cache_dir().starts_with(&app.store.root) {
+            println!(
+                "Photos: index and thumbnails in {} (inside the storage folder; set STARBASE_PHOTOS_CACHE or mount a volume at /cache to keep them on a local disk).",
+                p.cache_dir().display()
+            );
+        } else {
+            println!("Photos: index and thumbnails in {}.", p.cache_dir().display());
+        }
+        println!("Photos: {} workers, {} MB each.", p.cfg.workers, p.cfg.child_memory / 1024 / 1024);
     }
     tokio::spawn(backup_schedule(app.clone()));
     let router = router(app);

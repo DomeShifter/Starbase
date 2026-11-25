@@ -45,8 +45,29 @@ pub struct Limits {
 
 pub const LIMITS: Limits = Limits { max_pixels: 50_000_000, max_pixels_jpeg: 150_000_000, max_side: 30_000, max_alloc: 512 * 1024 * 1024 };
 
-/// The child's own limits: address space (bytes) and CPU time (seconds).
+impl Limits {
+    /// The limits for a child allowed `memory` bytes of address space: [`LIMITS`] at
+    /// [`CHILD_MEMORY`], smaller in proportion below it (a decoded picture and a copy of it, four
+    /// bytes a pixel, must fit with the program itself).
+    pub fn for_memory(memory: u64) -> Limits {
+        if memory >= CHILD_MEMORY {
+            return LIMITS;
+        }
+        let room = memory.saturating_sub(128 * 1024 * 1024);
+        Limits {
+            max_pixels: (room / 12).min(LIMITS.max_pixels),
+            // Decoded at a quarter of the pixels or less.
+            max_pixels_jpeg: (room / 3).min(LIMITS.max_pixels_jpeg),
+            max_side: LIMITS.max_side,
+            max_alloc: (room / 2).min(LIMITS.max_alloc),
+        }
+    }
+}
+
+/// The child's own limits: address space (bytes, by default) and CPU time (seconds).
 pub const CHILD_MEMORY: u64 = 1536 * 1024 * 1024;
+/// The least memory a child is given (the server lowers it when its own memory is tight).
+pub const MIN_CHILD_MEMORY: u64 = 512 * 1024 * 1024;
 pub const CHILD_CPU_SECS: u64 = 30;
 /// How long a child may take, start to end (it runs at idle I/O priority, so allow for waiting).
 pub const CHILD_TIMEOUT: Duration = Duration::from_secs(60);
@@ -330,29 +351,22 @@ struct Answer {
     thumbs: Vec<(u32, String, u64)>,
 }
 
-/// `starsheets-server photo-worker`: reads one picture from stdin, writes the answer to stdout.
-/// Runs before anything else in the program starts (no async runtime, no threads).
+/// `starsheets-server photo-worker MEMORY`: reads one picture from stdin (the server hands it
+/// the opened file itself), writes the answer to stdout. Runs before anything else in the
+/// program starts (no async runtime, no threads). Before reading anything it gives up what it
+/// doesn't need: an address-space limit of MEMORY bytes, 30 s of CPU, no core files, no files
+/// written, at most a few files open, no new privileges, and (where the kernel has Landlock, Linux
+/// 5.13+) no file system access at all; the picture comes in on stdin, already open.
 pub fn child_main() -> ! {
-    // SAFETY: plain system calls on this process's own limits and priority.
-    unsafe {
-        let cap = |res, v: u64| {
-            let l = libc::rlimit { rlim_cur: v as libc::rlim_t, rlim_max: v as libc::rlim_t };
-            libc::setrlimit(res, &l);
-        };
-        cap(libc::RLIMIT_AS, CHILD_MEMORY);
-        cap(libc::RLIMIT_CPU, CHILD_CPU_SECS);
-        cap(libc::RLIMIT_CORE, 0);
-        // Never more than a few files open, and nothing written to disk.
-        cap(libc::RLIMIT_FSIZE, 0);
-        libc::setpriority(libc::PRIO_PROCESS, 0, 15);
-    }
+    let memory: u64 = std::env::args().nth(2).and_then(|m| m.parse().ok()).unwrap_or(CHILD_MEMORY).max(MIN_CHILD_MEMORY);
+    lock_down(memory);
     let mut bytes = Vec::new();
     if std::io::stdin().lock().take(super::MAX_FILE + 1).read_to_end(&mut bytes).is_err() || bytes.len() as u64 > super::MAX_FILE {
         std::process::exit(2);
     }
     let out = std::io::stdout();
     let mut out = out.lock();
-    let r = make(&bytes, &LIMITS);
+    let r = make(&bytes, &Limits::for_memory(memory));
     drop(bytes);
     let (answer, data) = match r {
         Ok(m) => {
@@ -367,18 +381,64 @@ pub fn child_main() -> ! {
     std::process::exit(if ok { 0 } else { 3 })
 }
 
-/// Runs [`make`] for `bytes` in a child process (`exe photo-worker`), within its limits.
-pub fn run_isolated(exe: &Path, bytes: &[u8]) -> Result<Made, String> {
-    let mut cmd = std::process::Command::new(exe);
-    cmd.arg("photo-worker");
-    run_child(cmd, bytes, CHILD_TIMEOUT)
+/// The child's limits (see [`child_main`]). Returns whether Landlock took effect.
+fn lock_down(memory: u64) -> bool {
+    // SAFETY: system calls that only limit this process itself; the Landlock attribute struct
+    // is plain data of the size the kernel is told.
+    unsafe {
+        let cap = |res, v: u64| {
+            let l = libc::rlimit { rlim_cur: v as libc::rlim_t, rlim_max: v as libc::rlim_t };
+            libc::setrlimit(res, &l);
+        };
+        cap(libc::RLIMIT_AS, memory);
+        cap(libc::RLIMIT_CPU, CHILD_CPU_SECS);
+        cap(libc::RLIMIT_CORE, 0);
+        cap(libc::RLIMIT_FSIZE, 0);
+        // stdin, stdout, stderr and a little room.
+        cap(libc::RLIMIT_NOFILE, 8);
+        libc::setpriority(libc::PRIO_PROCESS, 0, 15);
+        libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+        // Landlock: a rule set that handles every file-system right of ABI 1 and allows none.
+        #[repr(C)]
+        struct RulesetAttr {
+            handled_access_fs: u64,
+        }
+        let attr = RulesetAttr { handled_access_fs: (1 << 13) - 1 };
+        let fd = libc::syscall(libc::SYS_landlock_create_ruleset, &attr as *const RulesetAttr, std::mem::size_of::<RulesetAttr>(), 0u32);
+        if fd < 0 {
+            return false;
+        }
+        let ok = libc::syscall(libc::SYS_landlock_restrict_self, fd as libc::c_int, 0u32) == 0;
+        libc::close(fd as libc::c_int);
+        ok
+    }
 }
 
-/// Sends `bytes` to the child `cmd` and reads its answer, killing it after `timeout`.
-pub fn run_child(mut cmd: std::process::Command, bytes: &[u8], timeout: Duration) -> Result<Made, String> {
+/// The input of a child: a file it reads itself (the server's case: no copy of the picture in
+/// the server), or bytes written to it (tests).
+pub enum Input {
+    File(std::fs::File),
+    #[cfg(test)]
+    Bytes(Vec<u8>),
+}
+
+/// Runs [`make`] for the picture in `file` in a child process (`exe photo-worker MEMORY`).
+pub fn run_isolated(exe: &Path, file: std::fs::File, memory: u64) -> Result<Made, String> {
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("photo-worker").arg(memory.to_string());
+    run_child(cmd, Input::File(file), CHILD_TIMEOUT)
+}
+
+/// Gives the child `cmd` its input and reads its answer, killing it after `timeout`.
+pub fn run_child(mut cmd: std::process::Command, input: Input, timeout: Duration) -> Result<Made, String> {
     use std::process::Stdio;
+    let (stdin, bytes): (Stdio, Option<Vec<u8>>) = match input {
+        Input::File(f) => (Stdio::from(f), None),
+        #[cfg(test)]
+        Input::Bytes(b) => (Stdio::piped(), Some(b)),
+    };
     let mut child = cmd
-        .stdin(Stdio::piped())
+        .stdin(stdin)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .env_clear()
@@ -392,9 +452,10 @@ pub fn run_child(mut cmd: std::process::Command, bytes: &[u8], timeout: Duration
         let r = (&mut stdout).take(MAX_ANSWER).read_to_end(&mut answer);
         let _ = tx.send(r.map(|_| answer));
     });
-    let mut stdin = child.stdin.take().ok_or("no pipe")?;
-    let wrote = stdin.write_all(bytes);
-    drop(stdin);
+    let mut wrote = Ok(());
+    if let (Some(bytes), Some(mut pipe)) = (bytes, child.stdin.take()) {
+        wrote = pipe.write_all(&bytes);
+    }
     let got = rx.recv_timeout(timeout);
     if got.is_err() {
         let _ = child.kill();
@@ -431,4 +492,16 @@ pub fn run_child(mut cmd: std::process::Command, bytes: &[u8], timeout: Duration
         rest = &rest[len..];
     }
     Ok(Made { meta: head.meta, thumbs })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn limits_follow_the_memory() {
+        let big = super::Limits::for_memory(super::CHILD_MEMORY);
+        assert_eq!((big.max_pixels, big.max_pixels_jpeg), (super::LIMITS.max_pixels, super::LIMITS.max_pixels_jpeg));
+        let small = super::Limits::for_memory(super::MIN_CHILD_MEMORY);
+        assert!(small.max_pixels < big.max_pixels && small.max_alloc < big.max_alloc);
+        assert!(small.max_pixels * 4 * 2 < super::MIN_CHILD_MEMORY, "room for the picture and a copy");
+    }
 }

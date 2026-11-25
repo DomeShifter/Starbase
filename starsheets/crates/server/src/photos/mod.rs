@@ -1,20 +1,29 @@
-//! Photos (job 1 of the Photos plan): an index of every picture in the store and thumbnails of
-//! them, made in the background at low priority. The HTTP side is in [`routes`]; the API is
-//! described in docs/photos-api.md.
+//! Photos (job 1 of the Photos plan): an index of the pictures in the folders Photos is turned on
+//! for, and thumbnails of them, made in the background at low priority. The HTTP side is in
+//! [`routes`]; the API is described in docs/photos-api.md.
 //!
-//! - **Index** ([`index`]): SQLite, in `.starsheets/photos-cache/` (or STARBASE_PHOTOS_CACHE),
-//!   never inside anyone's folder: path, size, modified time, content hash, type, EXIF date,
-//!   orientation, camera, place, width and height.
-//! - **Thumbnails** ([`decode`]): 256 and 1024 pixels on the longest side, kept by content hash
-//!   in `photos-cache/thumbs/`, so a renamed, moved or copied picture is never decoded again.
-//!   Made by a few worker threads (STARBASE_PHOTOS_WORKERS) at low CPU and idle I/O priority,
-//!   each picture in a child process with limits of its own.
-//! - **Finding changes**: inotify (the `notify` crate) sees changes made through this computer,
-//!   including Starbase's own; a stat-only rescan every STARBASE_PHOTOS_RESCAN seconds (default
-//!   10 minutes on a network file system such as a NAS share, where other computers' changes
-//!   never reach inotify; an hour on a local disk) catches the rest; opening a folder in Photos
-//!   rescans that folder. Nothing in a request waits for a picture to be decoded beyond a short
-//!   wait for the one thumbnail it asked for.
+//! - **Opt-in per folder**: nothing is indexed until someone who may edit a folder turns on
+//!   "View as photos" for it (`POST /api/photos/enable`); it then covers that folder and every
+//!   folder inside it. The folder's owner can turn it off, which forgets its pictures and deletes
+//!   their thumbnails.
+//! - **Index** ([`index`]): SQLite, in the cache folder ([`Config::from_env`]), never inside
+//!   anyone's folder: path, size, modified time, content hash, type, EXIF date, orientation,
+//!   camera, place, width and height. A damaged index is moved aside and started again.
+//! - **Thumbnails** ([`decode`]): 256 and 1024 pixels on the longest side, kept by content hash,
+//!   so a renamed, moved or copied picture is never decoded again; at most
+//!   STARBASE_PHOTOS_CACHE_MB, the least recently shown going first. Made by a few worker threads
+//!   (STARBASE_PHOTOS_WORKERS, default 2) at low CPU and idle I/O priority. The server streams a
+//!   picture once to hash it (never holding it whole), then hands the opened file to a child
+//!   process that decodes it within limits of its own; workers × the child's memory limit is kept
+//!   within half of the server's memory limit (its cgroup's memory.max).
+//! - **Finding changes**: one scanner thread does every scan, from one queue. On a local disk
+//!   inotify (not following symbolic links) watches the folders Photos is on for; on a network
+//!   file system (a NAS share, where other computers' changes never reach inotify) there is no
+//!   watcher, only rescans: a stat-only rescan every STARBASE_PHOTOS_RESCAN seconds (default 10
+//!   minutes on a network file system, an hour on a local disk), and opening a folder in Photos
+//!   rescans that folder. No scan holds the index's lock for more than one batch of 500 files,
+//!   and no request waits for a picture to be decoded beyond a short wait for the one thumbnail
+//!   it asked for.
 //!
 //! Symbolic links are never followed (as everywhere in the store), and hidden files and
 //! folders (`.starsheets`, `.bin`) are skipped.
@@ -39,6 +48,8 @@ use index::{Index, State};
 
 /// The biggest picture file read (bigger ones are listed, marked failed).
 pub const MAX_FILE: u64 = 200 * 1024 * 1024;
+/// Index changes made under one hold of its lock.
+const BATCH: usize = 500;
 
 /// The server's own program, when pictures are to be read in child processes (set by main).
 static WORKER_EXE: OnceLock<PathBuf> = OnceLock::new();
@@ -68,24 +79,64 @@ pub fn media_of(name: &str) -> Option<(&'static str, bool)> {
 /// Settings (environment).
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// Thumbnail threads.
+    /// Thumbnail threads (each with one child process at a time).
     pub workers: usize,
+    /// Each child's address-space limit, bytes.
+    pub child_memory: u64,
     /// Seconds between rescans; None = by file system (network: 600, local: 3600).
     pub rescan: Option<u64>,
-    /// Where the index and thumbnails go; None = `.starsheets/photos-cache`.
+    /// Where the index and thumbnails go; None = `.starsheets/photos-cache` in the store.
     pub cache: Option<PathBuf>,
-    /// Watch with inotify.
+    /// The most the thumbnails may take, bytes.
+    pub cache_cap: u64,
+    /// Watch with inotify (local disks only).
     pub watch: bool,
+}
+
+/// The server's memory limit (its cgroup's, v2 or v1), if it has one.
+fn memory_limit() -> Option<u64> {
+    let read = |p: &str| std::fs::read_to_string(p).ok().and_then(|s| s.trim().parse::<u64>().ok());
+    read("/sys/fs/cgroup/memory.max").or_else(|| read("/sys/fs/cgroup/memory/memory.limit_in_bytes")).filter(|&l| l < 1 << 60)
+}
+
+/// Workers and child memory that fit in half of `limit`: the child's memory goes down first
+/// (to its minimum), then the number of workers (to one).
+pub fn fit_memory(workers: usize, child: u64, limit: Option<u64>) -> (usize, u64) {
+    let Some(limit) = limit else { return (workers, child) };
+    let budget = limit / 2;
+    let workers = workers.max(1);
+    if workers as u64 * child <= budget {
+        return (workers, child);
+    }
+    let child = (budget / workers as u64).max(decode::MIN_CHILD_MEMORY).min(child);
+    let workers = ((budget / child) as usize).clamp(1, workers);
+    (workers, child)
+}
+
+/// Whether `path` is its own mount (a volume mounted there), not just a folder.
+fn is_mount(path: &Path) -> bool {
+    let (Ok(a), Ok(b)) = (std::fs::metadata(path), std::fs::metadata(path.parent().unwrap_or(Path::new("/")))) else { return false };
+    a.is_dir() && a.dev() != b.dev()
 }
 
 impl Config {
     pub fn from_env() -> Config {
         let get = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
-        let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(2);
+        let num = |k: &str| get(k).and_then(|v| v.trim().parse::<u64>().ok());
+        // A local disk for the cache when there is one: STARBASE_PHOTOS_CACHE, else a volume
+        // mounted at /cache (Docker), else inside the store (Photos::start says so in the log).
+        let cache = get("STARBASE_PHOTOS_CACHE").map(PathBuf::from).or_else(|| is_mount(Path::new("/cache")).then(|| PathBuf::from("/cache/photos")));
+        let (workers, child_memory) = fit_memory(
+            num("STARBASE_PHOTOS_WORKERS").unwrap_or(2).clamp(1, 32) as usize,
+            num("STARBASE_PHOTOS_CHILD_MB").map_or(decode::CHILD_MEMORY, |m| m * 1024 * 1024).max(decode::MIN_CHILD_MEMORY),
+            memory_limit(),
+        );
         Config {
-            workers: get("STARBASE_PHOTOS_WORKERS").and_then(|v| v.trim().parse().ok()).unwrap_or((cores / 4).clamp(1, 4)).clamp(1, 32),
-            rescan: get("STARBASE_PHOTOS_RESCAN").and_then(|v| v.trim().parse().ok()).map(|s: u64| s.max(30)),
-            cache: get("STARBASE_PHOTOS_CACHE").map(PathBuf::from),
+            workers,
+            child_memory,
+            rescan: num("STARBASE_PHOTOS_RESCAN").map(|s| s.max(30)),
+            cache,
+            cache_cap: num("STARBASE_PHOTOS_CACHE_MB").unwrap_or(20 * 1024).max(64) * 1024 * 1024,
             watch: true,
         }
     }
@@ -124,11 +175,25 @@ fn now_secs() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+/// Whether `path` is `folder` or inside it ("" holds everything).
+fn inside(path: &str, folder: &str) -> bool {
+    folder.is_empty() || path == folder || path.starts_with(&format!("{folder}/"))
+}
+
 #[derive(Default)]
 struct Queue {
     order: VecDeque<String>,
     set: HashSet<String>,
     working: usize,
+}
+
+/// Scans waiting for the scanner thread: (folder, deep, ticket).
+#[derive(Default)]
+struct Scans {
+    order: VecDeque<(String, bool, u64)>,
+    next: u64,
+    /// The tickets finished lately (requests wait for theirs).
+    done: VecDeque<u64>,
 }
 
 /// The photo service of one store.
@@ -140,6 +205,10 @@ pub struct Photos {
     wake: Condvar,
     pub cfg: Config,
     network: bool,
+    /// The folders Photos is on for (as in the index).
+    enabled: Mutex<Vec<String>>,
+    scans: Mutex<Scans>,
+    scans_wake: Condvar,
     /// "inotify", or why there's no watcher.
     watching: Mutex<String>,
     watcher: Mutex<Option<notify::RecommendedWatcher>>,
@@ -151,6 +220,7 @@ pub struct Photos {
     last_scan: Mutex<Option<(u64, f64, usize)>>,
     scanning: AtomicBool,
     made: AtomicU64,
+    cache_bytes: AtomicU64,
     stop: AtomicBool,
 }
 
@@ -175,12 +245,16 @@ pub fn service(store: &Store) -> Option<Arc<Photos>> {
 }
 
 impl Photos {
-    /// Opens the index, then starts the workers, the watcher and the rescans.
+    /// Opens the index, then starts the workers, the watcher and the scanner.
     pub fn start(store: &Store, cfg: Config) -> Result<Arc<Photos>, String> {
         let cache = cfg.cache.clone().unwrap_or_else(|| store.meta().join("photos-cache"));
         std::fs::create_dir_all(cache.join("thumbs")).map_err(|e| format!("{}: {e}", cache.display()))?;
-        let db = Index::open(&cache.join("index.sqlite")).map_err(|e| e.to_string())?;
+        let (db, aside) = Index::open_or_rebuild(&cache.join("index.sqlite")).map_err(|e| e.to_string())?;
+        if let Some(a) = aside {
+            eprintln!("Photos: the index was damaged; kept it as {} and started a new one (pictures are read again).", a.display());
+        }
         db.renderer_changed(decode::RENDER).map_err(|e| e.to_string())?;
+        let enabled = db.enabled().map_err(|e| e.to_string())?;
         let p = Arc::new(Photos {
             store: Store { root: store.root.clone(), keep: store.keep, spaces: store.spaces },
             cache,
@@ -189,6 +263,9 @@ impl Photos {
             wake: Condvar::new(),
             network: on_network(&store.root),
             cfg,
+            enabled: Mutex::new(enabled),
+            scans: Mutex::default(),
+            scans_wake: Condvar::new(),
             watching: Mutex::new("not started".into()),
             watcher: Mutex::new(None),
             dirty: Mutex::default(),
@@ -196,6 +273,7 @@ impl Photos {
             last_scan: Mutex::new(None),
             scanning: AtomicBool::new(false),
             made: AtomicU64::new(0),
+            cache_bytes: AtomicU64::new(0),
             stop: AtomicBool::new(false),
         });
         let waiting = p.db().pending().unwrap_or_default();
@@ -204,14 +282,14 @@ impl Photos {
             let me = p.clone();
             std::thread::Builder::new().name(format!("photos-{i}")).spawn(move || me.work()).map_err(|e| e.to_string())?;
         }
-        if p.cfg.watch {
-            p.start_watching();
-        } else {
-            *p.watching.lock().unwrap_or_else(|e| e.into_inner()) = "off".into();
-        }
+        p.start_watching();
         let me = p.clone();
-        std::thread::Builder::new().name("photos-scan".into()).spawn(move || me.rescans()).map_err(|e| e.to_string())?;
+        std::thread::Builder::new().name("photos-scan".into()).spawn(move || me.scanner()).map_err(|e| e.to_string())?;
         Ok(p)
+    }
+
+    pub fn cache_dir(&self) -> &Path {
+        &self.cache
     }
 
     fn db(&self) -> std::sync::MutexGuard<'_, Index> {
@@ -223,7 +301,46 @@ impl Photos {
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
         self.wake.notify_all();
+        self.scans_wake.notify_all();
         *self.watcher.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    // ------------------------------------------------------------ turning it on and off
+
+    /// Whether Photos is on for `path` (a folder or a file): it, or a folder above it, is on.
+    pub fn covers(&self, path: &str) -> bool {
+        self.enabled.lock().unwrap_or_else(|e| e.into_inner()).iter().any(|f| inside(path, f))
+    }
+
+    /// Turns Photos on for `folder` (by `who`) and starts indexing it.
+    pub fn enable(&self, folder: &str, who: &str) -> Result<(), String> {
+        self.db().enable(folder, who).map_err(|e| e.to_string())?;
+        let list = self.db().enabled().map_err(|e| e.to_string())?;
+        *self.enabled.lock().unwrap_or_else(|e| e.into_inner()) = list;
+        self.watch_folder(folder);
+        self.request_scan(folder, true, true);
+        Ok(())
+    }
+
+    /// Turns Photos off for `folder` and every folder inside it: their pictures leave the index
+    /// and thumbnails no other picture uses are deleted now. True when a folder above it still
+    /// has Photos on (then it stays indexed through that one).
+    pub fn disable(&self, folder: &str) -> Result<bool, String> {
+        let hashes = self.db().disable(folder).map_err(|e| e.to_string())?;
+        let list = self.db().enabled().map_err(|e| e.to_string())?;
+        *self.enabled.lock().unwrap_or_else(|e| e.into_inner()) = list;
+        if let Some(w) = self.watcher.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            use notify::Watcher;
+            let _ = w.unwatch(&self.store.full(folder));
+        }
+        self.scans.lock().unwrap_or_else(|e| e.into_inner()).order.retain(|(f, _, _)| !inside(f, folder));
+        {
+            let mut q = self.queue.lock().unwrap_or_else(|e| e.into_inner());
+            q.order.retain(|p| !inside(p, folder));
+            q.set.retain(|p| !inside(p, folder));
+        }
+        self.forget_thumbs(hashes);
+        Ok(self.covers(folder))
     }
 
     // ------------------------------------------------------------ the queue and the workers
@@ -271,7 +388,9 @@ impl Photos {
                     q = self.wake.wait(q).unwrap_or_else(|e| e.into_inner());
                 }
             };
-            self.process(&path);
+            if self.covers(&path) {
+                self.process(&path);
+            }
             self.queue.lock().unwrap_or_else(|e| e.into_inner()).working -= 1;
         }
     }
@@ -290,19 +409,51 @@ impl Photos {
         ["jpg", "png"].into_iter().map(|ext| (base.with_extension(ext), ext)).find(|(p, _)| p.is_file())
     }
 
+    /// A thumbnail was shown: it counts as recently used (its modified time, at most daily).
+    pub fn used(&self, file: &Path) {
+        let old = std::fs::metadata(file).and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().unwrap_or_default() > Duration::from_secs(86_400));
+        if old && let Ok(f) = std::fs::File::options().write(true).open(file) {
+            let _ = f.set_modified(SystemTime::now());
+        }
+    }
+
     fn keep_thumb(&self, hash: &str, t: &decode::Thumb) -> std::io::Result<()> {
         let to = self.thumb_base(hash, t.size).with_extension(t.ext);
         std::fs::create_dir_all(to.parent().unwrap_or(&self.cache))?;
         let tmp = to.with_extension(format!("{}.{}.tmp", t.ext, crate::store::random_hex(4)));
         std::fs::write(&tmp, &t.bytes)?;
-        std::fs::rename(&tmp, &to)
+        std::fs::rename(&tmp, &to)?;
+        self.cache_bytes.fetch_add(t.bytes.len() as u64, Ordering::Relaxed);
+        Ok(())
     }
 
-    /// Reads one picture: its hash, EXIF and thumbnails, into the index.
+    /// Deletes the thumbnails of these contents, unless a picture still has them.
+    fn forget_thumbs(&self, hashes: Vec<String>) {
+        for h in hashes {
+            if self.db().hash_used(&h).unwrap_or(true) {
+                continue;
+            }
+            for size in decode::SIZES {
+                while let Some((f, _)) = self.thumb_file(&h, size) {
+                    let n = std::fs::metadata(&f).map(|m| m.len()).unwrap_or(0);
+                    if std::fs::remove_file(&f).is_err() {
+                        break;
+                    }
+                    let mut now = self.cache_bytes.load(Ordering::Relaxed);
+                    while let Err(was) = self.cache_bytes.compare_exchange_weak(now, now.saturating_sub(n), Ordering::Relaxed, Ordering::Relaxed) {
+                        now = was;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Reads one picture: its hash, EXIF and thumbnails, into the index. The file is streamed
+    /// once to hash it; only the child that decodes it holds it whole.
     fn process(&self, path: &str) {
         let Some((media, true)) = media_of(path) else { return };
         // Opened without following links; the file opened is the one checked (store.rs).
-        let Some(file) = self.store.open_safe(path) else {
+        let Some(mut file) = self.store.open_safe(path) else {
             let _ = self.db().remove(path);
             return;
         };
@@ -316,11 +467,17 @@ impl Photos {
             let _ = self.db().failed(path, size, mtime, None, "the file is too big", render);
             return;
         }
-        let mut bytes = Vec::with_capacity(size as usize);
-        if file.take(MAX_FILE).read_to_end(&mut bytes).is_err() {
-            return;
+        let mut hasher = Sha256::new();
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            match file.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => hasher.update(&buf[..n]),
+                Err(_) => return,
+            }
         }
-        let hash = hex::encode(Sha256::digest(&bytes));
+        drop(buf);
+        let hash = hex::encode(hasher.finalize());
         // The same content was read before (a copy, or a move seen as delete + new).
         let have_all = decode::SIZES.iter().all(|&s| self.thumb_file(&hash, s).is_some());
         let known = if have_all { self.db().meta_of_hash(&hash).ok().flatten() } else { None };
@@ -328,11 +485,21 @@ impl Photos {
             let _ = self.db().done(path, size, mtime, &hash, &meta, render);
             return;
         }
+        // The same file again, from the start, for the decoder.
+        let Some(file) = self.store.open_safe(path) else { return };
+        if file.metadata().map(|m| (m.len(), mtime_ns(&m))).ok() != Some((size, mtime)) {
+            return; // changed while it was hashed: the next scan queues it again
+        }
         let made = match WORKER_EXE.get() {
-            Some(exe) => decode::run_isolated(exe, &bytes),
-            None => decode::make_guarded(&bytes, &decode::LIMITS),
+            Some(exe) => decode::run_isolated(exe, file, self.cfg.child_memory),
+            None => {
+                let mut bytes = Vec::new();
+                if file.take(MAX_FILE).read_to_end(&mut bytes).is_err() {
+                    return;
+                }
+                decode::make_guarded(&bytes, &decode::Limits::for_memory(self.cfg.child_memory))
+            }
         };
-        drop(bytes);
         match made {
             Ok(made) => {
                 if made.thumbs.iter().any(|t| self.keep_thumb(&hash, t).is_err()) {
@@ -380,89 +547,177 @@ impl Photos {
         Some(out)
     }
 
+    /// The parts of `scopes` Photos is on for: a scope outside every such folder becomes the
+    /// folders inside it that are on (when deep), or nothing.
+    fn covered_scopes(&self, scopes: &[(String, bool)]) -> Vec<(String, bool)> {
+        let on = self.enabled.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let mut out: Vec<(String, bool)> = Vec::new();
+        for (f, deep) in scopes {
+            if on.iter().any(|e| inside(f, e)) {
+                out.push((f.clone(), *deep));
+            } else if *deep {
+                out.extend(on.iter().filter(|e| inside(e, f)).map(|e| (e.clone(), true)));
+            }
+        }
+        out.sort();
+        out.dedup();
+        // A deep scope covers the scopes inside it.
+        let deep: Vec<String> = out.iter().filter(|s| s.1).map(|s| s.0.clone()).collect();
+        out.retain(|(f, is_deep)| !deep.iter().any(|d| inside(f, d) && !(*is_deep && f == d)));
+        out
+    }
+
     /// Brings the index in line with the files in `scopes` (folder, and below it if deep),
-    /// all at once, so a file moved from one to another keeps its row. Returns how many picture
-    /// files were found; new or changed ones are queued.
-    pub fn scan(&self, scopes: &[(String, bool)]) -> usize {
+    /// all at once, so a file moved from one to another keeps its row. Only the folders Photos
+    /// is on for. Returns how many picture files were found; new or changed ones are queued.
+    /// Runs on the scanner thread (tests call it directly).
+    fn scan(&self, scopes: &[(String, bool)]) -> usize {
+        let scopes = self.covered_scopes(scopes);
         let mut present: HashMap<String, (u64, i64)> = HashMap::new();
         let mut gone_scopes = Vec::new();
-        for (folder, deep) in scopes {
+        for (folder, deep) in &scopes {
             match self.list(folder, *deep) {
                 Some(found) => present.extend(found),
                 None => gone_scopes.push(folder.clone()),
             }
         }
         let found = present.len();
-        let mut db = self.db();
-        let r = db.batch(|ix| {
-            let mut rows: HashMap<String, index::Row> = HashMap::new();
-            for (folder, deep) in scopes {
-                // A folder that is gone: everything in it, at any depth.
-                let deep = *deep || gone_scopes.contains(folder);
-                for r in ix.in_folder(folder, deep)? {
-                    rows.insert(r.path.clone(), r);
-                }
+        let mut rows: HashMap<String, index::Row> = HashMap::new();
+        for (folder, deep) in &scopes {
+            // A folder that is gone: everything in it, at any depth.
+            let deep = *deep || gone_scopes.contains(folder);
+            for r in self.db().in_folder(folder, deep).unwrap_or_default() {
+                rows.insert(r.path.clone(), r);
             }
-            let gone: Vec<&index::Row> = rows.values().filter(|r| !present.contains_key(&r.path)).collect();
-            let mut new: Vec<&String> = present.keys().filter(|p| !rows.contains_key(*p)).collect();
-            new.sort();
-            // Moves: a gone file and a new one with the same size and modified time, one each.
-            let mut by_stat: HashMap<(u64, i64), Vec<&String>> = HashMap::new();
-            for p in &new {
-                by_stat.entry(present[*p]).or_default().push(p);
-            }
-            let mut gone_stat: HashMap<(u64, i64), usize> = HashMap::new();
-            for r in &gone {
-                *gone_stat.entry((r.size, r.mtime_ns)).or_default() += 1;
-            }
-            for r in &gone {
-                let key = (r.size, r.mtime_ns);
-                match by_stat.get(&key) {
-                    Some(to) if to.len() == 1 && gone_stat[&key] == 1 && r.hash.is_some() => ix.moved(&r.path, to[0])?,
-                    _ => ix.remove(&r.path)?,
-                }
-            }
-            let mut wait = Vec::new();
-            let mut paths: Vec<&String> = present.keys().collect();
-            paths.sort();
-            for p in paths {
-                let (size, mtime) = present[p];
-                let Some((media, ok)) = media_of(p) else { continue };
-                if ix.found(p, size, mtime, media, ok)? {
-                    wait.push(p.clone());
-                }
-            }
-            Ok(wait)
-        });
-        drop(db);
-        match r {
-            Ok(wait) => self.enqueue(wait, false),
-            Err(e) => eprintln!("Photos: index update failed: {e}"),
         }
+        // What to do, worked out without the lock; then done in batches.
+        enum Op {
+            Moved(String, String),
+            Removed(String),
+            Found(String, u64, i64),
+        }
+        let gone: Vec<&index::Row> = rows.values().filter(|r| !present.contains_key(&r.path)).collect();
+        let mut new: Vec<&String> = present.keys().filter(|p| !rows.contains_key(*p)).collect();
+        new.sort();
+        // Moves: a gone file and a new one with the same size and modified time, one each.
+        let mut by_stat: HashMap<(u64, i64), Vec<&String>> = HashMap::new();
+        for p in &new {
+            by_stat.entry(present[*p]).or_default().push(p);
+        }
+        let mut gone_stat: HashMap<(u64, i64), usize> = HashMap::new();
+        for r in &gone {
+            *gone_stat.entry((r.size, r.mtime_ns)).or_default() += 1;
+        }
+        let mut ops = Vec::new();
+        let mut removed_hashes = Vec::new();
+        for r in &gone {
+            let key = (r.size, r.mtime_ns);
+            match by_stat.get(&key) {
+                Some(to) if to.len() == 1 && gone_stat[&key] == 1 && r.hash.is_some() => ops.push(Op::Moved(r.path.clone(), to[0].clone())),
+                _ => {
+                    removed_hashes.extend(r.hash.clone());
+                    ops.push(Op::Removed(r.path.clone()));
+                }
+            }
+        }
+        let mut paths: Vec<&String> = present.keys().collect();
+        paths.sort();
+        for p in paths {
+            let (size, mtime) = present[p];
+            // Unchanged rows need nothing.
+            if rows.get(p).is_some_and(|r| r.size == size && r.mtime_ns == mtime && r.state != State::Pending) {
+                continue;
+            }
+            ops.push(Op::Found(p.clone(), size, mtime));
+        }
+        let mut wait = Vec::new();
+        for chunk in ops.chunks(BATCH) {
+            let r = self.db().batch(|ix| {
+                let mut w = Vec::new();
+                for op in chunk {
+                    match op {
+                        Op::Moved(from, to) => ix.moved(from, to)?,
+                        Op::Removed(p) => ix.remove(p)?,
+                        Op::Found(p, size, mtime) => {
+                            let Some((media, ok)) = media_of(p) else { continue };
+                            if ix.found(p, *size, *mtime, media, ok)? {
+                                w.push(p.clone());
+                            }
+                        }
+                    }
+                }
+                Ok(w)
+            });
+            match r {
+                Ok(w) => wait.extend(w),
+                Err(e) => eprintln!("Photos: index update failed: {e}"),
+            }
+        }
+        self.enqueue(wait, false);
+        self.forget_thumbs(removed_hashes);
         found
     }
 
-    /// Rescans one folder for a request (Photos mode just opened it), at most every 5 s.
-    pub fn look_at(&self, folder: &str, deep: bool) {
+    /// Asks the scanner thread for a scan of `folder` (deep: with everything inside); `urgent`
+    /// puts it first. Returns its ticket ([`Self::wait_scan`]).
+    pub fn request_scan(&self, folder: &str, deep: bool, urgent: bool) -> u64 {
+        let mut s = self.scans.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(t) = s.order.iter().find(|(f, d, _)| f == folder && *d == deep).map(|x| x.2) {
+            return t;
+        }
+        s.next += 1;
+        let t = s.next;
+        if urgent {
+            s.order.push_front((folder.to_string(), deep, t));
+        } else {
+            s.order.push_back((folder.to_string(), deep, t));
+        }
+        drop(s);
+        self.scans_wake.notify_all();
+        t
+    }
+
+    /// Waits (at most `max`) for scan `ticket` to finish; true when it has.
+    pub fn wait_scan(&self, ticket: u64, max: Duration) -> bool {
+        let until = Instant::now() + max;
+        let mut s = self.scans.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if s.done.contains(&ticket) {
+                return true;
+            }
+            let left = until.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return false;
+            }
+            s = self.scans_wake.wait_timeout(s, left).unwrap_or_else(|e| e.into_inner()).0;
+        }
+    }
+
+    /// Rescans one folder for a request (Photos mode just opened it): at most every 5 s (a
+    /// whole tree: every minute). Returns the scan's ticket, or None when it was looked at just now.
+    pub fn look_at(&self, folder: &str, deep: bool) -> Option<u64> {
         let key = format!("{deep}:{folder}");
         let gap = if deep { Duration::from_secs(60) } else { Duration::from_secs(5) };
         {
             let mut looked = self.looked.lock().unwrap_or_else(|e| e.into_inner());
             if looked.get(&key).is_some_and(|t| t.elapsed() < gap) {
-                return;
+                return None;
             }
             if looked.len() > 10_000 {
                 looked.clear();
             }
             looked.insert(key, Instant::now());
         }
-        self.scan(&[(folder.to_string(), deep)]);
+        Some(self.request_scan(folder, deep, true))
     }
 
     /// Asks for `path` to be read next (someone is waiting for its thumbnail). Returns false
-    /// when it can't be (not a picture this server reads, or not there).
+    /// when it can't be (not a picture this server reads, not there, or Photos is off for it).
     pub fn hurry(&self, path: &str) -> bool {
         let Some((media, true)) = media_of(path) else { return false };
+        if !self.covers(path) {
+            return false;
+        }
         let Some(full) = self.store.safe_file(path) else { return false };
         let Ok(m) = std::fs::symlink_metadata(&full) else { return false };
         let _ = self.db().found(path, m.len(), mtime_ns(&m), media, true);
@@ -485,31 +740,51 @@ impl Photos {
 
     // ------------------------------------------------------------ watching and rescans
 
+    /// inotify on the folders Photos is on for, on a local disk only: on a network file system
+    /// it would only walk the whole tree (slowly, over the network) to see this computer's own
+    /// changes, and never anyone else's.
     fn start_watching(self: &Arc<Self>) {
-        use notify::Watcher;
-        let me = Arc::downgrade(self);
-        let made = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-            let Some(me) = me.upgrade() else { return };
-            match res {
-                Ok(ev) if !ev.kind.is_access() => me.dirty.lock().unwrap_or_else(|e| e.into_inner()).extend(ev.paths),
-                Ok(_) => {}
-                // Events were lost (queue overflow): look at everything again.
-                Err(_) => {
-                    me.dirty.lock().unwrap_or_else(|e| e.into_inner()).insert(me.store.root.clone());
+        let state = if !self.cfg.watch {
+            "off".to_string()
+        } else if self.network {
+            "rescans only (network storage)".to_string()
+        } else {
+            let me = Arc::downgrade(self);
+            let handler = move |res: notify::Result<notify::Event>| {
+                let Some(me) = me.upgrade() else { return };
+                match res {
+                    Ok(ev) if !ev.kind.is_access() => me.dirty.lock().unwrap_or_else(|e| e.into_inner()).extend(ev.paths),
+                    Ok(_) => {}
+                    // Events were lost (queue overflow): look at everything again.
+                    Err(_) => {
+                        me.dirty.lock().unwrap_or_else(|e| e.into_inner()).insert(me.store.root.clone());
+                    }
                 }
-            }
-        });
-        let state = match made {
-            Ok(mut w) => match w.watch(&self.store.root, notify::RecursiveMode::Recursive) {
-                Ok(()) => {
+            };
+            use notify::Watcher;
+            match notify::RecommendedWatcher::new(handler, notify::Config::default().with_follow_symlinks(false)) {
+                Ok(w) => {
                     *self.watcher.lock().unwrap_or_else(|e| e.into_inner()) = Some(w);
                     "inotify".to_string()
                 }
                 Err(e) => format!("rescans only (inotify: {e})"),
-            },
-            Err(e) => format!("rescans only (inotify: {e})"),
+            }
         };
         *self.watching.lock().unwrap_or_else(|e| e.into_inner()) = state;
+        let on = self.enabled.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        for f in on {
+            self.watch_folder(&f);
+        }
+    }
+
+    fn watch_folder(&self, folder: &str) {
+        use notify::Watcher;
+        let mut w = self.watcher.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(w) = w.as_mut()
+            && let Err(e) = w.watch(&self.store.full(folder), notify::RecursiveMode::Recursive)
+        {
+            *self.watching.lock().unwrap_or_else(|e| e.into_inner()) = format!("inotify, with rescans for some folders ({e})");
+        }
     }
 
     /// What inotify reported since last time, as scan scopes.
@@ -533,12 +808,6 @@ impl Photos {
                 scopes.push((rel, true));
             }
         }
-        scopes.sort();
-        scopes.dedup();
-        // A deep scope covers the scopes inside it.
-        let deep: Vec<String> = scopes.iter().filter(|s| s.1).map(|s| s.0.clone()).collect();
-        let inside = |f: &str, d: &String| d.is_empty() || f == d || f.starts_with(&format!("{d}/"));
-        scopes.retain(|(f, is_deep)| !deep.iter().any(|d| inside(f, d) && !(*is_deep && f == d)));
         if !scopes.is_empty() {
             self.scan(&scopes);
         }
@@ -549,73 +818,116 @@ impl Photos {
         Duration::from_secs(self.cfg.rescan.unwrap_or(if self.network { 600 } else { 3600 }))
     }
 
-    /// Everything, then every rescan interval; inotify's changes every 2 s in between.
-    fn rescans(self: Arc<Self>) {
+    /// The one thread that scans: requested scans first, then the regular rescan, then what
+    /// inotify reported (every 2 s at most).
+    fn scanner(self: Arc<Self>) {
         low_priority();
-        let mut next = Instant::now();
+        let mut next_full = Instant::now();
+        let mut next_settle = Instant::now();
         while !self.stop.load(Ordering::Relaxed) {
-            if Instant::now() >= next {
-                self.full_scan();
-                next = Instant::now() + self.rescan_every();
+            let job = self.scans.lock().unwrap_or_else(|e| e.into_inner()).order.pop_front();
+            if let Some((folder, deep, ticket)) = job {
+                self.scan(&[(folder, deep)]);
+                let mut s = self.scans.lock().unwrap_or_else(|e| e.into_inner());
+                s.done.push_back(ticket);
+                if s.done.len() > 256 {
+                    s.done.pop_front();
+                }
+                drop(s);
+                self.scans_wake.notify_all();
+                continue;
             }
-            self.settle();
-            std::thread::sleep(Duration::from_secs(2));
+            if Instant::now() >= next_full {
+                self.full_scan();
+                next_full = Instant::now() + self.rescan_every();
+                continue;
+            }
+            if Instant::now() >= next_settle {
+                self.settle();
+                next_settle = Instant::now() + Duration::from_secs(2);
+            }
+            let s = self.scans.lock().unwrap_or_else(|e| e.into_inner());
+            if s.order.is_empty() {
+                let _ = self.scans_wake.wait_timeout(s, Duration::from_secs(2));
+            }
         }
     }
 
-    /// Rescans the whole store, then clears out thumbnails no picture uses any more.
+    /// Rescans every folder Photos is on for, then clears out thumbnails no picture uses and
+    /// keeps the cache within its size.
     pub fn full_scan(&self) {
         self.scanning.store(true, Ordering::Relaxed);
         let (started, t) = (now_secs(), Instant::now());
-        let found = self.scan(&[(String::new(), true)]);
+        let on: Vec<(String, bool)> = self.enabled.lock().unwrap_or_else(|e| e.into_inner()).iter().map(|f| (f.clone(), true)).collect();
+        let found = if on.is_empty() { 0 } else { self.scan(&on) };
         *self.last_scan.lock().unwrap_or_else(|e| e.into_inner()) = Some((started, t.elapsed().as_secs_f64(), found));
         self.scanning.store(false, Ordering::Relaxed);
         self.clear_unused();
     }
 
     /// Deletes kept thumbnails of content no picture has now (older than 10 minutes, so one
-    /// just made for a picture not yet marked done stays) and of older renderers.
+    /// just made for a picture not yet marked done stays) and of older renderers; then, while
+    /// the cache is over its size, the least recently shown. Counts the cache's size.
     fn clear_unused(&self) {
         let Ok(used) = self.db().hashes() else { return };
         let Ok(dirs) = std::fs::read_dir(self.cache.join("thumbs")) else { return };
+        let mut kept: Vec<(SystemTime, u64, PathBuf)> = Vec::new();
         for d in dirs.flatten() {
             let Ok(files) = std::fs::read_dir(d.path()) else { continue };
             for f in files.flatten() {
                 let name = f.file_name().to_string_lossy().into_owned();
                 let mut parts = name.splitn(3, '-');
                 let (hash, render) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
-                let old = f.metadata().and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().unwrap_or_default() > Duration::from_secs(600));
+                let Ok(m) = f.metadata() else { continue };
+                let when = m.modified().unwrap_or(UNIX_EPOCH);
+                let old = when.elapsed().unwrap_or_default() > Duration::from_secs(600);
                 if old && (!used.contains(hash) || render != decode::RENDER) {
                     let _ = std::fs::remove_file(f.path());
+                } else {
+                    kept.push((when, m.len(), f.path()));
                 }
             }
         }
+        let mut total: u64 = kept.iter().map(|k| k.1).sum();
+        if total > self.cfg.cache_cap {
+            // Down to 90%, so it isn't done again for every new thumbnail.
+            kept.sort();
+            for (_, n, p) in kept {
+                if total <= self.cfg.cache_cap / 10 * 9 {
+                    break;
+                }
+                if std::fs::remove_file(p).is_ok() {
+                    total -= n;
+                }
+            }
+        }
+        self.cache_bytes.store(total, Ordering::Relaxed);
     }
 
-    /// For GET /api/photos/status. `all`: with the whole store's counts (the owner).
-    pub fn status(&self, all: bool) -> Value {
+    /// For GET /api/photos/status (the server's owner).
+    pub fn status(&self) -> Value {
         let (queued, working) = self.queued();
-        let mut v = json!({
+        let [pending, ready, failed, unsupported] = self.db().counts().unwrap_or_default();
+        let last = *self.last_scan.lock().unwrap_or_else(|e| e.into_inner());
+        json!({
             "queued": queued,
             "working": working,
             "scanning": self.scanning.load(Ordering::Relaxed),
-        });
-        if all {
-            let [pending, ready, failed, unsupported] = self.db().counts().unwrap_or_default();
-            let last = *self.last_scan.lock().unwrap_or_else(|e| e.into_inner());
-            v["pictures"] = json!({ "pending": pending, "ready": ready, "failed": failed, "unsupported": unsupported });
-            v["made_since_start"] = json!(self.made.load(Ordering::Relaxed));
-            v["workers"] = json!(self.cfg.workers);
-            v["isolation"] = json!(if WORKER_EXE.get().is_some() { "process" } else { "thread" });
-            v["watching"] = json!(self.watching.lock().unwrap_or_else(|e| e.into_inner()).clone());
-            v["network_storage"] = json!(self.network);
-            v["rescan_seconds"] = json!(self.rescan_every().as_secs());
-            v["last_rescan"] = match last {
+            "folders": self.enabled.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            "pictures": { "pending": pending, "ready": ready, "failed": failed, "unsupported": unsupported },
+            "made_since_start": self.made.load(Ordering::Relaxed),
+            "workers": self.cfg.workers,
+            "child_memory_mb": self.cfg.child_memory / 1024 / 1024,
+            "isolation": if WORKER_EXE.get().is_some() { "process" } else { "thread" },
+            "watching": self.watching.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+            "network_storage": self.network,
+            "rescan_seconds": self.rescan_every().as_secs(),
+            "cache": { "folder": self.cache.display().to_string(), "bytes": self.cache_bytes.load(Ordering::Relaxed), "cap": self.cfg.cache_cap },
+            "last_rescan": match last {
                 Some((at, secs, files)) => json!({ "started": at, "seconds": (secs * 10.0).round() / 10.0, "files": files }),
                 None => Value::Null,
-            };
-        }
-        v
+            },
+        })
     }
 
     /// Waits (at most `max`) until `path` has been read (or failed); false on running out of time.
