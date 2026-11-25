@@ -364,7 +364,7 @@ impl Editor {
     }
 
     /// Answers since last frame.
-    fn logic(&mut self, ctx: &egui::Context, store: &Backend) {
+    fn logic(&mut self, _ctx: &egui::Context, _store: &Backend) {
         let got: Vec<Got> = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(|e| e.into_inner()));
         for g in got {
             match g {
