@@ -1,15 +1,16 @@
 <p align="center">
   <img src="starsheets/app/stardrive.svg" alt="Starbase Drive" width="72" height="72">&nbsp;&nbsp;
   <img src="starsheets/app/favicon.svg" alt="Starbase Sheets" width="72" height="72">&nbsp;&nbsp;
-  <img src="stardocs/app/favicon.svg" alt="Starbase Docs" width="72" height="72">
+  <img src="stardocs/app/favicon.svg" alt="Starbase Docs" width="72" height="72">&nbsp;&nbsp;
+  <img src="starsheets/app/icons/starslides.svg" alt="Starbase Slides" width="72" height="72">
 </p>
 
 <h1 align="center">Starbase</h1>
 
 <p align="center">
   <b>A self-hosted, open-source alternative to Google Workspace.</b><br>
-  Drive, Sheets and Docs (Slides coming), with your files kept as ordinary <code>.xlsx</code> and
-  <code>.docx</code> on your own disk.
+  Drive, Sheets, Docs and (brand new) Slides, with your files kept as ordinary <code>.xlsx</code>,
+  <code>.docx</code> and <code>.pptx</code> on your own disk.
 </p>
 
 <p align="center">
@@ -22,7 +23,8 @@
 > **Early preview (v0.1.0).** Starbase works and we use it every day, but it is young: expect
 > rough edges, keep your own backups (the built-in backups help), and please
 > [tell us what breaks](https://github.com/DomeShifter/Starbase/issues). Starbase Sheets is the
-> most mature part; Starbase Docs and Starbase Drive are newer.
+> most mature part; Starbase Docs and Starbase Drive are newer, and Starbase Slides has only just
+> arrived.
 
 <p align="center">
   <img src="docs/images/drive-home.png" alt="Starbase Drive: folders and files with previews" width="800">
@@ -36,7 +38,7 @@ friendly, familiar feel, on a machine you control.
 
 | | |
 |---|---|
-| **Your files stay yours** | Every spreadsheet is a real `.xlsx` and every document a real `.docx`, in a normal folder. Open them in Excel, Word or LibreOffice any time. No database to export from, no lock-in. |
+| **Your files stay yours** | Every spreadsheet is a real `.xlsx`, every document a real `.docx` and every presentation a real `.pptx`, in a normal folder. Open them in Excel, Word, PowerPoint or LibreOffice any time. No database to export from, no lock-in. |
 | **Any disk, any server** | One Docker image runs the whole suite on a home server, a NAS (TrueNAS, Unraid), a Proxmox box or a small cloud machine. |
 | **Work together** | Live co-editing in Starbase Sheets: several people in the same spreadsheet, seeing each other's changes as they happen. |
 | **Share like you're used to** | Share files and folders with people as editor or viewer, or by link. |
@@ -47,7 +49,8 @@ friendly, familiar feel, on a machine you control.
 
 ## What works today
 
-Starbase **v0.1.0** (November 2026) is the first public release. In one image you get:
+Starbase **v0.1.0** (November 2026) is the first public release, and `main` has moved on since.
+In one image you get:
 
 **Starbase Drive**, the home screen: folders (with colours), file previews, search, recent,
 starred, shared with me and a bin.
@@ -66,6 +69,10 @@ pictures (with crop and text wrapping), comments, version history and your own d
 <p align="center">
   <img src="docs/images/docs-newsletter.png" alt="Starbase Docs: a newsletter with headings, a list and a table" width="800">
 </p>
+
+**Starbase Slides** (new on `main`, not yet in a release), presentations at `/slides/`: open, edit
+and save `.pptx` files in the browser, straight from Drive. It is at an early stage: one person
+edits at a time, with no live co-editing yet.
 
 **Around them:** accounts and sharing, version history for spreadsheets and documents, scheduled
 encrypted backups with restore, OIDC sign-in, and install guides for Docker, Proxmox, TrueNAS
@@ -109,11 +116,11 @@ Here is where Starbase is heading. Nothing below has a date: it lands when it's 
 |---|---|
 | **Linux desktop app** (AppImage, Flatpak, then Flathub): work offline on local files, or connect to your server | In progress |
 | **Live co-editing in Starbase Docs**, as Sheets already has | Planned |
-| **Starbase Slides**, presentations built on DeckCraft, with `.pptx` files | In progress (early groundwork: a `.pptx` round-trip check runs in CI) |
+| **Starbase Slides**: first version is on `main` (open, edit and save `.pptx`); next comes polish and **live co-editing** | In progress |
 | **Windows**, then **Mac** desktop apps | Planned |
-| **Any file in Drive**: PDFs, pictures and everything else, not just spreadsheets and documents | Planned |
+| **Any file in Drive**: PDFs, pictures and everything else, not just spreadsheets and documents | In progress |
 | **Photos**, with private face grouping that runs entirely on your own machine and is off unless you turn it on | Planned |
-| **"Open in Starbase"** from your computer's file manager | Planned |
+| **"Open in Starbase"** from your computer's file manager: a file on your server's share opens on the server, any other opens in the desktop app | Built (on `main`, ships with the Linux desktop package) |
 
 ### Coming next
 
@@ -130,10 +137,10 @@ Starbase stands on the shoulders of the excellent open-source engines by
 |---|---|---|
 | Starbase Sheets and Starbase Drive | [GridCraft](https://github.com/storytold/gridcraft) | `starsheets/` |
 | Starbase Docs | [WordCraft](https://github.com/storytold/wordcraft) | `stardocs/` |
-| Starbase Slides (coming) | [DeckCraft](https://github.com/storytold/deckcraft) | `slides/` |
+| Starbase Slides | [DeckCraft](https://github.com/storytold/deckcraft) | `slides/` |
 
 We keep our engine changes on forks (DomeShifter/gridcraft branch `starsheets`, DomeShifter/wordcraft
-branch `stardocs`) and offer useful fixes back upstream. The apps were called StarSheets, StarDocs
+branch `stardocs`, DomeShifter/deckcraft branch `starslides`) and offer useful fixes back upstream. The apps were called StarSheets, StarDocs
 and StarDrive until November 2026, which is why some folders and programs still use those names.
 
 ## Contributing
@@ -156,7 +163,8 @@ cd app && trunk build --release    # site in stardocs/dist (needs about 9 GB of 
 
 - Found a security problem? Please report it privately, as described in
   [SECURITY.md](starsheets/SECURITY.md), rather than in a public issue.
-- What Starbase stores and sends: [docs/privacy.md](docs/privacy.md).
+- Privacy: by default Starbase makes no outbound connections at all. Everything it can connect
+  to, and when: [docs/privacy.md](docs/privacy.md).
 - How release downloads are signed: [docs/code-signing-policy.md](docs/code-signing-policy.md).
 
 ## Licence
