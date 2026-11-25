@@ -25,7 +25,9 @@ matching Google Sheets is the goal.
    Before a pull request: `cargo fmt -p starsheets -p starsheets-server -p starsheets-sync`, and no clippy warnings
    (`cargo clippy -p starsheets --target wasm32-unknown-unknown`, and
    `cargo clippy -p starsheets-server -p starsheets-sync --all-targets`). CI checks both.
-3. Keep pull requests small and about one thing. Say what it changes for someone using Starbase Sheets.
+3. Keep pull requests small and about one thing. Say what it changes for someone using Starbase Sheets,
+   in a changelog file `changes/<topic>.md` at the top of the repository, not in CHANGELOG.md
+   (see [the repository's CONTRIBUTING.md](../CONTRIBUTING.md#changelog)).
 4. Menus and the toolbar are tables in `app/src/shell.rs`; a test checks that every entry names a
    real command.
 5. Google-only functions (like QUERY) live in the fork's `crates/sheets-functions` (in `upstream/gridcraft` once fetched), with their own tests.

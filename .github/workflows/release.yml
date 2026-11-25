@@ -1,8 +1,9 @@
 # Starbase release: one Docker image for the whole suite.
-# A suite version tag (vX.Y.Z) rebuilds both apps (the StarSheets and StarDocs workflows, called
-# from here, tests included), puts StarSheets' site at / and StarDocs' at /docs/ next to the
-# file server, pushes ghcr.io/domeshifter/starbase:<version> and :latest (amd64 + arm64) and
-# drafts a GitHub release with the notes from CHANGELOG.md's section for that version.
+# A suite version tag (vX.Y.Z) rebuilds the apps (the StarSheets, StarDocs and Starbase Slides
+# workflows, called from here, tests included), puts StarSheets' site at /, StarDocs' at /docs/ and
+# Slides' at /slides/ next to the file server, pushes ghcr.io/domeshifter/starbase:<version> and
+# :latest (amd64 + arm64) and drafts a GitHub release with the notes from CHANGELOG.md's section
+# for that version, with the changelog files still in changes/ added (changes/assemble.py).
 # Run by hand (Actions › Release › Run workflow) it does the same build without pushing or
 # releasing, and keeps an amd64 image as the `starbase-image` artifact for trying it out:
 #   docker load -i starbase-amd64.tar && docker run -p 8080:8080 ghcr.io/domeshifter/starbase:test
@@ -32,18 +33,22 @@ jobs:
     name: StarDocs
     uses: ./.github/workflows/stardocs.yml
 
+  slides:
+    name: Starbase Slides
+    uses: ./.github/workflows/slides.yml
+
   desktop:
     name: Desktop (AppImage)
     uses: ./.github/workflows/desktop.yml
 
   image:
     name: Docker image
-    needs: [starsheets, stardocs]
+    needs: [starsheets, stardocs, slides]
     # A release needs every check green. A test build (by hand) goes on when only a check failed:
     # the next step stops it if a build is missing.
     if: >-
-      !cancelled() && ((needs.starsheets.result == 'success' && needs.stardocs.result == 'success')
-      || !startsWith(github.ref, 'refs/tags/v'))
+      !cancelled() && ((needs.starsheets.result == 'success' && needs.stardocs.result == 'success'
+      && needs.slides.result == 'success') || !startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -57,11 +62,18 @@ jobs:
         run: |
           if [ "$RELEASE" = true ]; then v="${GITHUB_REF_NAME#v}"; else v="test"; fi
           echo "VERSION=$v" >> "$GITHUB_ENV"
+      # Each pull request adds a changes/<topic>.md file instead of editing CHANGELOG.md
+      # (CONTRIBUTING.md, "Changelog"). Here they are gathered into this version's section (on
+      # this runner's copy only; the release-preparation pull request commits it for good).
       - name: Release notes from CHANGELOG.md
         run: |
-          section="${VERSION}"; [ "$RELEASE" = true ] || section="Unreleased"
-          awk -v v="$section" '$0 ~ "^## \\[" v "\\]" {on=1; next} on && /^## \[/ {exit} on && !/^\[[^]]*\]: http/ {print}' CHANGELOG.md > notes.md
-          [ -s notes.md ] || { echo "CHANGELOG.md has no section for $section"; exit 1; }
+          if [ "$RELEASE" = true ]; then
+            python3 changes/assemble.py --version "$VERSION" --write --keep > /dev/null
+            awk -v v="$VERSION" '$0 ~ "^## \\[" v "\\]" {on=1; next} on && /^## \[/ {exit} on && !/^\[[^]]*\]: http/ {print}' CHANGELOG.md > notes.md
+          else
+            python3 changes/assemble.py --unreleased > notes.md
+          fi
+          [ -s notes.md ] || { echo "no release notes: CHANGELOG.md has no section for $VERSION and changes/ is empty"; exit 1; }
           printf '\n---\n**Docker:** `docker run -d -p 8080:8080 -v starbase:/data ghcr.io/domeshifter/starbase:%s`. Install guides (Docker, Proxmox, TrueNAS, Unraid): docs/install/.\n' "$VERSION" >> notes.md
           cat notes.md
       - uses: actions/download-artifact@v8
@@ -74,16 +86,20 @@ jobs:
           path: build/site/docs
       - uses: actions/download-artifact@v8
         with:
+          name: slides-web
+          path: build/site/slides
+      - uses: actions/download-artifact@v8
+        with:
           name: starsheets-server
           path: build/server-bin
       - name: Zip the sites for the release, then compress them (served pre-compressed)
         working-directory: build
         run: |
-          [ -f site/index.html ] && [ -f site/docs/index.html ] && [ -f server-bin/amd64/starsheets-server ] && [ -f server-bin/arm64/starsheets-server ]
+          [ -f site/index.html ] && [ -f site/docs/index.html ] && [ -f site/slides/index.html ] && [ -f server-bin/amd64/starsheets-server ] && [ -f server-bin/arm64/starsheets-server ]
           (cd site && zip -qr "../starbase-web-$VERSION.zip" .)
           find site -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.css' -o -name '*.html' -o -name '*.svg' -o -name '*.json' -o -name '*.txt' -o -name '*.ttf' -o -name '*.otf' \) -exec gzip -k -9 {} \;
           cp ../docker/Dockerfile .
-          du -sh site site/docs; ls -la server-bin/*
+          du -sh site site/docs site/slides; ls -la server-bin/*
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4

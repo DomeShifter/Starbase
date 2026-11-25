@@ -3,6 +3,9 @@
 //!
 //! Build the web app with `trunk build --release` from `app/` after `scripts/fetch-upstream.sh`.
 //! `cargo build -p starsheets` builds the desktop program instead (native.rs).
+// Windows release builds are windowed programs: no console window opens beside them.
+// `--version`/`--help` join the terminal that started them (starbase_connect::attach_terminal).
+#![cfg_attr(all(windows, not(debug_assertions), not(test)), windows_subsystem = "windows")]
 
 #[cfg(target_arch = "wasm32")]
 mod account;

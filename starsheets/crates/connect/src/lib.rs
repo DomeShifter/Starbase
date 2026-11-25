@@ -22,6 +22,9 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+mod desktop;
+pub use desktop::{attach_terminal, system_documents_dir};
+
 /// The keyring's name for Starbase's entries (one per server address).
 const KEYRING: &str = "Starbase";
 

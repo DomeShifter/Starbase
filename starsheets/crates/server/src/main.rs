@@ -6,7 +6,8 @@
 //! LOCATION (how people are told where files are kept), STARBASE_AUTH (off = no login),
 //! STARBASE_PASSWORD, SITE (a built StarSheets site to serve), the security settings in
 //! guard.rs (STARBASE_PUBLIC_URL, STARBASE_ALLOWED_HOSTS, STARBASE_TRUSTED_PROXY,
-//! STARBASE_SECURE_COOKIE) and single sign-on's STARBASE_OIDC_* (oidc.rs, docs/oidc.md).
+//! STARBASE_SECURE_COOKIE), single sign-on's STARBASE_OIDC_* (oidc.rs, docs/oidc.md) and the
+//! photo index's STARBASE_PHOTOS_WORKERS, STARBASE_PHOTOS_RESCAN and STARBASE_PHOTOS_CACHE (photos/).
 
 // Request handlers return a ready HTTP response as their error (axum's usual way); boxing it to
 // make the error smaller would only add an allocation on the error path.
@@ -22,6 +23,7 @@ mod guard;
 mod live;
 mod log;
 mod oidc;
+mod photos;
 mod preview;
 mod sharing;
 mod spaces;
@@ -1846,6 +1848,10 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
     if let Some(resp) = findpath::route(&app, &m, &p, &q, me.clone()).await {
         return resp;
     }
+    // Photos: folder listings with EXIF dates, thumbnails, the index's status (photos/).
+    if let Some(resp) = photos::routes::route(&app, &m, &p, &q, me.clone(), &headers).await {
+        return resp;
+    }
     if p.first().map(String::as_str) == Some("backup") && p.len() <= 2 {
         return backup_api(&app, &m, &p, me, &body).await;
     }
@@ -2006,8 +2012,17 @@ fn healthcheck() -> ! {
     std::process::exit(if ok { 0 } else { 1 })
 }
 
+fn main() {
+    // A child that reads one picture for the photo index (photos/decode.rs), before anything
+    // else starts: no async runtime, no threads, its own limits.
+    if std::env::args().nth(1).as_deref() == Some("photo-worker") {
+        photos::decode::child_main();
+    }
+    serve();
+}
+
 #[tokio::main]
-async fn main() {
+async fn serve() {
     if std::env::args().nth(1).as_deref() == Some("healthcheck") {
         healthcheck();
     }
@@ -2078,6 +2093,23 @@ async fn main() {
                 std::process::exit(1);
             }
         }
+    }
+    // The photo index starts now (its first rescan runs in the background); pictures are read in
+    // child processes of this program, each with limits of its own.
+    match std::env::current_exe() {
+        Ok(exe) => photos::use_child_processes(exe),
+        Err(e) => eprintln!("Photos: pictures are read in this process ({e})"),
+    }
+    if let Some(p) = photos::service(&app.store) {
+        if p.cache_dir().starts_with(&app.store.root) {
+            println!(
+                "Photos: index and thumbnails in {} (inside the storage folder; set STARBASE_PHOTOS_CACHE or mount a volume at /cache to keep them on a local disk).",
+                p.cache_dir().display()
+            );
+        } else {
+            println!("Photos: index and thumbnails in {}.", p.cache_dir().display());
+        }
+        println!("Photos: {} workers, {} MB each.", p.cfg.workers, p.cfg.child_memory / 1024 / 1024);
     }
     tokio::spawn(backup_schedule(app.clone()));
     let router = router(app);
