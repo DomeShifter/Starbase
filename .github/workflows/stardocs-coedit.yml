@@ -1,0 +1,68 @@
+# Starbase Docs co-editing engine (stardocs/coedit, a library, not wired into the app yet):
+# randomised two- and three-user sessions on real WordCraft sessions must converge (same model,
+# byte-identical .docx), the step transform must agree both ways round, and the per-keystroke
+# cost is printed. The full run (~18 min) is on main (any Docs change: the engine is WordCraft's)
+# and weekly; a pull request runs it only when stardocs/coedit/ or this file changes, with fewer
+# cases. A failure prints its seed: COEDIT_SEED=<seed> cargo test -p stardocs-coedit replay.
+name: Docs co-editing engine
+on:
+  push:
+    branches: [main]
+    paths: ["stardocs/**", ".github/workflows/stardocs-coedit.yml", "rustfmt.toml"]
+  pull_request:
+    paths: ["stardocs/coedit/**", ".github/workflows/stardocs-coedit.yml"]
+  schedule:
+    - cron: "0 5 * * 1" # Monday 05:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a pull request cancels the older run; runs on main always finish.
+concurrency:
+  group: stardocs-coedit-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  # Pull requests: 1,000 sessions of each kind and 20,000 transform pairs. Main and weekly: the
+  # tests' own defaults (10,000 two-user + 4,000 three-user + 4,000 typing-only; 200,000 pairs).
+  COEDIT_CASES: ${{ github.event_name == 'pull_request' && '1000' || '' }}
+  COEDIT_PAIRS: ${{ github.event_name == 'pull_request' && '20000' || '' }}
+
+defaults:
+  run:
+    working-directory: stardocs
+
+jobs:
+  coedit:
+    name: Co-editing engine (headless convergence)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Make disk space (in the background)
+        working-directory: /
+        run: sudo nohup rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL >/dev/null 2>&1 &
+      - uses: actions/checkout@v7
+      - name: Fetch WordCraft at the pinned commit of our fork
+        run: scripts/fetch-upstream.sh
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Formatting
+        run: cargo fmt -p stardocs-coedit --check
+      # Saved only on main (CONTRIBUTING.md, "Continuous integration").
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: stardocs-coedit
+          workspaces: stardocs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Clippy
+        run: cargo clippy -p stardocs-coedit --tests --no-deps -- -D warnings
+      - name: Convergence, transform pairs and inverses, undo, 100-page cost
+        run: |
+          # An empty value means "the tests' defaults".
+          [ -n "$COEDIT_CASES" ] || unset COEDIT_CASES
+          [ -n "$COEDIT_PAIRS" ] || unset COEDIT_PAIRS
+          echo "cases: ${COEDIT_CASES:-default}, pairs: ${COEDIT_PAIRS:-default}"
+          cargo test -p stardocs-coedit -- --nocapture

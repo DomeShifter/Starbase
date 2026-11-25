@@ -99,10 +99,10 @@ jobs:
         run: |
           target/release/${{ matrix.app }} --version
           ls -la target/release/${{ matrix.app }}*
-      # Information only: hosted runners have no GPU (Windows: OpenGL 1.1 only, so glow can't
-      # start; macOS: a virtual display). A window that stays up for 15 s counts as started.
-      - name: Starts and stays up (information only)
-        continue-on-error: true
+      # Hosted runners have no GPU (Windows: OpenGL 1.1 only; macOS: a virtual display). Docs falls
+      # back to wgpu when OpenGL is too old (#52), so both programs must start: a window that stays
+      # up for 15 s counts as started, and an early exit fails the job.
+      - name: Starts and stays up
         run: |
           target/release/${{ matrix.app }} > "$RUNNER_TEMP/start.log" 2>&1 &
           pid=$!
