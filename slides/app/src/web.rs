@@ -57,6 +57,7 @@ pub fn start() {
                 options,
                 Box::new(move |cc| {
                     egui_extras::install_image_loaders(&cc.egui_ctx);
+                    crate::fonts::add();
                     deckcraft_ui_egui::install_ime_pass_hooks(&cc.egui_ctx);
                     if let Some(token) = crate::presenter::token() {
                         let presenter = crate::presenter::Popup::new(token, cc.egui_ctx.clone()).map_err(std::io::Error::other)?;
@@ -96,7 +97,9 @@ pub fn start() {
                     crate::api::install(&mut app, cc.egui_ctx.clone());
                     let mode = crate::theme::Mode::parse(&crate::prefs::get(crate::theme::KEY).unwrap_or_default());
                     let hook = crate::testhook::TestHook::install(&cc.egui_ctx);
-                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, link, shell: Shell::new(mode), hook, dirty }))
+                    let fonts = Rc::new(Cell::new(0));
+                    crate::fonts::fetch_more(fonts.clone(), cc.egui_ctx.clone());
+                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, link, shell: Shell::new(mode), hook, dirty, fonts, fonts_seen: 0 }))
                 }),
             )
             .await;
@@ -139,6 +142,10 @@ struct WebShell {
     hook: Option<crate::testhook::TestHook>,
     /// Unsaved changes, for the leave-page guard.
     dirty: Rc<Cell<bool>>,
+    /// Font faces fetched after start so far (`fonts::fetch_more`), and how many the slides were
+    /// last drawn with: when more arrive, the slides are drawn again in them.
+    fonts: Rc<Cell<usize>>,
+    fonts_seen: usize,
 }
 
 impl eframe::App for WebShell {
@@ -148,6 +155,10 @@ impl eframe::App for WebShell {
         }
         if let Some(link) = &self.link {
             link.before(&mut self.app);
+        }
+        if self.fonts.get() != self.fonts_seen {
+            self.fonts_seen = self.fonts.get();
+            self.app.textures.invalidate();
         }
         self.app.logic(ctx);
         if let Some(link) = &self.link {

@@ -23,7 +23,9 @@ JSON.parse(await starslides.wait(starslides.state())) // the window and presenta
 `state()` has: `shell` (title shown, save state "saving"/"saved"/"failed: …", server file name,
 view only, theme), `documents` (title, unsaved changes, file name: always a .pptx on the server),
 `slides` (count), `current`, `view`, `notes`, `pane`, `tool`, `format`, `showing` (slideshow on),
-`status`, `theme` (`mode`, `dark`, and whether DeckCraft's half and egui are dark too).
+`status`, `author` (who signs new comments), `fonts` (the families DeckCraft can draw with:
+Inter at once; Liberation Sans, Carlito and Caladea once fetched), `theme` (`mode`, `dark`, and
+whether DeckCraft's half and egui are dark too).
 
 Our own commands: `slides.new`, `slides.home`, `slides.rename {name}`, `slides.download {format:
 pptx|pdf|outline}`, `slides.theme {mode: system|light|dark}`, `slides.textBox`, `slides.shape

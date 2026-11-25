@@ -161,6 +161,7 @@ fn snapshot(app: &mut SlideApp, shell: &Shell, drive: Option<&dyn Drive>, ctx: &
         "showing": app.show.is_some(),
         "status": app.status.as_ref().map(|(m, _)| m.clone()),
         "author": app.session.prefs.author,
+        "fonts": crate::fonts::families(),
         "theme": crate::theme::state(app, shell.mode, ctx),
     })
 }

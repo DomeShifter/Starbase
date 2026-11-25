@@ -212,3 +212,15 @@ fn a_viewer_gets_a_greyed_toolbar() {
     let new_slide = h.get_by_label("New slide (Ctrl+M)");
     assert!(new_slide.accesskit_node().is_disabled(), "New slide is greyed for a viewer");
 }
+
+#[test]
+fn the_default_slide_font_is_in_the_program() {
+    crate::fonts::add();
+    let families = crate::fonts::families();
+    assert!(families.iter().any(|f| f == "Inter"), "Inter is bundled: {families:?}");
+    let mut app = app_with(Services::default());
+    let f = app.session.execute("format.state", &json!({})).unwrap_or_default();
+    assert_eq!(f["font"], "Inter", "a new presentation's text is Inter");
+    let more = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fonts/more");
+    assert!(crate::fonts::MORE.iter().all(|f| more.join(f).is_file()), "every fetched face is in fonts/more");
+}

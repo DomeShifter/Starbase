@@ -18,6 +18,8 @@ path = "src/main.rs"
 [dependencies]
 deckcraft-engine = { workspace = true }
 deckcraft-ui-egui = { workspace = true }
+# The font database the bundled fonts go into (src/fonts.rs).
+deckcraft-fonts = { workspace = true }
 egui = { workspace = true }
 log = { workspace = true }
 serde_json = { workspace = true }
