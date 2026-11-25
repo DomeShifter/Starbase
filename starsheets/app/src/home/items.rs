@@ -7,7 +7,8 @@ impl Home {
         // Path (each part clickable and a drop target), view switch.
         // Anywhere empty in this area: right-click for New (items drawn later sit on top of it).
         let bg = ui.interact(ui.max_rect(), egui::Id::unique("home_bg"), Sense::click());
-        let crumbs = self.title();
+        let searching = !self.search.trim().is_empty();
+        let crumbs = if searching { vec![("Search results".to_string(), None)] } else { self.title() };
         ui.horizontal(|ui| {
             // Back, forward and up (the mouse's back button goes up too).
             let nav = |ui: &mut Ui, icon: &str, enabled: bool, tip: &str| {
@@ -56,6 +57,10 @@ impl Home {
                     self.navigate(v);
                 }
             }
+            if searching && ui.add(egui::Button::new(RichText::new("×").size(22.0).color(theme::TEXT_DIM)).frame(false)).on_hover_text("Clear search").clicked() {
+                self.search.clear();
+                self.filters = Default::default();
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let toggle = |ui: &mut Ui, icon: &str, on: bool, tip: &str| {
                     let b = match crate::icons::icon(icon) {
@@ -91,6 +96,9 @@ impl Home {
                     self.error = None;
                 }
             });
+        }
+        if !self.search.trim().is_empty() {
+            self.filter_chips(ui);
         }
         ui.add_space(house::M);
         if self.view == Some(View::Bin) && self.search.trim().is_empty() {

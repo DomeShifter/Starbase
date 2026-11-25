@@ -23,6 +23,7 @@ impl Home {
             "view": view,
             "loading": self.loading,
             "search": self.search,
+            "filters": { "kind": self.filters.kind, "who": self.filters.who, "when": self.filters.when },
             "error": self.error,
             "folders": folders.iter().map(|f| json!({ "path": f.path, "name": name_of(&f.path) })).collect::<Vec<_>>(),
             "files": files
@@ -32,7 +33,7 @@ impl Home {
         })
     }
 
-    /// `home:folder` {path}, `home:search` {text}, `home:refresh`, `home:recent`, `home:starred`,
+    /// `home:folder` {path}, `home:search` {text}, `home:filter` {kind, who, when}, `home:refresh`, `home:recent`, `home:starred`,
     /// `home:shared`, `home:bin`; `home:opens` {id} says what opening that file does (without
     /// opening it): `{"opens": "editor" | "preview" | "download", "url"}`.
     pub(crate) fn test_run(&mut self, ctx: &egui::Context, id: &str, params: &Json) -> Result<Json, String> {
@@ -43,6 +44,12 @@ impl Home {
                 self.go_folder(&path);
             }
             "home:search" => self.search = text("text").unwrap_or_default(),
+            // {kind: folder|sheet|doc|slides|image|pdf|null, who: 0..2, when: 0..4}
+            "home:filter" => {
+                self.filters.kind = super::filters::KINDS.iter().map(|(k, _)| *k).find(|k| Some(*k) == text("kind").as_deref());
+                let n = |k: &str| params.get(k).and_then(Json::as_u64).unwrap_or(0) as u8;
+                (self.filters.who, self.filters.when) = (n("who").min(2), n("when").min(4));
+            }
             "home:refresh" => self.refresh(ctx),
             "home:opens" => {
                 let id = text("id").ok_or("home:opens needs {id}")?;
