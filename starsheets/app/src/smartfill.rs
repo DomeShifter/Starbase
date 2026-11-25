@@ -1,6 +1,6 @@
 //! Smart Fill, as in Google Sheets: after you type a few entries in a column next to data
-//! ("Ada" beside "Ada Lovelace", "Alan" beside "Alan Turing"), a small card under the next cell
-//! offers to fill the rest of the column the same way. Accept (or Ctrl+Shift+Y) fills it as one
+//! ("Ada" beside "Ada Lovelace", "Alan" beside "Alan Turing"), the rest of the column shows the
+//! suggested values in grey and a small card beside the next cell offers to fill them. Accept (or Ctrl+Shift+Y) fills it as one
 //! undo step; ✕ hides it for that column. Tools › Suggestion controls turns the card off.
 //! The pattern is GridCraft's Flash Fill (`fill::flash_fill_preview`, StarSheets 0097).
 
@@ -18,6 +18,10 @@ const OFF_KEY: &str = "starsheets.smartFillOff";
 const EXAMPLES: u32 = 2;
 /// How many filled values the card shows.
 const SHOWN: usize = 3;
+/// How many suggested values are previewed in their cells (the rest fill on Accept).
+const PREVIEW_CELLS: usize = 200;
+/// The preview's grey (suggested text, as Google greys it).
+const PREVIEW: egui::Color32 = theme::BOX;
 
 /// What Smart Fill would write, for the active cell.
 #[derive(Clone, Debug, PartialEq)]
@@ -117,10 +121,23 @@ impl SmartFill {
         if app.grid.cells_rect.is_some_and(|r| !r.contains(rect.left_top() + vec2(1.0, 1.0))) {
             return;
         }
+        // Google's grey preview: each suggested value in its own cell, until accepted or hidden.
+        if let Some(clip) = app.grid.cells_rect {
+            let layer = egui::LayerId::new(egui::Order::Middle, egui::Id::unique("starsheets_smart_fill_preview"));
+            let painter = ctx.layer_painter(layer).with_clip_rect(clip);
+            for (cell, text) in s.cells.iter().take(PREVIEW_CELLS) {
+                let Some(r) = crate::linkcard::cell_rect(app, *cell) else { continue };
+                if !clip.intersects(r) {
+                    continue;
+                }
+                let font = egui::FontId::proportional((r.height() * 0.55).clamp(house::NOTE, house::BODY + 2.0));
+                painter.with_clip_rect(r.intersect(clip)).text(r.left_center() + vec2(house::XS, 0.0), Align2::LEFT_CENTER, text, font, PREVIEW);
+            }
+        }
         let mut close = false;
         let mut fill = false;
         egui::Area::new(egui::Id::unique("starsheets_smart_fill"))
-            .fixed_pos(rect.left_bottom() + vec2(0.0, 4.0))
+            .fixed_pos(rect.right_top() + vec2(house::S, 0.0))
             .pivot(Align2::LEFT_TOP)
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {

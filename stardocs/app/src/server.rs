@@ -14,7 +14,8 @@
 //!   with every later save (`X-Comment-Ids`, comment_ids.rs), so the editor's ids never change
 //!   and a save already waiting goes out right. The document is opened again only when the ids
 //!   can't be kept or it changed elsewhere ([`Link::reopen`]: waiting saves are dropped first).
-//! - Not signed in (401): the page goes to the home screen, which asks to sign in.
+//! - Not signed in (401): the page goes to the sign-in page (the home screen's), which comes back
+//!   to this document afterwards (`?next=`, a path on this server only).
 //! - Exports (PDF, pictures, other formats) still download in the browser.
 //!
 //! The page saves by itself ([`Link::tick`]) a couple of seconds after the last change, like
@@ -369,7 +370,7 @@ impl Link {
                     inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
                     link.ask_role(&id);
                 }
-                Ok((401, ..)) => go_home(""),
+                Ok((401, ..)) => sign_in_and_return(),
                 Ok((code, _, body)) => {
                     link.state.borrow_mut().reopening = false;
                     // Nothing to edit: the blank page is read-only, so typing can't look like work.
@@ -921,6 +922,16 @@ fn set_title(name: &str) {
     if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
         let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
         doc.set_title(&format!("{stem} - Starbase Docs"));
+    }
+}
+
+/// Signing in on the home screen's sign-in page (one folder up), then back to this document:
+/// `../?next=<this page's path and query>`.
+fn sign_in_and_return() {
+    if let Some(w) = web_sys::window() {
+        let loc = w.location();
+        let here = format!("{}{}", loc.pathname().unwrap_or_default(), loc.search().unwrap_or_default());
+        let _ = loc.replace(&format!("../?next={}", enc(&here)));
     }
 }
 

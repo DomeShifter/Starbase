@@ -105,8 +105,15 @@ Step-by-step guides: [Docker and Compose](docs/install/docker.md) ·
 in the [Docker guide](docs/install/docker.md); single sign-on is in
 [docs/oidc.md](starsheets/docs/oidc.md).
 
-**Desktop programs:** not released yet. A Linux AppImage and a Flatpak are built and tested on
-every change, and will be attached to a release once they are ready; Windows and Mac come later.
+**Desktop programs (Linux):** from v0.2.0, Starbase Drive, Sheets and Docs install from our own
+signed Flatpak repository (not Flathub), and update with `flatpak update`:
+
+```sh
+flatpak install --user --from https://domeshifter.github.io/Starbase/starbase.flatpakref
+```
+
+The runtime comes from Flathub. A signed AppImage is attached to each release too. Windows and
+Mac come later.
 
 ## Roadmap highlights
 

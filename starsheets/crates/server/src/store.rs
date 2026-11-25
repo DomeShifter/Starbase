@@ -113,6 +113,9 @@ const MAX_VERSION_NAME: usize = 100;
 
 const DAY: i64 = 86_400;
 
+/// Seconds per step when [`thin`] compares how close versions are (a minute).
+const GAP_UNIT: i64 = 60;
+
 /// The versions in a versions folder, oldest first (their names sort by when they were made).
 fn version_names(folder: &Path) -> Vec<String> {
     let mut names: Vec<String> =
@@ -131,6 +134,8 @@ fn version_stem(name: &str) -> &str {
 /// of each hour for a week, and the newest of each day before that. Named versions are always
 /// kept. At most `keep` unnamed ones stay: past that, the one closest in time to the next newer
 /// one goes first (the oldest of equals), so what is kept stays spread over the file's life.
+/// Gaps are compared in whole minutes: save times are whole seconds, so a burst of saves that
+/// happens to straddle a second boundary must not keep an older one over a newer one.
 fn thin(folder: &Path, meta: &mut Map<String, Value>, keep: usize, now: i64) -> io::Result<()> {
     let mut seen = BTreeSet::new();
     let mut kept: Vec<(String, i64, bool)> = Vec::new();
@@ -157,7 +162,7 @@ fn thin(folder: &Path, meta: &mut Map<String, Value>, keep: usize, now: i64) -> 
     while kept.iter().filter(|k| !k.2).count() > keep {
         let mut best: Option<(i64, usize)> = None;
         for (i, k) in kept.iter().enumerate().filter(|(_, k)| !k.2) {
-            let gap = if i == 0 { i64::MAX } else { kept[i - 1].1 - k.1 };
+            let gap = if i == 0 { i64::MAX } else { (kept[i - 1].1 - k.1).div_euclid(GAP_UNIT) };
             if best.is_none_or(|(g, _)| gap <= g) {
                 best = Some((gap, i));
             }
@@ -1179,6 +1184,24 @@ mod tests {
         assert!(left.contains(&"v02.docx".to_string()), "named kept: {left:?}");
         assert!(left.contains(&"v09.docx".to_string()) && left.contains(&"v01.docx".to_string()), "newest and oldest kept: {left:?}");
         assert_eq!(left.len(), 4, "{left:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn thin_drops_the_oldest_of_a_burst_across_a_second_boundary() {
+        // Seven saves in about a second, the clock ticking over after the third (parity.py's
+        // "version order" check, which failed now and then in CI): the newest two stay.
+        let dir = std::env::temp_dir().join(format!("starsheets-burst-{}", random_hex(6)));
+        fs::create_dir_all(&dir).unwrap();
+        let now = 100 * DAY;
+        let mut meta = Map::new();
+        for i in 0..7 {
+            let n = format!("v{i}.xlsx");
+            fs::write(dir.join(&n), b"x").unwrap();
+            meta.insert(n, json!({"saved": now - if i < 3 { 1 } else { 0 }}));
+        }
+        thin(&dir, &mut meta, 2, now).unwrap();
+        assert_eq!(version_names(&dir), ["v5.xlsx", "v6.xlsx"]);
         let _ = fs::remove_dir_all(&dir);
     }
 

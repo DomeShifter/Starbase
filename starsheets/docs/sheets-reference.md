@@ -85,7 +85,7 @@ Sheet tab menu: Delete · Duplicate · Copy to ▸ · Rename · Change colour ·
 | Checkboxes & dropdowns | Insert › Checkbox makes TRUE/FALSE cells with ticks; dropdown chips (coloured pills) from data validation | P1 (checkbox), P1/Later (chip styling) |
 | Tables | Convert to table (Ctrl+Alt+T): typed columns, header styling, column menu (Ctrl+Alt+\\), table references | Later (GridCraft has Excel tables) |
 | Paste values | Ctrl+Shift+V | P1 |
-| Hyperlinks | Hover card with preview; Alt+Enter opens | P1 |
+| Hyperlinks | Hover card with preview; Alt+Enter opens | P1 (hover card done, no fetched preview: app/src/linkcard.rs) |
 | Comments vs notes | Comments are threaded (side panel, @mentions, resolve); notes are simple yellow popups (Shift+F2) | P1 notes, P3 comments |
 | Freeze | Drag the thick grey bars at the top-left corner | P1 |
 | Explore / Gemini | AI analysis panels | No (maybe Later with the local LLM) |

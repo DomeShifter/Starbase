@@ -240,7 +240,7 @@ def compare(label, steps, auth):
 
 
 def version_order():
-    """Rust only: versions saved within one second are kept newest-first, oldest dropped."""
+    """Rust only: a burst of saves (within a minute) keeps the newest two, oldest dropped."""
     base = tempfile.mkdtemp()
     store = os.path.join(base, "store")
     os.makedirs(store)
