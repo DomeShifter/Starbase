@@ -63,3 +63,9 @@ opens the viewer; `home:photos:key {key}` with `next`, `prev`, `zoomin`, `zoomou
 
 The avatar menu's dialogs open with `starsheets.run("account:profile")` (also `account:password`,
 `account:people`), on either screen.
+
+**Signed out and the account menu.** Every snapshot has `account`: `shown` (Drive or a file may
+be drawn), `signedIn`, `user`, `signInPage` (the sign-in page is up), `menuOpen` (the avatar's
+account menu) and `next` (where signing in goes on to, from `?next=`). Signed out the snapshot is
+`screen: "signin"` with only `account`. `starsheets.run("account:menu")` opens the account menu
+as clicking the avatar does.

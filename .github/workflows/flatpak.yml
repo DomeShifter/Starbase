@@ -17,13 +17,13 @@
 name: Flatpak
 on:
   push:
+    # Not on tags: release.yml calls this workflow for a version tag (and publishes the result).
     branches: [main]
-    tags: ["v*"]
     paths: ["starsheets/**", "stardocs/**", "packaging/**", ".github/workflows/flatpak.yml"]
   pull_request:
     paths: ["packaging/**", ".github/workflows/flatpak.yml"]
   workflow_dispatch:
-  workflow_call: # from release.yml (later)
+  workflow_call: # from release.yml
 
 permissions:
   contents: read
