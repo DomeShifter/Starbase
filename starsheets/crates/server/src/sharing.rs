@@ -53,6 +53,8 @@ pub struct Share {
     pub people: Vec<(String, Role)>,
     /// What anyone signed in with the link may do (None = restricted).
     pub link: Role,
+    /// Keep where a photo was taken when someone else downloads it (off by default).
+    pub keep_location: bool,
 }
 
 impl Share {
@@ -99,6 +101,7 @@ fn parse(v: &Value) -> Share {
             .filter(|(_, r)| *r != Role::None)
             .collect(),
         link: Role::parse(v.get("link").and_then(Value::as_str).unwrap_or("none")),
+        keep_location: v.get("keep_location").and_then(Value::as_bool).unwrap_or(false),
     }
 }
 
@@ -111,7 +114,7 @@ pub fn set(store: &Store, item: Item, share: &Share) -> std::io::Result<()> {
     let mut group = all.get(item.group()).and_then(Value::as_object).cloned().unwrap_or_default();
     if share.is_shared() {
         let people: Vec<Value> = share.people.iter().map(|(u, r)| json!({ "username": u, "role": r.name() })).collect();
-        group.insert(item.id(), json!({ "people": people, "link": share.link.name() }));
+        group.insert(item.id(), json!({ "people": people, "link": share.link.name(), "keep_location": share.keep_location }));
     } else {
         group.remove(&item.id());
     }
@@ -238,6 +241,13 @@ impl Access {
         self.role_from(own.chain(self.shares_above(&crate::store::parent_of(path)).cloned()), false)
     }
 
+    /// Whether a photo's location may go with it to people who aren't its owner: the file's own
+    /// share, or a folder it's in, says to keep it.
+    pub fn keeps_location(&self, file: &str) -> bool {
+        let Some(path) = self.file_paths.get(file) else { return false };
+        self.files.get(file).is_some_and(|s| s.keep_location) || self.shares_above(&crate::store::parent_of(path)).any(|s| s.keep_location)
+    }
+
     /// Whether a file shows in my lists: mine, or shared with me by name (itself or a folder it's
     /// in). A file opened only through its link isn't listed, as in Drive.
     pub fn file_listed(&self, file: &str) -> bool {
@@ -313,7 +323,7 @@ pub fn describe(store: &Store, item: Item, relpath: &str, you: Role) -> Value {
     let owner = owner_of(store, relpath);
     let mut people = vec![person(&owner, "owner")];
     people.extend(share.people.iter().filter(|(u, _)| *u != owner).map(|(u, r)| person(u, r.name())));
-    json!({ "people": people, "link": share.link.name(), "you": you.name(), "folder": matches!(item, Item::Folder(_)) })
+    json!({ "people": people, "link": share.link.name(), "keep_location": share.keep_location, "you": you.name(), "folder": matches!(item, Item::Folder(_)) })
 }
 
 /// Applies the Share dialog's changes: `people` maps username → "view", "comment", "edit" or
@@ -343,6 +353,9 @@ pub fn update(store: &Store, item: Item, relpath: &str, body: &Value) -> Result<
     }
     if let Some(link) = body.get("link").and_then(Value::as_str) {
         share.link = Role::parse(link);
+    }
+    if let Some(k) = body.get("keep_location").and_then(Value::as_bool) {
+        share.keep_location = k;
     }
     set(store, item, &share).map_err(|e| e.to_string())
 }

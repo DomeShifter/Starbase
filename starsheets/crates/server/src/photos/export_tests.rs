@@ -176,7 +176,7 @@ async fn exports_are_new_files_for_people_who_may_add_them() {
     sharing::set(
         &app.store,
         sharing::Item::Folder(&folder_id),
-        &sharing::Share { people: vec![("bob".into(), sharing::Role::View)], link: sharing::Role::None },
+        &sharing::Share { people: vec![("bob".into(), sharing::Role::View)], link: sharing::Role::None, ..Default::default() },
     )
     .unwrap();
     let g = send(&app, "POST", &url(a), Some("bob"), &[], "").await;
@@ -199,4 +199,75 @@ async fn second_export_gets_429_quickly() {
     assert!(t.elapsed() < std::time::Duration::from_secs(2));
     drop(first);
     assert!(export::take_slot(&SEM, std::time::Duration::from_millis(50)).await.is_some());
+}
+
+/// A photo shared with someone, or by link, goes without its location (exiftool is the oracle);
+/// the owner's own download keeps it; the file on disk is untouched; the owner can allow it.
+#[tokio::test]
+async fn shared_downloads_leave_the_location_out() {
+    let root = tmp("shared-dl");
+    let s = Store { root: root.clone(), keep: 3, spaces: true };
+    for (u, n) in [("boss", "Boss"), ("ann", "Ann"), ("bob", "Bob")] {
+        auth::add(&s, u, n, &format!("{u}password")).unwrap();
+    }
+    std::fs::create_dir_all(s.full("ann/Trip")).unwrap();
+    let pic = photo(60, 40, 6);
+    std::fs::write(s.full("ann/Trip/a.jpg"), &pic).unwrap();
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    let chunk = |k: &[u8], d: &[u8]| [(d.len() as u32).to_be_bytes().to_vec(), k.to_vec(), d.to_vec(), vec![0; 4]].concat();
+    png.extend(chunk(b"IHDR", &[0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0]));
+    png.extend(chunk(b"eXIf", b"MM\0*GPSsecret"));
+    png.extend(chunk(b"IEND", b""));
+    std::fs::write(s.full("ann/Trip/b.png"), &png).unwrap();
+    s.synced_index().unwrap();
+    let ids: HashMap<String, String> = s.synced_index().unwrap().into_iter().map(|(id, p)| (p, id)).collect();
+    let app: Shared = Arc::new(crate::App {
+        store: s,
+        base: root.clone(),
+        lock: std::sync::Mutex::new(()),
+        location: "here".into(),
+        auth: true,
+        site: None,
+        rooms: crate::live::Rooms::default(),
+        oidc: None,
+    });
+    let folder = app.store.synced_folders().unwrap().into_iter().find(|(_, p)| p == "ann/Trip").unwrap().0;
+    let share = |keep: bool| {
+        sharing::set(&app.store, sharing::Item::Folder(&folder), &sharing::Share { people: vec![], link: sharing::Role::View, keep_location: keep })
+            .unwrap()
+    };
+    let (a, b) = (&ids["ann/Trip/a.jpg"], &ids["ann/Trip/b.png"]);
+    let gps = |bytes: &[u8]| {
+        let dir = root.join("x");
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("t.jpg");
+        std::fs::write(&f, bytes).unwrap();
+        let o =
+            std::process::Command::new("exiftool").args(["-j", "-a", "-G1", "-n"]).arg(&f).output().expect("exiftool is installed (CI installs it)");
+        let v: Value = serde_json::from_slice(&o.stdout).unwrap();
+        v[0].as_object().unwrap().keys().filter(|k| k.to_ascii_lowercase().contains("gps")).cloned().collect::<Vec<_>>()
+    };
+    share(false);
+    let own = ask(&app, "GET", &format!("/api/files/{a}"), Some("ann"), &[]).await;
+    assert_eq!(own.bytes, pic, "the owner's download is the original");
+    assert!(!gps(&own.bytes).is_empty());
+    for url in [format!("/api/files/{a}"), format!("/api/files/{a}/raw")] {
+        let got = ask(&app, "GET", &url, Some("bob"), &[]).await;
+        assert_eq!(got.status, 200, "{url}");
+        assert!(gps(&got.bytes).is_empty(), "{url}: location left in: {:?}", gps(&got.bytes));
+        assert_eq!(decode::exif_meta(&got.bytes).orientation, 6, "orientation as stored");
+        assert_eq!(decode::exif_meta(&got.bytes).make.as_deref(), Some("Canon"));
+        assert!(image::load_from_memory(&got.bytes).is_ok());
+    }
+    let p = ask(&app, "GET", &format!("/api/files/{b}"), Some("bob"), &[]).await;
+    assert!(
+        p.status == 200 && p.bytes.starts_with(b"\x89PNG") && !p.bytes.windows(3).any(|w| w == b"GPS") && p.bytes.windows(4).any(|w| w == b"IEND"),
+        "{}",
+        p.status
+    );
+    // The owner may let it through for this share.
+    share(true);
+    assert!(!gps(&ask(&app, "GET", &format!("/api/files/{a}"), Some("bob"), &[]).await.bytes).is_empty());
+    assert_eq!(std::fs::read(app.store.full("ann/Trip/a.jpg")).unwrap(), pic, "the source file is unchanged");
+    let _ = std::fs::remove_dir_all(&root);
 }

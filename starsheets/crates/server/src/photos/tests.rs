@@ -585,7 +585,7 @@ mod http {
         sharing::set(
             &app.store,
             sharing::Item::Folder(&folder_id),
-            &sharing::Share { people: vec![("bob".into(), sharing::Role::View)], link: sharing::Role::None },
+            &sharing::Share { people: vec![("bob".into(), sharing::Role::View)], link: sharing::Role::None, ..Default::default() },
         )
         .unwrap();
         let g = get(&app, &format!("/api/photos?folder_id={folder_id}"), Some("bob"), &[]).await;

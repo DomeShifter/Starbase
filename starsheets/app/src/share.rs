@@ -46,7 +46,7 @@ struct Person {
 }
 
 enum Reply {
-    Loaded { people: Vec<Person>, link: String, you: String },
+    Loaded { people: Vec<Person>, link: String, you: String, keep_location: bool },
     Users(Vec<Me>),
     Saved,
     Error(String),
@@ -81,6 +81,8 @@ pub struct Share {
     /// Role picks per person (index in ROLES), as shown.
     picks: Vec<usize>,
     link: usize,
+    /// "Remove location when sharing" is ticked (the default).
+    remove_location: bool,
     you: String,
     users: Vec<Me>,
     add: usize,
@@ -127,7 +129,12 @@ fn loaded(v: Json) -> Reply {
             role: p["role"].as_str().unwrap_or("view").into(),
         })
         .collect();
-    Reply::Loaded { people, link: v["link"].as_str().unwrap_or("none").into(), you: v["you"].as_str().unwrap_or("view").into() }
+    Reply::Loaded {
+        people,
+        link: v["link"].as_str().unwrap_or("none").into(),
+        you: v["you"].as_str().unwrap_or("view").into(),
+        keep_location: v["keep_location"].as_bool().unwrap_or(false),
+    }
 }
 
 impl Share {
@@ -157,7 +164,7 @@ impl Share {
             _ => None,
         };
         if let Some((url, page, name)) = target {
-            *self = Share { inbox: self.inbox.clone(), open: true, url: url.clone(), page, name, ..Share::default() };
+            *self = Share { inbox: self.inbox.clone(), open: true, url: url.clone(), page, name, remove_location: true, ..Share::default() };
             call(&self.inbox, ctx, Method::Get, url, None, loaded);
             call(&self.inbox, ctx, Method::Get, "api/users".into(), None, |v| {
                 Reply::Users(
@@ -178,7 +185,8 @@ impl Share {
         for r in replies {
             self.busy = false;
             match r {
-                Reply::Loaded { people, link, you } => {
+                Reply::Loaded { people, link, you, keep_location } => {
+                    self.remove_location = !keep_location;
                     self.picks = people.iter().map(|p| role_index(&p.role)).collect();
                     self.people = people;
                     self.link = LINK_NAMES.iter().position(|n| *n == link).unwrap_or(0);
@@ -278,6 +286,10 @@ impl Share {
                 house::text(ui, LINKS[self.link]);
                 house::note(ui, "Only the owner can change who has access.");
             }
+            // Photos: where they were taken stays home unless the owner says otherwise.
+            ui.add_enabled(owner, egui::Checkbox::new(&mut self.remove_location, "Remove location when sharing")).on_hover_text(
+                "Photos other people download, or open through the link, are sent without where they were taken. Your own downloads keep it.",
+            );
             house::gap(ui);
             ui.horizontal(|ui| {
                 let mut url = self.link_url();
@@ -316,7 +328,7 @@ impl Share {
                 }
             }
             let link = LINK_NAMES[self.link.min(3)];
-            let body = json!({ "people": people, "link": link });
+            let body = json!({ "people": people, "link": link, "keep_location": !self.remove_location });
             call(&self.inbox, ctx, Method::Post, self.url.clone(), Some(body), |_| Reply::Saved);
         }
     }

@@ -36,6 +36,7 @@ pub mod index;
 pub mod model;
 pub mod routes;
 pub mod sidecar;
+pub mod strip;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Read;

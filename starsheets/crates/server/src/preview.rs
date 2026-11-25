@@ -148,12 +148,16 @@ struct Found {
     version: String,
     /// Who asked (their username; "" without accounts), for the stream limits.
     who: String,
+    /// A picture someone else's: sent without where it was taken (photos/strip.rs).
+    strip: bool,
 }
 
 /// Finds file `id` for `me` (who must be able to view it). Err = the reply to send.
 async fn find(app: &Shared, me: Option<auth::User>, id: String, opened: bool) -> Result<Found, Response<Body>> {
     blocking(app, move |a| {
-        if sharing::file_role(&a.store, a.auth, me.as_ref(), &id) < sharing::Role::View {
+        let acc = sharing::Access::new(&a.store, a.auth, me.as_ref());
+        let role = acc.file_role(&id);
+        if role < sharing::Role::View {
             return Err(error(403, "You don't have access to that."));
         }
         let path = a.store.path_of(&id).ok().flatten().ok_or_else(|| error(404, "no such file"))?;
@@ -162,7 +166,11 @@ async fn find(app: &Shared, me: Option<auth::User>, id: String, opened: bool) ->
         if opened && let Some(u) = &me {
             let _ = spaces::note_opened(&a.store, u, &id);
         }
-        Ok(Found { file, name: store::base_of(&path), version, who: me.map(|u| u.username).unwrap_or_default() })
+        let name = store::base_of(&path);
+        let lower = name.to_ascii_lowercase();
+        let photo = [".jpg", ".jpeg", ".png"].iter().any(|e| lower.ends_with(e));
+        let strip = photo && role < sharing::Role::Owner && !acc.keeps_location(&id);
+        Ok(Found { file, name, version, who: me.map(|u| u.username).unwrap_or_default(), strip })
     })
     .await
     .unwrap_or_else(|| Err(error(500, "server error")))
@@ -205,11 +213,32 @@ pub fn range(h: Option<&str>, len: u64) -> Result<Option<(u64, u64)>, ()> {
     Ok(Some((start, end)))
 }
 
+/// A picture that isn't the sender's own: read, location taken out in memory (nothing is written
+/// anywhere) and sent whole. Not a picture we can clean: refused, never sent as it is.
+async fn stripped(f: Found, extra: &[(header::HeaderName, String)], _ticket: Ticket) -> Response<Body> {
+    let mut file = tokio::fs::File::from_std(f.file);
+    let mut bytes = Vec::new();
+    if file.metadata().await.map_or(true, |m| m.len() > crate::photos::strip::MAX) || file.read_to_end(&mut bytes).await.is_err() {
+        return error(413, "That picture is too big to share without its location.");
+    }
+    let Some(clean) = tokio::task::spawn_blocking(move || crate::photos::strip::without_location(&bytes)).await.ok().flatten() else {
+        return error(422, "That picture can't be copied without its location. Ask the owner to download it.");
+    };
+    let mut b = Response::builder().status(200).header(header::CONTENT_LENGTH, clean.len()).header(header::ETAG, format!("\"{}-nl\"", f.version));
+    for (k, v) in extra {
+        b = b.header(k, v);
+    }
+    b.body(Body::from(clean)).unwrap()
+}
+
 /// Streams the file from disk: `extra` headers, the Range asked for.
 async fn stream(f: Found, headers: &HeaderMap, extra: &[(header::HeaderName, String)]) -> Response<Body> {
     let Some(ticket) = Ticket::take(&f.who) else {
         return error(503, "Too many downloads at once. Wait for one to finish, then try again.");
     };
+    if f.strip {
+        return stripped(f, extra, ticket).await;
+    }
     let mut file = tokio::fs::File::from_std(f.file);
     let len = match file.metadata().await {
         Ok(m) => m.len(),

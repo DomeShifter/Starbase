@@ -153,7 +153,12 @@ fn small(v: &Value) -> bool {
 
 /// The new EXIF block (TIFF bytes): orientation 1 plus the allowed fields of the original.
 fn exif_block(original: &[u8], keep_location: bool) -> Option<Vec<u8>> {
-    let mut fields = vec![Field { tag: Tag::Orientation, ifd_num: In::PRIMARY, value: Value::Short(vec![1]) }];
+    exif_block_turned(original, keep_location, 1)
+}
+
+/// Like [`exif_block`], with orientation `o` (a copy of the file as stored keeps its own).
+pub(super) fn exif_block_turned(original: &[u8], keep_location: bool, o: u16) -> Option<Vec<u8>> {
+    let mut fields = vec![Field { tag: Tag::Orientation, ifd_num: In::PRIMARY, value: Value::Short(vec![o]) }];
     if let Ok(ex) = exif::Reader::new().read_from_container(&mut Cursor::new(original)) {
         for f in ex.fields() {
             let allowed = KEEP.contains(&f.tag) || (keep_location && LOCATION.contains(&f.tag));
@@ -172,7 +177,7 @@ fn exif_block(original: &[u8], keep_location: bool) -> Option<Vec<u8>> {
 }
 
 /// `jpeg` with an EXIF (APP1) segment after its JFIF header.
-fn with_exif(jpeg: Vec<u8>, tiff: &[u8]) -> Vec<u8> {
+pub(super) fn with_exif(jpeg: Vec<u8>, tiff: &[u8]) -> Vec<u8> {
     let len = tiff.len() + 8;
     if len > usize::from(u16::MAX) || jpeg.len() < 4 {
         return jpeg;

@@ -33,6 +33,8 @@ pub(super) struct Viewer {
     pub pan: Vec2,
     pub playing: bool,
     pub shuffle: bool,
+    /// The Info panel (ⓘ, or I) is open.
+    pub info: bool,
     pub every: f64,
     pub next_at: f64,
     /// A sideways drag so far (not zoomed in).
@@ -79,6 +81,7 @@ impl Viewer {
             pan: Vec2::ZERO,
             playing: false,
             shuffle: false,
+            info: false,
             every: EVERY[1],
             next_at: 0.0,
             drag: 0.0,
@@ -187,6 +190,9 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
         if i.consume_key(Modifiers::NONE, Key::Num0) {
             v.zoom = 1.0;
             v.pan = Vec2::ZERO;
+        }
+        if i.consume_key(Modifiers::NONE, Key::I) {
+            v.info = !v.info;
         }
         if i.consume_key(Modifiers::NONE, Key::E) {
             edit = true;
@@ -304,6 +310,17 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
             if button(ui, "white_download", "Download") {
                 download(&id);
             }
+            // The system's default app on the desktop; in the browser the file is downloaded.
+            if ui
+                .add(egui::Button::new(RichText::new("Open with…").size(13.0).color(Color32::WHITE)).frame(false).min_size(vec2(40.0, 36.0)))
+                .on_hover_text(if cfg!(target_arch = "wasm32") { "Download the original" } else { "Open in your default app" })
+                .clicked()
+            {
+                download(&id);
+            }
+            if toggle(ui, "white_info", "Info (I)", v.info) {
+                v.info = !v.info;
+            }
             let edit_icon = crate::icons::icon_in("edit", Color32::WHITE).map(|i| i.fit_to_exact_size(vec2(20.0, 20.0)));
             let b = match edit_icon {
                 Some(img) => egui::Button::image_and_text(img, RichText::new("Edit").size(14.0).color(Color32::WHITE)),
@@ -341,6 +358,11 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
                 v.zoom_by(1.0 / 1.5);
             }
         });
+        if v.info
+            && let Some(p) = pm.pics.get(v.index())
+        {
+            info_panel(ui, rect, p);
+        }
         // Arrows at the sides.
         if n > 1 {
             for (icon, by, x) in [("white_chevron_left", -1, rect.left() + 36.0), ("white_chevron_right", 1, rect.right() - 36.0)] {
@@ -375,6 +397,42 @@ fn v_edit(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) {
 
 fn p_has_size(w: f32, h: f32) -> bool {
     w > 1.0 && h > 1.0
+}
+
+/// The facts about a picture. Where it was taken only when the server sent it (people who may edit).
+pub(super) fn info_lines(p: &super::photos::Pic) -> Vec<(&'static str, String)> {
+    let mut rows = vec![("Date taken", super::photos::date_label(p.taken.as_deref(), p.modified))];
+    if let Some(c) = &p.camera {
+        rows.push(("Camera", c.clone()));
+    }
+    if p.width > 0 {
+        rows.push(("Size", format!("{} × {} px, {}", p.width, p.height, human(p.size))));
+    }
+    if let Some((lat, lon)) = p.gps {
+        rows.push(("Location", format!("{lat:.5}, {lon:.5}")));
+    }
+    rows
+}
+
+fn human(b: u64) -> String {
+    match b {
+        0..1_000 => format!("{b} B"),
+        1_000..1_000_000 => format!("{:.0} KB", b as f64 / 1e3),
+        _ => format!("{:.1} MB", b as f64 / 1e6),
+    }
+}
+
+fn info_panel(ui: &mut egui::Ui, rect: Rect, p: &super::photos::Pic) {
+    let panel = Rect::from_min_max(pos2(rect.right() - 300.0, rect.top() + 56.0), pos2(rect.right(), rect.bottom()));
+    ui.painter().rect_filled(panel, 0, Color32::from_black_alpha(190));
+    let mut c = ui.new_child(egui::UiBuilder::new().max_rect(panel.shrink(16.0)));
+    c.label(RichText::new("Info").size(16.0).strong().color(Color32::WHITE));
+    c.add_space(8.0);
+    for (k, v) in info_lines(p) {
+        c.label(RichText::new(k).size(12.0).color(Color32::from_gray(170)));
+        c.label(RichText::new(v).size(14.0).color(Color32::WHITE));
+        c.add_space(6.0);
+    }
 }
 
 /// A white icon button on the dark bar.
