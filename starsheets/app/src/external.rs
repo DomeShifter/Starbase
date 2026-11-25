@@ -10,6 +10,7 @@
 //! `GET|POST /api/files/<id>/external`), next to their stars and recent files; a spreadsheet not
 //! yet on the server (an imported file before its first save) is decided for this tab only, and
 //! carried over to the server file once it is saved. docs/privacy.md, "External content".
+#![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))] // the guard runs in the web app; the desktop build compiles it unused
 
 use std::cell::RefCell;
 use std::collections::HashMap;
