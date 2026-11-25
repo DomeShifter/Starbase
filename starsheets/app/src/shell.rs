@@ -158,6 +158,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Cmd("Tick box", "insert.checkbox", ""),
             Cmd("Drop-down", "panel:dropdown", ""),
             Sep,
+            Cmd("Comment", "panel:comment", "Ctrl+Alt+M"),
             Cmd("Note", "panel:note", "Shift+F2"),
         ],
     ),
@@ -1322,6 +1323,8 @@ pub fn run_entry_with(app: &mut SheetApp, ctx: &egui::Context, id: &str, params:
         ctx.data_mut(|m| m.insert_temp(egui::Id::unique(crate::customdate::REQUEST), true));
     } else if id == "panel:settings" {
         ctx.data_mut(|m| m.insert_temp(egui::Id::unique(crate::settings::REQUEST), true));
+    } else if id == "panel:comment" {
+        ctx.data_mut(|m| m.insert_temp(egui::Id::unique(crate::notes::COMMENT_REQUEST), true));
     } else if id == "panel:note" {
         ctx.data_mut(|m| m.insert_temp(egui::Id::unique(crate::notes::REQUEST), true));
     } else if id == "panel:protect" {
@@ -1353,15 +1356,20 @@ pub fn run_entry_with(app: &mut SheetApp, ctx: &egui::Context, id: &str, params:
 }
 
 /// Sheets' keys that GridCraft doesn't have, taken before the grid sees them: Ctrl+/ (keyboard
-/// shortcuts), Alt+/ (search the menus) and Ctrl+Shift+V (paste values only).
+/// shortcuts), Alt+/ (search the menus), Ctrl+Alt+M (comment) and Ctrl+Shift+V (paste values
+/// only).
 fn sheets_keys(app: &mut SheetApp, ctx: &egui::Context) {
     use egui::{Key, KeyboardShortcut, Modifiers};
-    let (help, search) = ctx.input_mut(|i| {
+    let (help, search, comment) = ctx.input_mut(|i| {
         (
             i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::Slash)),
             i.consume_shortcut(&KeyboardShortcut::new(Modifiers::ALT, Key::Slash)),
+            i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::ALT, Key::M)),
         )
     });
+    if comment {
+        run_entry(app, ctx, "panel:comment");
+    }
     if help {
         run_entry(app, ctx, "panel:shortcuts");
     }
@@ -1635,6 +1643,7 @@ mod tests {
             "Data › Data clean-up › Remove duplicates",
             "Help › Search the menus",
             "Help › Keyboard shortcuts",
+            "Insert › Comment",
         ] {
             assert!(paths.iter().any(|p| p == want), "missing {want}");
         }
@@ -1662,6 +1671,7 @@ mod tests {
             "panel:imageOverCells",
             "panel:dropdown",
             "panel:note",
+            "panel:comment",
             "panel:customdate",
             "panel:customnumber",
             "panel:customcurrency",

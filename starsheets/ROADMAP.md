@@ -40,6 +40,8 @@
 - [x] Menu contents matched to docs/sheets-menus.md where GridCraft has the command (Number, Rotation, Font size, Function, Zoom submenus; UK wording)
 - [x] Right-click menus (cell, row and column headers, sheet tab + its ▾) and toolbar dropdowns (icon strips, number formats with examples) in the Sheets look (patch 0015)
 - [x] Sheets menu batch 1 (docs/research/google-sheets-gap.md items 2-6, 9): Paste special sub-menu, Move column, Freeze 2 rows/columns, Sort sheet, Randomise range, Trim whitespace, Custom currency, Keyboard shortcuts, Search the menus
+- [x] Sheets menu batch 2 (gap list items 7, 8, 11-13, what the engine allows): comment cards (Insert › Comment, Ctrl+Alt+M; reply, resolve, edit, delete), trendline type, degree, equation label and R² in the chart editor, Create/Remove filter
+- [ ] Batch 2 leftovers that need GridCraft changes: Sheets-style pivot editor (GridCraft draws its own pane), chart axis min/max, comment dates and per-reply edit/delete, Comment on the right-click menu, filter views, filter and sort by colour, drop-down multiple selections and chips; commenter share role (server)
 - [ ] Still missing from Sheets menus: Clip wrapping, Hidden sheets, Full screen, Version history (phase 2), Edit › Move row up/down, Paste special › Conditional formatting only, Alternating colours (all need engine work)
 - [x] Named ranges suggested while typing formulas (patch 0016); sheet tabs: ▾ opens the menu, drag to reorder
 - [x] Conditional formatting side panel: single colour (19 Sheets conditions, style, presets) and colour scales with configurable points (docs/sheets-cf.md, patch 0017); tab colour bar inside the tab

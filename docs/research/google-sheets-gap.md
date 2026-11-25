@@ -175,6 +175,8 @@ Google's function list (support.google.com/docs/table/25273, downloaded and pars
 14. **IMPORTRANGE between Starbase files** (server resolves the file, checks the reader's access, pushes updates), then **IMAGE** + **SPARKLINE**.
 15. **Version history upgrade**: more than 6 versions, named versions, who changed what (and later per-cell edit history), using the authors the live server already knows.
 
+_Batch 2 (2026-11-25): 8 done as far as the engine goes (trendline options; axis min/max needs engine fields), 11 done without a side panel or commenter role, 12 only Create/Remove filter; 7, 12 (filter views) and 13 wait on GridCraft changes (starsheets/ROADMAP.md lists them)._
+
 _After these: **Sheets-style Tables** (column types, column menu, Pre-built tables, group by view) and **per-person protected ranges** (server-enforced) are the next M–L jobs._
 
 ## 4. Deliberately NOT building (for now)
