@@ -901,8 +901,10 @@ impl Store {
                     return ok(json!({"name": base_of(&path), "id": fid}));
                 }
                 let name = match qs(q, "as") {
+                    // Named as a rename would be: the file keeps its own extension, so a move
+                    // can't turn report.xlsx into report.html.
                     Some(want) => {
-                        let (stem, ext) = split_existing(&clean_name(Some(want)));
+                        let (stem, ext) = renamed(&base_of(&path), &clean_name(Some(want)));
                         self.claim_exact(&folder, &stem, &ext, None)?
                     }
                     None => {
@@ -996,7 +998,13 @@ impl Store {
         if self.spaces && !path.contains('/') {
             return Err(Bad::new(400, "A person's own folder can't be changed."));
         }
-        self.synced_folders()?;
+        let folder_ids = self.synced_folders()?;
+        let fid = folder_ids.iter().find(|(_, p)| **p == path).map(|(k, _)| k.clone()).unwrap_or_default();
+        // ?id=<the folder's id> (an Undo): the folder at `path` must still be the one the action
+        // being undone moved or renamed, not another that has taken its name since.
+        if qs(q, "id").is_some_and(|want| want != fid) {
+            return Err(Bad::new(409, format!("\u{201c}{}\u{201d} has been moved or renamed since, so it was left where it is.", base_of(&path))));
+        }
         match (action, method) {
             // ?if_empty=1 (an Undo of New folder): refused once something has been put in it.
             ("", "DELETE") => {
@@ -1019,7 +1027,7 @@ impl Store {
                 let new = join(&parent, &free);
                 fs::rename(self.full(&path), self.full(&new))?;
                 self.moved_prefix(index, &path, &new)?;
-                ok(json!({"path": new}))
+                ok(json!({"path": new, "id": fid}))
             }
             ("move" | "copy", "POST") => {
                 let to = rel(qs(q, "to"))?;
@@ -1039,9 +1047,9 @@ impl Store {
                 if action == "move" {
                     move_any(&self.full(&path), &self.full(&new))?;
                     self.moved_prefix(index, &path, &new)?;
-                } else {
-                    copy_tree(&self.full(&path), &self.full(&new))?;
+                    return ok(json!({"path": new, "id": fid}));
                 }
+                copy_tree(&self.full(&path), &self.full(&new))?;
                 ok(json!({"path": new}))
             }
             _ => Err(Bad::new(404, "not found")),
@@ -1420,6 +1428,39 @@ mod tests {
         call(&store, "DELETE", &format!("files/{id}"));
         fs::remove_dir_all(dir.join("B/A")).unwrap();
         assert_eq!(call(&store, "POST", "bin/restore?name=Plan.xlsx&expect=B/A/Plan.xlsx&exact=1").0, 409);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_move_back_keeps_the_files_own_extension() {
+        let (dir, store, id) = undo_store();
+        assert_eq!(call(&store, "POST", &format!("files/{id}/move?folder=B")).0, 200);
+        // `as=` names it as a rename would: never a new extension (report.xlsx -> report.html).
+        let (code, v) = call(&store, "POST", &format!("files/{id}/move?folder=A&from=B/a.xlsx&as=evil.html"));
+        assert_eq!(code, 200, "{v}");
+        assert_eq!(v["name"], "evil.html.xlsx");
+        assert!(!dir.join("A/evil.html").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_folder_undo_refuses_another_folder_that_took_its_place() {
+        let (dir, store, _) = undo_store();
+        let (code, v) = call(&store, "POST", "folders/move?path=A&to=B");
+        assert_eq!(code, 200);
+        let fid = v["id"].as_str().unwrap().to_string();
+        assert!(!fid.is_empty());
+        // Someone renames ours away and makes a different "A" in B.
+        assert_eq!(call(&store, "POST", "folders/rename?path=B/A&name=Mine").1["path"], "B/Mine");
+        fs::create_dir(dir.join("B/A")).unwrap();
+        let (code, v) = call(&store, "POST", &format!("folders/move?path=B/A&to=&as=A&id={fid}"));
+        assert_eq!(code, 409, "{v}");
+        assert!(dir.join("B/A").is_dir() && !dir.join("A").exists(), "the other folder is left alone");
+        // Ours, with its id: moved back. A rename answers with the id too.
+        let (code, v) = call(&store, "POST", &format!("folders/move?path=B/Mine&to=&as=A&id={fid}"));
+        assert_eq!((code, v["path"].as_str()), (200, Some("A")), "{v}");
+        let (_, v) = call(&store, "POST", "folders/rename?path=A&name=Z");
+        assert_eq!(v["id"].as_str(), Some(fid.as_str()));
         let _ = fs::remove_dir_all(&dir);
     }
 }

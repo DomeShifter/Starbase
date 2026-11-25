@@ -261,7 +261,8 @@ impl Home {
                         url,
                         Box::new(move |v: &Json| {
                             let now = v["path"].as_str()?.to_string();
-                            (now != p).then_some(undo::Step::Folder { was: p, now })
+                            let id = v["id"].as_str().unwrap_or_default().to_string();
+                            (now != p).then_some(undo::Step::Folder { id, was: p, now })
                         }),
                     )
                 }

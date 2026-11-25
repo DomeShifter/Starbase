@@ -866,7 +866,8 @@ pub(crate) fn answer(root: &Path, data: &Path, method: Method, url: &str, body: 
                         return reply(200, moved(&path));
                     }
                     let to = match q.get("as") {
-                        Some(want) => match exact_path(&to_dir, &clean_name(want), None) {
+                        // Named as a rename would be: the file keeps its own extension.
+                        Some(want) => match exact_path(&to_dir, &format!("{}{}", split_name(&clean_name(want)).0, split_name(&name).1), None) {
                             Ok(p) => p,
                             Err(a) => return a,
                         },
