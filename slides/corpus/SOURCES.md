@@ -86,3 +86,25 @@ Only decks with a clear open-source licence are used: no decks of unknown origin
 | `lo-anim-color-by-rgb` | colour animation | [anim-color-by-rgb.pptx](https://github.com/LibreOffice/core/blob/88289f1ea16f267c3f0438ff3bb72b33318da285/sd/qa/unit/data/pptx/anim-color-by-rgb.pptx) |
 | `lo-activex_commandbutton` | ActiveX command button | [activex_commandbutton.pptx](https://github.com/LibreOffice/core/blob/88289f1ea16f267c3f0438ff3bb72b33318da285/sd/qa/unit/data/pptx/activex_commandbutton.pptx) |
 | `lo-smartart-cycle` | SmartArt cycle | [smartart-cycle.pptx](https://github.com/LibreOffice/core/blob/88289f1ea16f267c3f0438ff3bb72b33318da285/sd/qa/unit/data/pptx/smartart-cycle.pptx) |
+
+## Baseline and known losses
+
+`baseline.json` is the `results.json` of a run of the workflow (see the comment at the top of
+`.github/workflows/slides-corpus.yml` for how to refresh it). The check fails only when a deck does
+worse than this baseline: a new inventory change, a second save that changes something, a page count
+that no longer matches, or a page whose pixel difference grew by more than 0.3 points. Better results
+are listed in the summary as a reason to refresh the baseline.
+
+Known changes with DeckCraft v0.18.1 (all 56 decks open, save and reopen; a second save never
+changes anything; LibreOffice opens every saved file with the same page count):
+
+| Deck | What changes on save | How bad |
+|---|---|---|
+| `lo-activex_checkbox`, `lo-activex_commandbutton`, `lo-activex_picture` | ActiveX controls (`p:control`) are dropped; their preview pictures are kept as plain pictures | the controls are gone (PowerPoint blocks them today anyway); LibreOffice draws 0.4–4.5% differently |
+| `lo-ole-emf_min` | the OLE object becomes a plain picture of its preview | looks the same; the embedded object can no longer be opened |
+| `lo-ole` | the embedded file moves from `ppt/embeddings/` to `ppt/media/` (as .docx); the fallback copy of the object is dropped | looks the same; Office not tested |
+| `lo-smartart-cycle`, `lo-smartart-org-chart` | SmartArt parts are written to `ppt/media/mediaN.xml` instead of `ppt/diagrams/` | valid package (right content types and relationships), unusual location; Office not tested |
+| `lo-modern-comments` | a comment authors part is added | harmless |
+| `poi-with_japanese` | 3 empty text runs are dropped; 4 hyperlinks whose relationship is missing in the original are written with the target `ppt/slides` | the input is broken; the written link is odd |
+| `gen-06-lo-resaved` | no inventory change, but DeckCraft's own render of the saved file differs by up to 1.5% per page (LibreOffice: 0.4% on slide 1) | small; cause not looked into |
+| `poi-sample_pptx_grouping_issues`, `poi-smartart-rotated-text` | no inventory change; renders differ by ≤0.5% | small |

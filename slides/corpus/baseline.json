@@ -1,0 +1,1825 @@
+{
+ "decks": {
+  "gen-01-text-review": {
+   "convert": {
+    "messages": [],
+    "ms": 1409,
+    "ok": true
+   },
+   "dc_pages": [
+    11,
+    11
+   ],
+   "dc_px": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "diffs": [],
+   "features": "",
+   "lo_pages": [
+    11,
+    11
+   ],
+   "lo_px": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 11,
+   "source": "generated (make_decks.py)"
+  },
+  "gen-02-photos": {
+   "convert": {
+    "messages": [],
+    "ms": 9,
+    "ok": true
+   },
+   "dc_pages": [
+    3,
+    3
+   ],
+   "dc_px": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "diffs": [],
+   "features": "",
+   "lo_pages": [
+    3,
+    3
+   ],
+   "lo_px": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 3,
+   "source": "generated (make_decks.py)"
+  },
+  "gen-03-tables": {
+   "convert": {
+    "messages": [],
+    "ms": 9,
+    "ok": true
+   },
+   "dc_pages": [
+    2,
+    2
+   ],
+   "dc_px": [
+    0.0,
+    0.0
+   ],
+   "diffs": [],
+   "features": "",
+   "lo_pages": [
+    2,
+    2
+   ],
+   "lo_px": [
+    0.0,
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 2,
+   "source": "generated (make_decks.py)"
+  },
+  "gen-04-charts": {
+   "convert": {
+    "messages": [],
+    "ms": 12,
+    "ok": true
+   },
+   "dc_pages": [
+    6,
+    6
+   ],
+   "dc_px": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "diffs": [],
+   "features": "",
+   "lo_pages": [
+    6,
+    6
+   ],
+   "lo_px": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 6,
+   "source": "generated (make_decks.py)"
+  },
+  "gen-05-shapes": {
+   "convert": {
+    "messages": [],
+    "ms": 8,
+    "ok": true
+   },
+   "dc_pages": [
+    2,
+    2
+   ],
+   "dc_px": [
+    0.0,
+    0.0
+   ],
+   "diffs": [],
+   "features": "",
+   "lo_pages": [
+    2,
+    2
+   ],
+   "lo_px": [
+    0.0,
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 2,
+   "source": "generated (make_decks.py)"
+  },
+  "gen-06-lo-resaved": {
+   "convert": {
+    "messages": [],
+    "ms": 16,
+    "ok": true
+   },
+   "dc_pages": [
+    11,
+    11
+   ],
+   "dc_px": [
+    0.29,
+    0.1,
+    1.09,
+    0.43,
+    1.45,
+    0.28,
+    0.0,
+    0.09,
+    0.09,
+    1.01,
+    0.67
+   ],
+   "diffs": [],
+   "features": "",
+   "lo_pages": [
+    11,
+    11
+   ],
+   "lo_px": [
+    0.38,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 11,
+   "source": "generated (make_decks.py)"
+  },
+  "gen-07-text-formatting": {
+   "convert": {
+    "messages": [],
+    "ms": 9,
+    "ok": true
+   },
+   "dc_pages": [
+    2,
+    2
+   ],
+   "dc_px": [
+    0.0,
+    0.0
+   ],
+   "diffs": [],
+   "features": "",
+   "lo_pages": [
+    2,
+    2
+   ],
+   "lo_px": [
+    0.0,
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 2,
+   "source": "generated (make_decks.py)"
+  },
+  "gen-08-many-slides": {
+   "convert": {
+    "messages": [],
+    "ms": 21,
+    "ok": true
+   },
+   "dc_pages": [
+    60,
+    60
+   ],
+   "dc_px": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "diffs": [],
+   "features": "",
+   "lo_pages": [
+    60,
+    60
+   ],
+   "lo_px": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 60,
+   "source": "generated (make_decks.py)"
+  },
+  "gen-09-fills-lines": {
+   "convert": {
+    "messages": [],
+    "ms": 9,
+    "ok": true
+   },
+   "dc_pages": [
+    3,
+    3
+   ],
+   "dc_px": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "diffs": [],
+   "features": "",
+   "lo_pages": [
+    3,
+    3
+   ],
+   "lo_px": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 3,
+   "source": "generated (make_decks.py)"
+  },
+  "gen-10-show-settings": {
+   "convert": {
+    "messages": [],
+    "ms": 10,
+    "ok": true
+   },
+   "dc_pages": [
+    6,
+    6
+   ],
+   "dc_px": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "diffs": [],
+   "features": "",
+   "lo_pages": [
+    5,
+    5
+   ],
+   "lo_px": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 6,
+   "source": "generated (make_decks.py)"
+  },
+  "gen-11-charts-more": {
+   "convert": {
+    "messages": [],
+    "ms": 11,
+    "ok": true
+   },
+   "dc_pages": [
+    5,
+    5
+   ],
+   "dc_px": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "diffs": [],
+   "features": "",
+   "lo_pages": [
+    5,
+    5
+   ],
+   "lo_px": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 5,
+   "source": "generated (make_decks.py)"
+  },
+  "gen-12-links-actions": {
+   "convert": {
+    "messages": [],
+    "ms": 8,
+    "ok": true
+   },
+   "dc_pages": [
+    4,
+    4
+   ],
+   "dc_px": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "diffs": [],
+   "features": "",
+   "lo_pages": [
+    4,
+    4
+   ],
+   "lo_px": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 4,
+   "source": "generated (make_decks.py)"
+  },
+  "gen-13-picture-formats": {
+   "convert": {
+    "messages": [],
+    "ms": 9,
+    "ok": true
+   },
+   "dc_pages": [
+    2,
+    2
+   ],
+   "dc_px": [
+    0.0,
+    0.0
+   ],
+   "diffs": [],
+   "features": "",
+   "lo_pages": [
+    2,
+    2
+   ],
+   "lo_px": [
+    0.0,
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 2,
+   "source": "generated (make_decks.py)"
+  },
+  "gen-14-tables-styled": {
+   "convert": {
+    "messages": [],
+    "ms": 8,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "generated (make_decks.py)"
+  },
+  "lo-MorphTransition": {
+   "convert": {
+    "messages": [],
+    "ms": 7,
+    "ok": true
+   },
+   "dc_pages": [
+    4,
+    4
+   ],
+   "dc_px": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "diffs": [],
+   "features": "Morph transition",
+   "lo_pages": [
+    4,
+    4
+   ],
+   "lo_px": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 4,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "lo-NumberedList-12ab-ab-34": {
+   "convert": {
+    "messages": [],
+    "ms": 7,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "numbered lists, mixed styles",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "lo-activex_checkbox": {
+   "convert": {
+    "messages": [],
+    "ms": 6,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [
+    "slide 1 pics: 0 -> 3",
+    "slide 1 crops: [] -> [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]",
+    "slide 1 controls: 6 -> 0",
+    "slide 1 control_previews: 3 -> 0"
+   ],
+   "features": "ActiveX check box",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    2.03
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "lo-activex_commandbutton": {
+   "convert": {
+    "messages": [],
+    "ms": 6,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [
+    "slide 1 pics: 0 -> 3",
+    "slide 1 crops: [] -> [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]]",
+    "slide 1 controls: 6 -> 0",
+    "slide 1 control_previews: 3 -> 0"
+   ],
+   "features": "ActiveX command button",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.37
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "lo-activex_picture": {
+   "convert": {
+    "messages": [],
+    "ms": 8,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [
+    "slide 1 pics: 0 -> 17",
+    "slide 1 crops: [] -> [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0, 0.0], [0.0...",
+    "slide 1 controls: 34 -> 0",
+    "slide 1 control_previews: 17 -> 0"
+   ],
+   "features": "ActiveX control with a picture",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    4.52
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "lo-airplane-transition": {
+   "convert": {
+    "messages": [],
+    "ms": 6,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "airplane transition (p15)",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "lo-anim-color-by-rgb": {
+   "convert": {
+    "messages": [],
+    "ms": 6,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "colour animation",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "lo-connector-shape-animations": {
+   "convert": {
+    "messages": [],
+    "ms": 5,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "animations on connectors and shapes",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "lo-crop-to-shape": {
+   "convert": {
+    "messages": [],
+    "ms": 6,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "picture cropped to a shape",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "lo-custgeom-overlapping-contours": {
+   "convert": {
+    "messages": [],
+    "ms": 7,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "custom geometry, overlapping paths",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "lo-effectOrder": {
+   "convert": {
+    "messages": [],
+    "ms": 6,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "glow and outer shadow on one shape",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "lo-group-rot": {
+   "convert": {
+    "messages": [],
+    "ms": 9,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "rotated group",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "lo-hyperlinktest": {
+   "convert": {
+    "messages": [],
+    "ms": 6,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "hyperlinks and click actions",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "lo-modern-comments": {
+   "convert": {
+    "messages": [],
+    "ms": 7,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [
+    "parts.comments: 1 -> 2"
+   ],
+   "features": "modern (threaded) comments",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "lo-multicol": {
+   "convert": {
+    "messages": [],
+    "ms": 5,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "text in columns",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "lo-ole": {
+   "convert": {
+    "messages": [],
+    "ms": 6,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [
+    "parts.media: [\"emf\"] -> [\"docx\", \"emf\"]",
+    "parts.embeddings: 1 -> 0",
+    "slide 1 ole: 2 -> 1"
+   ],
+   "features": "embedded OLE object",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "lo-ole-emf_min": {
+   "convert": {
+    "messages": [],
+    "ms": 7,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.04
+   ],
+   "diffs": [
+    "slide 1 pics: 0 -> 1",
+    "slide 1 crops: [] -> [[0.0, 0.0]]",
+    "slide 1 ole: 2 -> 0",
+    "slide 1 ole_previews: 1 -> 0"
+   ],
+   "features": "OLE object with an EMF preview",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "lo-predefined-table-style": {
+   "convert": {
+    "messages": [],
+    "ms": 7,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "built-in table style",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "lo-rightToLeftParagraph": {
+   "convert": {
+    "messages": [],
+    "ms": 6,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "right-to-left paragraphs",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "lo-shape-glow-effect": {
+   "convert": {
+    "messages": [],
+    "ms": 3,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "glow effect",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "lo-slidenum_field": {
+   "convert": {
+    "messages": [],
+    "ms": 8,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "slide number field",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "lo-smartart-cycle": {
+   "convert": {
+    "messages": [],
+    "ms": 6,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [
+    "parts.media: [] -> [\"xml\", \"xml\", \"xml\", \"xml\"]"
+   ],
+   "features": "SmartArt cycle",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "lo-smartart-org-chart": {
+   "convert": {
+    "messages": [],
+    "ms": 7,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [
+    "parts.media: [] -> [\"xml\", \"xml\", \"xml\", \"xml\"]"
+   ],
+   "features": "SmartArt organisation chart",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "lo-tableBorderLineStyle": {
+   "convert": {
+    "messages": [],
+    "ms": 8,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "table border line styles",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "lo-video-loop-mute": {
+   "convert": {
+    "messages": [],
+    "ms": 6,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "video set to loop and mute",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "LibreOffice/core (MPL-2.0)"
+  },
+  "poi-ArtisticEffectSample": {
+   "convert": {
+    "messages": [],
+    "ms": 16,
+    "ok": true
+   },
+   "dc_pages": [
+    2,
+    2
+   ],
+   "dc_px": [
+    0.0,
+    0.0
+   ],
+   "diffs": [],
+   "features": "picture artistic effects",
+   "lo_pages": [
+    2,
+    2
+   ],
+   "lo_px": [
+    0.0,
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 2,
+   "source": "apache/poi (Apache-2.0)"
+  },
+  "poi-EmbeddedAudio": {
+   "convert": {
+    "messages": [],
+    "ms": 7,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "embedded audio",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "apache/poi (Apache-2.0)"
+  },
+  "poi-EmbeddedVideo": {
+   "convert": {
+    "messages": [],
+    "ms": 7,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "embedded video (p14:media)",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "apache/poi (Apache-2.0)"
+  },
+  "poi-SampleShow": {
+   "convert": {
+    "messages": [],
+    "ms": 8,
+    "ok": true
+   },
+   "dc_pages": [
+    2,
+    2
+   ],
+   "dc_px": [
+    0.0,
+    0.0
+   ],
+   "diffs": [],
+   "features": "sample deck: text, layouts",
+   "lo_pages": [
+    2,
+    2
+   ],
+   "lo_px": [
+    0.0,
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 2,
+   "source": "apache/poi (Apache-2.0)"
+  },
+  "poi-SmartArt": {
+   "convert": {
+    "messages": [],
+    "ms": 7,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "SmartArt diagram",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "apache/poi (Apache-2.0)"
+  },
+  "poi-backgrounds": {
+   "convert": {
+    "messages": [],
+    "ms": 8,
+    "ok": true
+   },
+   "dc_pages": [
+    4,
+    4
+   ],
+   "dc_px": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "diffs": [],
+   "features": "slide backgrounds: gradient, picture, pattern",
+   "lo_pages": [
+    4,
+    4
+   ],
+   "lo_px": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 4,
+   "source": "apache/poi (Apache-2.0)"
+  },
+  "poi-bug58144-headers-footers-2007": {
+   "convert": {
+    "messages": [],
+    "ms": 9,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "headers, footers, slide numbers",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "apache/poi (Apache-2.0)"
+  },
+  "poi-chart-picture-bg": {
+   "convert": {
+    "messages": [],
+    "ms": 20,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "chart with a picture background",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "apache/poi (Apache-2.0)"
+  },
+  "poi-chart-texture-bg": {
+   "convert": {
+    "messages": [],
+    "ms": 7,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "chart with a texture background",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "apache/poi (Apache-2.0)"
+  },
+  "poi-layouts": {
+   "convert": {
+    "messages": [],
+    "ms": 8,
+    "ok": true
+   },
+   "dc_pages": [
+    10,
+    10
+   ],
+   "dc_px": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "diffs": [],
+   "features": "many slide layouts",
+   "lo_pages": [
+    10,
+    10
+   ],
+   "lo_px": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 10,
+   "source": "apache/poi (Apache-2.0)"
+  },
+  "poi-radar-chart": {
+   "convert": {
+    "messages": [],
+    "ms": 8,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "radar chart",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "apache/poi (Apache-2.0)"
+  },
+  "poi-sample_pptx_grouping_issues": {
+   "convert": {
+    "messages": [],
+    "ms": 9,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "nested groups",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.48
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "apache/poi (Apache-2.0)"
+  },
+  "poi-scatter-chart": {
+   "convert": {
+    "messages": [],
+    "ms": 8,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [],
+   "features": "scatter chart",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "apache/poi (Apache-2.0)"
+  },
+  "poi-shapes": {
+   "convert": {
+    "messages": [],
+    "ms": 9,
+    "ok": true
+   },
+   "dc_pages": [
+    6,
+    6
+   ],
+   "dc_px": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "diffs": [],
+   "features": "preset shapes and fills",
+   "lo_pages": [
+    6,
+    6
+   ],
+   "lo_px": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 6,
+   "source": "apache/poi (Apache-2.0)"
+  },
+  "poi-smartart-rotated-text": {
+   "convert": {
+    "messages": [],
+    "ms": 8,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.28
+   ],
+   "diffs": [],
+   "features": "SmartArt with rotated text",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.24
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "apache/poi (Apache-2.0)"
+  },
+  "poi-themes": {
+   "convert": {
+    "messages": [],
+    "ms": 39,
+    "ok": true
+   },
+   "dc_pages": [
+    10,
+    10
+   ],
+   "dc_px": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "diffs": [],
+   "features": "several themes and masters",
+   "lo_pages": [
+    10,
+    10
+   ],
+   "lo_px": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 10,
+   "source": "apache/poi (Apache-2.0)"
+  },
+  "poi-with_japanese": {
+   "convert": {
+    "messages": [],
+    "ms": 10,
+    "ok": true
+   },
+   "dc_pages": [
+    1,
+    1
+   ],
+   "dc_px": [
+    0.0
+   ],
+   "diffs": [
+    "slide 1 fmt[36:39]: [\"/11.0/Calibri/theme\", \"/11.0/Calibri/theme\", \"/18.0/Arial/theme\"] -> []",
+    "slide 1 links[0]: \"(broken link)\" -> \"ppt/slides\"",
+    "slide 1 links[1]: \"(broken link)\" -> \"ppt/slides\"",
+    "slide 1 links[3]: \"(broken link)\" -> \"ppt/slides\"",
+    "slide 1 links[4]: \"(broken link)\" -> \"ppt/slides\""
+   ],
+   "features": "Japanese text",
+   "lo_pages": [
+    1,
+    1
+   ],
+   "lo_px": [
+    0.0
+   ],
+   "reconvert_ok": true,
+   "rt2_diffs": [],
+   "slides": 1,
+   "source": "apache/poi (Apache-2.0)"
+  }
+ },
+ "meta": {
+  "deckcraft": "v0.18.1 @ 7cc73ab1895e",
+  "libreoffice": "LibreOffice 24.2.7.2 420(Build:2)"
+ }
+}
