@@ -28,6 +28,7 @@ mod filebrowser;
 mod files;
 mod findreplace;
 mod fonts;
+mod formulaimages;
 mod home;
 mod hostdata;
 mod house;
