@@ -1629,6 +1629,30 @@ impl Shell {
                 });
             });
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                // Your avatar at the far right, as in Starbase Sheets and Slides: a small menu
+                // with who you are and the way back to the home screen.
+                #[cfg(target_arch = "wasm32")]
+                if let Some((name, username, colour)) = link.and_then(Link::me) {
+                    ui.add_space(8.0);
+                    let r = crate::share::avatar(ui, &name, &colour, 32.0).on_hover_text(format!("{name} ({username})"));
+                    egui::Popup::menu(&r).show(|ui| {
+                        ui.set_min_width(240.0);
+                        ui.add_space(6.0);
+                        ui.vertical_centered(|ui| {
+                            crate::share::avatar(ui, &name, &colour, 56.0);
+                            ui.label(RichText::new(format!("Hi, {name}!")).size(18.0).color(TEXT));
+                            ui.label(RichText::new(&username).size(13.0).color(TEXT_DIM));
+                        });
+                        ui.add_space(6.0);
+                        if ui.button(RichText::new("Starbase home").size(14.0).color(TEXT)).clicked() {
+                            if let Some(l) = link {
+                                l.home();
+                            }
+                            ui.close();
+                        }
+                    });
+                    ui.add_space(8.0);
+                }
                 let label = if self.share.waiting() { "Saving…" } else { "Share" };
                 let share = Button::new(RichText::new(label).size(14.0).color(TEXT)).fill(SHARE).corner_radius(18.0).min_size(vec2(84.0, 36.0));
                 match link {
@@ -1665,11 +1689,20 @@ impl Shell {
         let server_name = link.map(Link::name).filter(|n| !n.is_empty());
         let stem = match &server_name {
             Some(n) => n.rsplit_once('.').map_or(n.as_str(), |(s, _)| s).to_string(),
-            None if link.is_some() => "Untitled document".to_string(),
+            None if link.is_some() => {
+                // A new document has no name until its first save: Docs' "Untitled document",
+                // which the first save keeps as the file's name unless it is renamed here.
+                #[cfg(target_arch = "wasm32")]
+                if app.session.file_name.is_none() && app.session.path.is_none() && app.session.doc.core.title.is_empty() {
+                    app.session.file_name = Some(UNTITLED.to_string());
+                }
+                app.title_stem()
+            }
             None => app.title_stem(),
         };
+        let new_doc = link.is_some() && server_name.is_none();
         let asked = ui.ctx().data_mut(|d| d.remove_temp::<bool>(egui::Id::unique(RENAME))).unwrap_or(false);
-        if asked && server_name.is_some() {
+        if asked && (server_name.is_some() || new_doc) {
             self.renaming = Some(stem.clone());
         }
         if let (Some(text), Some(link)) = (&mut self.renaming, link) {
@@ -1696,13 +1729,17 @@ impl Shell {
             if done || cancel {
                 let new = text.trim().to_string();
                 if !cancel && !new.is_empty() && new != stem {
-                    link.rename(&new);
+                    if new_doc {
+                        app.session.file_name = Some(new);
+                    } else {
+                        link.rename(&new);
+                    }
                 }
                 self.renaming = None;
             }
         } else {
             let label = ui.add(egui::Label::new(RichText::new(&stem).size(18.0).color(TEXT)).sense(egui::Sense::click()));
-            if server_name.is_some() && label.on_hover_text("Rename").clicked() {
+            if (server_name.is_some() || new_doc) && label.on_hover_text("Rename").clicked() {
                 self.renaming = Some(stem.clone());
                 ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(RENAME), true));
             }
@@ -1729,6 +1766,10 @@ impl Shell {
         }
     }
 }
+
+/// What Docs calls a document that has no name yet.
+#[cfg(target_arch = "wasm32")]
+pub const UNTITLED: &str = "Untitled document";
 
 /// Docs' menu rows: 32 px tall whatever they hold, 16 px from the sides.
 const ROW: f32 = 32.0;

@@ -55,6 +55,11 @@ pub fn from_address() -> Option<String> {
     safe_next(&params.get("next")?)
 }
 
+/// Whether `next` itself carries a `next=` (following it could go round in circles).
+pub fn loops(next: &str) -> bool {
+    next.contains("next=")
+}
+
 /// Takes `?next=` out of the address bar (signed in already: it isn't followed, so a page that
 /// sent here by mistake can't go round in circles).
 #[cfg(target_arch = "wasm32")]
@@ -92,6 +97,12 @@ mod tests {
         ] {
             assert_eq!(safe_next(good).as_deref(), Some(good), "{good}");
         }
+    }
+
+    #[test]
+    fn a_link_with_its_own_next_is_a_loop() {
+        assert!(super::loops("/?next=/docs/"));
+        assert!(!super::loops("/docs/?file=abc"));
     }
 
     #[test]

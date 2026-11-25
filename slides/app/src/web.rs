@@ -60,7 +60,7 @@ pub fn start() {
                         return Ok(Box::new(presenter) as Box<dyn eframe::App>);
                     }
                     let inbox: Inbox = Inbox::default();
-                    let mode = crate::theme::Mode::parse(&crate::prefs::get(crate::theme::KEY).unwrap_or_default());
+                    let mode = crate::theme::Mode::default();
                     let shell = Shell::new(mode);
                     let mut services = services(inbox.clone(), cc.egui_ctx.clone(), shell.presenter_flag());
                     if let Some(bridge) = &app_bridge {

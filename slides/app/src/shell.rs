@@ -139,15 +139,6 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Cmd("Zoom in", "view.zoomIn", NO, "Ctrl++"),
             Cmd("Zoom out", "view.zoomOut", NO, "Ctrl+-"),
             Cmd("Fit", "view.fit", NO, ""),
-            Sep,
-            Sub(
-                "Theme",
-                &[
-                    Check("Match the system", "slides.theme", r#"{"mode":"system"}"#, "theme:system"),
-                    Check("Light", "slides.theme", r#"{"mode":"light"}"#, "theme:light"),
-                    Check("Dark", "slides.theme", r#"{"mode":"dark"}"#, "theme:dark"),
-                ],
-            ),
         ],
     ),
     (
@@ -356,16 +347,20 @@ impl Shell {
     }
 
     /// The palette for this frame.
-    pub fn palette(&self, ctx: &egui::Context) -> Palette {
-        Palette::of(self.mode.is_dark(ctx))
+    pub fn palette(&self) -> Palette {
+        Palette::of(self.mode.is_dark())
     }
 
     /// Draws the title row, menus and toolbar (nothing during a slideshow, which is full screen).
     /// Call before `SlideApp::ui`, which takes the room left.
     pub fn ui(&mut self, app: &mut SlideApp, ui: &mut Ui, drive: Option<&dyn Drive>) {
         let ctx = ui.ctx().clone();
-        let pal = self.palette(&ctx);
+        let pal = self.palette();
         crate::theme::sync(app, pal.dark);
+        if !pal.dark {
+            // Light whatever the OS prefers (egui would follow it otherwise), as Docs does.
+            ctx.set_theme(egui::ThemePreference::Light);
+        }
         if app.show.is_some() {
             self.presenting = self.presenter.get();
         } else if self.presenting {
@@ -773,10 +768,8 @@ impl Shell {
                 download(&name, &bytes);
                 return Ok(json!({ "name": name, "bytes": size }));
             }
-            "theme" => {
-                self.mode = Mode::parse(p.get("mode").and_then(Value::as_str).unwrap_or("system"));
-                crate::prefs::set(crate::theme::KEY, self.mode.name());
-            }
+            // Slides is light like Drive, Sheets and Docs; "dark" exists for tests and the test hook only.
+            "theme" => self.mode = Mode::parse(p.get("mode").and_then(Value::as_str).unwrap_or("light")),
             "presenter" => {
                 // The slides here, the presenter window (notes, next slide, timer) beside them.
                 self.presenter.set(true);
