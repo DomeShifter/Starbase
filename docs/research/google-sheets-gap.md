@@ -69,7 +69,7 @@ Google's function list (support.google.com/docs/table/25273, downloaded and pars
 | Settings: locale, time zone, calculation (iterative, manual) | File › Settings | Partly | Med | S | Settings panel exists; check locale/time zone; `formulas.calculationOptions` (incl. iterative) is engine-only |
 | Undo / redo / cut / copy / paste / paste special | Edit | Has | High | – | Paste special is GridCraft's Excel-style dialog; Sheets has a sub-menu (values only, format only, formula only, data validation only, conditional formatting only, transposed, column widths) |
 | Paste special as a Sheets sub-menu | Edit › Paste special ▸ | Has (except Conditional formatting only: engine) | High | S | Same command with params; Ctrl+Shift+V = values is the most used |
-| Move row / column up, down, left, right | Edit › Move | Partly (columns; rows need an engine command) | Med | S | `sheet.moveColumns`; no row move in the engine |
+| Move row / column up, down, left, right | Edit › Move | Has (2026-11-25) | Med | S | `sheet.moveColumns`; rows with `sheet.moveRows` (StarSheets 0096) |
 | Delete values / row / column / cells | Edit › Delete | Has | High | – | |
 | Find and replace, Ctrl+F bar | Edit | Has | High | – | `findreplace.rs`, regex included |
 | Show gridlines / formula bar / formulas | View › Show | Has | Med | – | |
@@ -114,7 +114,7 @@ Google's function list (support.google.com/docs/table/25273, downloaded and pars
 | Convert to table (Ctrl+Alt+T) | Format › Convert to table | Partly | Med–High | M | Runs GridCraft's Excel table (`insert.table`, `table.*`). Sheets' **Tables** add column types (number, text, date, drop-down, tick box, chips), a column menu (Ctrl+Alt+\\), table references `Table[Column]` and Pre-built tables. Engine has structured refs and banded rows; column types and the Sheets look are missing |
 | Pre-built tables (templates) | Insert › Pre-built tables | Missing | Low–Med | M | Needs a template gallery (shared with the home screen's "start a new spreadsheet" row) |
 | Conditional formatting (single colour, colour scale, custom formula) | Format › Conditional formatting | Has | High | – | `cfpanel.rs` |
-| Alternating colours | Format › Alternating colours | Engine-only (as table styles) | Med–High | S–M | `table.style`, `table.bandedRows`, `home.formatAsTable`; Sheets' panel = header colour + two band colours + footer, on a plain range. Skipped in batch 1: a table rewrites header cells and adds a header row when there is none, so plain-range banding needs an engine change |
+| Alternating colours | Format › Alternating colours | Has (2026-11-25: side panel; stored as conditional formatting, docs/decisions.md) | Med–High | S–M | `table.style`, `table.bandedRows`, `home.formatAsTable`; Sheets' panel = header colour + two band colours + footer, on a plain range. Skipped in batch 1: a table rewrites header cells and adds a header row when there is none, so plain-range banding needs an engine change |
 | Clear formatting (Ctrl+\\) | Format | Has | High | – | |
 | Paint format | Toolbar | Has | High | – | `edit.formatPainter` |
 | Sort range A→Z / Z→A / advanced (several columns, header row) | Data › Sort range | Has | High | – | |
@@ -136,7 +136,7 @@ Google's function list (support.google.com/docs/table/25273, downloaded and pars
 | Data extraction (pull parts out of smart chips) | Data › Data extraction | Missing | Low | – | Needs chips; skip |
 | Spelling | Tools › Spelling | Has | Med | – | Personal dictionary per browser (could move to the account) |
 | **Autocomplete** (suggest the rest of a typed value from the column) | Tools › Suggestion controls | Check | High | S | Excel's AutoComplete may already be in GridCraft; check it's on |
-| **Smart Fill** (Ctrl+Shift+Y, pattern suggestions) | Tools › Suggestion controls | Engine-only (as Flash Fill) | Med | S–M | `edit.flashFill` / `data.flashFill` (Excel's Ctrl+E); Sheets offers it as a grey suggestion to accept. Knowledge-Graph part not buildable |
+| **Smart Fill** (Ctrl+Shift+Y, pattern suggestions) | Tools › Suggestion controls | Has (2026-11-25: a suggestion card, not grey text in the cells) | Med | S–M | `edit.flashFill` / `data.flashFill` (Excel's Ctrl+E); Sheets offers it as a grey suggestion to accept. Knowledge-Graph part not buildable |
 | Formula suggestions / formula corrections | Tools › Suggestion controls | Missing | Low | M | AI-ish; skip or local LLM later |
 | Calculation controls (recalc settings, iterative) | Tools › Calculation controls | Partly | Low | S | Only "Calculate now"; `formulas.calculationOptions` has the rest |
 | Conditional notifications / notification settings (email on change) | Tools | Missing | Low–Med | M | Needs mail or Telegram-like hooks on the server |
@@ -174,6 +174,8 @@ Google's function list (support.google.com/docs/table/25273, downloaded and pars
 13. **Drop-down: multiple selections + chip style**, and **filter/sort by colour**.
 14. **IMPORTRANGE between Starbase files** (server resolves the file, checks the reader's access, pushes updates), then **IMAGE** + **SPARKLINE**.
 15. **Version history upgrade**: more than 6 versions, named versions, who changed what (and later per-cell edit history), using the authors the live server already knows.
+
+_Batch 1 (2026-11-24) did 1–4, 6 and 9 except moving rows; batch 3 (2026-11-25) did the rest of the cheap ones: 5 (Alternating colours), 9 (Move row up/down) and 10 (Smart Fill; AutoComplete was already on). Only Paste special › Conditional formatting only is still missing from 2 (engine)._
 
 _Batch 2 (2026-11-25): 8 done as far as the engine goes (trendline options; axis min/max needs engine fields), 11 done without a side panel or commenter role, 12 only Create/Remove filter; 7, 12 (filter views) and 13 wait on GridCraft changes (starsheets/ROADMAP.md lists them)._
 

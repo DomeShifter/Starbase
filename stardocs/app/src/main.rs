@@ -22,6 +22,7 @@
 
 // The window and what it needs: both the browser and the desktop.
 mod bundled_fonts;
+mod download;
 mod icons;
 mod looks;
 mod mystyles;
@@ -61,6 +62,8 @@ mod native;
 mod native_stubs;
 #[cfg(not(target_arch = "wasm32"))]
 mod serverfile;
+#[cfg(not(target_arch = "wasm32"))]
+mod updates;
 #[cfg(not(target_arch = "wasm32"))]
 use localfile as server;
 #[cfg(not(target_arch = "wasm32"))]

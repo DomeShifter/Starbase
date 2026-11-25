@@ -220,6 +220,18 @@ fn spawn(file: Option<&Path>) {
     }
 }
 
+/// A window of its own on document `id` on the connected server (`--server-file`).
+fn spawn_server(id: &str, name: &str) {
+    match std::env::current_exe() {
+        Ok(exe) => {
+            if let Err(e) = std::process::Command::new(exe).args(["--server-file", id, "--name", name]).spawn() {
+                log::error!("can't open another window: {e}");
+            }
+        }
+        Err(e) => log::error!("can't find this program to open another window: {e}"),
+    }
+}
+
 /// Where the editor's preferences (theme, interface size, editing options…) are kept, as the
 /// web app keeps them in `localStorage`.
 fn prefs_path() -> Option<PathBuf> {
@@ -275,6 +287,8 @@ pub fn make_app(link: &Link, services: Services, stored_prefs: Option<&str>) -> 
     let mut app = WordApp::new(session, services).with_chrome(HostChrome { title_bar: false, ribbon: false, status_bar: false });
     // The link saves (a moment after the last change); WordCraft's own AutoSave stays off.
     app.autosave = false;
+    // Update checks ask for Starbase's releases, never WordCraft's; none starts here.
+    crate::updates::setup(&mut app);
     crate::prefs::restore(&mut app, stored_prefs);
     crate::theme::keep_light(&mut app);
     crate::looks::apply(&mut app);
@@ -323,6 +337,7 @@ impl Desktop {
         link.set_server(server.as_ref().map(|s| s.url.clone()));
         let services = Services { file_dialog: Some(Box::new(file_dialog)), ..Default::default() };
         let mut app = make_app(&link, services, stored.as_deref());
+        crate::updates::start_if_on(&mut app);
         if open {
             link.open(&mut app);
         } else if server_file.is_some() {
@@ -420,6 +435,7 @@ impl eframe::App for Desktop {
         for r in self.link.take_requests() {
             match r {
                 Request::Open(path) => self.open(path),
+                Request::OpenServer(id, name) => spawn_server(&id, &name),
                 Request::New => spawn(None),
                 Request::Connect => self.connect.open(),
                 Request::Disconnect => {

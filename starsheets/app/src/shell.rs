@@ -76,7 +76,15 @@ pub const MENUS: &[(&str, &[Item])] = &[
                 ],
             ),
             Sep,
-            Sub("Move", &[Cmd("Column left", "panel:moveColumnLeft", ""), Cmd("Column right", "panel:moveColumnRight", "")]),
+            Sub(
+                "Move",
+                &[
+                    Cmd("Row up", "panel:moveRowUp", ""),
+                    Cmd("Row down", "panel:moveRowDown", ""),
+                    Cmd("Column left", "panel:moveColumnLeft", ""),
+                    Cmd("Column right", "panel:moveColumnRight", ""),
+                ],
+            ),
             Sub(
                 "Delete",
                 &[
@@ -259,6 +267,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
             ),
             Cmd("Convert to table", "insert.table", "Ctrl+Alt+T"),
             Cmd("Conditional formatting", "ui:manageRules", ""),
+            Cmd("Alternating colours", "panel:alternatingColours", ""),
             Sep,
             Cmd("Clear formatting", "edit.clearFormats", "Ctrl+\\"),
         ],
@@ -300,6 +309,10 @@ pub const MENUS: &[(&str, &[Item])] = &[
         "Tools",
         &[
             Sub("Spelling", &[Cmd("Spell check", "review.spelling", "")]),
+            Sub(
+                "Suggestion controls",
+                &[Cmd("Smart Fill", "panel:smartFill", "Ctrl+Shift+Y"), Cmd("Turn off Smart Fill suggestions", "panel:smartFillToggle", "")],
+            ),
             Sub("Calculation controls", &[CmdWith("Calculate now", "formulas.calculateNow", "", "{}")]),
             Sep,
             Cmd("Accessibility", "review.checkAccessibility", ""),
@@ -520,6 +533,8 @@ pub struct Shell {
     currency: crate::currency::CustomCurrency,
     /// Help › Keyboard shortcuts and Help › Search the menus.
     help: crate::shortcuts::Help,
+    /// Smart Fill's suggestion card under the next empty cell of a column being typed.
+    smart: crate::smartfill::SmartFill,
     /// The bar of the filter view open in this tab (Data › Filter views).
     views: filterviews::Bar,
     /// Borders menu: the colour and line style the next border is drawn with (to-do row 66).
@@ -612,6 +627,7 @@ impl Shell {
             run_found(app, &ctx, &found);
         }
         sheets_keys(app, &ctx);
+        self.smart.ui(app, &ctx);
         // Ctrl+Shift+F: hide/show the menus (taken before the grid sees it).
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::F)) {
             self.compact = !self.compact;
@@ -1172,6 +1188,7 @@ pub const MENU_ICONS: &[(&str, &str)] = &[
     ("Merge cells", "cell_merge"),
     ("Convert to table", "table"),
     ("Conditional formatting", "format_paint"),
+    ("Alternating colours", "format_color_fill"),
     ("Clear formatting", "format_clear"),
     ("Sort range A → Z", "sort_by_alpha"),
     ("Sort range Z → A", "sort_by_alpha"),
@@ -1443,6 +1460,22 @@ pub fn run_entry_with(app: &mut SheetApp, ctx: &egui::Context, id: &str, params:
     if filterviews::handles(id) {
         return filterviews::run(app, id, &params);
     }
+    match id {
+        "panel:smartFill" => return crate::smartfill::accept(app),
+        "panel:smartFillToggle" => return crate::smartfill::set_off(!crate::smartfill::off()),
+        // With parameters (the test hook) it applies them; from the menu it opens the panel.
+        "panel:alternatingColours" if params.as_object().is_some_and(|o| !o.is_empty()) => {
+            if let Err(e) = crate::altcolours::run(app, &params) {
+                app.message = Some(("Alternating colours".into(), e));
+            }
+            return;
+        }
+        "panel:alternatingColours" => {
+            ctx.data_mut(|m| m.insert_temp(egui::Id::unique(crate::altcolours::REQUEST), true));
+            return;
+        }
+        _ => {}
+    }
     if !id.starts_with("panel:") && !id.starts_with("ui:") && !matches!(id, "edit.copy" | "edit.cut" | "edit.paste") {
         return app.run_or_alert(id, params);
     }
@@ -1496,17 +1529,21 @@ pub fn run_entry_with(app: &mut SheetApp, ctx: &egui::Context, id: &str, params:
 }
 
 /// Sheets' keys that GridCraft doesn't have, taken before the grid sees them: Ctrl+/ (keyboard
-/// shortcuts), Alt+/ (search the menus), Ctrl+Alt+M (comment) and Ctrl+Shift+V (paste values
-/// only).
+/// shortcuts), Alt+/ (search the menus), Ctrl+Alt+M (comment), Ctrl+Shift+Y (Smart Fill) and
+/// Ctrl+Shift+V (paste values only).
 fn sheets_keys(app: &mut SheetApp, ctx: &egui::Context) {
     use egui::{Key, KeyboardShortcut, Modifiers};
-    let (help, search, comment) = ctx.input_mut(|i| {
+    let (help, search, comment, smart) = ctx.input_mut(|i| {
         (
             i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::Slash)),
             i.consume_shortcut(&KeyboardShortcut::new(Modifiers::ALT, Key::Slash)),
             i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::ALT, Key::M)),
+            i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Y)),
         )
     });
+    if smart && app.editor.is_none() {
+        run_entry(app, ctx, "panel:smartFill");
+    }
     if comment {
         run_entry(app, ctx, "panel:comment");
     }
@@ -1826,6 +1863,9 @@ mod tests {
             "panel:protect",
             "panel:shortcuts",
             "panel:searchMenus",
+            "panel:alternatingColours",
+            "panel:smartFill",
+            "panel:smartFillToggle",
         ];
         for id in ids.iter().filter(|id| id.starts_with("panel:")) {
             assert!(crate::menuactions::handles(id) || filterviews::handles(id) || known.contains(id), "{id}: nothing opens it");

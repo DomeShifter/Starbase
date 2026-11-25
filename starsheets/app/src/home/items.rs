@@ -178,6 +178,9 @@ impl Home {
                 if house::menu_row(ui, Some("description"), "New document", "", true) {
                     self.new_file(&into, true);
                 }
+                if self.store.has_slides() && house::menu_row(ui, Some("slideshow"), "New presentation", "", true) {
+                    self.store.new_presentation(&into);
+                }
                 if house::menu_row(ui, Some("create_new_folder"), "New folder", "", true) {
                     if here.is_none() {
                         self.navigate(View::Mine(self.space.clone()));
@@ -235,7 +238,7 @@ impl Home {
         let order = self.order();
         self.select_click(ui, item, resp, &order);
         if resp.double_clicked() {
-            self.activate(item);
+            self.activate(ui.ctx(), item);
         }
         if resp.drag_started() {
             let set = if self.selected.contains(item) { self.selected.clone() } else { vec![item.clone()] };
@@ -331,7 +334,7 @@ impl Home {
 
     pub(super) fn file_card(&mut self, ui: &mut Ui, ctx: &egui::Context, f: &FileRow, clicked_item: &mut bool) {
         let item = Item::File(f.id.clone());
-        let kind = if crate::store::is_doc(&f.name) { "stardocs" } else { "starsheets" };
+        let kind = kind_icon(&f.name);
         let (r, resp) = ui.allocate_exact_size(vec2(CARD_W, CARD_H), Sense::click_and_drag());
         if ui.is_rect_visible(r) {
             self.want_thumb(ctx, f);
@@ -430,7 +433,7 @@ impl Home {
                 Item::File(id) => self.file(id).map(|f| ListRow {
                     item: item.clone(),
                     name: f.name.clone(),
-                    icon: if crate::store::is_doc(&f.name) { "stardocs" } else { "starsheets" },
+                    icon: kind_icon(&f.name),
                     owner: f.owner.clone(),
                     modified: f.modified,
                     size: Some(f.size),
@@ -540,7 +543,7 @@ impl Home {
         }
     }
 
-    pub(super) fn activate(&mut self, item: &Item) {
+    pub(super) fn activate(&mut self, ctx: &egui::Context, item: &Item) {
         match item {
             Item::Folder(f) => {
                 let f = f.clone();
@@ -548,10 +551,21 @@ impl Home {
             }
             // Files always open in a new tab, as from Google Drive, so the file browser stays
             // where it was (to-do 2 row 5; the separate "Open in new tab" entry went with it).
+            // Other files: a preview in a new tab (pictures, PDFs, sound, films, text), else a
+            // download.
             Item::File(id) => {
                 let name = self.file(id).map(|f| f.name.clone()).unwrap_or_default();
-                if let Err(e) = self.store.open(id, &name) {
-                    self.error = Some(e);
+                // This computer's own files open where they belong: Sheets, Docs, else the
+                // system's default app (localstore.rs).
+                let editor = opens_as(&name) == Opens::Editor || self.store.opens_any_file();
+                match if editor { Opens::Editor } else { opens_as(&name) } {
+                    Opens::Editor => {
+                        if let Err(e) = self.store.open(id, &name) {
+                            self.error = Some(e);
+                        }
+                    }
+                    Opens::Preview => self.preview(ctx, id, &name),
+                    Opens::Download => self.download(ctx, id, &name),
                 }
             }
         }
@@ -567,6 +581,62 @@ impl Home {
     }
 }
 
+/// What a file is, from its name: "sheet", "doc", or for other files (the server's own list is
+/// crates/server/src/preview.rs) "image", "audio", "video", "pdf", "text" or "other" (HTML, SVG
+/// and anything unknown: download only, never shown).
+pub(super) fn file_kind(name: &str) -> &'static str {
+    let lower = name.to_lowercase();
+    if crate::store::is_doc(&lower) {
+        return "doc";
+    }
+    if [".xlsx", ".xlsm", ".xls", ".csv", ".ods"].iter().any(|x| lower.ends_with(x)) {
+        return "sheet";
+    }
+    let ext = lower.rsplit_once('.').map_or("", |(_, e)| e);
+    match ext {
+        "png" | "jpg" | "jpeg" | "jfif" | "gif" | "webp" | "avif" | "bmp" | "ico" => "image",
+        "mp3" | "wav" | "ogg" | "oga" | "opus" | "flac" | "m4a" | "aac" => "audio",
+        "mp4" | "m4v" | "webm" | "ogv" | "mov" => "video",
+        "pdf" => "pdf",
+        "txt" | "text" | "md" | "markdown" | "log" | "json" | "yaml" | "yml" | "toml" | "ini" | "cfg" | "conf" | "env" | "tsv" | "rs" | "py"
+        | "js" | "mjs" | "ts" | "tsx" | "jsx" | "c" | "h" | "cc" | "cpp" | "hpp" | "java" | "kt" | "go" | "rb" | "php" | "sh" | "bash" | "zsh"
+        | "fish" | "ps1" | "bat" | "css" | "scss" | "sql" | "lua" | "pl" | "r" | "swift" | "cs" | "diff" | "patch" | "tex" | "srt" | "vtt"
+        | "nfo" => "text",
+        _ => "other",
+    }
+}
+
+/// The icon of a file's type.
+pub(super) fn kind_icon(name: &str) -> &'static str {
+    match file_kind(name) {
+        "sheet" | "doc" => crate::store::app_icon(name),
+        "image" => "image",
+        "audio" => "music_note",
+        "video" => "movie",
+        "pdf" => "picture_as_pdf",
+        "text" => "description",
+        _ => "draft",
+    }
+}
+
+/// What opening a file does.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Opens {
+    /// Starbase Sheets or Docs.
+    Editor,
+    /// The server's preview page, in a new tab.
+    Preview,
+    Download,
+}
+
+pub(super) fn opens_as(name: &str) -> Opens {
+    match file_kind(name) {
+        "sheet" | "doc" => Opens::Editor,
+        "other" => Opens::Download,
+        _ => Opens::Preview,
+    }
+}
+
 /// One row of the list view: a folder or a file, as it is shown.
 struct ListRow {
     item: Item,
@@ -578,11 +648,11 @@ struct ListRow {
     starred: bool,
 }
 
-/// A file's name as Drive shows it: without `.xlsx` or `.docx` (the icon says which it is; the
+/// A file's name as Drive shows it: without `.xlsx`, `.docx` or `.pptx` (the icon says which it is; the
 /// full name shows on hover). Other extensions (.csv, .odt) stay.
 fn shown_name(name: &str) -> &str {
     let lower = name.to_ascii_lowercase();
-    if (lower.ends_with(".xlsx") || lower.ends_with(".docx")) && name.len() > 5 { &name[..name.len() - 5] } else { name }
+    if (lower.ends_with(".xlsx") || lower.ends_with(".docx") || lower.ends_with(".pptx")) && name.len() > 5 { &name[..name.len() - 5] } else { name }
 }
 
 /// `text` on one line, at most `width` wide: cut short with "…" when longer (as Drive does).
@@ -616,7 +686,26 @@ fn empty_folder(ui: &mut Ui, can_add: bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::shown_name;
+    use super::{Opens, kind_icon, opens_as, shown_name};
+
+    #[test]
+    fn every_file_type_has_an_icon_and_a_way_to_open() {
+        assert_eq!((kind_icon("a.xlsx"), opens_as("a.xlsx")), ("starsheets", Opens::Editor));
+        assert_eq!((kind_icon("a.DOCX"), opens_as("a.DOCX")), ("stardocs", Opens::Editor));
+        assert_eq!((kind_icon("Talk.pptx"), opens_as("Talk.pptx")), ("starslides", Opens::Editor));
+        assert_eq!((kind_icon("a.JPG"), opens_as("a.JPG")), ("image", Opens::Preview));
+        assert_eq!((kind_icon("a.pdf"), opens_as("a.pdf")), ("picture_as_pdf", Opens::Preview));
+        assert_eq!((kind_icon("a.mp4"), opens_as("a.mp4")), ("movie", Opens::Preview));
+        assert_eq!((kind_icon("a.mp3"), opens_as("a.mp3")), ("music_note", Opens::Preview));
+        assert_eq!((kind_icon("a.md"), opens_as("a.md")), ("description", Opens::Preview));
+        // Never shown in the browser: download only.
+        for n in ["a.html", "a.svg", "a.exe", "README"] {
+            assert_eq!((kind_icon(n), opens_as(n)), ("draft", Opens::Download), "{n}");
+        }
+        for icon in ["starsheets", "stardocs", "starslides", "image", "picture_as_pdf", "movie", "music_note", "description", "draft"] {
+            assert!(crate::icons::has(icon), "{icon}");
+        }
+    }
 
     #[test]
     fn drive_hides_only_its_own_file_extensions() {

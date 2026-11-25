@@ -529,6 +529,26 @@ mod tests {
     }
 
     #[test]
+    fn a_csv_is_written_with_crlf_and_read_back_from_either_line_ending() {
+        // CRLF between rows (RFC 4180, as Google Sheets and Excel export CSV); a file with
+        // plain LF line endings still opens the same.
+        let mut s = gridcraft_engine::Session::new();
+        s.new_workbook();
+        s.execute("cell.set", serde_json::json!({"cell": "A1", "input": "Item"})).unwrap();
+        s.execute("cell.set", serde_json::json!({"cell": "B1", "input": "Cost"})).unwrap();
+        s.execute("cell.set", serde_json::json!({"cell": "A2", "input": "Rent"})).unwrap();
+        s.execute("cell.set", serde_json::json!({"cell": "B2", "input": "850"})).unwrap();
+        let csv = crate::store::xlsx(&s.active().unwrap().wb, "Budget.csv").unwrap();
+        assert_eq!(csv, b"Item,Cost\r\nRent,850\r\n");
+        let read = |bytes: &[u8]| {
+            let (wb, _) = gridcraft_engine::io::open_bytes("Budget.csv", bytes).unwrap();
+            crate::store::xlsx(&wb, "Budget.csv").unwrap()
+        };
+        assert_eq!(read(&csv), csv, "CRLF round-trips unchanged");
+        assert_eq!(read(b"Item,Cost\nRent,850\n"), csv, "LF reads the same");
+    }
+
+    #[test]
     fn names_without_their_extension() {
         assert_eq!(stem("Budget.xlsx"), "Budget");
         assert_eq!(stem("Budget (conflicted copy).xlsx"), "Budget (conflicted copy)");

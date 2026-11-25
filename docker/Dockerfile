@@ -1,9 +1,11 @@
-# Starbase in one container: Starbase Sheets (with the home screen) at /, Starbase Docs at /docs/, and the
-# file server (starsheets/crates/server) that stores everything and serves both sites.
+# Starbase in one container: Starbase Sheets (with the home screen) at /, Starbase Docs at /docs/,
+# Starbase Slides at /slides/, and the file server (starsheets/crates/server) that stores everything
+# and serves the sites.
 # Assembled by .github/workflows/release.yml; the build context holds
 #   server-bin/<arch>/starsheets-server   (Starbase Sheets workflow, artifact starsheets-server)
 #   site/                                  (artifact starsheets-web)
 #   site/docs/                             (artifact stardocs-web)
+#   site/slides/                           (artifact slides-web)
 #   docker run -d -p 8080:8080 -v starbase:/data ghcr.io/domeshifter/starbase
 FROM debian:13.7-slim
 ARG TARGETARCH

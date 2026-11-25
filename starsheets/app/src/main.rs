@@ -6,6 +6,7 @@
 
 #[cfg(target_arch = "wasm32")]
 mod account;
+mod altcolours;
 mod autolink;
 mod bottom;
 mod calcpreview;
@@ -59,11 +60,14 @@ mod share;
 mod sheets_formulas;
 mod shell;
 mod shortcuts;
+mod smartfill;
 mod spelling;
 mod store;
 #[cfg(target_arch = "wasm32")]
 mod testhook;
 mod theme;
+#[cfg(not(target_arch = "wasm32"))]
+mod updates;
 // File › Version history: the web app's (files keep their versions on the server); also built
 // for its tests.
 #[cfg(any(target_arch = "wasm32", test))]

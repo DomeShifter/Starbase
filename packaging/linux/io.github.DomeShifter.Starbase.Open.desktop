@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=Starbase
+GenericName=Office Files
+Comment=Open on your Starbase server when the file is stored there, otherwise in Starbase Sheets or Docs
+Exec=starbase-open %F
+TryExec=starbase-open
+Icon=io.github.DomeShifter.Starbase
+Terminal=false
+NoDisplay=true
+StartupNotify=false
+Categories=Office;
+MimeType=application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;application/vnd.ms-excel.sheet.macroEnabled.12;application/vnd.ms-excel.sheet.binary.macroEnabled.12;application/vnd.ms-excel;application/vnd.oasis.opendocument.spreadsheet;text/csv;text/tab-separated-values;application/vnd.openxmlformats-officedocument.wordprocessingml.document;application/vnd.ms-word.document.macroEnabled.12;application/vnd.openxmlformats-officedocument.wordprocessingml.template;application/vnd.ms-word.template.macroEnabled.12;application/msword;application/vnd.oasis.opendocument.text;application/rtf;text/rtf;

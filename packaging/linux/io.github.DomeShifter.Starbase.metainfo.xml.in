@@ -1,13 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- AppStream metadata (software centres, Flathub) for the whole Starbase package. One
      component, because Flathub has one app ID per package; the three menu entries are listed
-     as launchables. Template: the packaging scripts substitute @VERSION@ and @DATE@. -->
+     Flathub allows one launchable, so only Starbase Drive (the home screen) is listed; the
+     Sheets and Docs menu entries are still installed and exported (their IDs start with the app
+     ID). Releases are written out by hand, newest first, from the root CHANGELOG.md; development
+     builds carry no release entry of their own. Checked against Flathub's MetaInfo and quality
+     guidelines (packaging/linux/flathub-submission.md). -->
 <component type="desktop-application">
   <id>io.github.DomeShifter.Starbase</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT OR Apache-2.0</project_license>
   <name>Starbase</name>
-  <summary>Spreadsheets and documents, on your computer or your own server</summary>
+  <summary>Edit spreadsheets and documents</summary>
   <developer id="io.github.domeshifter">
     <name>DomeShifter</name>
   </developer>
@@ -17,8 +21,8 @@
       documents, and Starbase Drive, a home screen that lists your files and folders.
     </p>
     <p>
-      Work on files in your Documents folder, or connect to your own Starbase server to share
-      files and edit them together with other people at the same time.
+      Keep your files in a Starbase folder inside Documents, or connect to your own
+      Starbase server to share files and edit them together with other people at the same time.
     </p>
     <p>
       Starbase Sheets opens and saves Excel (.xlsx), OpenDocument (.ods) and CSV files. Starbase Docs
@@ -26,13 +30,12 @@
     </p>
   </description>
   <launchable type="desktop-id">io.github.DomeShifter.Starbase.desktop</launchable>
-  <launchable type="desktop-id">io.github.DomeShifter.Starbase.Sheets.desktop</launchable>
-  <launchable type="desktop-id">io.github.DomeShifter.Starbase.Docs.desktop</launchable>
   <icon type="stock">io.github.DomeShifter.Starbase</icon>
-  <!-- Only url types known to appstream 0.15 (Ubuntu 22.04, where CI will validate). -->
   <url type="homepage">https://github.com/DomeShifter/Starbase</url>
   <url type="bugtracker">https://github.com/DomeShifter/Starbase/issues</url>
-  <url type="help">https://github.com/DomeShifter/Starbase</url>
+  <url type="help">https://github.com/DomeShifter/Starbase#readme</url>
+  <url type="vcs-browser">https://github.com/DomeShifter/Starbase</url>
+  <url type="contribute">https://github.com/DomeShifter/Starbase/blob/main/starsheets/CONTRIBUTING.md</url>
   <categories>
     <category>Office</category>
     <category>Spreadsheet</category>
@@ -45,15 +48,26 @@
     <keyword>xlsx</keyword>
     <keyword>docx</keyword>
   </keywords>
-  <!-- TODO before a Flathub submission: Flathub requires screenshots. Add them once the native
-       apps exist, e.g. images committed under docs/images/ and referenced by raw GitHub URL:
+  <!-- Flathub wants image links pinned to a commit or tag, never a branch. Taken from a test
+       server with made-up content, light theme (packaging/linux/screenshots/). -->
   <screenshots>
     <screenshot type="default">
-      <caption>Starbase Drive home with a folder of spreadsheets and documents</caption>
-      <image>https://raw.githubusercontent.com/DomeShifter/Starbase/main/docs/images/desktop-home.png</image>
+      <image>https://raw.githubusercontent.com/DomeShifter/Starbase/21ddd88894d237c63166830befac78b773eaa340/packaging/linux/screenshots/drive.png</image>
+      <caption>Starbase Drive lists your folders, spreadsheets and documents</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/DomeShifter/Starbase/21ddd88894d237c63166830befac78b773eaa340/packaging/linux/screenshots/sheets.png</image>
+      <caption>A budget with formulas and currency formats in Starbase Sheets</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/DomeShifter/Starbase/21ddd88894d237c63166830befac78b773eaa340/packaging/linux/screenshots/docs.png</image>
+      <caption>Planning notes with headings in Starbase Docs</caption>
     </screenshot>
   </screenshots>
-  -->
+  <branding>
+    <color type="primary" scheme_preference="light">#9ec5f8</color>
+    <color type="primary" scheme_preference="dark">#1e3f73</color>
+  </branding>
   <requires>
     <display_length compare="ge">760</display_length>
   </requires>
@@ -78,8 +92,24 @@
     <mediatype>application/vnd.oasis.opendocument.text</mediatype>
     <mediatype>application/rtf</mediatype>
   </provides>
+  <!-- OARS: no violence, drugs, gambling, ads, purchases or chat with strangers. Sharing and
+       comments only reach people on a Starbase server the user chose to connect to. -->
   <content_rating type="oars-1.1"/>
   <releases>
-    <release version="@VERSION@" date="@DATE@"/>
+    <release version="0.1.0" date="2026-11-25">
+      <url type="details">https://github.com/DomeShifter/Starbase/blob/v0.1.0/CHANGELOG.md</url>
+      <description>
+        <p>
+          The first public release, an early preview: it works and is used every day, but expect
+          rough edges, and keep backups of files that matter.
+        </p>
+        <ul>
+          <li>Starbase Sheets for spreadsheets, Starbase Docs for documents and Starbase Drive as the home screen</li>
+          <li>Opens and saves Excel, Word and OpenDocument files</li>
+          <li>Connect to your own Starbase server to share files and edit spreadsheets live with others</li>
+          <li>Version history for documents and spreadsheets kept on a server</li>
+        </ul>
+      </description>
+    </release>
   </releases>
 </component>

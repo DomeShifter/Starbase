@@ -1,0 +1,46 @@
+[package]
+name = "starslides"
+description = "Starbase Slides: a Google Slides-style presentation editor for the web on DeckCraft's engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "starslides"
+path = "src/main.rs"
+
+[dependencies]
+deckcraft-engine = { workspace = true }
+deckcraft-ui-egui = { workspace = true }
+# The font database the bundled fonts go into (src/fonts.rs).
+deckcraft-fonts = { workspace = true }
+egui = { workspace = true }
+log = { workspace = true }
+serde_json = { workspace = true }
+# SVG loader for the toolbar icons (resvg).
+egui_extras = { workspace = true, features = ["svg"] }
+
+# Native tests of the window (src/shell_tests.rs): egui_kittest's accessibility tree, no GPU.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+egui_kittest = { workspace = true }
+egui = { workspace = true, features = ["default_fonts"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# The page command API (storytold/craft-libs#413): window.deckcraft over the control channel.
+craft-web-api = { git = "https://github.com/storytold/craft-libs", rev = "fd5e2feff6ea25bed371a99cc732b3968d621505", version = "0.1.0" }
+# The host messages (storytold/craft-libs): one contract and one bridge for the web builds.
+craft-web-host = { git = "https://github.com/storytold/craft-libs", rev = "fd5e2feff6ea25bed371a99cc732b3968d621505", version = "0.1.0" }
+# `glow` draws with WebGL2 only: wgpu + naga (WebGPU) cost download size, and DeckCraft draws
+# slides on the CPU (vello_cpu) into ordinary textures (docs/research/wordcraft-trim.md).
+eframe = { workspace = true, features = ["default_fonts", "glow", "accesskit"] }
+rfd = { workspace = true }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration", "MessageEvent", "Event", "EventTarget", "UrlSearchParams", "BeforeUnloadEvent", "Storage", "Request", "RequestInit", "RequestCredentials", "Response", "Headers", "History", "Performance", "MouseEvent", "PointerEvent", "KeyboardEvent", "AddEventListenerOptions", "Screen"] }

@@ -1,8 +1,9 @@
-# StarDocs: builds the web app and the Linux desktop program (kept as `stardocs-linux-x86_64`),
-# runs the native window tests (egui_kittest) and the lint
-# checks on every push and pull request that touches stardocs/. The built site is kept as the
-# `stardocs-web` artifact (30 days). WordCraft's web build needs more memory and disk than a
-# small machine has (the wasm-bindgen step alone uses ~9 GB), which is why it runs here.
+# StarDocs: builds the web app, runs the native window tests (egui_kittest), the lint checks and the
+# desktop program's checks on every push and pull request that touches stardocs/. On main and tags
+# it also makes the release build of the Linux desktop program (kept as `stardocs-linux-x86_64`).
+# The built site is kept as the `stardocs-web` artifact (30 days). WordCraft's web build needs more
+# memory and disk than a small machine has (the wasm-bindgen step alone uses ~9 GB), which is why it
+# runs here. What runs where, and why: CONTRIBUTING.md, "Continuous integration".
 name: StarDocs
 on:
   push:
@@ -16,9 +17,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request cancels the older run. Runs on main always finish: each merge is
+# checked, and main's runs are the only ones that save build caches.
 concurrency:
   group: stardocs-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -34,27 +37,36 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - name: Make disk space (WordCraft's build needs more than the runner leaves free)
+      # WordCraft's build needs more disk than the runner leaves free. Deleting takes 1-2 min, so it
+      # runs in the background while the checkout, toolchain and cache restore go on.
+      - name: Make disk space (in the background)
         working-directory: /
-        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL; df -h /
+        run: sudo nohup rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL >/dev/null 2>&1 &
       - uses: actions/checkout@v7
       - name: Fetch WordCraft at the pinned commit of our fork
         run: scripts/fetch-upstream.sh
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+      # Caches: shared by key across jobs and workflows that build the same thing, saved only on
+      # main (GitHub keeps 10 GB per repository; pull-request caches used to push main's out).
       - uses: Swatinem/rust-cache@v2
         with:
-          key: web
+          shared-key: stardocs-wasm-release
           workspaces: stardocs
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install trunk
         run: |
           curl -sSfL "https://github.com/trunk-rs/trunk/releases/download/${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" | sudo tar xz -C /usr/local/bin trunk
           trunk --version
+      # wasm-opt only shrinks the file (~1.5 min); a pull request's build is never served.
+      - name: No wasm-opt on pull requests
+        if: github.event_name == 'pull_request'
+        working-directory: stardocs/app
+        run: sed -i 's/data-wasm-opt="z"/data-wasm-opt="0"/' index.html && grep -q 'data-wasm-opt="0"' index.html
       - name: Build
         working-directory: stardocs/app
-        run: trunk build --release
+        run: df -h / && trunk build --release
       - name: Record build info
         run: |
           printf '{"commit":"%s","wordcraft":"%s","built":"%s"}\n' "$GITHUB_SHA" "$(sed -n 's/^commit = "\(.*\)"/\1/p' upstream.pin)" "$(date -u +%FT%TZ)" > dist/build.json
@@ -66,64 +78,17 @@ jobs:
           retention-days: 30
 
   test:
-    name: Window tests (native, egui_kittest)
+    # One job for the checks that build for the same machine (fewer jobs: on a busy day runs wait
+    # for a free runner longer than they take). Formatting, clippy on the web app (wasm) and the
+    # desktop program, the window tests, and a debug build of the desktop program that must start
+    # and stay up under a headless X server.
+    name: Window tests, lint, desktop checks
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - name: Make disk space
+      - name: Make disk space (in the background)
         working-directory: /
-        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
-      - uses: actions/checkout@v7
-      - name: Fetch WordCraft at the pinned commit of our fork
-        run: scripts/fetch-upstream.sh
-      - name: System libraries for egui's native backends
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-dev libxkbcommon-dev libwayland-dev pkg-config libxkbcommon-x11-0
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: test
-          workspaces: stardocs
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Test
-        run: cargo test -p stardocs
-
-  coedit:
-    # SPIKE A of the Docs co-editing design (stardocs/coedit): randomised two- and three-user
-    # sessions on real WordCraft sessions must converge (same model, byte-identical .docx), the
-    # step transform must agree both ways round, and the per-keystroke cost is printed.
-    name: Co-editing spike (headless convergence)
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - name: Make disk space
-        working-directory: /
-        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
-      - uses: actions/checkout@v7
-      - name: Fetch WordCraft at the pinned commit of our fork
-        run: scripts/fetch-upstream.sh
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-      - name: Formatting
-        run: cargo fmt -p stardocs-coedit --check
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: coedit
-          workspaces: stardocs
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Clippy
-        run: cargo clippy -p stardocs-coedit --tests --no-deps -- -D warnings
-      - name: Convergence (10,000 two-user + 4,000 three-user + 4,000 typing-only sessions, with undo), transform pairs + inverses, undo, 100-page cost
-        run: cargo test -p stardocs-coedit -- --nocapture
-
-  native:
-    name: Desktop program (native, Linux)
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    steps:
-      - name: Make disk space
-        working-directory: /
-        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+        run: sudo nohup rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL >/dev/null 2>&1 &
       - uses: actions/checkout@v7
       - name: Fetch WordCraft at the pinned commit of our fork
         run: scripts/fetch-upstream.sh
@@ -131,14 +96,58 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-dev libxkbcommon-dev libwayland-dev pkg-config xvfb libgl1-mesa-dri libxkbcommon-x11-0
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+      - name: Formatting
+        run: cargo fmt -p stardocs --check
       - uses: Swatinem/rust-cache@v2
         with:
-          key: native
+          shared-key: stardocs-test
           workspaces: stardocs
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Clippy (the desktop program, our code only)
+      - name: Clippy, web app (our code only, --no-deps; WordCraft is linted upstream)
+        run: cargo clippy -p stardocs --no-deps --target wasm32-unknown-unknown -- -D warnings
+      - name: Clippy, desktop program (our code only)
         run: cargo clippy -p stardocs --no-deps -- -D warnings
+      - name: Tests (window tests and local mode)
+        run: cargo test -p stardocs
+      - name: Desktop program starts and stays up (debug build, a headless X server, 20 s)
+        run: |
+          cargo build -p stardocs
+          target/debug/stardocs --version
+          export HOME="$RUNNER_TEMP/home"; mkdir -p "$HOME"
+          set +e; timeout 20 xvfb-run -a target/debug/stardocs; code=$?; set -e
+          echo "exit code $code (124: still running when stopped, as it should be)"
+          test "$code" = 124
+          test -d "$HOME/Documents/Starbase"
+
+  native:
+    # The release build of the desktop program, its local-mode tests in release mode, and a start-up
+    # check. Main and tags only (the test job checks a debug build on pull requests). On ubuntu-22.04
+    # with the same cache as the Desktop workflow's stardocs build, which is the same build.
+    name: Desktop program (release, Linux)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - name: Make disk space (in the background)
+        working-directory: /
+        run: sudo nohup rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL >/dev/null 2>&1 &
+      - uses: actions/checkout@v7
+      # The scripts use tomllib (Python 3.11+); ubuntu-22.04 ships 3.10.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Fetch WordCraft at the pinned commit of our fork
+        run: scripts/fetch-upstream.sh
+      - name: System libraries for egui's native backends, and a headless X server with OpenGL
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-dev libxkbcommon-dev libwayland-dev pkg-config xvfb libgl1-mesa-dri libxkbcommon-x11-0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: stardocs-native-release-2204
+          workspaces: stardocs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build
         run: cargo build --release -p stardocs
       - name: Local mode tests (open, type, autosave, reopen, conflict copy)
@@ -156,28 +165,3 @@ jobs:
           name: stardocs-linux-x86_64
           path: stardocs/target/release/stardocs
           retention-days: 30
-
-  lint:
-    name: Formatting + clippy (wasm)
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    steps:
-      - name: Make disk space
-        working-directory: /
-        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
-      - uses: actions/checkout@v7
-      - name: Fetch WordCraft at the pinned commit of our fork
-        run: scripts/fetch-upstream.sh
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-          components: clippy, rustfmt
-      - name: Formatting
-        run: cargo fmt -p stardocs --check
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: clippy
-          workspaces: stardocs
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Clippy (our code only, --no-deps; WordCraft is linted upstream)
-        run: cargo clippy -p stardocs --no-deps --target wasm32-unknown-unknown -- -D warnings

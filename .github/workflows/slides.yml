@@ -1,0 +1,106 @@
+# Starbase Slides: builds the web app, runs the native window tests (egui_kittest) and the lint
+# checks on every push and pull request that touches slides/. The built site is kept as the
+# `slides-web` artifact (30 days). The same shape as stardocs.yml (no desktop program yet).
+# What runs where, and why: CONTRIBUTING.md, "Continuous integration".
+name: Starbase Slides
+on:
+  push:
+    branches: [main]
+    paths: ["slides/**", ".github/workflows/slides.yml", "rustfmt.toml"]
+  pull_request:
+    paths: ["slides/**", ".github/workflows/slides.yml", "rustfmt.toml"]
+  workflow_dispatch:
+  workflow_call: # from release.yml (the Starbase image)
+
+permissions:
+  contents: read
+
+# A newer push to a pull request cancels the older run. Runs on main always finish: each merge is
+# checked, and main's runs are the only ones that save build caches.
+concurrency:
+  group: slides-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  TRUNK_VERSION: v0.22.2
+
+defaults:
+  run:
+    working-directory: slides
+
+jobs:
+  web:
+    name: Build web app
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      # DeckCraft's build needs more disk than the runner leaves free. Deleting takes 1-2 min, so it
+      # runs in the background while the checkout, toolchain and cache restore go on.
+      - name: Make disk space (in the background)
+        working-directory: /
+        run: sudo nohup rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL >/dev/null 2>&1 &
+      - uses: actions/checkout@v7
+      - name: Fetch DeckCraft at the pinned commit of our fork
+        run: scripts/fetch-upstream.sh
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      # Caches: shared by key, saved only on main (GitHub keeps 10 GB per repository).
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: slides-wasm-release
+          workspaces: slides
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install trunk
+        run: |
+          curl -sSfL "https://github.com/trunk-rs/trunk/releases/download/${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" | sudo tar xz -C /usr/local/bin trunk
+          trunk --version
+      # wasm-opt only shrinks the file (~1.5 min); a pull request's build is never served.
+      - name: No wasm-opt on pull requests
+        if: github.event_name == 'pull_request'
+        working-directory: slides/app
+        run: sed -i 's/data-wasm-opt="z"/data-wasm-opt="0"/' index.html && grep -q 'data-wasm-opt="0"' index.html
+      - name: Build
+        working-directory: slides/app
+        run: df -h / && trunk build --release
+      - name: Record build info
+        run: |
+          printf '{"commit":"%s","deckcraft":"%s","built":"%s"}\n' "$GITHUB_SHA" "$(sed -n 's/^commit = "\(.*\)"/\1/p' upstream.pin)" "$(date -u +%FT%TZ)" > dist/build.json
+          du -sh dist; ls -la dist/*.wasm
+      - uses: actions/upload-artifact@v7
+        with:
+          name: slides-web
+          path: slides/dist/
+          retention-days: 30
+
+  test:
+    # One job for formatting, clippy (wasm) and the window tests: fewer jobs, since on a busy day
+    # runs wait for a free runner longer than they take.
+    name: Window tests and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Make disk space (in the background)
+        working-directory: /
+        run: sudo nohup rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL >/dev/null 2>&1 &
+      - uses: actions/checkout@v7
+      - name: Fetch DeckCraft at the pinned commit of our fork
+        run: scripts/fetch-upstream.sh
+      - name: System libraries for egui's native backends
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-dev libxkbcommon-dev libwayland-dev pkg-config libxkbcommon-x11-0 libasound2-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
+      - name: Formatting
+        run: cargo fmt -p starslides --check
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: slides-test
+          workspaces: slides
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Clippy (our code only, --no-deps; DeckCraft is linted upstream)
+        run: cargo clippy -p starslides --no-deps --target wasm32-unknown-unknown -- -D warnings
+      - name: Test
+        run: cargo test -p starslides

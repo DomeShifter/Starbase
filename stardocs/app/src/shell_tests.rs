@@ -814,3 +814,51 @@ fn paragraph_style_options_save_reset_and_use_my_default_styles() {
     assert_eq!(shell.test_command(app, None, "stardocs.resetStyles", json!({})), Ok(json!(true)));
     assert!(!heading1_italic(&h));
 }
+
+/// What was handed to `Services::download`, newest last.
+type Downloads = std::rc::Rc<std::cell::RefCell<Vec<(String, Vec<u8>)>>>;
+
+fn catch_downloads(h: &mut Harness<'static, Win>) -> Downloads {
+    let got = Downloads::default();
+    let keep = got.clone();
+    h.state_mut().app.services.download = Some(Box::new(move |name: &str, bytes: &[u8]| {
+        keep.borrow_mut().push((name.to_string(), bytes.to_vec()));
+        Ok(())
+    }));
+    got
+}
+
+/// File › Download's Word and PDF entries (the others: `file_download_writes_other_formats…`).
+#[test]
+fn file_download_word_and_pdf() {
+    let mut h = window(1400.0);
+    let got = catch_downloads(&mut h);
+    type_text(&mut h, "Word words");
+    menu(&mut h, &["File", "Download", "Microsoft Word (.docx)"]);
+    // Without a server the document's own save is the download (or WordCraft asks for a name).
+    let downloaded = got.borrow().last().is_some_and(|(name, bytes)| name.ends_with(".docx") && bytes.starts_with(b"PK"));
+    let names: Vec<String> = got.borrow().iter().map(|g| g.0.clone()).collect();
+    assert!(downloaded || h.state_mut().state()["dialogs"]["wordcraft"] == true, "{names:?}");
+    h.state_mut().app.dialog = None;
+    steps(&mut h, 2);
+    menu(&mut h, &["File", "Download", "PDF document (.pdf)"]);
+    // WordCraft's Export PDF: where there is no Save dialog (the browser), the download.
+    let pdf = got.borrow().last().is_some_and(|(name, bytes)| name.ends_with(".pdf") && bytes.starts_with(b"%PDF"));
+    let names: Vec<String> = got.borrow().iter().map(|g| g.0.clone()).collect();
+    assert!(pdf || h.state_mut().state()["dialogs"]["wordcraft"] == true, "{names:?}");
+}
+
+/// File › Make a copy with no server and no file of its own (the plain web app): a download of
+/// "Copy of <name>.docx"; the document itself is left as it was.
+#[test]
+fn file_make_a_copy_without_a_server_downloads_one() {
+    let mut h = window(1400.0);
+    let got = catch_downloads(&mut h);
+    type_text(&mut h, "Copied words");
+    menu(&mut h, &["File", "Make a copy"]);
+    let (name, bytes) = got.borrow_mut().pop().expect("a copy was downloaded");
+    assert!(name.starts_with("Copy of ") && name.ends_with(".docx"), "{name}");
+    let back = wordcraft_engine::io::open_bytes(&name, &bytes).unwrap();
+    assert!(back.plain_text(wordcraft_doc::StoryRef::Body).contains("Copied words"));
+    assert!(h.state().app.session.dirty, "still the same document, still to be saved");
+}

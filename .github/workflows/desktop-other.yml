@@ -1,0 +1,174 @@
+# Starbase desktop programs on Windows and macOS (look-ahead for desktop-plan.md Phases 3 and 4):
+# builds starsheets (Starbase Drive + Sheets) and stardocs (Starbase Docs) natively, runs their
+# tests (egui_kittest window tests included: they use the accessibility tree, no GPU), and keeps
+# the unsigned executables for 7 days. No installers and no signing here: those are later jobs.
+# Status and known gaps: docs/research/windows-mac-status.md.
+name: Desktop (Windows, macOS)
+on:
+  push:
+    branches: [main]
+    paths: ["starsheets/**", "stardocs/**", "packaging/**", ".github/workflows/desktop.yml", ".github/workflows/desktop-other.yml"]
+  # The slowest workflow (17-25 min): on pull requests only when platform-specific code changes.
+  # Otherwise main, once a week (Monday 04:00 UTC) and by hand.
+  pull_request:
+    paths:
+      - ".github/workflows/desktop-other.yml"
+      - "starsheets/crates/connect/**"
+      - "**/localstore.rs"
+      - "**/localfile.rs"
+      - "packaging/windows/**"
+      - "packaging/macos/**"
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a pull request cancels the older run; runs on main always finish.
+concurrency:
+  group: desktop-other-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.app }} (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+        app: [starsheets, stardocs]
+        include:
+          - app: starsheets
+            # The connect crate (keyring, settings folder) is tested with Sheets.
+            tests: -p starsheets -p starbase-connect -p starsheets-sync
+          - app: stardocs
+            tests: -p stardocs
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ matrix.app }}
+    steps:
+      # Byte-exact checkouts on Windows: the fetch scripts read upstream.pin and compare
+      # Cargo.toml blocks, and the tests read fixtures. Long paths for the engines' deep trees.
+      # The C runtime linked in statically (+crt-static), so the .exe needs no Visual C++
+      # Redistributable (vcruntime140.dll) on the user's computer.
+      - name: Git and build settings (Windows)
+        if: runner.os == 'Windows'
+        working-directory: ${{ runner.temp }}
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.longpaths true
+          echo "RUSTFLAGS=-C target-feature=+crt-static" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      # The fetch scripts call python3; Windows only has python.exe (and a Store stub named python3).
+      - name: python3 on Windows
+        if: runner.os == 'Windows'
+        run: |
+          python3 -c 'import tomllib' 2>/dev/null || cp "$(command -v python)" "$(dirname "$(command -v python)")/python3.exe"
+          python3 --version
+      - name: Fetch the engine at the pinned commit of our fork
+        run: scripts/fetch-upstream.sh
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # One cache per app and OS (the OS is part of rust-cache's key), saved only on main.
+          shared-key: desktop-other-${{ matrix.app }}
+          workspaces: ${{ matrix.app }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Our code only, warnings as errors: cfg(unix)-only code that leaves something unused on
+      # Windows or macOS shows up here.
+      - name: Clippy (our code)
+        run: cargo clippy ${{ matrix.tests }} --no-deps -- -D warnings
+      - name: Build
+        run: cargo build --release -p ${{ matrix.app }}
+      # --release: the tests reuse the release build's dependencies instead of a second build.
+      - name: Tests
+        run: cargo test --release ${{ matrix.tests }}
+      - name: Version
+        run: |
+          target/release/${{ matrix.app }} --version
+          ls -la target/release/${{ matrix.app }}*
+      # Information only: hosted runners have no GPU (Windows: OpenGL 1.1 only, so glow can't
+      # start; macOS: a virtual display). A window that stays up for 15 s counts as started.
+      - name: Starts and stays up (information only)
+        continue-on-error: true
+        run: |
+          target/release/${{ matrix.app }} > "$RUNNER_TEMP/start.log" 2>&1 &
+          pid=$!
+          sleep 15
+          if kill -0 "$pid" 2>/dev/null; then echo "still running after 15 s"; kill "$pid" || true; ok=1; else code=0; wait "$pid" || code=$?; echo "exited with $code"; ok=0; fi
+          tail -n 40 "$RUNNER_TEMP/start.log"
+          test "$ok" = 1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.app }}-${{ runner.os == 'Windows' && 'windows-x86_64' || 'macos-arm64' }}
+          path: |
+            ${{ matrix.app }}/target/release/${{ matrix.app }}.exe
+            ${{ matrix.app }}/target/release/${{ matrix.app }}
+          retention-days: 7
+          if-no-files-found: error
+
+  windows-portable:
+    # An UNSIGNED preview zip of both Windows programs (SignPath signs only an already-released
+    # build, desktop-plan.md 3c). Kept as an artifact only; release.yml attaches it later.
+    name: Windows portable zip (unsigned)
+    needs: build
+    # Also when only a macOS build failed (a missing Windows artifact still fails it).
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: starsheets-windows-x86_64
+          path: zip
+      - uses: actions/download-artifact@v8
+        with:
+          name: stardocs-windows-x86_64
+          path: zip
+      # Only Windows' own DLLs: no Visual C++ runtime or other DLL the user would have to find.
+      - name: The programs need only system DLLs
+        run: |
+          ls -la zip
+          for exe in zip/starsheets.exe zip/stardocs.exe; do
+            echo "$exe:"; objdump -p "$exe" | sed -n 's/.*DLL Name: //p' | sort -u | tee "$RUNNER_TEMP/dlls.txt"
+            if grep -iE '^(vcruntime|msvcp|ucrtbase)' "$RUNNER_TEMP/dlls.txt"; then echo "needs the Visual C++ runtime" >&2; exit 1; fi
+          done
+      - name: Pack
+        env:
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          printf '%s\r\n' \
+            "Starbase for Windows: PREVIEW, UNSIGNED (build ${SHA::7})" \
+            "" \
+            "starsheets.exe  Starbase Drive (the home screen) and Starbase Sheets" \
+            "stardocs.exe    Starbase Docs" \
+            "" \
+            "These programs are not signed yet. On first start Windows SmartScreen warns" \
+            "\"Windows protected your PC\" (publisher: Unknown). Choose \"More info\", then" \
+            "\"Run anyway\". If Windows blocks the files after unzipping, right-click the zip" \
+            "before unzipping, choose Properties and tick \"Unblock\"." \
+            "" \
+            "Nothing is installed: no Start menu entry and no file associations yet." \
+            "Settings are kept in %APPDATA%\\Starbase. New files go in Documents\\Starbase." \
+            "" \
+            "Licence: MIT OR Apache-2.0. Source: https://github.com/DomeShifter/Starbase" > zip/README.txt
+          cd zip && zip -9 ../starbase-windows-x64-portable.zip starsheets.exe stardocs.exe README.txt
+          cd .. && unzip -l starbase-windows-x64-portable.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: starbase-windows-x64-portable
+          path: starbase-windows-x64-portable.zip
+          retention-days: 7
+          if-no-files-found: error

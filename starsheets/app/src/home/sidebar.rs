@@ -29,6 +29,9 @@ impl Home {
             if house::menu_row(ui, Some("description"), "New document", "", true) {
                 self.new_file(&folder, true);
             }
+            if self.store.has_slides() && house::menu_row(ui, Some("slideshow"), "New presentation", "", true) {
+                self.store.new_presentation(&folder);
+            }
             if house::menu_row(ui, Some("create_new_folder"), "New folder", "", true) {
                 call(&self.store, &self.inbox, ui.ctx(), Method::Post, format!("api/folders?path={}&name=New%20folder", enc(&folder)), None, |b| {
                     let v: Json = serde_json::from_slice(&b).unwrap_or_default();
@@ -42,7 +45,7 @@ impl Home {
             if house::menu_row(ui, Some("upload"), "Upload files…", "", true) {
                 let (store, inbox, ctx) = (self.store.clone(), self.inbox.clone(), ui.ctx().clone());
                 self.store.pick_files(Box::new(move |name, bytes| {
-                    let url = format!("api/files?name={}&folder={}", enc(&name), enc(&folder));
+                    let url = format!("api/files?name={}&folder={}&as_is=1", enc(&name), enc(&folder));
                     call(&store, &inbox, &ctx, Method::Post, url, Some(bytes), refresh_after);
                 }));
             }

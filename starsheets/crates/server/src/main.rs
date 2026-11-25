@@ -15,10 +15,12 @@
 mod auth;
 mod backup;
 mod devices;
+mod findpath;
 mod guard;
 mod live;
 mod log;
 mod oidc;
+mod preview;
 mod sharing;
 mod spaces;
 mod store;
@@ -1548,6 +1550,10 @@ async fn thumb(app: &Shared, me: Option<auth::User>, file: String, headers: &Hea
         if let Some(png) = thumbs::cached(&app.store, &f2, &version) {
             return Ok(Got::Have(png, version));
         }
+        // Other files (photos, PDFs…) have no picture here: the Drive shows their type's icon.
+        if !store::is_editable(&path) {
+            return Err(error(404, "no picture for this kind of file"));
+        }
         // A document's picture comes from StarDocs (put_thumb); none for this version yet.
         if store::is_doc(&path) {
             return Err(error(404, "no picture of this version yet"));
@@ -1833,6 +1839,9 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
         return please_sign_in(&app, &headers);
     }
     let me = current_user(&app, &headers);
+    if let Some(resp) = findpath::route(&app, &m, &p, &q, me.clone()).await {
+        return resp;
+    }
     if p.first().map(String::as_str) == Some("backup") && p.len() <= 2 {
         return backup_api(&app, &m, &p, me, &body).await;
     }
@@ -1844,6 +1853,17 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
     }
     if m == "PUT" && p.len() == 3 && p[0] == "files" && p[2] == "thumb" {
         return put_thumb(&app, me, p[1].clone(), &q, body).await;
+    }
+    // Files that aren't spreadsheets or documents: previews, and downloads streamed from disk
+    // (preview.rs says how they are kept safe).
+    if m == "GET" && p.len() == 3 && p[0] == "files" && p[2] == "preview" {
+        return preview::preview(&app, me, p[1].clone(), &headers).await;
+    }
+    if m == "GET" && p.len() == 3 && p[0] == "files" && p[2] == "raw" {
+        return preview::raw(&app, me, p[1].clone(), &headers).await;
+    }
+    if m == "GET" && p.len() == 2 && p[0] == "files" && preview::is_other(&app, p[1].clone()).await {
+        return preview::download(&app, me, p[1].clone(), &headers).await;
     }
     // StarDocs reads a document with a plain GET (spreadsheets open through their live room,
     // which notes this itself): it counts as opened, for Recent.
@@ -2595,6 +2615,137 @@ mod tests {
         let page = String::from_utf8_lossy(&g.bytes);
         assert!(page.contains("Connect an app") && page.contains("devices/approve"));
         assert_eq!(g.headers[header::X_FRAME_OPTIONS], "DENY", "never inside another site's frame");
+        let _ = std::fs::remove_dir_all(&app.store.root);
+    }
+
+    /// The any-file Drive: every type is uploaded, listed, downloaded, previewed, renamed and
+    /// moved; previews never run a file as a page; no way out of the store.
+    #[tokio::test]
+    async fn any_file_drive() {
+        let (app, ip, boss) = owned().await;
+        assert_eq!(post(&app, &ip, "/api/users", &boss, json!({"username": "ann", "name": "Ann", "password": "annpassword"})).await.status, 200);
+        let ann = cookie_of(&post(&app, &ip, "/api/login", "", json!({"username": "ann", "password": "annpassword"})).await);
+        let png = b"\x89PNG\r\n\x1a\nfake picture".to_vec();
+        let up = |name: &str| format!("/api/files?name={name}&as_is=1");
+        let g = send(&app, &ip, "POST", &up("photo.png"), &boss, &[], png.clone()).await;
+        assert_eq!((g.status, g.json["name"].as_str(), g.json["folder"].as_str()), (201, Some("photo.png"), Some("boss")));
+        let photo = g.json["id"].as_str().unwrap().to_string();
+        // Without as_is a name that isn't a spreadsheet still becomes one (the apps' own saves).
+        assert_eq!(send(&app, &ip, "POST", "/api/files?name=notes.txt", &boss, &[], b"x".to_vec()).await.json["name"], "notes.txt.xlsx");
+        let id_of = |g: &Got| g.json["id"].as_str().unwrap().to_string();
+        let html = id_of(&send(&app, &ip, "POST", &up("page.html"), &boss, &[], b"<script>alert(1)</script>".to_vec()).await);
+        let svg = id_of(&send(&app, &ip, "POST", &up("pic.svg"), &boss, &[], b"<svg onload=alert(1)/>".to_vec()).await);
+        let txt = id_of(&send(&app, &ip, "POST", &up("read%20me.md"), &boss, &[], b"# Hi <script>x</script>".to_vec()).await);
+        let pdf = id_of(&send(&app, &ip, "POST", &up("paper.pdf"), &boss, &[], b"%PDF-1.4 fake".to_vec()).await);
+        let exe = id_of(&send(&app, &ip, "POST", &up("tool.exe"), &boss, &[], b"MZ".to_vec()).await);
+        let listed = send(&app, &ip, "GET", "/api/files", &boss, &[], vec![]).await.json;
+        let names: Vec<&str> = listed["files"].as_array().unwrap().iter().filter_map(|f| f["name"].as_str()).collect();
+        for n in ["photo.png", "page.html", "pic.svg", "read me.md", "paper.pdf", "tool.exe", "notes.txt.xlsx"] {
+            assert!(names.contains(&n), "{n} listed: {names:?}");
+        }
+        // Download: the bytes, as an attachment, never sniffed.
+        let g = send(&app, &ip, "GET", &format!("/api/files/{photo}"), &boss, &[], vec![]).await;
+        assert_eq!((g.status, &g.bytes), (200, &png));
+        assert!(g.headers[header::CONTENT_DISPOSITION].to_str().unwrap().starts_with("attachment"));
+        assert_eq!(g.headers[header::CONTENT_TYPE], "application/octet-stream");
+        assert_eq!(g.headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        // The preview page: sandboxed, no script, the picture from raw.
+        let g = send(&app, &ip, "GET", &format!("/api/files/{photo}/preview"), &boss, &[], vec![]).await;
+        let page = String::from_utf8_lossy(&g.bytes).to_string();
+        let csp = g.headers[header::CONTENT_SECURITY_POLICY].to_str().unwrap().to_string();
+        assert_eq!(g.status, 200);
+        assert!(csp.starts_with("sandbox") && csp.contains("default-src 'none'") && !csp.contains("allow-scripts"), "{csp}");
+        assert!(page.contains("<img src=\"raw?v=") && !page.contains("<script"), "{page}");
+        // Raw: the exact type, inline, sandboxed; byte ranges.
+        let g = send(&app, &ip, "GET", &format!("/api/files/{photo}/raw"), &boss, &[], vec![]).await;
+        assert_eq!((g.status, g.headers[header::CONTENT_TYPE].to_str().unwrap()), (200, "image/png"));
+        assert!(g.headers[header::CONTENT_DISPOSITION].to_str().unwrap().starts_with("inline"));
+        assert!(g.headers[header::CONTENT_SECURITY_POLICY].to_str().unwrap().starts_with("sandbox"));
+        let g = send(&app, &ip, "GET", &format!("/api/files/{photo}/raw"), &boss, &[("range", "bytes=1-3")], vec![]).await;
+        assert_eq!((g.status, g.bytes.as_slice()), (206, &png[1..4]));
+        assert_eq!(g.headers[header::CONTENT_RANGE], format!("bytes 1-3/{}", png.len()).as_str());
+        let g = send(&app, &ip, "GET", &format!("/api/files/{photo}/raw"), &boss, &[("range", "bytes=999-")], vec![]).await;
+        assert_eq!(g.status, 416);
+        // HTML, SVG, text and unknown types are never served to be shown as they are.
+        for id in [&html, &svg, &exe, &txt] {
+            assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{id}/raw"), &boss, &[], vec![]).await.status, 415, "raw {id}");
+        }
+        for id in [&html, &svg] {
+            let g = send(&app, &ip, "GET", &format!("/api/files/{id}/preview"), &boss, &[], vec![]).await;
+            let page = String::from_utf8_lossy(&g.bytes).to_string();
+            assert!(page.contains("data-kind=\"none\"") && !page.contains("alert(1)"), "{page}");
+        }
+        // Text is shown escaped.
+        let page = String::from_utf8_lossy(&send(&app, &ip, "GET", &format!("/api/files/{txt}/preview"), &boss, &[], vec![]).await.bytes).to_string();
+        assert!(page.contains("&lt;script&gt;x&lt;/script&gt;") && !page.contains("<script>"), "{page}");
+        // A PDF is shown by the browser's viewer (no sandbox: it would block it), never sniffed.
+        let g = send(&app, &ip, "GET", &format!("/api/files/{pdf}/preview"), &boss, &[], vec![]).await;
+        assert_eq!((g.status, g.headers[header::CONTENT_TYPE].to_str().unwrap()), (200, "application/pdf"));
+        assert_eq!(g.headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+        // Someone without access gets nothing.
+        for url in [format!("/api/files/{photo}"), format!("/api/files/{photo}/preview"), format!("/api/files/{photo}/raw")] {
+            assert_eq!(send(&app, &ip, "GET", &url, &ann, &[], vec![]).await.status, 403, "{url}");
+        }
+        assert_eq!(g.headers[header::CACHE_CONTROL], "no-store", "never cached: access can be taken away");
+        // Replacing it keeps no versions, but the old content goes to the bin (restorable);
+        // renaming keeps its type; moving too.
+        assert_eq!(send(&app, &ip, "PUT", &format!("/api/files/{photo}"), &boss, &[], b"new".to_vec()).await.status, 200);
+        assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{photo}/versions"), &boss, &[], vec![]).await.json, json!([]));
+        let bin = send(&app, &ip, "GET", "/api/bin", &boss, &[], vec![]).await.json;
+        assert!(bin.as_array().unwrap().iter().any(|b| b["name"] == "photo.png" && b["original"] == "boss/photo.png"), "{bin}");
+        assert_eq!(std::fs::read(app.store.full("boss/.bin/photo.png")).unwrap(), png, "the replaced content");
+        assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{photo}"), &boss, &[], vec![]).await.bytes, b"new");
+        let g = send(&app, &ip, "POST", &format!("/api/files/{photo}/rename?name=Holiday"), &boss, &[], vec![]).await;
+        assert_eq!(g.json["name"], "Holiday.png");
+        let g = send(&app, &ip, "POST", &format!("/api/files/{photo}/rename?name=Trip.PNG"), &boss, &[], vec![]).await;
+        assert_eq!(g.json["name"], "Trip.png");
+        assert_eq!(send(&app, &ip, "POST", "/api/folders?path=boss&name=Pics", &boss, &[], vec![]).await.status, 201);
+        let g = send(&app, &ip, "POST", &format!("/api/files/{photo}/move?folder=boss/Pics"), &boss, &[], vec![]).await;
+        assert_eq!(g.json["name"], "Trip.png");
+        assert!(app.store.full("boss/Pics/Trip.png").is_file());
+        // Delete goes to the bin.
+        assert_eq!(send(&app, &ip, "DELETE", &format!("/api/files/{exe}"), &boss, &[], vec![]).await.status, 200);
+        // No way out: names and folders can't climb; links out of the store are neither listed nor read.
+        let g = send(&app, &ip, "POST", &up("..%2F..%2Fescape.txt"), &boss, &[], b"x".to_vec()).await;
+        assert_eq!((g.status, g.json["folder"].as_str()), (201, Some("boss")));
+        assert!(!g.json["name"].as_str().unwrap().contains('/'));
+        assert_eq!(send(&app, &ip, "POST", &format!("{}&folder=..%2Fx", up("a.txt")), &boss, &[], vec![]).await.status, 400);
+        let outside = std::env::temp_dir().join(format!("starsheets-outside-{}", store::random_hex(4)));
+        std::fs::write(&outside, b"secret").unwrap();
+        std::os::unix::fs::symlink(&outside, app.store.full("boss/link.txt")).unwrap();
+        // Links are never followed, even inside the store: not to StarSheets' own data, not into
+        // someone else's folder.
+        std::os::unix::fs::symlink(app.store.full("boss/read me.md"), app.store.full("boss/inside.md")).unwrap();
+        std::os::unix::fs::symlink(app.store.meta().join("users.json"), app.store.full("boss/users.json")).unwrap();
+        std::os::unix::fs::symlink(app.store.full("boss/Pics/Trip.png"), app.store.full("ann/boss-photo.png")).unwrap();
+        std::os::unix::fs::symlink(app.store.full("boss/Pics"), app.store.full("ann/boss-pics")).unwrap();
+        let names = send(&app, &ip, "GET", "/api/files", &boss, &[], vec![]).await.json.to_string();
+        for n in ["link.txt", "inside.md", "users.json", "boss-photo.png", "boss-pics"] {
+            assert!(!names.contains(n), "{n} listed: {names}");
+        }
+        let anns = send(&app, &ip, "GET", "/api/files", &ann, &[], vec![]).await.json.to_string();
+        assert!(!anns.contains("boss-photo") && !anns.contains("Trip.png") && !anns.contains("boss-pics"), "{anns}");
+        // Nothing can be put through a linked folder either.
+        assert_eq!(send(&app, &ip, "POST", "/api/files?name=x.txt&as_is=1&folder=ann/boss-pics", &ann, &[], b"x".to_vec()).await.status, 404);
+        assert!(!app.store.full("boss/Pics/x.txt").exists());
+        // A listed file swapped for a link to StarSheets' own data afterwards isn't read.
+        let md = std::fs::read(app.store.full("boss/read me.md")).unwrap();
+        std::fs::remove_file(app.store.full("boss/read me.md")).unwrap();
+        std::os::unix::fs::symlink(app.store.meta().join("users.json"), app.store.full("boss/read me.md")).unwrap();
+        for url in [format!("/api/files/{txt}"), format!("/api/files/{txt}/preview"), format!("/api/files/{txt}/raw")] {
+            let g = send(&app, &ip, "GET", &url, &boss, &[], vec![]).await;
+            assert!(g.status == 404 && !String::from_utf8_lossy(&g.bytes).contains("hash"), "{url}: {}", g.status);
+        }
+        std::fs::remove_file(app.store.full("boss/read me.md")).unwrap();
+        std::fs::write(app.store.full("boss/read me.md"), md).unwrap();
+        // A listed file swapped for a link out of the store afterwards isn't read either.
+        std::fs::remove_file(app.store.full("boss/read me.md")).unwrap();
+        std::os::unix::fs::symlink(&outside, app.store.full("boss/read me.md")).unwrap();
+        for url in [format!("/api/files/{txt}"), format!("/api/files/{txt}/preview")] {
+            let g = send(&app, &ip, "GET", &url, &boss, &[], vec![]).await;
+            assert!(g.status == 404 && !String::from_utf8_lossy(&g.bytes).contains("secret"), "{url}: {}", g.status);
+        }
+        let _ = std::fs::remove_file(&outside);
         let _ = std::fs::remove_dir_all(&app.store.root);
     }
 }

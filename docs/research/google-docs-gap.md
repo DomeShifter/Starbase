@@ -14,11 +14,11 @@ _Research only, 2026-11-24. Sources: `stardocs/app/src/shell.rs` (MENUS + toolba
 | Feature | Google Docs: where | StarDocs today | How common | Size | Notes (WordCraft command / crate) |
 |---|---|---|---|---|---|
 | New / open / rename | File | Has | High | – | `file.new`, `file.open`, `stardocs.rename` |
-| Make a copy | File › Make a copy | Missing (server) | High | S | Needs a server `POST api/files/<id>/copy`; the home screen may already do it |
+| Make a copy | File › Make a copy | Has | High | – | The server's `POST api/files/<id>/copy` ("Copy of <name>" beside it, or in your own folder), opened in a new tab; desktop: beside the local file, or the server's copy (gap batch 4) |
 | Share (people, link access) | Share button | Has | High | – | `share.rs` (owner/edit/view, link access). No **commenter** role, which Docs has |
-| Commenter role | Share dialog | Missing | Med | S–M | Server role and view-only-plus-comments mode |
+| Commenter role | Share dialog | Missing | Med | S–M | Server role and view-only-plus-comments mode. WordCraft's Commenting state exists (fork StarDocs 0010, unused); the server side must rebuild a commenter's save from the server's file, never only check it (security review of PR #44) |
 | Download .docx / .pdf | File › Download | Has | High | – | `stardocs.download`, `file.exportPdf` |
-| Download .odt / .rtf / .txt / .html / .md / .epub | File › Download | Engine-only (not epub) | Med | S | The `formats` crate has odt, rtf, txt, html, markdown, latex and mht writers; `file.saveAs` with an extension. No EPUB |
+| Download .odt / .rtf / .txt / .html / .md / .epub | File › Download | Has (not epub) | Med | – | `download.rs` through the `formats` crate: a browser download, or the desktop's Save dialog. No EPUB |
 | Import other formats on open | File › Open | Engine (docx/odt/rtf/txt/md…) | Med | S | Wire the home-screen upload to accept them |
 | Email as attachment / email collaborators | File › Email | Missing | Low | M | Needs mail on the server; skip |
 | Version history (list, name, restore, copy) | File › Version history (Ctrl+Alt+Shift+H) | Has | High | – | Kept on the server (every save, thinned like Google's, `KEEP` cap); panel in `versions.rs`; editors only |
@@ -111,7 +111,7 @@ _Research only, 2026-11-24. Sources: `stardocs/app/src/shell.rs` (MENUS + toolba
 2. ~~**Image options**: wrap text, alt text, crop, size and rotate, replace and reset image, shown in a sub-menu and in a small toolbar when an image is selected (`arrange.wrap`, `picture.*`).~~ Done: Format › Image + a picture's right-click menu (menu batch 2); the picture tools in the toolbar while a picture is selected (gap batch 3).
 3. ~~**List options**: bullet and numbering styles, restart numbering, set the start number (`para.bullets {kind}`, `para.defineNumber`, `para.restartNumbering`, `para.setNumberingValue`).~~ Done: Format › Bullets and numbering: bullet and numbering styles, List options › Restart numbering with a start number (menu batch 1).
 4. ~~**Suggestions one at a time**: accept/reject this one, next/previous (`review.accept/reject/nextChange/previousChange`), plus a **Viewing** mode in the mode box.~~ Done: Tools › Review suggested edits, and Viewing in the mode box and View › Mode (menu batch 2, docs-engine-3).
-5. **Download as .odt, .rtf, .txt, .html, .md** (`file.saveAs` through the `formats` crate). _Already in File › Download on main; left out of gap batch 3 (the File menu was being changed in PR #31)._
+5. ~~**Download as .odt, .rtf, .txt, .html, .md** (`file.saveAs` through the `formats` crate).~~ Done: File › Download, every format (`download.rs`; kittests per entry in gap batch 4).
 6. ~~**Capitalization + text size up/down**, with Docs' keys Ctrl+Shift+. and Ctrl+Shift+, (`format.changeCase`, `format.growFont1/shrinkFont1`).~~ Done: Format › Text › Size and Capitalisation, Ctrl+Shift+. and Ctrl+Shift+, (menu batch 1).
 7. ~~**Headings 4–6** + "Update style to match" + "Save as my default styles" (`para.style`, `styles.updateToMatch`, `design.setDefault`).~~ Done: Headings 4–6 with Ctrl+Alt+4–6 and Update to match (menu batch 1); Format › Paragraph styles › Options and the style box's Options: Save as my default styles, Use my default styles, Reset styles (gap batch 3; WordCraft's `design.setDefault` only shows a message, so StarDocs keeps the styles itself, in the browser).
 8. ~~**Insert › Break**: section break (next page / continuous) and column break (`layout.break`, `text.columnBreak`); **headers/footers options**: different first page, odd/even, page-number format (`layout.*`).~~ Done: Insert › Break, Headers and footers (different first page, odd/even), Page numbers › Number format (menu batch 2).
@@ -123,7 +123,7 @@ _Research only, 2026-11-24. Sources: `stardocs/app/src/shell.rs` (MENUS + toolba
 12. ~~**Version history kept on the server**: snapshots on save, named versions, restore, make a copy.~~ Done: File › Version history.
 13. **Checklists**: tick boxes that strike through, Ctrl+Shift+9. Needs engine work; content-control check boxes are a possible base.
 14. **Smart chips, first set**: `@date` (date picker), `@person` (server users), dropdown chip. Engine base: `insert.dateField`, `developer.datePicker`, `developer.dropDown`.
-15. **Make a copy** (File menu + server) and a **commenter** share role.
+15. ~~**Make a copy** (File menu + server)~~ Done (gap batch 4). A **commenter** share role: still to do (see the table).
 
 _After these, the next big job is **live co-editing** (L). It's the main thing Docs users expect and we lack, but it's far bigger than all fifteen above put together; plan it as its own project, building on StarSheets' live-sync server._
 

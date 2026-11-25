@@ -7,8 +7,8 @@
 //! a password.
 //!
 //! The token goes in the system keyring (Secret Service on Linux, Credential Manager, Keychain).
-//! Where there is none, it goes in a file only this user can read (`starbase/token`, 0600, in
-//! `$XDG_CONFIG_HOME`). Which server it is goes beside it (`starbase/server.json`). Every request
+//! Where there is none, it goes in a file only this user can read (`token`, 0600 on Linux and
+//! macOS, in [`config_dir`]). Which server it is goes beside it (`server.json`). Every request
 //! then carries it as `Authorization: Bearer …` ([`Server::call`]); the server checks it like a
 //! browser session, with the same rights. Disconnecting removes it on the server and here.
 //!
@@ -332,20 +332,22 @@ fn sign_in(typed: &str, name: &str, tell: &dyn Fn(Step) -> bool) -> Result<Serve
 
 // ------------------------------------------------------------ keeping the token
 
-/// Where Starbase keeps its settings: `$STARBASE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/starbase`
-/// (`~/.config/starbase`; `%APPDATA%\starbase` on Windows).
+/// Where Starbase keeps its settings: `$STARBASE_CONFIG_DIR`, else the system's place for them:
+/// `$XDG_CONFIG_HOME/starbase` (`~/.config/starbase`) on Linux, `%APPDATA%\Starbase` on Windows,
+/// `~/Library/Application Support/Starbase` on macOS.
 pub fn config_dir() -> Option<PathBuf> {
     if let Some(d) = std::env::var_os("STARBASE_CONFIG_DIR").filter(|d| !d.is_empty()) {
         return Some(PathBuf::from(d));
     }
-    let base = std::env::var_os("XDG_CONFIG_HOME").filter(|d| !d.is_empty()).map(PathBuf::from).or_else(|| {
-        if cfg!(windows) {
-            std::env::var_os("APPDATA").map(PathBuf::from)
-        } else {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config"))
-        }
-    })?;
-    Some(base.join("starbase"))
+    let home = || std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from);
+    if cfg!(windows) {
+        std::env::var_os("APPDATA").filter(|d| !d.is_empty()).map(|d| PathBuf::from(d).join("Starbase"))
+    } else if cfg!(target_os = "macos") {
+        home().map(|h| h.join("Library").join("Application Support").join("Starbase"))
+    } else {
+        let base = std::env::var_os("XDG_CONFIG_HOME").filter(|d| !d.is_empty()).map(PathBuf::from).or_else(|| home().map(|h| h.join(".config")))?;
+        Some(base.join("starbase"))
+    }
 }
 
 /// Whether the keyring may be used (STARBASE_NO_KEYRING=1 keeps the token in the file).
@@ -353,8 +355,9 @@ fn keyring_allowed() -> bool {
     std::env::var("STARBASE_NO_KEYRING").map_or(true, |v| v.trim().is_empty() || v.trim() == "0")
 }
 
-/// Writes `bytes` to `path` readable by this user only (0600), atomically.
-fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+/// Writes `bytes` to `path` readable by this user only (0600), atomically. Also used for
+/// starbase-open's setting beside `server.json`.
+pub fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
@@ -492,9 +495,66 @@ impl Renewing {
     }
 }
 
+// ------------------------------------------------------------ update checks (docs/privacy.md)
+
+/// Where Starbase's desktop releases are published: the only place "Check for updates" asks
+/// (`api.github.com/repos/<this>/releases`), never WordCraft's or GridCraft's.
+pub const RELEASES_REPO: &str = "DomeShifter/Starbase";
+
+/// The Starbase version this program is, which a check compares releases with: the release
+/// build sets `STARBASE_VERSION` (the tag without its "v"); any other build is "0.0.0-dev".
+pub const VERSION: &str = match option_env!("STARBASE_VERSION") {
+    Some(v) if !v.is_empty() => v,
+    _ => "0.0.0-dev",
+};
+
+/// The file that keeps Help › Check for updates, shared by Starbase Docs, Sheets and Drive.
+const UPDATES_FILE: &str = "updates.json";
+
+/// Whether the desktop apps look for a newer Starbase release when they start: off unless the
+/// person turned it on (Help › Check for updates). Starbase makes no connection by default.
+pub fn update_check_on() -> bool {
+    config_dir().is_some_and(|d| update_check_on_in(&d))
+}
+
+/// [`update_check_on`] for the settings folder `dir`.
+pub fn update_check_on_in(dir: &std::path::Path) -> bool {
+    std::fs::read(dir.join(UPDATES_FILE))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .is_some_and(|v| v.get("check") == Some(&Value::Bool(true)))
+}
+
+/// Turns the check at start on or off for every Starbase desktop app on this computer.
+pub fn set_update_check(on: bool) -> Result<(), String> {
+    let dir = config_dir().ok_or("There's no settings folder to keep this setting in.")?;
+    set_update_check_in(&dir, on)
+}
+
+/// [`set_update_check`] in the settings folder `dir`.
+pub fn set_update_check_in(dir: &std::path::Path, on: bool) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(&json!({ "check": on })).unwrap_or_default();
+    write_private(&dir.join(UPDATES_FILE), &bytes).map_err(|e| format!("The setting couldn't be kept: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_checks_are_off_until_turned_on() {
+        let dir = std::env::temp_dir().join(format!("starbase-updates-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!update_check_on_in(&dir), "off with no settings at all");
+        set_update_check_in(&dir, true).unwrap();
+        assert!(update_check_on_in(&dir));
+        set_update_check_in(&dir, false).unwrap();
+        assert!(!update_check_on_in(&dir));
+        std::fs::write(dir.join(UPDATES_FILE), b"not json").unwrap();
+        assert!(!update_check_on_in(&dir), "an unreadable file is off");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(RELEASES_REPO, "DomeShifter/Starbase");
+    }
 
     #[test]
     fn addresses_are_made_whole() {
