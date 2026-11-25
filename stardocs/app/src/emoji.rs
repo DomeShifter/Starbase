@@ -142,9 +142,9 @@ impl Emoji {
                 search.request_focus();
             }
             ui.add_space(8.0);
-            // Only emoji the interface fonts can draw: egui refuses a missing glyph.
+            // Only emoji the interface fonts AND the page's fonts can draw: egui refuses a missing glyph, and the page would show a box.
             let font = egui::FontId::proportional(22.0);
-            let found: Vec<&str> = matching(&self.filter).into_iter().filter(|e| ui.fonts_mut(|f| f.has_glyphs(&font, e))).collect();
+            let found: Vec<&str> = matching(&self.filter).into_iter().filter(|e| ui.fonts_mut(|f| f.has_glyphs(&font, e)) && crate::bundled_fonts::body_can_draw(e)).collect();
             if found.is_empty() {
                 ui.label(RichText::new("No emoji found").color(TEXT_DIM));
             }
@@ -182,5 +182,13 @@ mod tests {
         assert!(matching("thumbs up").contains(&"👍"));
         assert!(!matching("thumbs up").contains(&"👎"));
         assert!(matching("zzzz").is_empty());
+    }
+
+    #[test]
+    fn the_page_can_draw_the_emoji_it_offers() {
+        crate::bundled_fonts::add();
+        assert!(crate::bundled_fonts::body_can_draw("👍"), "the thumbs up needs a face in the page");
+        let ok = super::LIST.iter().filter(|(e, _)| crate::bundled_fonts::body_can_draw(e)).count();
+        assert!(ok * 10 >= super::LIST.len() * 8, "only {ok} of {} emoji drawable", super::LIST.len());
     }
 }
