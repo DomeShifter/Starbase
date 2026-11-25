@@ -617,13 +617,13 @@ impl Account {
                     ME.with(|m| *m.borrow_mut() = user);
                     if !auth || signed_in {
                         // Signed in already: go straight to `?next=` (a path on this server, without a `next=` of its own, so it can't go round in circles), else just drop it.
-                        if auth && signed_in {
-                            if let Some(next) = crate::continueto::from_address().filter(|n| !crate::continueto::loops(n)) {
-                                if let Some(w) = web_sys::window() {
-                                    let _ = w.location().replace(&next);
-                                    return;
-                                }
-                            }
+                        if auth
+                            && signed_in
+                            && let Some(next) = crate::continueto::from_address().filter(|n| !crate::continueto::loops(n))
+                            && let Some(w) = web_sys::window()
+                        {
+                            let _ = w.location().replace(&next);
+                            return;
                         }
                         APP_SHOWN.with(|s| s.set(true));
                         crate::continueto::forget();
