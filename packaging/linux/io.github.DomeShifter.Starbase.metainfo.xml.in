@@ -96,6 +96,23 @@
        comments only reach people on a Starbase server the user chose to connect to. -->
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.0" date="2026-11-26">
+      <url type="details">https://github.com/DomeShifter/Starbase/blob/v0.2.0/CHANGELOG.md</url>
+      <description>
+        <p>
+          The first release you can install on Linux as a desktop program, still an early preview:
+          keep backups of files that matter.
+        </p>
+        <ul>
+          <li>Install from Starbase's own signed Flatpak repository, or download the signed AppImage</li>
+          <li>Starbase Slides opens and saves PowerPoint files, next to Sheets and Docs</li>
+          <li>Sheets: pivot table editor, alternating colours, Smart Fill, sparklines and pictures in cells</li>
+          <li>Docs: make a copy, download in every format, picture toolbar and your own default styles</li>
+          <li>Drive: a photo grid with a slideshow, and a new sign-in page and account menu</li>
+          <li>Saves to a server that failed are tried again by themselves</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-11-25">
       <url type="details">https://github.com/DomeShifter/Starbase/blob/v0.1.0/CHANGELOG.md</url>
       <description>
