@@ -294,7 +294,23 @@ impl AltColoursPanel {
                     let colour_row = |ui: &mut Ui, label: &str, now: u32| -> Option<u32> {
                         let mut out = None;
                         ui.horizontal(|ui| {
-                            ui.add_sized([120.0, house::ROW_HEIGHT], egui::Label::new(RichText::new(label).size(house::BODY).color(theme::TEXT)));
+                            // The colour itself, then its name, then the button that changes it.
+                            let (swatch, _) = ui.allocate_exact_size(vec2(house::L + house::S, house::L + house::S), Sense::hover());
+                            ui.painter().rect_filled(swatch, CornerRadius::same(house::FIELD_RADIUS), crate::cfpanel::c32(now));
+                            ui.painter().rect_stroke(
+                                swatch,
+                                CornerRadius::same(house::FIELD_RADIUS),
+                                Stroke::new(1.0, theme::DIVIDER),
+                                egui::StrokeKind::Inside,
+                            );
+                            ui.add_space(house::S);
+                            ui.allocate_ui_with_layout(
+                                vec2(PANEL_W / 3.0, house::ROW_HEIGHT),
+                                egui::Layout::left_to_right(egui::Align::Center),
+                                |ui| {
+                                    ui.label(RichText::new(label).size(house::BODY).color(theme::TEXT));
+                                },
+                            );
                             if let Some(Some(rgb)) = crate::cfpanel::colour_pick(ui, label, Some(now), "format_color_fill", label) {
                                 out = Some(rgb);
                             }
