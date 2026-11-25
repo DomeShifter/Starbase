@@ -29,9 +29,9 @@ mod items;
 mod photo_edit;
 mod photos;
 mod sidebar;
-pub(crate) mod textpreview;
 #[cfg(target_arch = "wasm32")]
 mod test;
+pub(crate) mod textpreview;
 mod undo;
 mod viewer;
 

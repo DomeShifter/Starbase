@@ -18,10 +18,14 @@ use std::sync::{Arc, Mutex};
 
 use egui::{Color32, Key, Modifiers, Order, Rect, RichText, Sense, Vec2, pos2, vec2};
 
+use super::textpreview;
 use crate::store::{Backend, Method};
+#[cfg(target_arch = "wasm32")]
+use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Text shown, at most (the server's preview page has the same limit).
-pub(super) const TEXT_MAX: u64 = 1024 * 1024;
+/// Text files fetched, at most; only the first [`textpreview::MAX_BYTES`] are kept and shown,
+/// with a note saying so.
+pub(super) const TEXT_MAX: u64 = 16 * 1024 * 1024;
 /// Pictures read whole into memory, at most.
 pub(super) const IMAGE_MAX: u64 = 64 * 1024 * 1024;
 const MAX_ZOOM: f32 = 8.0;
@@ -65,8 +69,25 @@ pub(super) fn shown_as(name: &str) -> Shown {
         "video" => Shown::Video,
         "audio" => Shown::Audio,
         "text" => Shown::Text,
+        // CSV, Markdown variants, HTML/SVG/XML source and other code: shown as text (never run).
+        _ if textpreview::handles(name) => Shown::Text,
         _ => Shown::None,
     }
+}
+
+/// Whether a key pressed on the page (`KeyboardEvent.key` and its modifiers) closes the preview:
+/// Esc on its own. Used by the page-level listener that still hears Esc once a PDF frame or a
+/// film has the keyboard focus (egui only hears keys while the canvas has it).
+pub(super) fn closes_preview(key: &str, ctrl: bool, alt: bool, meta: bool, shift: bool) -> bool {
+    matches!(key, "Escape" | "Esc") && !(ctrl || alt || meta || shift)
+}
+
+/// The part of a fetched text file that is kept: a byte over [`textpreview::MAX_BYTES`] so the
+/// preview knows to say it shows only the first part.
+fn keep_head(mut bytes: Vec<u8>) -> Vec<u8> {
+    bytes.truncate(textpreview::MAX_BYTES + 1);
+    bytes.shrink_to_fit();
+    bytes
 }
 
 enum Got {
@@ -113,7 +134,16 @@ pub(super) struct FilePreview {
 
 impl FilePreview {
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn open(ctx: &egui::Context, store: &Backend, id: &str, name: &str, size: u64, modified: i64, owner: String, at: (usize, usize)) -> Self {
+    pub(super) fn open(
+        ctx: &egui::Context,
+        store: &Backend,
+        id: &str,
+        name: &str,
+        size: u64,
+        modified: i64,
+        owner: String,
+        at: (usize, usize),
+    ) -> Self {
         let shown = shown_as(name).here();
         let mut p = FilePreview {
             id: id.into(),
@@ -157,7 +187,7 @@ impl FilePreview {
                     if image {
                         decode(bytes, max, id, got, ctx2);
                     } else {
-                        push(&got, &ctx2, id, Got::Bytes(bytes));
+                        push(&got, &ctx2, id, Got::Bytes(keep_head(bytes)));
                     }
                 }
                 Ok((s, _)) => push(&got, &ctx2, id, Got::Failed(format!("The server said {s}."))),
@@ -215,6 +245,20 @@ impl FilePreview {
             if i.consume_key(Modifiers::NONE, Key::Escape) {
                 act = Some(Act::Close);
             }
+            // Esc heard by the page while a PDF frame or a film had the focus.
+            // The pointer back over the canvas: take the keyboard back from a PDF frame, whose
+            // keys never reach this page.
+            #[cfg(target_arch = "wasm32")]
+            {
+                if self.element.as_ref().is_some_and(|e| e.esc.swap(false, Ordering::Relaxed)) {
+                    act = Some(Act::Close);
+                }
+                if i.pointer.delta() != Vec2::ZERO
+                    && let Some(e) = &self.element
+                {
+                    e.refocus_canvas();
+                }
+            }
             if i.consume_key(Modifiers::NONE, Key::ArrowRight) {
                 act = Some(Act::Step(1));
             }
@@ -245,7 +289,8 @@ impl FilePreview {
             self.content_ui(ui, &resp, area, ctx);
             // The bar at the top.
             let bar = Rect::from_min_size(rect.min, vec2(rect.width(), BAR));
-            let mut b = ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(16.0, 10.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+            let mut b =
+                ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(16.0, 10.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
             if let Some(img) = crate::icons::icon_in(super::items::kind_icon(&self.name), Color32::WHITE) {
                 b.add(img.fit_to_exact_size(vec2(24.0, 24.0)));
             }
@@ -286,7 +331,13 @@ impl FilePreview {
                     match crate::icons::icon(icon) {
                         Some(img) => img.paint_at(ui, Rect::from_center_size(r.center(), vec2(32.0, 32.0))),
                         None => {
-                            painter.text(r.center(), egui::Align2::CENTER_CENTER, if by < 0 { "‹" } else { "›" }, egui::FontId::proportional(28.0), Color32::WHITE);
+                            painter.text(
+                                r.center(),
+                                egui::Align2::CENTER_CENTER,
+                                if by < 0 { "‹" } else { "›" },
+                                egui::FontId::proportional(28.0),
+                                Color32::WHITE,
+                            );
                         }
                     }
                     if hit.clicked() {
@@ -343,7 +394,7 @@ impl FilePreview {
                 let mut t = ui.new_child(egui::UiBuilder::new().max_rect(area).layout(egui::Layout::top_down(egui::Align::Min)));
                 egui::Frame::NONE.fill(Color32::WHITE).corner_radius(8).inner_margin(16).show(&mut t, |ui| {
                     ui.set_min_size(area.size() - vec2(32.0, 32.0));
-                    super::textpreview::show(ui, &self.name, &bytes);
+                    textpreview::show(ui, &self.name, &bytes);
                 });
             }
             Content::Nothing(why) => {
@@ -367,7 +418,12 @@ impl FilePreview {
         p.label(RichText::new("Details").size(16.0).color(Color32::WHITE));
         p.add_space(12.0);
         let date = chrono_like(self.modified);
-        for (k, v) in [("Type", super::items::file_kind(&self.name).to_string()), ("Size", super::size_text(self.size)), ("Modified", date), ("Owner", self.owner.clone())] {
+        for (k, v) in [
+            ("Type", super::items::file_kind(&self.name).to_string()),
+            ("Size", super::size_text(self.size)),
+            ("Modified", date),
+            ("Owner", self.owner.clone()),
+        ] {
             p.label(RichText::new(k).size(12.0).color(Color32::from_gray(170)));
             p.label(RichText::new(v).size(14.0).color(Color32::WHITE));
             p.add_space(8.0);
@@ -425,18 +481,65 @@ fn icon_toggle(ui: &mut egui::Ui, icon: &str, tip: &str, on: bool) -> bool {
 
 // ------------------------------------------------------------ the page element (web)
 
+/// A page event listener kept alive by Rust.
+#[cfg(target_arch = "wasm32")]
+type Listener = wasm_bindgen::closure::Closure<dyn FnMut(web_sys::Event)>;
+
 /// A `<iframe>`, `<video>` or `<audio>` over the canvas, removed when dropped.
 #[cfg(target_arch = "wasm32")]
 struct Element {
     el: web_sys::HtmlElement,
     tag: String,
     at: [i32; 4],
+    /// Set by the page-level Esc listeners; read (and cleared) by [`FilePreview::ui`].
+    esc: Arc<AtomicBool>,
+    /// Listeners added for this element (target, event; all capturing), removed with it.
+    listeners: Vec<(web_sys::EventTarget, &'static str, Listener)>,
 }
 
 #[cfg(target_arch = "wasm32")]
 impl Drop for Element {
     fn drop(&mut self) {
+        use wasm_bindgen::JsCast;
+        for (target, ev, f) in self.listeners.drain(..) {
+            let _ = target.remove_event_listener_with_callback_and_bool(ev, f.as_ref().unchecked_ref(), true);
+        }
         self.el.remove();
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Element {
+    /// Gives the keyboard back to egui's canvas when the PDF frame has it.
+    fn refocus_canvas(&self) {
+        refocus_canvas(&self.el);
+    }
+
+    /// Hears Esc on `target` (the page, or the PDF frame's own page when the browser lets us in).
+    fn listen_esc(&mut self, target: web_sys::EventTarget, ctx: &egui::Context) {
+        use wasm_bindgen::JsCast;
+        let (esc, ctx) = (self.esc.clone(), ctx.clone());
+        let f = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+            let Some(k) = e.dyn_ref::<web_sys::KeyboardEvent>() else { return };
+            if closes_preview(&k.key(), k.ctrl_key(), k.alt_key(), k.meta_key(), k.shift_key()) {
+                esc.store(true, Ordering::Relaxed);
+                ctx.request_repaint();
+            }
+        });
+        if target.add_event_listener_with_callback_and_bool("keydown", f.as_ref().unchecked_ref(), true).is_ok() {
+            self.listeners.push((target, "keydown", f));
+        }
+    }
+}
+
+/// Focuses egui's canvas if `el` (the PDF frame) has the keyboard focus.
+#[cfg(target_arch = "wasm32")]
+fn refocus_canvas(el: &web_sys::HtmlElement) {
+    use wasm_bindgen::JsCast;
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else { return };
+    let focused = doc.active_element().is_some_and(|a| a == *el.unchecked_ref::<web_sys::Element>());
+    if focused && let Some(c) = doc.get_element_by_id(crate::web::CANVAS_ID).and_then(|c| c.dyn_into::<web_sys::HtmlElement>().ok()) {
+        let _ = c.focus();
     }
 }
 
@@ -469,7 +572,39 @@ impl FilePreview {
             if let Some(body) = doc.body() {
                 let _ = body.append_child(&el);
             }
-            self.element = Some(Element { el, tag: tag.into(), at: [0; 4] });
+            let mut e = Element { el, tag: tag.into(), at: [0; 4], esc: Arc::default(), listeners: Vec::new() };
+            // Keys in a film's or sound's controls stay on this page: hear Esc there.
+            if let Some(w) = web_sys::window() {
+                e.listen_esc(w.into(), ctx);
+            }
+            // A PDF frame is its own page: when it has loaded, hear Esc inside it if the browser
+            // lets us (the same site), and hand the keyboard back to the canvas either way.
+            if tag == "iframe" {
+                let (esc, ctx2, frame) = (e.esc.clone(), ctx.clone(), e.el.clone());
+                let on_load = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::Event)>::new(move |_e: web_sys::Event| {
+                    refocus_canvas(&frame);
+                    let Some(inner) = frame.dyn_ref::<web_sys::HtmlIFrameElement>().and_then(|f| f.content_window()) else { return };
+                    let (esc, ctx2) = (esc.clone(), ctx2.clone());
+                    let f = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
+                        let Some(k) = e.dyn_ref::<web_sys::KeyboardEvent>() else { return };
+                        if closes_preview(&k.key(), k.ctrl_key(), k.alt_key(), k.meta_key(), k.shift_key()) {
+                            esc.store(true, Ordering::Relaxed);
+                            ctx2.request_repaint();
+                        }
+                    });
+                    // Another origin (or the browser's own viewer) refuses: the pointer refocus covers it.
+                    let target: &web_sys::EventTarget = inner.unchecked_ref();
+                    if target.add_event_listener_with_callback_and_bool("keydown", f.as_ref().unchecked_ref(), true).is_ok() {
+                        // Lives as long as the frame's page, which goes when the frame is removed.
+                        f.forget();
+                    }
+                });
+                let target: web_sys::EventTarget = e.el.clone().into();
+                if target.add_event_listener_with_callback_and_bool("load", on_load.as_ref().unchecked_ref(), true).is_ok() {
+                    e.listeners.push((target, "load", on_load));
+                }
+            }
+            self.element = Some(e);
         }
         let z = ctx.zoom_factor();
         let mut r = area;
@@ -504,13 +639,14 @@ mod tests {
             (&["mp3", "wav", "ogg", "oga", "opus", "flac", "m4a", "aac"], Shown::Audio),
             (
                 &[
-                    "txt", "text", "md", "markdown", "log", "json", "yaml", "yml", "toml", "ini", "cfg", "conf", "env", "tsv", "rs", "py", "js", "mjs",
-                    "ts", "tsx", "jsx", "c", "h", "cc", "cpp", "hpp", "java", "kt", "go", "rb", "php", "sh", "bash", "zsh", "fish", "ps1", "bat",
-                    "css", "scss", "sql", "lua", "pl", "r", "swift", "cs", "diff", "patch", "tex", "srt", "vtt", "nfo",
+                    "txt", "text", "md", "markdown", "log", "json", "yaml", "yml", "toml", "ini", "cfg", "conf", "env", "tsv", "rs", "py", "js",
+                    "mjs", "ts", "tsx", "jsx", "c", "h", "cc", "cpp", "hpp", "java", "kt", "go", "rb", "php", "sh", "bash", "zsh", "fish", "ps1",
+                    "bat", "css", "scss", "sql", "lua", "pl", "r", "swift", "cs", "diff", "patch", "tex", "srt", "vtt", "nfo", "csv", "svg", "html",
+                    "htm", "xml",
                 ],
                 Shown::Text,
             ),
-            (&["zip", "exe", "svg", "html", "htm", "xml", "iso", "7z", "psd", "", "xlsx", "csv", "docx", "odt", "pptx"], Shown::None),
+            (&["zip", "exe", "iso", "7z", "psd", "", "xlsx", "docx", "odt", "pptx"], Shown::None),
         ];
         for (exts, want) in table {
             for e in *exts {
@@ -522,6 +658,35 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Esc closes the preview from wherever the page hears it; Esc with a modifier, and other
+    /// keys, don't.
+    #[test]
+    fn esc_closes_from_the_page() {
+        let table = [
+            ("Escape", [false; 4], true),
+            ("Esc", [false; 4], true),
+            ("Escape", [true, false, false, false], false),
+            ("Escape", [false, true, false, false], false),
+            ("Escape", [false, false, true, false], false),
+            ("Escape", [false, false, false, true], false),
+            ("Enter", [false; 4], false),
+            ("q", [false; 4], false),
+            ("", [false; 4], false),
+        ];
+        for (key, [c, a, m, s], want) in table {
+            assert_eq!(closes_preview(key, c, a, m, s), want, "{key} {c} {a} {m} {s}");
+        }
+    }
+
+    /// Big text files keep only what the preview shows, plus one byte so it says so.
+    #[test]
+    fn text_keeps_only_the_head() {
+        assert_eq!(keep_head(b"abc".to_vec()), b"abc");
+        let big = keep_head(vec![b'x'; textpreview::MAX_BYTES + 500]);
+        assert_eq!(big.len(), textpreview::MAX_BYTES + 1);
+        assert!(TEXT_MAX as usize > textpreview::MAX_BYTES);
     }
 
     #[test]
