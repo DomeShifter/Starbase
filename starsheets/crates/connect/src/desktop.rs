@@ -105,11 +105,30 @@ mod tests {
         std::fs::create_dir_all(&moved).unwrap();
         let moved_s = moved.to_string_lossy().into_owned();
         assert!(reg(&["add", KEY, "/v", "Personal", "/t", "REG_EXPAND_SZ", "/d", &moved_s, "/f"]).status.success());
-        let found = super::system_documents_dir();
+        // Windows keeps a process's known folders once looked up, so a new process looks (this
+        // test program again, running only the probe below), as a newly started Starbase would.
+        let probe = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["desktop::tests::documents_folder_probe", "--exact", "--nocapture", "--test-threads=1"])
+            .env("STARBASE_DOCUMENTS_PROBE", "1")
+            .output()
+            .unwrap();
         let _ = match &old {
             Some(v) => reg(&["add", KEY, "/v", "Personal", "/t", "REG_EXPAND_SZ", "/d", v, "/f"]),
             None => reg(&["delete", KEY, "/v", "Personal", "/f"]),
         };
-        assert_eq!(found.map(|f| f.to_string_lossy().to_lowercase()), Some(moved_s.to_lowercase()));
+        let out = String::from_utf8_lossy(&probe.stdout).into_owned();
+        let found = out.lines().find_map(|l| l.strip_prefix("DOCUMENTS=")).unwrap_or_else(|| panic!("no answer from the probe: {out}"));
+        // Both sides in long form (the temp folder can come as RUNNER~1).
+        let same = |p: &str| std::fs::canonicalize(p).unwrap_or_else(|e| panic!("{p}: {e}"));
+        assert_eq!(same(found), same(&moved_s));
+    }
+
+    /// Prints the Documents folder for the test above (only when it asks).
+    #[cfg(windows)]
+    #[test]
+    fn documents_folder_probe() {
+        if std::env::var_os("STARBASE_DOCUMENTS_PROBE").is_some() {
+            println!("DOCUMENTS={}", super::system_documents_dir().unwrap().display());
+        }
     }
 }
