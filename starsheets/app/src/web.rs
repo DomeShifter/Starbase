@@ -480,12 +480,22 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
     }
 }
 
+/// Clipboard HTML longer than this (UTF-16 units, as the browser counts) is left out of a paste:
+/// the cells' data is at most ~2.7 MB of it, and a huge page copied elsewhere would only be
+/// copied into the app and scanned for nothing. The plain text still pastes.
+const MAX_PASTE_HTML: u32 = 8 * 1024 * 1024;
+
 /// The clipboard HTML of the paste being handled, taken so a later paste never sees it.
 fn take_paste_html() -> Option<String> {
     let w = web_sys::window()?;
-    let html = js_sys::Reflect::get(&w, &"__ssPasteHtml".into()).ok()?.as_string();
+    let value = js_sys::Reflect::get(&w, &"__ssPasteHtml".into()).ok()?;
     let _ = js_sys::Reflect::set(&w, &"__ssPasteHtml".into(), &JsValue::NULL);
-    html.filter(|h| !h.is_empty())
+    // Measured on the JavaScript side, before the text is copied into the app's memory.
+    let text = value.dyn_into::<js_sys::JsString>().ok()?;
+    if text.length() == 0 || text.length() > MAX_PASTE_HTML {
+        return None;
+    }
+    text.as_string()
 }
 
 /// Start inside the copy gesture; deferring `write` can lose browser user activation.
