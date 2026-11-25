@@ -3,7 +3,7 @@
 
 use serde_json::json;
 
-use super::{Home, Json, View, name_of};
+use super::{Home, Item, Json, View, name_of};
 
 impl Home {
     /// Where the home screen is and what it lists, in the order shown.
@@ -24,6 +24,8 @@ impl Home {
             "loading": self.loading,
             "search": self.search,
             "error": self.error,
+            "undo": self.undo.done.iter().map(|a| a.label.clone()).collect::<Vec<_>>(),
+            "note": self.note_text(),
             "folders": folders.iter().map(|f| json!({ "path": f.path, "name": name_of(&f.path) })).collect::<Vec<_>>(),
             "files": files
                 .iter()
@@ -32,7 +34,7 @@ impl Home {
         })
     }
 
-    /// `home:folder` {path}, `home:search` {text}, `home:refresh`, `home:recent`, `home:starred`,
+    /// `home:folder` {path}, `home:search` {text}, `home:refresh`, `home:move`, `home:delete`, `home:undo`, `home:recent`, `home:starred`,
     /// `home:shared`, `home:bin`; `home:opens` {id} says what opening that file does (without
     /// opening it): `{"opens": "editor" | "preview" | "download", "url"}`.
     pub(crate) fn test_run(&mut self, ctx: &egui::Context, id: &str, params: &Json) -> Result<Json, String> {
@@ -44,6 +46,22 @@ impl Home {
             }
             "home:search" => self.search = text("text").unwrap_or_default(),
             "home:refresh" => self.refresh(ctx),
+            // Undo (undo.rs): `home:move` {files: [id], folders: [path], to} moves as a drag
+            // does, `home:delete` {files, folders} bins, `home:undo` is Ctrl+Z.
+            "home:move" | "home:delete" => {
+                let list = |k: &str| params.get(k).and_then(Json::as_array).into_iter().flatten().filter_map(Json::as_str).map(str::to_string);
+                let items: Vec<Item> = list("files").map(Item::File).chain(list("folders").map(Item::Folder)).collect();
+                if items.is_empty() {
+                    return Err(format!("{id} needs {{files}} or {{folders}}"));
+                }
+                if id == "home:delete" {
+                    self.delete(ctx, items);
+                } else {
+                    let to = text("to").ok_or("home:move needs {to}")?;
+                    self.send_to(ctx, items, to, true);
+                }
+            }
+            "home:undo" => self.undo(ctx),
             "home:opens" => {
                 let id = text("id").ok_or("home:opens needs {id}")?;
                 let f = self.file(&id).ok_or("no such file listed")?;
