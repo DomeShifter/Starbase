@@ -1,0 +1,313 @@
+{
+ "_comment": "Third-party test decks, fetched at test time at pinned commits and checked by sha256 (fetch.py). Licences and attribution: SOURCES.md.",
+ "repos": {
+  "poi": {
+   "github": "apache/poi",
+   "commit": "4793c3e741c2858bf29e728f13f617ee784243f4",
+   "dir": "test-data/slideshow",
+   "licence": "Apache-2.0"
+  },
+  "lo": {
+   "github": "LibreOffice/core",
+   "commit": "88289f1ea16f267c3f0438ff3bb72b33318da285",
+   "dir": "sd/qa/unit/data/pptx",
+   "licence": "MPL-2.0"
+  }
+ },
+ "decks": [
+  {
+   "id": "poi-SampleShow",
+   "repo": "poi",
+   "file": "SampleShow.pptx",
+   "features": "sample deck: text, layouts",
+   "sha256": "bfb4b2f07c9233afd2f32aa5781d849d0c7d225bf03721a10becf487b481d828"
+  },
+  {
+   "id": "poi-sample_pptx_grouping_issues",
+   "repo": "poi",
+   "file": "sample_pptx_grouping_issues.pptx",
+   "features": "nested groups",
+   "sha256": "a8639e12e763a01d889a6178e154c21db2dd4275f8f35ac81a458f81e26b2c18"
+  },
+  {
+   "id": "poi-SmartArt",
+   "repo": "poi",
+   "file": "SmartArt.pptx",
+   "features": "SmartArt diagram",
+   "sha256": "b97e4c6d2ee1dd4094f50f9043820610268dd452d7717c537f5456636adcc353"
+  },
+  {
+   "id": "poi-smartart-rotated-text",
+   "repo": "poi",
+   "file": "smartart-rotated-text.pptx",
+   "features": "SmartArt with rotated text",
+   "sha256": "a357985aec81b0bfa8a71138bbe94c9b3f6e00dee110c0da34302e22253de260"
+  },
+  {
+   "id": "poi-bug58144-headers-footers-2007",
+   "repo": "poi",
+   "file": "bug58144-headers-footers-2007.pptx",
+   "features": "headers, footers, slide numbers",
+   "sha256": "63e0db239ef3083b8537705941247af195b200e83535f8d92c246e774f771289"
+  },
+  {
+   "id": "poi-radar-chart",
+   "repo": "poi",
+   "file": "radar-chart.pptx",
+   "features": "radar chart",
+   "sha256": "faf631199e44a1eb5dae48527d233b3231e67ea0345e93fd0c9306ce5261b570"
+  },
+  {
+   "id": "poi-scatter-chart",
+   "repo": "poi",
+   "file": "scatter-chart.pptx",
+   "features": "scatter chart",
+   "sha256": "946d17760f23822950d97a02aeeedbac773fe8ba5afd61bb26a9ee5fd8db53be"
+  },
+  {
+   "id": "poi-chart-texture-bg",
+   "repo": "poi",
+   "file": "chart-texture-bg.pptx",
+   "features": "chart with a texture background",
+   "sha256": "ae762899957805da751059c50ae8e770fb97ce5905e6a177b7c9644c4b173d45"
+  },
+  {
+   "id": "poi-chart-picture-bg",
+   "repo": "poi",
+   "file": "chart-picture-bg.pptx",
+   "features": "chart with a picture background",
+   "sha256": "97bad7041fa5f23408eea513cd85bf7fed47a8ba218d8791a59be14cb53fdaa5"
+  },
+  {
+   "id": "poi-layouts",
+   "repo": "poi",
+   "file": "layouts.pptx",
+   "features": "many slide layouts",
+   "sha256": "9c3d53afa3115de2ba72ec77637a616aeed505a6ff3b30a46db871c4edd32be5"
+  },
+  {
+   "id": "poi-backgrounds",
+   "repo": "poi",
+   "file": "backgrounds.pptx",
+   "features": "slide backgrounds: gradient, picture, pattern",
+   "sha256": "6d1e661c87b072a701e02e28f9d2c9bb43c6bfe0ad5acd02811a0382bab769b7"
+  },
+  {
+   "id": "poi-shapes",
+   "repo": "poi",
+   "file": "shapes.pptx",
+   "features": "preset shapes and fills",
+   "sha256": "19fde9b87e33dd1a95fdbba0cf6abc2278bf03874f4665c7f8b88b6afe4a2571"
+  },
+  {
+   "id": "poi-with_japanese",
+   "repo": "poi",
+   "file": "with_japanese.pptx",
+   "features": "Japanese text",
+   "sha256": "f0b1efbfbd70f7ee2395dc2505639f99449971ba404a6ec8cf1b97d82cf45c10"
+  },
+  {
+   "id": "poi-EmbeddedAudio",
+   "repo": "poi",
+   "file": "EmbeddedAudio.pptx",
+   "features": "embedded audio",
+   "sha256": "c5ae4274e2bf5504a56aef9c8d7c5d2381ece69c9bf68f7749ad5eae3e675edb"
+  },
+  {
+   "id": "poi-EmbeddedVideo",
+   "repo": "poi",
+   "file": "EmbeddedVideo.pptx",
+   "features": "embedded video (p14:media)",
+   "sha256": "7940e3b1a339db11f00b65399a2fe77e0e85a5da3a30ac8d6c8a0a77527b2ab2"
+  },
+  {
+   "id": "poi-themes",
+   "repo": "poi",
+   "file": "themes.pptx",
+   "features": "several themes and masters",
+   "sha256": "3ea86e4ee84a8bca6b99fe3a9f2a9a9186c0655df28ff92a2d02da24926c64ba"
+  },
+  {
+   "id": "poi-ArtisticEffectSample",
+   "repo": "poi",
+   "file": "ArtisticEffectSample.pptx",
+   "features": "picture artistic effects",
+   "sha256": "55c9b01d60efc8245f5d28097e702e1921e06aebfab522b6de574dcb435d66b7"
+  },
+  {
+   "id": "lo-ole-emf_min",
+   "repo": "lo",
+   "file": "ole-emf_min.pptx",
+   "features": "OLE object with an EMF preview",
+   "sha256": "99d27ff56b7c2f2568bac1fb4fb4d5ece7c6a97aeb7e949db4e0a9c541f027d0"
+  },
+  {
+   "id": "lo-ole",
+   "repo": "lo",
+   "file": "ole.pptx",
+   "features": "embedded OLE object",
+   "sha256": "fe7df9c5e4303960df7c81e35dbd9a12a02ff887c49cc0573bed7cc66e6da489"
+  },
+  {
+   "id": "lo-activex_checkbox",
+   "repo": "lo",
+   "file": "activex_checkbox.pptx",
+   "features": "ActiveX check box",
+   "sha256": "9d366c0627b0c0af5c643a7c3b1d02983c9752d28f6d26b86a2a7568e08b0888"
+  },
+  {
+   "id": "lo-activex_picture",
+   "repo": "lo",
+   "file": "activex_picture.pptx",
+   "features": "ActiveX control with a picture",
+   "sha256": "90a9425724f4e0be685a0b356fc38f3c3106af803b1dc456190515106d5d40d7"
+  },
+  {
+   "id": "lo-smartart-org-chart",
+   "repo": "lo",
+   "file": "smartart-org-chart.pptx",
+   "features": "SmartArt organisation chart",
+   "sha256": "7a457c32c73efed6244cf79e184994a2f2a0cb65901f6ce4f3dfcd22dbcf4ac1"
+  },
+  {
+   "id": "lo-modern-comments",
+   "repo": "lo",
+   "file": "modern-comments.pptx",
+   "features": "modern (threaded) comments",
+   "sha256": "0450cf856d80ea8826540cceadb2c4b13fef28b7c613fd4db657611fa804c600"
+  },
+  {
+   "id": "lo-MorphTransition",
+   "repo": "lo",
+   "file": "MorphTransition.pptx",
+   "features": "Morph transition",
+   "sha256": "f9dca61525e0f3de8fb1a8124f439f68b66469c18a4b379af81076104e998a36"
+  },
+  {
+   "id": "lo-airplane-transition",
+   "repo": "lo",
+   "file": "airplane-transition.pptx",
+   "features": "airplane transition (p15)",
+   "sha256": "27eed094a47dfe56617061987b81520b1ae6af73f5702fd05cf656a9da64707c"
+  },
+  {
+   "id": "lo-rightToLeftParagraph",
+   "repo": "lo",
+   "file": "rightToLeftParagraph.pptx",
+   "features": "right-to-left paragraphs",
+   "sha256": "2533a51c70ca3e3a0e86032f13ff818be900bc8a559d6571d48d63cc570adf0a"
+  },
+  {
+   "id": "lo-multicol",
+   "repo": "lo",
+   "file": "multicol.pptx",
+   "features": "text in columns",
+   "sha256": "307a742f8c3552e0d465f55dbff4a03c4c3aec4fe98d5f522939be22cb7ad37a"
+  },
+  {
+   "id": "lo-predefined-table-style",
+   "repo": "lo",
+   "file": "predefined-table-style.pptx",
+   "features": "built-in table style",
+   "sha256": "f3711fb2c44295c7d93ae92e5a5458af14a49e049ace24cc6fc64a3e3c0018bc"
+  },
+  {
+   "id": "lo-tableBorderLineStyle",
+   "repo": "lo",
+   "file": "tableBorderLineStyle.pptx",
+   "features": "table border line styles",
+   "sha256": "137e3b9c380f965bb2650d6760f7c4d7c32f2b64ec3bc64c8150e9281363386f"
+  },
+  {
+   "id": "lo-shape-glow-effect",
+   "repo": "lo",
+   "file": "shape-glow-effect.pptx",
+   "features": "glow effect",
+   "sha256": "4f42a41afc627dc2fc6fba99457a8daa956c86037783e59a74899dc8081c806f"
+  },
+  {
+   "id": "lo-group-rot",
+   "repo": "lo",
+   "file": "group-rot.pptx",
+   "features": "rotated group",
+   "sha256": "dfda3cecf7a04edbf695ed4e23707087db1aa08c8b1b68d3ab9f572210bc744e"
+  },
+  {
+   "id": "lo-crop-to-shape",
+   "repo": "lo",
+   "file": "crop-to-shape.pptx",
+   "features": "picture cropped to a shape",
+   "sha256": "6d2392f37b8e0616625b59e6aceb43acffe77fbd936d593df9c1d1dc44a95c1c"
+  },
+  {
+   "id": "lo-slidenum_field",
+   "repo": "lo",
+   "file": "slidenum_field.pptx",
+   "features": "slide number field",
+   "sha256": "3171f365b51ede9291f5fd4810b4436dde625249431a0f7c09695c3df764d132"
+  },
+  {
+   "id": "lo-hyperlinktest",
+   "repo": "lo",
+   "file": "hyperlinktest.pptx",
+   "features": "hyperlinks and click actions",
+   "sha256": "ff82b2d4a1b3245179bb95b14ee4e90de6a2cf7b14bbd4ee365c691cb80de0a0"
+  },
+  {
+   "id": "lo-video-loop-mute",
+   "repo": "lo",
+   "file": "video-loop-mute.pptx",
+   "features": "video set to loop and mute",
+   "sha256": "37627d5c2bb915bc97cacc5accac7ca083b87d5f15e27fb773be5c95a9a37d4d"
+  },
+  {
+   "id": "lo-effectOrder",
+   "repo": "lo",
+   "file": "effectOrder.pptx",
+   "features": "glow and outer shadow on one shape",
+   "sha256": "06c20aa7b3de1946972dc678a75db02e460d89071f49d186f6f2781f09b57285"
+  },
+  {
+   "id": "lo-NumberedList-12ab-ab-34",
+   "repo": "lo",
+   "file": "NumberedList-12ab-ab-34.pptx",
+   "features": "numbered lists, mixed styles",
+   "sha256": "7f8fcdd72c59b4dbcb7ba76e544dbba8cd663636ad04735f189dd7c159956e20"
+  },
+  {
+   "id": "lo-custgeom-overlapping-contours",
+   "repo": "lo",
+   "file": "custgeom-overlapping-contours.pptx",
+   "features": "custom geometry, overlapping paths",
+   "sha256": "f1adec8dccd7cecaf290164e4fa122ab8bc5665975e5776afd5209829cc5e00a"
+  },
+  {
+   "id": "lo-connector-shape-animations",
+   "repo": "lo",
+   "file": "connector-shape-animations.pptx",
+   "features": "animations on connectors and shapes",
+   "sha256": "40d07c0c9433c65c640bc6d4d5f25228735dc15d1bb719530cad0662a926a618"
+  },
+  {
+   "id": "lo-anim-color-by-rgb",
+   "repo": "lo",
+   "file": "anim-color-by-rgb.pptx",
+   "features": "colour animation",
+   "sha256": "e43ea0f22f56bbd0c4f0fbae7de79b7f80b878031662c15ed4cbc4c9191d1456"
+  },
+  {
+   "id": "lo-activex_commandbutton",
+   "repo": "lo",
+   "file": "activex_commandbutton.pptx",
+   "features": "ActiveX command button",
+   "sha256": "d5ff16a329d9a26acfb566fea12de5b6b54194b563e89d9a3215833a735a327d"
+  },
+  {
+   "id": "lo-smartart-cycle",
+   "repo": "lo",
+   "file": "smartart-cycle.pptx",
+   "features": "SmartArt cycle",
+   "sha256": "11b660611f00e297661a663a0904d7247fbbe173caa67ee36dbad68b1dfd9e0c"
+  }
+ ]
+}

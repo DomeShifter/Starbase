@@ -178,6 +178,9 @@ impl Home {
                 if house::menu_row(ui, Some("description"), "New document", "", true) {
                     self.new_file(&into, true);
                 }
+                if self.store.has_slides() && house::menu_row(ui, Some("slideshow"), "New presentation", "", true) {
+                    self.store.new_presentation(&into);
+                }
                 if house::menu_row(ui, Some("create_new_folder"), "New folder", "", true) {
                     if here.is_none() {
                         self.navigate(View::Mine(self.space.clone()));
@@ -603,8 +606,7 @@ pub(super) fn file_kind(name: &str) -> &'static str {
 /// The icon of a file's type.
 pub(super) fn kind_icon(name: &str) -> &'static str {
     match file_kind(name) {
-        "sheet" => "starsheets",
-        "doc" => "stardocs",
+        "sheet" | "doc" => crate::store::app_icon(name),
         "image" => "image",
         "audio" => "music_note",
         "video" => "movie",
@@ -643,11 +645,11 @@ struct ListRow {
     starred: bool,
 }
 
-/// A file's name as Drive shows it: without `.xlsx` or `.docx` (the icon says which it is; the
+/// A file's name as Drive shows it: without `.xlsx`, `.docx` or `.pptx` (the icon says which it is; the
 /// full name shows on hover). Other extensions (.csv, .odt) stay.
 fn shown_name(name: &str) -> &str {
     let lower = name.to_ascii_lowercase();
-    if (lower.ends_with(".xlsx") || lower.ends_with(".docx")) && name.len() > 5 { &name[..name.len() - 5] } else { name }
+    if (lower.ends_with(".xlsx") || lower.ends_with(".docx") || lower.ends_with(".pptx")) && name.len() > 5 { &name[..name.len() - 5] } else { name }
 }
 
 /// `text` on one line, at most `width` wide: cut short with "…" when longer (as Drive does).
@@ -687,6 +689,7 @@ mod tests {
     fn every_file_type_has_an_icon_and_a_way_to_open() {
         assert_eq!((kind_icon("a.xlsx"), opens_as("a.xlsx")), ("starsheets", Opens::Editor));
         assert_eq!((kind_icon("a.DOCX"), opens_as("a.DOCX")), ("stardocs", Opens::Editor));
+        assert_eq!((kind_icon("Talk.pptx"), opens_as("Talk.pptx")), ("starslides", Opens::Editor));
         assert_eq!((kind_icon("a.JPG"), opens_as("a.JPG")), ("image", Opens::Preview));
         assert_eq!((kind_icon("a.pdf"), opens_as("a.pdf")), ("picture_as_pdf", Opens::Preview));
         assert_eq!((kind_icon("a.mp4"), opens_as("a.mp4")), ("movie", Opens::Preview));
@@ -696,7 +699,7 @@ mod tests {
         for n in ["a.html", "a.svg", "a.exe", "README"] {
             assert_eq!((kind_icon(n), opens_as(n)), ("draft", Opens::Download), "{n}");
         }
-        for icon in ["starsheets", "stardocs", "image", "picture_as_pdf", "movie", "music_note", "description", "draft"] {
+        for icon in ["starsheets", "stardocs", "starslides", "image", "picture_as_pdf", "movie", "music_note", "description", "draft"] {
             assert!(crate::icons::has(icon), "{icon}");
         }
     }

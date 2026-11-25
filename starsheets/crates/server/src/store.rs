@@ -24,14 +24,15 @@ use serde_json::{Map, Value, json};
 /// Days something stays in the bin before it's deleted for good.
 pub const BIN_DAYS: i64 = 30;
 
-/// Files the apps edit (Sheets and Docs). Every other file is stored, listed, shared, moved and
+/// Files the apps edit (Sheets, Docs and Slides). Every other file is stored, listed, shared, moved and
 /// binned the same way, but has no versions and is never opened in a live room: the Drive
 /// previews it (preview.rs) or downloads it.
-pub const EXTS: [&str; 7] = [".xlsx", ".xlsm", ".xls", ".csv", ".ods", ".docx", ".odt"];
+pub const EXTS: [&str; 8] = [".xlsx", ".xlsm", ".xls", ".csv", ".ods", ".docx", ".odt", ".pptx"];
 
-/// Documents (StarDocs) rather than spreadsheets: stored, listed, shared and versioned like any
-/// file, but never opened in a live spreadsheet room or drawn as a sheet preview.
-pub const DOC_EXTS: [&str; 2] = [".docx", ".odt"];
+/// Documents (StarDocs) and presentations (Starbase Slides) rather than spreadsheets: stored,
+/// listed, shared and versioned like any file, but never opened in a live spreadsheet room or
+/// drawn as a sheet preview.
+pub const DOC_EXTS: [&str; 3] = [".docx", ".odt", ".pptx"];
 
 /// Whether a file name is a StarDocs document.
 pub fn is_doc(name: &str) -> bool {
@@ -1117,6 +1118,7 @@ mod tests {
         assert_eq!(split_name("notes.txt"), ("notes.txt".into(), ".xlsx".into()));
         assert_eq!(split_name("Letter.docx"), ("Letter".into(), ".docx".into()));
         assert!(is_doc("a/Letter.DOCX") && is_doc("b.odt") && !is_doc("c.xlsx"));
+        assert!(is_doc("Talk.pptx") && is_sheet_ext(".PPTX"), "presentations are kept, not as sheets");
         assert_eq!(split_name(".xlsx"), (".xlsx".into(), ".xlsx".into()));
         assert_eq!(split_existing("photo.JPG"), ("photo".into(), ".JPG".into()));
         assert_eq!(split_existing("README"), ("README".into(), String::new()));

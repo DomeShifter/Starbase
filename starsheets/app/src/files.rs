@@ -853,8 +853,9 @@ impl Files {
         let refresh = |_: u16, _: web_sys::Headers, _: Vec<u8>| Reply::Refresh;
         match action {
             Action::Open(id, _) if self.browser.name_of(&id).is_some_and(|n| is_doc(&n)) => {
-                // A document opens in StarDocs, in a new tab (this tab keeps its spreadsheet).
-                open_url(&docs_url(&id, ""));
+                // A document opens in StarDocs (a presentation in Starbase Slides), in a new tab
+                // (this tab keeps its spreadsheet).
+                open_url(&file_url(&id, &self.browser.name_of(&id).unwrap_or_default()));
             }
             Action::Open(id, new_tab) => {
                 // This tab only when the sheet here is completely blank; else a new tab.
@@ -1021,9 +1022,21 @@ pub fn docs_url(id: &str, extra: &str) -> String {
     format!("{dir}docs/?{q}{extra}")
 }
 
-/// The page a file opens on: StarDocs for a document, this page for a spreadsheet.
+/// Starbase Slides' page, in `slides/` beside this one, as [`docs_url`].
+pub fn slides_url(id: &str, extra: &str) -> String {
+    docs_url(id, extra).replacen("docs/?", "slides/?", 1)
+}
+
+/// The page a file opens on: Starbase Slides for a presentation, StarDocs for a document, this
+/// page for a spreadsheet.
 pub fn file_url(id: &str, name: &str) -> String {
-    if is_doc(name) { docs_url(id, "") } else { page_url(id) }
+    if crate::store::is_slides(name) {
+        slides_url(id, "")
+    } else if is_doc(name) {
+        docs_url(id, "")
+    } else {
+        page_url(id)
+    }
 }
 
 /// Opens a new tab; false when the browser blocked it.
@@ -1194,7 +1207,7 @@ fn list_files(inbox: Rc<RefCell<Vec<Reply>>>, ctx: egui::Context) {
             // file since the any-file Drive; photos and the like open from the Drive).
             .filter(|f| {
                 let n = f["name"].as_str().unwrap_or("").to_lowercase();
-                [".xlsx", ".xlsm", ".xls", ".csv", ".ods", ".docx", ".odt"].iter().any(|x| n.ends_with(x))
+                [".xlsx", ".xlsm", ".xls", ".csv", ".ods", ".docx", ".odt", ".pptx"].iter().any(|x| n.ends_with(x))
             })
             .map(|f| crate::filebrowser::FileInfo {
                 id: s(f, "id"),

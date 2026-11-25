@@ -155,6 +155,9 @@ pub struct SettingsWindow {
     draft: Option<Prefs>,
     /// The tab shown: 0 General, 1 Style.
     tab: usize,
+    /// The desktop program's "Check for updates" while the window is open (docs/privacy.md).
+    #[cfg(not(target_arch = "wasm32"))]
+    updates: bool,
 }
 
 impl SettingsWindow {
@@ -162,9 +165,17 @@ impl SettingsWindow {
         if ctx.data_mut(|m| m.remove_temp::<bool>(egui::Id::unique(REQUEST))).is_some() {
             self.draft = Some(Prefs::load());
             self.tab = 0;
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.updates = starbase_connect::update_check_on();
+            }
         }
         let Some(d) = self.draft.as_mut() else { return };
         let tab = &mut self.tab;
+        #[cfg(not(target_arch = "wasm32"))]
+        let updates = &mut self.updates;
+        #[cfg(not(target_arch = "wasm32"))]
+        let mut check_now = false;
         let mut done = None;
         let mut closed = false;
         house::dialog(ctx, "starsheets_settings", 520.0, "Settings", Some(&mut closed), |ui| {
@@ -173,6 +184,10 @@ impl SettingsWindow {
                 style_tab(ui, d);
             } else {
                 general_tab(ui, d);
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    check_now = updates_section(ui, updates);
+                }
             }
             match house::actions(ui, &["Cancel", "Save settings"]) {
                 Some(0) => done = Some(false),
@@ -183,6 +198,10 @@ impl SettingsWindow {
                 done = Some(false);
             }
         });
+        #[cfg(not(target_arch = "wasm32"))]
+        if check_now {
+            app.check_for_updates();
+        }
         // Style choices show straight away, before Save (house rule: live preview).
         if let Some(d) = &self.draft {
             d.apply_style();
@@ -196,6 +215,15 @@ impl SettingsWindow {
                     p.save();
                     p.apply(app);
                 }
+                #[cfg(not(target_arch = "wasm32"))]
+                if self.updates != starbase_connect::update_check_on() {
+                    match starbase_connect::set_update_check(self.updates) {
+                        // Turned on: look now, as the next start would.
+                        Ok(()) if self.updates => app.start_update_check(),
+                        Ok(()) => {}
+                        Err(e) => app.message = Some(("Settings".into(), e)),
+                    }
+                }
             }
             Some(false) => {
                 self.draft = None;
@@ -205,6 +233,16 @@ impl SettingsWindow {
             None => {}
         }
     }
+}
+
+/// The desktop program's update check (docs/privacy.md): off unless ticked, and then only
+/// Starbase's own releases. Returns whether "Check for updates now" was clicked.
+#[cfg(not(target_arch = "wasm32"))]
+fn updates_section(ui: &mut egui::Ui, on: &mut bool) -> bool {
+    house::gap(ui);
+    house::label(ui, "Updates", "Starbase connects to nothing unless you ask. This asks GitHub for Starbase's newest release.");
+    ui.checkbox(on, "Check for updates when Starbase starts");
+    ui.add(house::secondary("Check for updates now")).clicked()
 }
 
 /// The Style tab: look-and-feel choices, kept in this browser.

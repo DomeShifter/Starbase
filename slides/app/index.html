@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <!-- Light or dark: View › Theme (src/theme.rs); the loading screen follows the system. -->
+  <meta name="color-scheme" content="light dark">
+  <title>Starbase Slides</title>
+  <link rel="icon" type="image/svg+xml" href="favicon.svg">
+  <link data-trunk rel="copy-file" href="favicon.svg" />
+  <link data-trunk rel="rust" data-bin="starslides" data-wasm-opt="z" data-wasm-opt-params="--enable-bulk-memory --enable-bulk-memory-opt --enable-nontrapping-float-to-int --enable-sign-ext --enable-mutable-globals --enable-reference-types" data-weak-refs />
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #f9fbfd; }
+    #starslides_canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+    #starslides_loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      color: #555; font: 14px system-ui, sans-serif; pointer-events: none; }
+    @media (prefers-color-scheme: dark) {
+      html, body { background: #1b1b1b; }
+      #starslides_loading { color: #c4c7c5; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="starslides_canvas"></canvas>
+  <div id="starslides_loading">Loading Starbase Slides&hellip;</div>
+</body>
+</html>

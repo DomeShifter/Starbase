@@ -28,8 +28,10 @@ use crate::store::{has_data, is_doc, xlsx};
 
 /// Quiet time after the last change before saving (ms), as on the web.
 const SAVE_AFTER: f64 = 1500.0;
-/// A save to the server that failed is tried again this long after (ms).
-const RETRY_AFTER: f64 = 10_000.0;
+/// A save to the server that failed is tried again 2 s later, then after twice as long each
+/// time it fails again, at most every 30 s (ms).
+const RETRY_FIRST: f64 = 2_000.0;
+const RETRY_MAX: f64 = 30_000.0;
 pub const SHEETS_ID: &str = "io.github.DomeShifter.Starbase.Sheets";
 pub const DRIVE_ID: &str = "io.github.DomeShifter.Starbase";
 
@@ -156,6 +158,8 @@ fn creator(start: Start) -> eframe::AppCreator<'static> {
         let mut app = SheetApp::new(Session::new(), services());
         load_prefs(&mut app);
         starsheets_defaults(&mut app);
+        // Update checks ask for Starbase's releases, and only when the person turned them on.
+        crate::updates::setup(&mut app, starbase_connect::update_check_on());
         gridcraft_ui_egui::spelling::set(crate::spelling::known);
         SheetApp::setup_context_for_language(&cc.egui_ctx, false, app.ui.language);
         crate::theme::install(&cc.egui_ctx);
@@ -380,6 +384,44 @@ pub struct LocalFiles {
     remote: HashMap<u64, crate::remote::RemoteDoc>,
     /// The one being opened from the server (`--server-file`): the path GridCraft opened it from.
     pub pending_remote: Option<(String, crate::remote::RemoteDoc)>,
+    /// Failed saves to the server in a row, for the wait before the next try.
+    backoff: Backoff,
+    /// A save to the server just failed: wake the window this long after (ms) to try again.
+    wake_in: Option<f64>,
+}
+
+/// How long to wait before trying a failed save to the server again: [`RETRY_FIRST`] after the
+/// first failure, twice as long after each further one, at most [`RETRY_MAX`].
+#[derive(Default)]
+struct Backoff {
+    failures: u32,
+}
+
+impl Backoff {
+    /// One more failure in a row: the wait before the next try (ms).
+    fn failed(&mut self) -> f64 {
+        self.failures = self.failures.saturating_add(1);
+        (RETRY_FIRST * 2f64.powi(self.failures.min(16) as i32 - 1)).min(RETRY_MAX)
+    }
+
+    fn succeeded(&mut self) {
+        self.failures = 0;
+    }
+}
+
+/// Runs the window's logic again after `ms`, even while it is in the background or covered:
+/// eframe runs `App::logic` for a hidden window when a repaint is asked for from another
+/// thread, whereas a delayed repaint asked for by the window itself waits until it is shown.
+fn wake_after(ctx: &egui::Context, ms: f64) {
+    let ctx = ctx.clone();
+    let wait = std::time::Duration::from_millis(ms.max(0.0) as u64 + 50);
+    let spawned = std::thread::Builder::new().name("save-retry".into()).spawn(move || {
+        std::thread::sleep(wait);
+        ctx.request_repaint();
+    });
+    if let Err(e) = spawned {
+        log::warn!("couldn't start the save retry timer: {e}");
+    }
 }
 
 impl LocalFiles {
@@ -439,11 +481,17 @@ impl LocalFiles {
         }
         let wanted = app.session.active().is_some_and(|d| self.needs_save(d));
         if wanted && app.editor.is_none() {
-            if now - self.changed_at < SAVE_AFTER {
-                ctx.request_repaint_after(std::time::Duration::from_millis(400));
+            let left = SAVE_AFTER - (now - self.changed_at);
+            if left > 0.0 {
+                ctx.request_repaint_after(std::time::Duration::from_millis(left.min(RETRY_MAX) as u64 + 1));
             } else {
                 self.save_active(app);
+                // The save status changes ("Saved to …", "Not saved: …"): show it.
+                ctx.request_repaint();
             }
+        }
+        if let Some(ms) = self.wake_in.take() {
+            wake_after(ctx, ms);
         }
         use crate::shell::{SaveState, SaveStatus};
         let remote = app.session.active().and_then(|d| self.remote.get(&d.uid));
@@ -539,6 +587,7 @@ impl LocalFiles {
             match r.save(&bytes) {
                 Ok(copy) => {
                     self.error = None;
+                    self.backoff.succeeded();
                     if let Some(name) = copy {
                         app.message = Some((
                             "Saved as a copy".into(),
@@ -554,8 +603,11 @@ impl LocalFiles {
                 }
                 Err(e) => {
                     self.error = Some(e);
-                    // Tried again in a while (connected again meanwhile, say), not every frame.
-                    self.changed_at = gridcraft_ui_egui::monotonic_ms() + RETRY_AFTER;
+                    // Tried again in a while (connected again meanwhile, say), not every frame,
+                    // and also while the window is in the background ([`wake_after`]).
+                    let wait = self.backoff.failed();
+                    self.changed_at = gridcraft_ui_egui::monotonic_ms() + wait - SAVE_AFTER;
+                    self.wake_in = Some(wait);
                 }
             }
             return;
@@ -989,6 +1041,35 @@ mod tests {
         again.open_path(&path.to_string_lossy());
         assert_eq!(a1(&again), "Food", "the change is in the file");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_save_to_the_server_waits_longer_each_time_up_to_30_s() {
+        let mut b = Backoff::default();
+        let waits: Vec<f64> = (0..7).map(|_| b.failed()).collect();
+        assert_eq!(waits, [2_000.0, 4_000.0, 8_000.0, 16_000.0, 30_000.0, 30_000.0, 30_000.0]);
+        for _ in 0..100 {
+            b.failed();
+        }
+        assert_eq!(b.failed(), RETRY_MAX, "no overflow after many failures");
+        b.succeeded();
+        assert_eq!(b.failed(), RETRY_FIRST, "a save that worked starts again from 2 s");
+    }
+
+    #[test]
+    fn the_retry_timer_wakes_a_window_in_the_background() {
+        // The timer asks for a repaint from its own thread once the wait is over.
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let ctx = egui::Context::default();
+        let asked = Arc::new(AtomicBool::new(false));
+        let seen = asked.clone();
+        ctx.set_request_repaint_callback(move |_| seen.store(true, Ordering::SeqCst));
+        wake_after(&ctx, 10.0);
+        let start = std::time::Instant::now();
+        while !asked.load(Ordering::SeqCst) {
+            assert!(start.elapsed() < std::time::Duration::from_secs(5), "the timer never asked for a repaint");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
 
     #[test]

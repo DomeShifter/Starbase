@@ -32,7 +32,9 @@
 #   flatpak run --command=stardocs io.github.DomeShifter.Starbase           # Starbase Docs
 #
 # For Flathub, the `dir` sources become one `git` source pinned to a release tag and commit, and
-# the two generated JSON files are committed in the Flathub manifest repository.
+# the two generated JSON files are committed in the Flathub manifest repository. Flathub does not
+# accept AI-written manifests, so that copy has to be written by a person; see
+# packaging/linux/flathub-submission.md before submitting.
 id: io.github.DomeShifter.Starbase
 runtime: org.freedesktop.Platform
 runtime-version: '26.08'
@@ -147,10 +149,22 @@ modules:
       - >-
         for entry in io.github.DomeShifter.Starbase io.github.DomeShifter.Starbase.Sheets io.github.DomeShifter.Starbase.Docs; do
         install -Dm644 packaging/linux/$entry.desktop /app/share/applications/$entry.desktop; done
+      # ---- STARBASE-OPEN HANDLER (reserved) -------------------------------------------------------
+      # The `starbase-open` handler ("Open in Starbase" in the file manager) is added in a separate
+      # change. Enable once it is on main:
+      #   in the starsheets module (or its own module), after the starsheets build:
+      #     cargo --offline build --release --locked -p starbase-open
+      #     install -Dm755 target/release/starbase-open /app/bin/starbase-open
+      #   here:
+      #     install -Dm644 -t /app/share/applications packaging/linux/io.github.DomeShifter.Starbase.Open.desktop
+      # Its desktop file name starts with the app ID, so Flatpak exports it. If it is a menu-less
+      # handler (NoDisplay=true), the metainfo keeps its single launchable (Flathub allows one).
+      # ---- end STARBASE-OPEN HANDLER ---------------------------------------------------------------
       - install -Dm644 packaging/linux/io.github.DomeShifter.Starbase.mime.xml /app/share/mime/packages/io.github.DomeShifter.Starbase.xml
       - packaging/linux/icons.sh /app/share/icons
-      # Starbase has no package version of its own yet (the two workspaces are versioned
-      # separately). CI replaces 0.0.0-dev below with the same version the AppImage gets.
+      # The metainfo lists real releases by hand (newest first, from CHANGELOG.md), so the
+      # @VERSION@/@DATE@ substitution below is a no-op today; it stays for the template's sake.
+      # CI still writes its build version into this line (flatpak.yml).
       - >-
         version=0.0.0-dev;
         install -d /app/share/metainfo;

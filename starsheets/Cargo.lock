@@ -6184,6 +6184,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "starbase-open"
+version = "0.4.0"
+dependencies = [
+ "rfd",
+ "serde_json",
+ "starbase-connect",
+]
+
+[[package]]
 name = "starsheets"
 version = "0.4.0"
 dependencies = [

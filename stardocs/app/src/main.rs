@@ -24,6 +24,7 @@
 mod bundled_fonts;
 mod icons;
 mod looks;
+mod mystyles;
 mod prefs;
 mod shell;
 mod shortcuts;
@@ -60,6 +61,8 @@ mod native;
 mod native_stubs;
 #[cfg(not(target_arch = "wasm32"))]
 mod serverfile;
+#[cfg(not(target_arch = "wasm32"))]
+mod updates;
 #[cfg(not(target_arch = "wasm32"))]
 use localfile as server;
 #[cfg(not(target_arch = "wasm32"))]
