@@ -173,7 +173,10 @@ pub fn pick_cache(
         return (PathBuf::from("/cache/photos"), "a volume is mounted at /cache".into());
     }
     if is_network(store_root) {
-        let base = xdg_cache.filter(|p| p.is_absolute()).or_else(|| home.filter(|p| p.is_absolute()).map(|h| h.join(".cache"))).unwrap_or_else(|| PathBuf::from("/var/cache"));
+        let base = xdg_cache
+            .filter(|p| p.is_absolute())
+            .or_else(|| home.filter(|p| p.is_absolute()).map(|h| h.join(".cache")))
+            .unwrap_or_else(|| PathBuf::from("/var/cache"));
         let dir = base.join("starbase").join("photos").join(short_hash(&store_root.to_string_lossy()));
         return (dir, "the storage folder is on a network share, where the index cannot work, so a local folder is used".into());
     }
