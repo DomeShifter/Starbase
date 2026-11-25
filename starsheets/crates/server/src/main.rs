@@ -15,6 +15,7 @@
 mod auth;
 mod backup;
 mod devices;
+mod findpath;
 mod guard;
 mod live;
 mod log;
@@ -1833,6 +1834,9 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
         return please_sign_in(&app, &headers);
     }
     let me = current_user(&app, &headers);
+    if let Some(resp) = findpath::route(&app, &m, &p, &q, me.clone()).await {
+        return resp;
+    }
     if p.first().map(String::as_str) == Some("backup") && p.len() <= 2 {
         return backup_api(&app, &m, &p, me, &body).await;
     }

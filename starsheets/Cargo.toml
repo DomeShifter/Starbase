@@ -2,7 +2,7 @@
 # scripts/fetch-upstream.sh at the tag in upstream.pin; never edited by hand).
 [workspace]
 resolver = "3"
-members = ["app", "crates/server", "crates/sync", "crates/connect"]
+members = ["app", "crates/server", "crates/sync", "crates/connect", "crates/open"]
 exclude = ["upstream"]
 
 [workspace.package]
