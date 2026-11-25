@@ -734,10 +734,15 @@ fn version_history_opens_from_the_menu_and_its_keys() {
     assert_eq!(s["dialogs"]["versionHistory"], true, "{s}");
     assert_eq!(s["versions"]["error"], crate::versions::NO_SERVER);
     h.get_by_label_contains("needs a Starbase server");
-    click(&mut h, "Close");
+    click(&mut h, "Back");
     assert_eq!(h.state_mut().state()["dialogs"]["versionHistory"], false);
     keys(&mut h, Modifiers::COMMAND | Modifiers::ALT | Modifiers::SHIFT, Key::H);
     assert_eq!(h.state_mut().state()["dialogs"]["versionHistory"], true, "Ctrl+Alt+Shift+H");
+    // The history is a mode of its own, read-only, with its own bar in place of the menus.
+    assert_eq!(h.state_mut().state()["mode"], "viewing", "the history shows the document read-only");
+    assert!(h.query_by_label("File").is_none(), "no menus while the history shows");
+    click(&mut h, "Back");
+    assert_eq!(h.state_mut().state()["mode"], "editing", "back to editing once the history closes");
     menu(&mut h, &["File", "Version history", "Name current version"]);
     assert_eq!(h.state_mut().state()["dialogs"]["nameVersion"], true);
 }
