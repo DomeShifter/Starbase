@@ -1,0 +1,105 @@
+# Starbase desktop programs on Windows and macOS (look-ahead for desktop-plan.md Phases 3 and 4):
+# builds starsheets (Starbase Drive + Sheets) and stardocs (Starbase Docs) natively, runs their
+# tests (egui_kittest window tests included: they use the accessibility tree, no GPU), and keeps
+# the unsigned executables for 7 days. No installers and no signing here: those are later jobs.
+# Status and known gaps: docs/research/windows-mac-status.md.
+name: Desktop (Windows, macOS)
+on:
+  push:
+    branches: [main]
+    paths: ["starsheets/**", "stardocs/**", "packaging/**", ".github/workflows/desktop.yml", ".github/workflows/desktop-other.yml"]
+  pull_request:
+    paths: [".github/workflows/desktop-other.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-other-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.app }} (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+        app: [starsheets, stardocs]
+        include:
+          - app: starsheets
+            # The connect crate (keyring, settings folder) is tested with Sheets.
+            tests: -p starsheets -p starbase-connect -p starsheets-sync
+          - app: stardocs
+            tests: -p stardocs
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+        working-directory: ${{ matrix.app }}
+    steps:
+      # Byte-exact checkouts on Windows: the fetch scripts read upstream.pin and compare
+      # Cargo.toml blocks, and the tests read fixtures. Long paths for the engines' deep trees.
+      - name: Git settings (Windows)
+        if: runner.os == 'Windows'
+        working-directory: ${{ runner.temp }}
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.longpaths true
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      # The fetch scripts call python3; Windows only has python.exe (and a Store stub named python3).
+      - name: python3 on Windows
+        if: runner.os == 'Windows'
+        run: |
+          python3 -c 'import tomllib' 2>/dev/null || cp "$(command -v python)" "$(dirname "$(command -v python)")/python3.exe"
+          python3 --version
+      - name: Fetch the engine at the pinned commit of our fork
+        run: scripts/fetch-upstream.sh
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: desktop-other-${{ matrix.app }}
+          workspaces: ${{ matrix.app }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Our code only, warnings as errors: cfg(unix)-only code that leaves something unused on
+      # Windows or macOS shows up here.
+      - name: Clippy (our code)
+        run: cargo clippy ${{ matrix.tests }} --no-deps -- -D warnings
+      - name: Build
+        run: cargo build --release -p ${{ matrix.app }}
+      # --release: the tests reuse the release build's dependencies instead of a second build.
+      - name: Tests
+        run: cargo test --release ${{ matrix.tests }}
+      - name: Version
+        run: |
+          target/release/${{ matrix.app }} --version
+          ls -la target/release/${{ matrix.app }}*
+      # Information only: hosted runners have no GPU (Windows: OpenGL 1.1 only, so glow can't
+      # start; macOS: a virtual display). A window that stays up for 15 s counts as started.
+      - name: Starts and stays up (information only)
+        continue-on-error: true
+        run: |
+          target/release/${{ matrix.app }} > "$RUNNER_TEMP/start.log" 2>&1 &
+          pid=$!
+          sleep 15
+          if kill -0 "$pid" 2>/dev/null; then echo "still running after 15 s"; kill "$pid" || true; ok=1; else wait "$pid"; echo "exited with $?"; ok=0; fi
+          tail -n 40 "$RUNNER_TEMP/start.log"
+          test "$ok" = 1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.app }}-${{ runner.os == 'Windows' && 'windows-x86_64' || 'macos-arm64' }}
+          path: |
+            ${{ matrix.app }}/target/release/${{ matrix.app }}.exe
+            ${{ matrix.app }}/target/release/${{ matrix.app }}
+          retention-days: 7
+          if-no-files-found: error

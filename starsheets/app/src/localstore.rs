@@ -769,6 +769,8 @@ pub(crate) fn answer(root: &Path, data: &Path, method: Method, url: &str, body: 
 mod tests {
     use super::*;
 
+    // Linux only: it checks /proc, and `true` is a Unix program.
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_started_program_is_reaped_when_it_ends() {
         let pid = start_detached(std::process::Command::new("true")).unwrap();
