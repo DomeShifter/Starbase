@@ -266,8 +266,10 @@ fn the_command_line_opens_local_files_or_a_server_document() {
     assert!(a.files.is_empty());
     let a = parse_args(os(&["--name", "N.docx", "--server-file", "x"])).unwrap();
     assert_eq!(a.server_file, Some(("x".to_string(), "N.docx".to_string())), "in either order");
-    let a = parse_args(os(&["/tmp/a.docx", "/tmp/b.odt"])).unwrap();
-    assert_eq!(a.files, vec![PathBuf::from("/tmp/a.docx"), PathBuf::from("/tmp/b.odt")]);
+    // Absolute on every system (`/tmp/a.docx` isn't on Windows, where it gains a drive letter).
+    let (f1, f2) = (std::env::temp_dir().join("a.docx"), std::env::temp_dir().join("b.odt"));
+    let a = parse_args(vec![f1.clone().into_os_string(), f2.clone().into_os_string()]).unwrap();
+    assert_eq!(a.files, vec![f1, f2]);
     assert_eq!(parse_args(os(&["--version"])).unwrap(), Args { version: true, ..Default::default() });
     assert!(parse_args(os(&["--server-file"])).is_err(), "needs an id");
     assert!(parse_args(os(&["--server-file", ""])).is_err());
