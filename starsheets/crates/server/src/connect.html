@@ -74,7 +74,7 @@
 
   async function start() {
     let info;
-    try { info = await (await fetch("api/info", { cache: "no-store" })).json(); } catch (_) { return say("This server can't be reached.", true); }
+    try { info = await (await fetch("info", { cache: "no-store" })).json(); } catch (_) { return say("This server can't be reached.", true); }
     if (!info.auth) return say("Sign-in is off on this server, so the app doesn't need to connect.");
     if (!info.signed_in) {
       say("");
@@ -82,7 +82,7 @@
       if (sso) {
         $("sso").hidden = false;
         $("sso").textContent = "Sign in with " + (sso.label || "single sign-on");
-        $("sso").href = "api/oidc/login?next=" + encodeURIComponent(location.pathname + location.search);
+        $("sso").href = "oidc/login?next=" + encodeURIComponent(location.pathname + location.search);
       }
       $("password").hidden = !!(sso && sso.only);
       $("signin-button").hidden = !!(sso && sso.only);
@@ -94,7 +94,7 @@
   }
 
   async function check() {
-    const r = await fetch("api/devices/code?code=" + encodeURIComponent(code), { cache: "no-store" });
+    const r = await fetch("devices/code?code=" + encodeURIComponent(code), { cache: "no-store" });
     if (r.status === 401) return start();
     if (!r.ok) { say(await why(r), true); $("code").value = code; return show("enter"); }
     const d = await r.json();
@@ -106,7 +106,7 @@
   }
 
   async function answer(allow) {
-    const r = await post("api/devices/approve", { code, allow });
+    const r = await post("devices/approve", { code, allow });
     show("");
     if (!r.ok) return say(await why(r), true);
     say(allow ? "Done. Go back to the app: it carries on by itself." : "The app wasn't allowed in. You can close this page.", false);
@@ -115,7 +115,7 @@
 
   $("signin").addEventListener("submit", async (e) => {
     e.preventDefault();
-    const r = await post("api/login", { username: $("username").value, password: $("pw").value });
+    const r = await post("login", { username: $("username").value, password: $("pw").value });
     if (!r.ok) return say(await why(r), true);
     $("pw").value = "";
     start();

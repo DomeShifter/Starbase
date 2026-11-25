@@ -259,7 +259,7 @@ fn sign_in(typed: &str, name: &str, tell: &dyn Fn(Step) -> bool) -> Result<Serve
     let field = |k: &str| s.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     let (device_code, user_code) = (field("device_code"), field("user_code"));
     // The connect page at the address the person typed (not one the server names).
-    let verify_url = format!("{url}/connect?code={user_code}");
+    let verify_url = format!("{url}/api/connect?code={user_code}");
     let mut every = Duration::from_secs(s.get("interval").and_then(Value::as_u64).unwrap_or(5).clamp(1, 60));
     let until = Instant::now() + Duration::from_secs_f64(s.get("expires_in").and_then(Value::as_f64).unwrap_or(600.0).clamp(10.0, 3600.0));
     let opened = open_browser(&verify_url);

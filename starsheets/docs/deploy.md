@@ -71,3 +71,17 @@ the whole files folder (accounts and versions too). Point a new server's `/data`
   $http_upgrade; proxy_set_header Connection "upgrade";`) and allow long-lived connections.
   Without it the app still works and saves the usual way, one tab at a time.
 - Use HTTPS (or localhost): browsers only give full clipboard access to secure pages.
+
+## Desktop apps
+
+Starbase Sheets, Drive and Docs on a computer can use the server's files: Drive's account menu
+(Docs: File menu) › Connect to a server…, then the server's address. The browser opens the
+server's connect page (`/api/connect`) showing a short code; the person signs in there as usual
+(password or single sign-on) and allows the app. The app gets a device token of its own and keeps
+it in the system keyring (or a file only that user can read, where there is no keyring).
+
+- Each person sees and removes their connected apps in Your devices (avatar menu); the owner sees
+  anyone's from People. A removed device stops working at once, open live connections too. A new
+  password, or removing the account, removes all of them.
+- Nothing to set up on the server. Behind a proxy, `/api/` must reach the server (it already does
+  for the web app). Set `STARBASE_PUBLIC_URL` if the server can't tell its own address.

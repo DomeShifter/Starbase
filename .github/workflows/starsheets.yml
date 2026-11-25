@@ -121,7 +121,7 @@ jobs:
           key: test
           workspaces: starsheets
       - name: Test
-        run: cargo test -p starsheets -p starsheets-server -p starsheets-sync
+        run: cargo test -p starsheets -p starsheets-server -p starsheets-sync -p starbase-connect
 
   desktop:
     # The desktop program (app/src/native.rs, docs/research/desktop-plan.md D1a): built for
@@ -182,11 +182,11 @@ jobs:
           workspaces: starsheets
       - name: Formatting
         # Our packages only: GridCraft (upstream/) keeps its own formatting.
-        run: cargo fmt -p starsheets -p starsheets-server -p starsheets-sync --check
+        run: cargo fmt -p starsheets -p starsheets-server -p starsheets-sync -p starbase-connect --check
       - name: Clippy (web app)
         run: cargo clippy -p starsheets --target wasm32-unknown-unknown -- -D warnings
       - name: Clippy (server and sync, with tests)
-        run: cargo clippy -p starsheets-server -p starsheets-sync --all-targets -- -D warnings
+        run: cargo clippy -p starsheets-server -p starsheets-sync -p starbase-connect --all-targets -- -D warnings
 
   speed:
     # Speed and memory check on a big many-tab workbook (crates/sync/examples/bench.rs): the

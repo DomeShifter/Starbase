@@ -876,7 +876,7 @@ fn connect_url(headers: &HeaderMap, ask: Ask, user_code: &str) -> String {
         let host = headers.get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("localhost");
         format!("{}://{host}", if ask.secure { "https" } else { "http" })
     });
-    format!("{base}/connect?code={}", devices::show_code(user_code))
+    format!("{base}/api/connect?code={}", devices::show_code(user_code))
 }
 
 /// /api/devices…: desktop sign-in (start, poll; the connect page's code and approve) and the
@@ -1760,7 +1760,7 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
         return Response::builder().header(header::CONTENT_TYPE, "text/plain").body(Body::from("ok")).unwrap();
     }
     // The page where a desktop app is allowed in (devices.rs), with or without the web app.
-    if path == "/connect" && (method == Method::GET || method == Method::HEAD) {
+    if path == "/api/connect" && (method == Method::GET || method == Method::HEAD) {
         return Response::builder()
             .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
             .header(header::CACHE_CONTROL, "no-store")
@@ -2335,7 +2335,7 @@ mod tests {
         let g = post(app, ip, "/api/devices/start", "", json!({ "name": name })).await;
         assert_eq!(g.status, 200, "{:?}", g.json);
         let uc = g.json["user_code"].as_str().unwrap().to_string();
-        assert_eq!(g.json["verify_url"].as_str().unwrap(), format!("http://192.168.1.5:8080/connect?code={uc}"));
+        assert_eq!(g.json["verify_url"].as_str().unwrap(), format!("http://192.168.1.5:8080/api/connect?code={uc}"));
         (g.json["device_code"].as_str().unwrap().to_string(), uc)
     }
 
@@ -2551,10 +2551,10 @@ mod tests {
     #[tokio::test]
     async fn the_connect_page_is_served() {
         let (app, ip, _) = owned().await;
-        let g = send(&app, &ip, "GET", "/connect?code=ABCD-EFGH", "", &[], vec![]).await;
+        let g = send(&app, &ip, "GET", "/api/connect?code=ABCD-EFGH", "", &[], vec![]).await;
         assert_eq!(g.status, 200);
         let page = String::from_utf8_lossy(&g.bytes);
-        assert!(page.contains("Connect an app") && page.contains("api/devices/approve"));
+        assert!(page.contains("Connect an app") && page.contains("devices/approve"));
         assert_eq!(g.headers[header::X_FRAME_OPTIONS], "DENY", "never inside another site's frame");
         let _ = std::fs::remove_dir_all(&app.store.root);
     }
