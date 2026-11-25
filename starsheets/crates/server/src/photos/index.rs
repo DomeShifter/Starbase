@@ -13,7 +13,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use super::decode::Meta;
 
 /// The schema version this server writes.
-pub const SCHEMA: i32 = 1;
+pub const SCHEMA: i32 = 2;
 
 /// Where a picture is in the work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,14 +60,26 @@ pub struct Row {
     pub state: State,
     pub error: Option<String>,
     pub meta: Meta,
+    /// A hash of the picture's edits (its XMP sidecar), None when it has none.
+    pub edits: Option<String>,
+    /// The sidecar's size and modified time when it was read (None: there was none).
+    pub side: Option<String>,
+    /// The thumbnails' key: the content hash, or a hash of it and the edits.
+    pub thumb: Option<String>,
+}
+
+impl Row {
+    /// The key its thumbnails are kept under (and its `v`): with the edits, else the content.
+    pub fn thumb_key(&self) -> Option<&str> {
+        self.thumb.as_deref().or(self.hash.as_deref())
+    }
 }
 
 pub struct Index {
     conn: Connection,
 }
 
-const COLUMNS: &str =
-    "id, path, folder, name, size, mtime_ns, media, hash, state, error, width, height, orientation, taken, make, model, lat, lon, alt";
+const COLUMNS: &str = "id, path, folder, name, size, mtime_ns, media, hash, state, error, width, height, orientation, taken, make, model, lat, lon, alt, edits, side, thumb";
 
 fn row(r: &rusqlite::Row) -> rusqlite::Result<Row> {
     Ok(Row {
@@ -92,7 +104,18 @@ fn row(r: &rusqlite::Row) -> rusqlite::Result<Row> {
             lon: r.get(17)?,
             alt: r.get(18)?,
         },
+        edits: r.get(19)?,
+        side: r.get(20)?,
+        thumb: r.get(21)?,
     })
+}
+
+/// A picture's sidecar as read: a hash of its edits (None: no change) and its stat (None: no
+/// sidecar).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Side {
+    pub edits: Option<String>,
+    pub stat: Option<String>,
 }
 
 /// The folder part and the name part of a path inside the store.
@@ -140,6 +163,19 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                 enabled_at INTEGER NOT NULL
             );
             PRAGMA user_version = 1;
+            COMMIT;",
+        )?;
+    }
+    if v < 2 {
+        // Edits (XMP sidecars): the thumbnails' key includes them.
+        conn.execute_batch(
+            "BEGIN;
+            ALTER TABLE photos ADD COLUMN edits TEXT;
+            ALTER TABLE photos ADD COLUMN side TEXT;
+            ALTER TABLE photos ADD COLUMN thumb TEXT;
+            UPDATE photos SET thumb = hash;
+            CREATE INDEX photos_thumb ON photos(thumb);
+            PRAGMA user_version = 2;
             COMMIT;",
         )?;
     }
@@ -196,13 +232,13 @@ impl Index {
     }
 
     /// Turns Photos off for `folder` and every folder inside it, and forgets their pictures.
-    /// Returns the content hashes that were in use there (their thumbnails may now go).
+    /// Returns the thumbnail keys that were in use there (their thumbnails may now go).
     pub fn disable(&self, folder: &str) -> rusqlite::Result<Vec<String>> {
         let (lo, hi) = (format!("{folder}/"), format!("{folder}0"));
         let inside = if folder.is_empty() { "1" } else { "(path = ?1 OR (path >= ?2 AND path < ?3))" };
         self.conn.execute(&format!("DELETE FROM folders WHERE {inside}"), params![folder, lo, hi])?;
         let inside = if folder.is_empty() { "1" } else { "(folder = ?1 OR (folder >= ?2 AND folder < ?3))" };
-        let mut s = self.conn.prepare(&format!("SELECT DISTINCT hash FROM photos WHERE hash IS NOT NULL AND {inside}"))?;
+        let mut s = self.conn.prepare(&format!("SELECT DISTINCT thumb FROM photos WHERE thumb IS NOT NULL AND {inside}"))?;
         let hashes: Vec<String> = s.query_map(params![folder, lo, hi], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
         self.conn.execute(&format!("DELETE FROM photos WHERE {inside}"), params![folder, lo, hi])?;
         Ok(hashes)
@@ -214,9 +250,9 @@ impl Index {
         s.query_map([], |r| r.get(0))?.collect()
     }
 
-    /// Whether any picture still has this content (its thumbnails are still wanted).
-    pub fn hash_used(&self, hash: &str) -> rusqlite::Result<bool> {
-        self.conn.query_row("SELECT EXISTS(SELECT 1 FROM photos WHERE hash = ?1)", params![hash], |r| r.get(0))
+    /// Whether any picture still has thumbnails under this key (they are still wanted).
+    pub fn thumb_used(&self, key: &str) -> rusqlite::Result<bool> {
+        self.conn.query_row("SELECT EXISTS(SELECT 1 FROM photos WHERE thumb = ?1)", params![key], |r| r.get(0))
     }
 
     /// Pictures made with another renderer (an older server) are made again; failed ones too,
@@ -266,7 +302,7 @@ impl Index {
             }
             Some(_) => {
                 self.conn.execute(
-                    "UPDATE photos SET size = ?2, mtime_ns = ?3, media = ?4, state = ?5, hash = NULL, error = NULL, render = NULL,
+                    "UPDATE photos SET size = ?2, mtime_ns = ?3, media = ?4, state = ?5, hash = NULL, error = NULL, render = NULL, edits = NULL, side = NULL, thumb = NULL,
                      width = NULL, height = NULL, orientation = NULL, taken = NULL, make = NULL, model = NULL, lat = NULL, lon = NULL, alt = NULL
                      WHERE path = ?1",
                     params![path, size as i64, mtime_ns, media, want],
@@ -277,10 +313,12 @@ impl Index {
     }
 
     /// The picture at `path` was read: kept only if the file is still the one read.
-    pub fn done(&self, path: &str, size: u64, mtime_ns: i64, hash: &str, meta: &Meta, render: &str) -> rusqlite::Result<bool> {
+    // One row's worth of columns.
+    #[allow(clippy::too_many_arguments)]
+    pub fn done(&self, path: &str, size: u64, mtime_ns: i64, hash: &str, meta: &Meta, render: &str, side: &Side) -> rusqlite::Result<bool> {
         let n = self.conn.execute(
             "UPDATE photos SET state = 1, hash = ?4, error = NULL, render = ?5, width = ?6, height = ?7, orientation = ?8, taken = ?9,
-             make = ?10, model = ?11, lat = ?12, lon = ?13, alt = ?14, indexed_at = strftime('%s','now')
+             make = ?10, model = ?11, lat = ?12, lon = ?13, alt = ?14, edits = ?15, side = ?16, thumb = ?17, indexed_at = strftime('%s','now')
              WHERE path = ?1 AND size = ?2 AND mtime_ns = ?3",
             params![
                 path,
@@ -296,7 +334,10 @@ impl Index {
                 meta.model,
                 meta.lat,
                 meta.lon,
-                meta.alt
+                meta.alt,
+                side.edits,
+                side.stat,
+                super::sidecar::thumb_key(hash, side.edits.as_deref())
             ],
         )?;
         Ok(n > 0)
@@ -304,7 +345,7 @@ impl Index {
 
     pub fn failed(&self, path: &str, size: u64, mtime_ns: i64, hash: Option<&str>, why: &str, render: &str) -> rusqlite::Result<()> {
         self.conn.execute(
-            "UPDATE photos SET state = 2, hash = ?4, error = ?5, render = ?6, indexed_at = strftime('%s','now') WHERE path = ?1 AND size = ?2 AND mtime_ns = ?3",
+            "UPDATE photos SET state = 2, hash = ?4, error = ?5, render = ?6, thumb = NULL, indexed_at = strftime('%s','now') WHERE path = ?1 AND size = ?2 AND mtime_ns = ?3",
             params![path, size as i64, mtime_ns, hash, why, render],
         )?;
         Ok(())
@@ -317,6 +358,16 @@ impl Index {
             .query_row(&format!("SELECT {COLUMNS} FROM photos WHERE hash = ?1 AND state = 1 LIMIT 1"), params![hash], row)
             .optional()
             .map(|r| r.map(|r| r.meta))
+    }
+
+    /// New edits were saved for the picture at `path`: its thumbnails' key changes with them.
+    /// Returns the new key, None when the picture hasn't been read yet (it will be, with them).
+    pub fn edits_saved(&self, path: &str, side: &Side) -> rusqlite::Result<Option<String>> {
+        let Some(r) = self.get(path)? else { return Ok(None) };
+        let Some(hash) = r.hash.filter(|_| r.state == State::Ready) else { return Ok(None) };
+        let key = super::sidecar::thumb_key(&hash, side.edits.as_deref());
+        self.conn.execute("UPDATE photos SET edits = ?2, side = ?3, thumb = ?4 WHERE path = ?1", params![path, side.edits, side.stat, key])?;
+        Ok(Some(key))
     }
 
     pub fn remove(&self, path: &str) -> rusqlite::Result<()> {
@@ -350,9 +401,9 @@ impl Index {
         Ok(out)
     }
 
-    /// Every content hash in use (cache files for any other one can go).
-    pub fn hashes(&self) -> rusqlite::Result<HashSet<String>> {
-        let mut s = self.conn.prepare("SELECT DISTINCT hash FROM photos WHERE hash IS NOT NULL")?;
+    /// Every thumbnail key in use (cache files for any other one can go).
+    pub fn thumb_keys(&self) -> rusqlite::Result<HashSet<String>> {
+        let mut s = self.conn.prepare("SELECT DISTINCT thumb FROM photos WHERE thumb IS NOT NULL")?;
         s.query_map([], |r| r.get(0))?.collect()
     }
 
@@ -385,8 +436,8 @@ mod tests {
         assert!(!ix.found("ann/Trip/raw.cr2", 10, 1, "image/x-canon-cr2", false).unwrap(), "unsupported: doesn't wait");
         assert!(ix.found("ann/Trip/a.jpg", 10, 1, "image/jpeg", true).unwrap(), "still waiting");
         let meta = Meta { width: 4, height: 3, orientation: 6, taken: Some("2026-01-02T03:04:05".into()), ..Meta::default() };
-        assert!(!ix.done("ann/Trip/a.jpg", 11, 1, "h1", &meta, "r1").unwrap(), "a changed file's result is dropped");
-        assert!(ix.done("ann/Trip/a.jpg", 10, 1, "h1", &meta, "r1").unwrap());
+        assert!(!ix.done("ann/Trip/a.jpg", 11, 1, "h1", &meta, "r1", &Side::default()).unwrap(), "a changed file's result is dropped");
+        assert!(ix.done("ann/Trip/a.jpg", 10, 1, "h1", &meta, "r1", &Side::default()).unwrap());
         assert!(!ix.found("ann/Trip/a.jpg", 10, 1, "image/jpeg", true).unwrap(), "unchanged: nothing to do");
         let id = ix.get("ann/Trip/a.jpg").unwrap().unwrap().id;
         ix.moved("ann/Trip/a.jpg", "ann/Trip/Best/a.jpg").unwrap();
@@ -406,11 +457,11 @@ mod tests {
         ix.enable("ann/Trip", "boss").unwrap();
         ix.enable("ann/Other", "ann").unwrap();
         assert_eq!(ix.enabled().unwrap(), ["ann/Other", "ann/Trip"]);
-        assert!(ix.done("ann/Trip/Best/a.jpg", 12, 2, "h2", &Meta::default(), "r1").unwrap());
-        assert!(ix.hash_used("h2").unwrap());
+        assert!(ix.done("ann/Trip/Best/a.jpg", 12, 2, "h2", &Meta::default(), "r1", &Side::default()).unwrap());
+        assert!(ix.thumb_used("h2").unwrap());
         assert_eq!(ix.disable("ann/Trip").unwrap(), ["h2"]);
         assert_eq!(ix.enabled().unwrap(), ["ann/Other"], "off, with what was in it");
-        assert!(!ix.hash_used("h2").unwrap());
+        assert!(!ix.thumb_used("h2").unwrap());
         assert_eq!(ix.in_folder("ann", true).unwrap().len(), 0);
         drop(ix);
         // A damaged index is moved aside and started again.

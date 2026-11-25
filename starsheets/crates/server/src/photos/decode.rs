@@ -13,7 +13,10 @@
 //!   program at hand (unit tests) it runs on the calling thread inside `catch_unwind`.
 //!
 //! Thumbnails: the longest side at most each of [`SIZES`] (never enlarged), EXIF orientation
-//! applied, JPEG quality 80 (PNG when the picture has transparency).
+//! applied, JPEG quality 80 (PNG when the picture has transparency). With edits (the picture's
+//! XMP sidecar), the picture is turned upright first and then rendered with them
+//! (`starbase_photo_edit::render`), inside the same child and limits. Exports (export.rs) run in
+//! the same kind of child: `photo-worker MEMORY JOB`, JOB being a [`Job`] as JSON.
 
 use std::io::{Cursor, Read, Write};
 use std::path::Path;
@@ -22,6 +25,9 @@ use std::time::Duration;
 use fast_image_resize as fr;
 use image::{DynamicImage, ImageFormat};
 use serde::{Deserialize, Serialize};
+use starbase_photo_edit::Edits;
+
+use super::export;
 
 /// The thumbnail sizes made for every picture (longest side, pixels): the grid and the viewer.
 pub const SIZES: [u32; 2] = [256, 1024];
@@ -121,9 +127,31 @@ pub fn sniff(bytes: &[u8]) -> Option<ImageFormat> {
     }
 }
 
+/// What a child is asked to do besides reading the picture (`photo-worker MEMORY JOB`).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Job {
+    /// The picture's edits: thumbnails (or the export) show them.
+    #[serde(default)]
+    pub edits: Option<Edits>,
+    /// Export the picture (one new file) instead of making thumbnails.
+    #[serde(default)]
+    pub export: Option<export::Options>,
+}
+
+/// The largest JPEG decoded for edited thumbnails (longest side), however small the crop.
+const MAX_EDITED_DECODE: u32 = 4096;
+
 /// Reads the picture and makes its thumbnails (on this thread: see [`make_guarded`] and
 /// [`run_isolated`] for the ways it is called).
+#[cfg(test)]
 pub fn make(bytes: &[u8], limits: &Limits) -> Result<Made, String> {
+    make_with(bytes, limits, None)
+}
+
+/// [`make`], the thumbnails showing `edits`.
+pub fn make_with(bytes: &[u8], limits: &Limits, edits: Option<&Edits>) -> Result<Made, String> {
+    let edits = edits.filter(|e| !e.is_identity());
     let format = sniff(bytes).ok_or("not a JPEG, PNG, WebP or GIF picture")?;
     let mut meta = if format == ImageFormat::Gif { Meta::default() } else { exif_meta(bytes) };
     let (w, h) = image::ImageReader::with_format(Cursor::new(bytes), format).into_dimensions().map_err(|e| format!("unreadable: {e}"))?;
@@ -134,11 +162,16 @@ pub fn make(bytes: &[u8], limits: &Limits) -> Result<Made, String> {
     if w > limits.max_side || h > limits.max_side || u64::from(w) * u64::from(h) > max {
         return Err(format!("too big to make thumbnails of ({w} × {h} pixels)"));
     }
-    let o = meta.orientation;
+    let mut o = meta.orientation;
     (meta.width, meta.height) = if (5..=8).contains(&o) { (h, w) } else { (w, h) };
     let largest = SIZES.iter().copied().max().unwrap_or(1024);
+    // A crop keeps part of the picture: decode it bigger, so the crop still fills the thumbnail.
+    let want = edits.map_or(largest, |e| {
+        let part = (e.crop.r - e.crop.l).min(e.crop.b - e.crop.t).clamp(0.01, 1.0);
+        ((largest as f32 / part).ceil() as u32).clamp(largest, MAX_EDITED_DECODE)
+    });
     let img = if format == ImageFormat::Jpeg {
-        jpeg_scaled(bytes, largest, limits)?
+        jpeg_scaled(bytes, want, limits)?.0
     } else {
         let mut r = image::ImageReader::with_format(Cursor::new(bytes), format);
         let mut l = image::Limits::default();
@@ -149,6 +182,16 @@ pub fn make(bytes: &[u8], limits: &Limits) -> Result<Made, String> {
         r.decode().map_err(|e| format!("unreadable: {e}"))?
     };
     let alpha = img.color().has_alpha();
+    let img = match edits {
+        None => img,
+        Some(e) => {
+            // Upright first (the renderer expects it), then the edits; nothing left to turn.
+            let up = upright(img, o)?;
+            o = 1;
+            let out = starbase_photo_edit::render(&up, e);
+            if alpha { DynamicImage::ImageRgba8(out) } else { DynamicImage::ImageRgb8(DynamicImage::ImageRgba8(out).into_rgb8()) }
+        }
+    };
     let (mut src, kind) = if alpha {
         let i = img.into_rgba8();
         let (w, h) = i.dimensions();
@@ -172,14 +215,27 @@ pub fn make(bytes: &[u8], limits: &Limits) -> Result<Made, String> {
     Ok(Made { meta, thumbs })
 }
 
-/// [`make`] on this thread, with a panic in a decoder turned into an error.
-pub fn make_guarded(bytes: &[u8], limits: &Limits) -> Result<Made, String> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| make(bytes, limits))).unwrap_or_else(|_| Err("the decoder failed (panic)".into()))
+/// [`make_with`] on this thread, with a panic in a decoder turned into an error.
+pub fn make_guarded(bytes: &[u8], limits: &Limits, edits: Option<&Edits>) -> Result<Made, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| make_with(bytes, limits, edits)))
+        .unwrap_or_else(|_| Err("the decoder failed (panic)".into()))
+}
+
+/// The picture as it is shown (EXIF orientation `o` applied), four bytes a pixel.
+pub fn upright(img: DynamicImage, o: u16) -> Result<image::RgbaImage, String> {
+    let i = img.into_rgba8();
+    if !(2..=8).contains(&o) {
+        return Ok(i);
+    }
+    let (w, h) = i.dimensions();
+    let (buf, w, h) = orient(i.as_raw(), w, h, 4, o);
+    drop(i);
+    image::RgbaImage::from_raw(w, h, buf).ok_or_else(|| "wrong number of pixels".to_string())
 }
 
 /// A JPEG decoded at 1/8, 1/4 or 1/2 of its size when that is still at least `want` pixels on
-/// its longest side: much less work for a thumbnail of a big photo.
-fn jpeg_scaled(bytes: &[u8], want: u32, limits: &Limits) -> Result<DynamicImage, String> {
+/// its longest side: much less work for a thumbnail of a big photo. Also its ICC colour profile.
+pub fn jpeg_scaled(bytes: &[u8], want: u32, limits: &Limits) -> Result<(DynamicImage, Option<Vec<u8>>), String> {
     let mut d = jpeg_decoder::Decoder::new(Cursor::new(bytes));
     d.set_max_decoding_buffer_size(limits.max_alloc as usize);
     d.read_info().map_err(|e| format!("unreadable: {e}"))?;
@@ -188,8 +244,9 @@ fn jpeg_scaled(bytes: &[u8], want: u32, limits: &Limits) -> Result<DynamicImage,
     let px = d.decode().map_err(|e| format!("unreadable: {e}"))?;
     let info = d.info().ok_or("unreadable: no header")?;
     let (w, h) = (u32::from(info.width), u32::from(info.height));
+    let icc = d.icc_profile();
     let bad = || "unreadable: wrong number of pixels".to_string();
-    match info.pixel_format {
+    let img = match info.pixel_format {
         jpeg_decoder::PixelFormat::RGB24 => image::RgbImage::from_raw(w, h, px).map(DynamicImage::ImageRgb8).ok_or_else(bad),
         jpeg_decoder::PixelFormat::L8 => image::GrayImage::from_raw(w, h, px).map(DynamicImage::ImageLuma8).ok_or_else(bad),
         jpeg_decoder::PixelFormat::L16 => {
@@ -209,11 +266,12 @@ fn jpeg_scaled(bytes: &[u8], want: u32, limits: &Limits) -> Result<DynamicImage,
                 .collect();
             image::RgbImage::from_raw(w, h, rgb).map(DynamicImage::ImageRgb8).ok_or_else(bad)
         }
-    }
+    }?;
+    Ok((img, icc))
 }
 
 /// Scales `src` down so its longest side is at most `long` (never up).
-fn fit(src: fr::images::Image<'static>, long: u32, kind: fr::PixelType) -> Result<fr::images::Image<'static>, String> {
+pub fn fit(src: fr::images::Image<'static>, long: u32, kind: fr::PixelType) -> Result<fr::images::Image<'static>, String> {
     let (w, h) = (src.width(), src.height());
     if w.max(h) <= long {
         return Ok(src);
@@ -265,7 +323,7 @@ fn encode_jpeg(rgb: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-fn encode_png(rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
+pub fn encode_png(rgba: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
     use image::ImageEncoder;
     let mut out = Vec::new();
     image::codecs::png::PngEncoder::new_with_quality(&mut out, image::codecs::png::CompressionType::Fast, image::codecs::png::FilterType::Adaptive)
@@ -359,6 +417,13 @@ struct Answer {
 /// 5.13+) no file system access at all; the picture comes in on stdin, already open.
 pub fn child_main() -> ! {
     let memory: u64 = std::env::args().nth(2).and_then(|m| m.parse().ok()).unwrap_or(CHILD_MEMORY).max(MIN_CHILD_MEMORY);
+    let job: Job = match std::env::args().nth(3) {
+        None => Job::default(),
+        Some(j) => match serde_json::from_str(&j) {
+            Ok(j) => j,
+            Err(_) => std::process::exit(2),
+        },
+    };
     lock_down(memory);
     let mut bytes = Vec::new();
     if std::io::stdin().lock().take(super::MAX_FILE + 1).read_to_end(&mut bytes).is_err() || bytes.len() as u64 > super::MAX_FILE {
@@ -366,7 +431,23 @@ pub fn child_main() -> ! {
     }
     let out = std::io::stdout();
     let mut out = out.lock();
-    let r = make(&bytes, &Limits::for_memory(memory));
+    let limits = Limits::for_memory(memory);
+    if let Some(opts) = &job.export {
+        let r = export::export(&bytes, &limits, &job.edits.unwrap_or_default(), opts);
+        drop(bytes);
+        let (answer, data) = match r {
+            Ok(file) => (
+                Answer { ok: true, error: String::new(), meta: Meta::default(), thumbs: vec![(0, opts.format.ext().into(), file.len() as u64)] },
+                file,
+            ),
+            Err(e) => (Answer { ok: false, error: e, meta: Meta::default(), thumbs: vec![] }, vec![]),
+        };
+        let mut line = serde_json::to_vec(&answer).unwrap_or_default();
+        line.push(b'\n');
+        let ok = out.write_all(&line).is_ok() && out.write_all(&data).is_ok() && out.flush().is_ok();
+        std::process::exit(if ok { 0 } else { 3 })
+    }
+    let r = make_with(&bytes, &limits, job.edits.as_ref());
     drop(bytes);
     let (answer, data) = match r {
         Ok(m) => {
@@ -422,15 +503,49 @@ pub enum Input {
     Bytes(Vec<u8>),
 }
 
-/// Runs [`make`] for the picture in `file` in a child process (`exe photo-worker MEMORY`).
-pub fn run_isolated(exe: &Path, file: std::fs::File, memory: u64) -> Result<Made, String> {
+/// Runs [`make_with`] for the picture in `file` in a child process (`exe photo-worker MEMORY JOB`).
+pub fn run_isolated(exe: &Path, file: std::fs::File, memory: u64, edits: Option<&Edits>) -> Result<Made, String> {
     let mut cmd = std::process::Command::new(exe);
     cmd.arg("photo-worker").arg(memory.to_string());
+    if let Some(e) = edits.filter(|e| !e.is_identity()) {
+        let job = Job { edits: Some(e.clone()), export: None };
+        cmd.arg(serde_json::to_string(&job).map_err(|e| e.to_string())?);
+    }
     run_child(cmd, Input::File(file), CHILD_TIMEOUT)
 }
 
+/// Exports the picture in `file` in a child process: the new file's bytes.
+pub fn run_export(exe: &Path, file: std::fs::File, memory: u64, job: &Job) -> Result<Vec<u8>, String> {
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("photo-worker").arg(memory.to_string()).arg(serde_json::to_string(job).map_err(|e| e.to_string())?);
+    let (head, mut rest) = run_raw(cmd, Input::File(file), CHILD_TIMEOUT, export::MAX_OUTPUT)?;
+    let len = head.thumbs.first().map_or(u64::MAX, |t| t.2);
+    if head.thumbs.len() != 1 || rest.len() as u64 != len {
+        return Err("the picture reader's answer was cut short".into());
+    }
+    rest.shrink_to_fit();
+    Ok(rest)
+}
+
 /// Gives the child `cmd` its input and reads its answer, killing it after `timeout`.
-pub fn run_child(mut cmd: std::process::Command, input: Input, timeout: Duration) -> Result<Made, String> {
+pub fn run_child(cmd: std::process::Command, input: Input, timeout: Duration) -> Result<Made, String> {
+    let (head, answer) = run_raw(cmd, input, timeout, MAX_ANSWER)?;
+    let mut rest = answer.as_slice();
+    let mut thumbs = Vec::new();
+    for (size, ext, len) in head.thumbs {
+        let len = len as usize;
+        if rest.len() < len || !SIZES.contains(&size) {
+            return Err("the picture reader's answer was cut short".into());
+        }
+        let ext = if ext == "png" { "png" } else { "jpg" };
+        thumbs.push(Thumb { size, ext, bytes: rest[..len].to_vec() });
+        rest = &rest[len..];
+    }
+    Ok(Made { meta: head.meta, thumbs })
+}
+
+/// Runs the child, reads at most `max` bytes of answer: its header and the bytes after it.
+fn run_raw(mut cmd: std::process::Command, input: Input, timeout: Duration, max: u64) -> Result<(Answer, Vec<u8>), String> {
     use std::process::Stdio;
     let (stdin, bytes): (Stdio, Option<Vec<u8>>) = match input {
         Input::File(f) => (Stdio::from(f), None),
@@ -449,7 +564,7 @@ pub fn run_child(mut cmd: std::process::Command, input: Input, timeout: Duration
     // Read on a thread of its own, so a child that never ends (or never reads) can be killed.
     std::thread::spawn(move || {
         let mut answer = Vec::new();
-        let r = (&mut stdout).take(MAX_ANSWER).read_to_end(&mut answer);
+        let r = (&mut stdout).take(max).read_to_end(&mut answer);
         let _ = tx.send(r.map(|_| answer));
     });
     let mut wrote = Ok(());
@@ -480,18 +595,9 @@ pub fn run_child(mut cmd: std::process::Command, input: Input, timeout: Duration
     if !head.ok {
         return Err(head.error);
     }
-    let mut rest = &answer[nl + 1..];
-    let mut thumbs = Vec::new();
-    for (size, ext, len) in head.thumbs {
-        let len = len as usize;
-        if rest.len() < len || !SIZES.contains(&size) {
-            return Err("the picture reader's answer was cut short".into());
-        }
-        let ext = if ext == "png" { "png" } else { "jpg" };
-        thumbs.push(Thumb { size, ext, bytes: rest[..len].to_vec() });
-        rest = &rest[len..];
-    }
-    Ok(Made { meta: head.meta, thumbs })
+    let mut answer = answer;
+    answer.drain(..=nl);
+    Ok((head, answer))
 }
 
 #[cfg(test)]
