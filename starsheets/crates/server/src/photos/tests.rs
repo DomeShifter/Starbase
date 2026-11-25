@@ -616,3 +616,20 @@ mod http {
         let _ = std::fs::remove_dir_all(&root);
     }
 }
+
+#[test]
+fn cache_dir_choice() {
+    use std::path::{Path, PathBuf};
+    let root = Path::new("/data");
+    let meta = Path::new("/data/.starsheets");
+    let pick = |set: Option<&str>, mounted: bool, net: bool, xdg: Option<&str>, home: Option<&str>| {
+        super::pick_cache(set.map(PathBuf::from), mounted, root, meta, |_| net, xdg.map(PathBuf::from), home.map(PathBuf::from)).0
+    };
+    assert_eq!(pick(Some("/x"), true, true, None, None), PathBuf::from("/x"));
+    assert_eq!(pick(None, true, true, None, None), PathBuf::from("/cache/photos"));
+    let n = pick(None, false, true, Some("/xdg"), Some("/home/u"));
+    assert!(n.starts_with("/xdg/starbase/photos"), "{n:?}");
+    assert!(pick(None, false, true, None, Some("/home/u")).starts_with("/home/u/.cache/starbase/photos"));
+    assert!(pick(None, false, true, None, None).starts_with("/var/cache/starbase/photos"));
+    assert_eq!(pick(None, false, false, Some("/xdg"), None), PathBuf::from("/data/.starsheets/photos-cache"));
+}
