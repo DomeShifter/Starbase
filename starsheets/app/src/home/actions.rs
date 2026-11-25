@@ -164,13 +164,29 @@ impl Home {
         }
     }
 
+    /// Moves items to the bin; Ctrl+Z or the note's Undo puts them back (undo.rs). Something of
+    /// someone else's goes to their bin, which only they can restore from: no Undo for that.
     pub(super) fn delete(&mut self, ctx: &egui::Context, items: Vec<Item>) {
+        let label = if items.len() == 1 { "Moved to bin".to_string() } else { format!("{} items moved to bin", items.len()) };
+        let group = self.undo.start(label, items.len(), true);
+        let mine = if self.accounts { self.space.clone() } else { String::new() };
         for item in items {
-            let url = match item {
-                Item::File(id) => format!("api/files/{id}"),
-                Item::Folder(p) => format!("api/folders?path={}", enc(&p)),
+            let (url, original) = match &item {
+                Item::File(id) => (format!("api/files/{id}"), self.file(id).map(|f| join(&f.folder, &f.name)).unwrap_or_default()),
+                Item::Folder(p) => (format!("api/folders?path={}", enc(p)), p.clone()),
             };
-            call(&self.store, &self.inbox, ctx, Method::Delete, url, None, refresh_after);
+            let mine = mine.clone();
+            call_any(&self.store, &self.inbox, ctx, Method::Delete, url, None, move |r| {
+                Reply::Did(
+                    group,
+                    r.map(|b| {
+                        let v: Json = serde_json::from_slice(&b).unwrap_or_default();
+                        let bin = v["bin"].as_str().filter(|_| v["space"].as_str() == Some(mine.as_str()) && !original.is_empty())?;
+                        Some(undo::Step::Binned { bin: bin.to_string(), original })
+                    })
+                    .map_err(|e| e.1),
+                )
+            });
         }
         self.selected.clear();
     }
@@ -205,6 +221,9 @@ impl Home {
     }
 
     pub(super) fn really_send(&mut self, ctx: &egui::Context, items: Vec<Item>, folder: &str, cut: bool) {
+        if cut {
+            return self.move_items(ctx, items, folder);
+        }
         for item in items {
             let url = match (&item, cut) {
                 (Item::File(id), true) => format!("api/files/{id}/move?folder={}", enc(folder)),
@@ -213,6 +232,44 @@ impl Home {
                 (Item::Folder(p), false) => format!("api/folders/copy?path={}&to={}", enc(p), enc(folder)),
             };
             call(&self.store, &self.inbox, ctx, Method::Post, url, None, refresh_after);
+        }
+    }
+
+    /// Moves items into `folder` as one action that Ctrl+Z or the note's Undo can undo (undo.rs).
+    fn move_items(&mut self, ctx: &egui::Context, items: Vec<Item>, folder: &str) {
+        let place = self.folder_label(folder);
+        let label = if items.len() == 1 { format!("Moved to {place}") } else { format!("{} items moved to {place}", items.len()) };
+        let group = self.undo.start(label, items.len(), true);
+        for item in items {
+            let to = folder.to_string();
+            let (url, then): (String, undo::Then) = match item {
+                Item::File(id) => {
+                    let was = self.file(&id).map(|f| join(&f.folder, &f.name)).unwrap_or_default();
+                    let url = format!("api/files/{id}/move?folder={}", enc(folder));
+                    (
+                        url,
+                        Box::new(move |v: &Json| {
+                            let now = join(&to, v["name"].as_str()?);
+                            let id = v["id"].as_str().map_or(id, str::to_string);
+                            (!was.is_empty() && now != was).then_some(undo::Step::File { id, was, now })
+                        }),
+                    )
+                }
+                Item::Folder(p) => {
+                    let url = format!("api/folders/move?path={}&to={}", enc(&p), enc(folder));
+                    (
+                        url,
+                        Box::new(move |v: &Json| {
+                            let now = v["path"].as_str()?.to_string();
+                            let id = v["id"].as_str().unwrap_or_default().to_string();
+                            (now != p).then_some(undo::Step::Folder { id, was: p, now })
+                        }),
+                    )
+                }
+            };
+            call_any(&self.store, &self.inbox, ctx, Method::Post, url, None, move |r| {
+                Reply::Did(group, r.map(|b| then(&serde_json::from_slice(&b).unwrap_or_default())).map_err(|e| e.1))
+            });
         }
     }
 

@@ -219,6 +219,10 @@ def compare(label, steps, auth):
         # /api/info gained fields with accounts (setup, user): the old ones must still match.
         if a[1] == "/api/info" and isinstance(b[3], dict):
             b = (*b[:3], {k: v for k, v in b[3].items() if k in a[3]}, b[4])
+        # The Drive's Undo (2026-11-25): a move or rename also answers with the file's id, a delete
+        # with its name in the bin and whose bin it is. New fields only: the old ones must match.
+        if a[0] in ("POST", "DELETE") and isinstance(a[3], dict) and isinstance(b[3], dict):
+            b = (*b[:3], {k: v for k, v in b[3].items() if k in a[3] or k not in ("id", "bin", "space")}, b[4])
         a_cmp, b_cmp = list(a), list(b)
         # A file restored from the bin keeps its id in the Rust server (its versions and sharing
         # come back); files.py gave it a new one. Ids are compared as names, so drop them here.

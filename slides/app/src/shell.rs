@@ -62,6 +62,16 @@ pub trait Drive {
     }
     /// File › Connect to a server… (`true`) or Disconnect (`false`).
     fn ask_connect(&self, _connect: bool) {}
+    /// The file's id on the server (None until it is saved there, and on the desktop).
+    fn file_id(&self) -> Option<String> {
+        None
+    }
+    /// Opens the Share dialog.
+    fn share(&self) {}
+    /// Opens the Version history dialog.
+    fn history(&self) {}
+    /// Draws the Share and Version history dialogs when open (every frame).
+    fn dialogs(&self, _ctx: &egui::Context) {}
 }
 
 /// A menu entry: a command (label, id, params as JSON text, shortcut shown), a sub-menu, a line,
@@ -89,6 +99,8 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Cmd("Open from Starbase", "slides.home", NO, ""),
             Desktop,
             Sep,
+            Cmd("Share", "slides.share", NO, ""),
+            Sep,
             Cmd("Rename", "slides.rename", NO, ""),
             Sub(
                 "Download",
@@ -100,8 +112,11 @@ pub const MENUS: &[(&str, &[Item])] = &[
             ),
             Cmd("Export…", "app.exportDialog", NO, ""),
             Sep,
+            Cmd("Version history", "slides.history", NO, ""),
+            Sep,
             Cmd("Page setup", "app.dialog", r#"{"id":"slideSize"}"#, ""),
             Cmd("Slide numbers, date and footer", "app.dialog", r#"{"id":"headerFooter"}"#, ""),
+            Cmd("Print", "slides.print", NO, "Ctrl+P"),
         ],
     ),
     (
@@ -377,6 +392,9 @@ impl Shell {
                 ui.add_space(6.0);
                 self.toolbar(app, ui, drive, &pal);
             });
+        if let Some(d) = drive {
+            d.dialogs(&ctx);
+        }
     }
 
     fn title_and_menus(&mut self, app: &mut SlideApp, ui: &mut Ui, drive: Option<&dyn Drive>, pal: &Palette) {
@@ -427,6 +445,28 @@ impl Shell {
                 }
                 ui.add_space(8.0);
                 flat(ui, pal);
+                // Share (as in Sheets: blue pill) and the way back to Drive; both need the server.
+                if let Some(d) = drive {
+                    let can = d.file_id().is_some() && !d.desktop();
+                    let share = Button::image_and_text(
+                        icons::icon("share", pal.present_text).unwrap_or_else(|| icons::logo(20.0)),
+                        RichText::new("Share").size(14.0).color(pal.present_text),
+                    )
+                    .fill(pal.present)
+                    .corner_radius(18.0)
+                    .min_size(vec2(96.0, 36.0));
+                    let r = ui.add_enabled(can, share);
+                    named(ui, &r, "Share");
+                    if r.on_hover_text("Share with people or by link").clicked() {
+                        d.share();
+                    }
+                    ui.add_space(8.0);
+                    flat(ui, pal);
+                    let tip = if d.desktop() { "Open a presentation" } else { "Starbase Drive (all your files)" };
+                    if icon_button(ui, "home", false, pal).on_hover_text(tip).clicked() {
+                        d.home();
+                    }
+                }
                 let open = app.ui.pane.as_deref() == Some("comments");
                 if icon_button(ui, "comment", open, pal).on_hover_text("Show all comments").clicked() {
                     self.run(app, drive, "view.pane", json!({"pane": "comments", "toggle": true}));
@@ -683,9 +723,12 @@ impl Shell {
         for (label, sub) in [("Layout", "Apply layout"), ("Theme", "Change theme"), ("Transition", "Transition")] {
             let config = egui::containers::menu::MenuConfig::new().style(menu_style(*pal));
             let items = slide_sub(sub);
-            let _ = egui::containers::menu::MenuButton::new(RichText::new(label).size(14.0).color(pal.text))
-                .config(config)
-                .ui(ui, |ui| self.menu_items(app, ui, drive, items, pal));
+            let text = RichText::new(label).size(14.0).color(pal.text);
+            let b = match icons::icon_px("arrow_drop_down", 20.0, pal.icon) {
+                Some(arrow) => Button::new((text, arrow)),
+                None => Button::new(text),
+            };
+            let _ = egui::containers::menu::MenuButton::from_button(b).config(config).ui(ui, |ui| self.menu_items(app, ui, drive, items, pal));
         }
     }
     fn menu_items(&mut self, app: &mut SlideApp, ui: &mut Ui, drive: Option<&dyn Drive>, items: &[Item], pal: &Palette) {
@@ -698,7 +741,7 @@ impl Shell {
                     // The desktop program opens files on this computer.
                     let (label, keys) =
                         if *id == "slides.home" && drive.is_some_and(|d| d.desktop()) { ("Open…", "Ctrl+O") } else { (*label, *keys) };
-                    if ui.add_enabled(enabled, row(None, label, keys, width, pal)).clicked() {
+                    if ui.add_enabled(enabled, row(menu_icon(id, label), label, keys, width, pal)).clicked() {
                         self.run(app, drive, id, params(p));
                         ui.close();
                     }
@@ -713,7 +756,7 @@ impl Shell {
                     }
                 }
                 Sub(label, inner) => {
-                    let b = row(None, label, "", width, pal).right_text(match icons::icon_px("arrow_right", 20.0, pal.keys) {
+                    let b = row(menu_icon("", label), label, "", width, pal).right_text(match icons::icon_px("arrow_right", 20.0, pal.keys) {
                         Some(img) => egui::Atom::from(img),
                         None => egui::Atom::grow(),
                     });
@@ -776,12 +819,19 @@ impl Shell {
     /// Whether a menu entry can be used now: DeckCraft's own check for its commands; nothing that
     /// changes the presentation for someone who may only view it.
     fn allowed(&self, app: &SlideApp, drive: Option<&dyn Drive>, id: &str) -> bool {
-        if drive.is_some_and(|d| d.view_only()) && !READ_ONLY_OK.contains(&id) && !id.starts_with("view.") && !id.starts_with("show.") {
+        if drive.is_some_and(|d| d.view_only())
+            && !READ_ONLY_OK.contains(&id)
+            && !matches!(id, "slides.share" | "slides.print" | "slides.home")
+            && !id.starts_with("view.")
+            && !id.starts_with("show.")
+        {
             return false;
         }
         if let Some(own) = id.strip_prefix("slides.") {
             return match own {
                 "rename" | "home" | "new" => drive.is_some() || own == "new",
+                "share" => drive.is_some_and(|d| d.file_id().is_some() && !d.desktop()),
+                "history" => drive.is_some_and(|d| d.file_id().is_some() && !d.desktop() && !d.view_only()),
                 _ => true,
             };
         }
@@ -827,6 +877,18 @@ impl Shell {
                 }
             },
             "home" => drive.ok_or("not opened from Starbase")?.home(),
+            "share" => drive.filter(|d| d.file_id().is_some()).ok_or("sharing needs a presentation saved on a Starbase server")?.share(),
+            "history" => drive.filter(|d| d.file_id().is_some()).ok_or("version history needs a presentation saved on a Starbase server")?.history(),
+            "print" => {
+                let doc = app.session.active().map(|d| d.doc.clone()).ok_or("no presentation open")?;
+                let bytes = deckcraft_engine::cmd::file::save_bytes(&doc, "pdf").map_err(|e| e.to_string())?;
+                // The browser's own PDF viewer prints it, one slide per page; elsewhere it is saved.
+                if !print_pdf(&bytes) {
+                    let name = format!("{}.pdf", self.stem(app, drive));
+                    let download = app.services.download.as_mut().ok_or("printing is unavailable here")?;
+                    download(&name, &bytes);
+                }
+            }
             "openRecent" => {
                 let path = p.get("path").and_then(Value::as_str).ok_or("missing `path`")?;
                 drive.filter(|d| d.desktop()).ok_or("the desktop program opens files")?.open_path(path.into());
@@ -905,6 +967,22 @@ const READ_ONLY_OK: &[&str] = &[
     "slide.previous",
 ];
 
+/// Opens the PDF in a new browser tab, where its viewer prints it (browser only).
+#[cfg(target_arch = "wasm32")]
+fn print_pdf(bytes: &[u8]) -> bool {
+    let opts = web_sys::BlobPropertyBag::new();
+    opts.set_type("application/pdf");
+    let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));
+    let Ok(blob) = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &opts) else { return false };
+    let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) else { return false };
+    web_sys::window().is_some_and(|w| w.open_with_url_and_target(&url, "_blank").is_ok_and(|t| t.is_some()))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn print_pdf(_bytes: &[u8]) -> bool {
+    false
+}
+
 /// One of the Slide menu's sub-menus, which the toolbar's text buttons also show.
 fn slide_sub(label: &str) -> &'static [Item] {
     for (title, items) in MENUS {
@@ -980,6 +1058,31 @@ fn menu_width(ui: &Ui, items: &[Item]) -> f32 {
         })
         .fold(0.0_f32, f32::max);
     (widest + 2.0 * ROW_INSET + ICON + ICON_GAP + 8.0).max(240.0).ceil()
+}
+
+/// The icon at the left of a menu entry, as in Docs and Sheets' menus (none: the column stays blank).
+fn menu_icon(id: &str, label: &str) -> Option<&'static str> {
+    Some(match (id, label) {
+        ("slides.new", _) => "note_add",
+        ("slides.home", _) => "folder_open",
+        ("slides.share", _) => "share",
+        ("slides.history", _) => "history",
+        ("slides.print", _) => "print",
+        ("slides.rename", _) => "drive_file_rename_outline",
+        ("slides.download" | "app.exportDialog", _) | (_, "Download") => "download",
+        ("app.dialog", "Page setup") => "aspect_ratio",
+        ("edit.undo", _) => "undo",
+        ("edit.redo", _) => "redo",
+        ("edit.cut", _) => "content_cut",
+        ("edit.copy" | "edit.duplicate", _) => "content_copy",
+        ("edit.paste" | "edit.pasteText", _) => "content_paste",
+        ("edit.selectAll", _) => "select_all",
+        ("edit.delete", _) => "delete",
+        ("app.replace", _) => "find_replace",
+        ("show.fromStart" | "slides.presenter", _) => "slideshow",
+        ("slide.new", _) => "add",
+        _ => return None,
+    })
 }
 
 /// A menu row: the tick column (a tick or the same space blank), the label, the shortcut in grey.
