@@ -424,6 +424,11 @@ impl Link {
         }
     }
 
+    /// Who is signed in (name, username, colour): nobody for a local file, so no account button.
+    pub fn me(&self) -> Option<(String, String, String)> {
+        None
+    }
+
     /// Never view-only in local mode (a read-only file fails to save, and says so).
     pub fn view_only(&self) -> bool {
         false
