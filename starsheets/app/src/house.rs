@@ -579,6 +579,11 @@ pub fn toast(ctx: &egui::Context, text: &str) {
     ctx.request_repaint();
 }
 
+/// The toast showing now, if any (for the test hook; `show_toast` clears it once it has run out).
+pub fn toast_text() -> Option<String> {
+    TOAST.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|(t, _)| t.clone())
+}
+
 /// Draws the current toast, if any. Call once a frame from a screen that can raise one.
 pub fn show_toast(ctx: &egui::Context) {
     let Some((text, until)) = TOAST.lock().unwrap_or_else(|e| e.into_inner()).clone() else { return };
