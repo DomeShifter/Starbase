@@ -12,7 +12,7 @@ Checked by `.github/workflows/desktop-other.yml` on GitHub's `windows-latest` (x
 | starsheets + starbase-connect + starsheets-sync tests (107 + 3 + 20) | pass | pass |
 | stardocs (Docs): clippy, release build | yes | yes |
 | stardocs tests, egui_kittest window tests included (68) | pass (after the test fix below) | pass |
-| Starts and stays up 15 s on the runner | Sheets: yes, on wgpu's DX12 software renderer. Docs: see "OpenGL" below | both: yes |
+| Starts and stays up 15 s on the runner | Sheets: yes, on wgpu's DX12 software renderer. Docs: no, exits at once ("egui_glow requires opengl 2.0+"; see "OpenGL" below) | both: yes |
 | Artifacts (unsigned, 7 days) | `*-windows-x86_64`, plus `starbase-windows-x64-portable.zip` | `*-macos-arm64` (bare executables, no .app) |
 
 The egui_kittest tests run headless on both: they use egui's accessibility tree, no GPU and no
