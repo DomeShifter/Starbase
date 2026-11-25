@@ -508,7 +508,19 @@ pub struct Shell {
     room: f32,
     /// The window's egui context, kept from the last frame for the test hook.
     ctx: Option<egui::Context>,
+    /// The document last seen (WordCraft's id for it), to notice one being opened.
+    opened: Option<u64>,
+    /// Frames left in which an opened document's zoom follows the window's width (the window
+    /// may still be settling its size), and the zoom and fit last set then.
+    open_zoom: u8,
+    zoom_set: Option<(f32, String)>,
 }
+
+/// How many frames after opening the zoom keeps following the window's width.
+const OPEN_ZOOM_FRAMES: u8 = 10;
+/// Points to the page's pixels at 100 % (WordCraft's canvas), and the room around a page.
+const PX_PER_PT: f32 = 96.0 / 72.0;
+const PAGE_ROOM: f32 = 2.0 * 18.0 + 20.0;
 
 /// The toolbar groups' widths, starting from a guess.
 struct Widths([f32; 9]);
@@ -935,6 +947,7 @@ impl Shell {
                 let may_edit = !link.is_some_and(Link::view_only);
                 self.toolbar(app, ui, may_edit);
             });
+        self.zoom_on_open(app, ui.available_width());
         self.share.ui(ui.ctx());
         self.custom_colour(app, ui.ctx());
         if std::mem::take(&mut self.flags.shortcuts) {
@@ -950,6 +963,38 @@ impl Shell {
             self.word_count.ui(app, ui.ctx());
         }
         self.flags.sync(before);
+    }
+
+    /// A document just opened shows at 100 %, or at the page's width when a page at 100 % is
+    /// wider than the window (`width`), as Google Docs opens every document. WordCraft would show
+    /// the zoom the file was saved at, as Word does: a python-docx file says 146 %, wider than most
+    /// windows. Once the user picks a zoom it is theirs.
+    fn zoom_on_open(&mut self, app: &mut WordApp, width: f32) {
+        let id = app.session.document_id();
+        if self.opened != Some(id) {
+            self.opened = Some(id);
+            self.open_zoom = if app.session.path.is_some() { OPEN_ZOOM_FRAMES } else { 0 };
+            self.zoom_set = None;
+        }
+        if self.open_zoom == 0 {
+            return;
+        }
+        self.open_zoom -= 1;
+        let v = &mut app.session.view;
+        if let Some((zoom, fit)) = &self.zoom_set
+            && (v.fit != *fit || (fit.is_empty() && v.zoom != *zoom))
+        {
+            self.open_zoom = 0;
+            return;
+        }
+        let doc = &app.session.doc;
+        let page = doc.sections().iter().map(|(_, p)| p.page_w).fold(doc.last_section.page_w, f32::max);
+        let fit = if page * PX_PER_PT + PAGE_ROOM <= width { "" } else { "pageWidth" };
+        v.zoom = 1.0;
+        v.fit = fit.into();
+        v.multi_page = false;
+        v.single_column = !fit.is_empty();
+        self.zoom_set = Some((v.zoom, v.fit.clone()));
     }
 
     /// StarDocs' own shortcuts, taken before WordCraft sees the keys.
@@ -1410,10 +1455,9 @@ impl Shell {
                     Some(link) if link.id().is_some() && link.name().is_empty() && !self.share.waiting() => {
                         ui.add_enabled(false, share).on_disabled_hover_text("The document isn't open");
                     }
-                    // A document on this computer (the desktop program's local mode).
-                    Some(link) if !link.can_share() => {
-                        ui.add_enabled(false, share).on_disabled_hover_text("Sharing needs a Starbase server");
-                    }
+                    // A document on this computer (the desktop program's local mode): no one to
+                    // share with, so no button.
+                    Some(link) if !link.can_share() => {}
                     Some(link) => {
                         if ui.add(share).on_hover_text("Share this document with people on this server").clicked() {
                             self.share.ask(app, link, ui.ctx());

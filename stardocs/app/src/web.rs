@@ -52,7 +52,8 @@ pub fn start() {
                 canvas,
                 options,
                 Box::new(move |cc| {
-                    crate::arimo::add();
+                    crate::bundled_fonts::add();
+                    crate::bundled_fonts::fetch_office(cc.egui_ctx.clone());
                     // Fonts the user added on an earlier visit (#582); the app notices them arrive.
                     font_store::load_all(cc.egui_ctx.clone());
                     let inbox: Inbox = Inbox::default();

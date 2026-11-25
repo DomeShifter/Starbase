@@ -1,5 +1,5 @@
 //! The desktop program's stand-in for the browser-only `share` module: local documents have no
-//! Starbase server to share through (the title row's Share button is greyed, `Link::can_share`),
+//! Starbase server to share through (the title row has no Share button, `Link::can_share`),
 //! so the Share dialog never opens.
 
 pub mod share {
