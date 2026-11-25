@@ -1631,6 +1631,7 @@ impl Shell {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // Your avatar at the far right, as in Starbase Sheets and Slides: a small menu
                 // with who you are and the way back to the home screen.
+                #[cfg(target_arch = "wasm32")]
                 if let Some((name, username, colour)) = link.and_then(Link::me) {
                     ui.add_space(8.0);
                     let r = crate::share::avatar(ui, &name, &colour, 32.0).on_hover_text(format!("{name} ({username})"));
