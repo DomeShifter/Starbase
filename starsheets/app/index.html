@@ -177,6 +177,16 @@
     window.__ssFlushNow = false;
     window.addEventListener('beforeunload', (e) => { if (window.__ssUnsaved) { window.__ssFlushNow = true; e.preventDefault(); e.returnValue = ''; } });
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden' && window.__ssUnsaved) window.__ssFlushNow = true; });
+    // Pasting: the clipboard's HTML flavour, for the app to read with the paste (eframe passes on
+    // only the plain text). Another Starbase Sheets tab's copy carries its cells there, so they
+    // paste with formulas, formatting and data validation. Set on every paste, so it is never an
+    // old one; the app takes it (web.rs paste_html).
+    window.__ssPasteHtml = null;
+    window.addEventListener('paste', (e) => {
+      let html = null;
+      try { html = (e.clipboardData && e.clipboardData.getData('text/html')) || null; } catch (_) {}
+      window.__ssPasteHtml = html;
+    }, true);
     window.__ssCopyEvent = null;
     for (const t of ['copy', 'cut']) {
       window.addEventListener(t, (e) => {
@@ -203,9 +213,10 @@
     // Sheets shortcuts that Firefox/Chrome also use (Ctrl+D bookmark, Ctrl+B sidebar, Ctrl+U
     // source…): stop the browser's action; StarSheets still gets the key.
     // Ctrl+Shift+R is left to the browser (hard reload; owner's choice over Sheets' align right).
-    // Copy/cut/paste and tab/window keys (C X V W T N Tab) are left alone.
+    // Copy/cut/paste and tab/window keys (C X V W T N Tab) are left alone; Ctrl+Shift+V too: the
+    // browser's paste event for it is how Sheets' "paste values only" gets the clipboard.
     (function () {
-      var plain = "bdfghikoprsuyz", shifted = "acdeflvz1234567";
+      var plain = "bdfghikoprsuyz", shifted = "acdeflz1234567";
       window.addEventListener("keydown", function (e) {
         if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
         if (e.target && e.target.closest && e.target.closest('#ss_signin')) return;

@@ -426,6 +426,8 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
         copy_html: Some(Box::new(copy_html)),
         // Menu Paste: StarSheets' own last copy (the page can't read the clipboard on http).
         paste_text: Some(Box::new(crate::editmenu::last_copy)),
+        // The HTML that came with this paste (index.html keeps it from the browser's paste event).
+        paste_html: Some(Box::new(take_paste_html)),
         open_async: Some(Box::new(move || {
             let inbox = open_inbox.clone();
             let ctx = ctx.clone();
@@ -478,14 +480,28 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
     }
 }
 
+/// The clipboard HTML of the paste being handled, taken so a later paste never sees it.
+fn take_paste_html() -> Option<String> {
+    let w = web_sys::window()?;
+    let html = js_sys::Reflect::get(&w, &"__ssPasteHtml".into()).ok()?.as_string();
+    let _ = js_sys::Reflect::set(&w, &"__ssPasteHtml".into(), &JsValue::NULL);
+    html.filter(|h| !h.is_empty())
+}
+
 /// Start inside the copy gesture; deferring `write` can lose browser user activation.
 fn copy_html(html: &str, text: &str) -> Result<(), String> {
     crate::editmenu::remember_copy(text);
     let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
     let window = web_sys::window().ok_or("no window")?;
-    // Plain http: no clipboard API, but the page's copy bridge can still copy (see index.html).
+    // The page's copy bridge first (see index.html), on https too: it fills the browser's own
+    // copy event, which keeps the HTML as written. The async clipboard API cleans HTML up on
+    // write, which may drop the data another Starbase Sheets tab pastes the cells from.
+    if page_copy(text, Some(html)) {
+        return Ok(());
+    }
+    // Plain http: no clipboard API either.
     if !window.is_secure_context() {
-        return if page_copy(text, Some(html)) { Ok(()) } else { Err("the browser refused to copy (plain http)".into()) };
+        return Err("the browser refused to copy (plain http)".into());
     }
     let clipboard = window.navigator().clipboard();
     if clipboard.is_undefined() || clipboard.is_null() {
