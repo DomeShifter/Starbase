@@ -558,7 +558,13 @@ mod http {
         let deep = "/api/photos?folder=ann/Trip&sub=1&sort=name";
         let top = get(&app, "/api/photos?folder=ann/Trip", Some("ann"), &[]).await.json["photos"].clone();
         let g = get(&app, deep, Some("ann"), &[]).await;
-        let inner = g.json["photos"].as_array().unwrap().iter().find(|p| !top.as_array().unwrap().iter().any(|t| t["id"] == p["id"])).expect("one in a subfolder").clone();
+        let inner = g.json["photos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| !top.as_array().unwrap().iter().any(|t| t["id"] == p["id"]))
+            .expect("one in a subfolder")
+            .clone();
         assert_eq!(inner["starred"], false, "{}", g.json);
         let id = inner["id"].as_str().unwrap();
         assert_eq!(send(&app, "POST", &format!("/api/files/{id}/star"), Some("ann"), &[], r#"{"on":true}"#).await.status, 200);
