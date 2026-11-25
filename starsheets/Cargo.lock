@@ -6187,6 +6187,7 @@ dependencies = [
 name = "starbase-open"
 version = "0.4.0"
 dependencies = [
+ "libc",
  "rfd",
  "serde_json",
  "starbase-connect",
