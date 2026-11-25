@@ -75,6 +75,9 @@ pub struct Palette {
     pub present_text: Color32,
     pub error: Color32,
     pub notice: Color32,
+    /// Links and the main button in a dialog (Connect), and the text on that button.
+    pub link: Color32,
+    pub on_link: Color32,
 }
 
 impl Palette {
@@ -98,6 +101,8 @@ impl Palette {
             present_text: Color32::from_rgb(0x1F, 0x1F, 0x1F),
             error: Color32::from_rgb(0xB3, 0x26, 0x1E),
             notice: Color32::from_rgb(0x8A, 0x5A, 0x00),
+            link: Color32::from_rgb(0x0B, 0x57, 0xD0),
+            on_link: Color32::WHITE,
         }
     }
 
@@ -121,6 +126,8 @@ impl Palette {
             present_text: Color32::from_rgb(0xFE, 0xEF, 0xC3),
             error: Color32::from_rgb(0xF2, 0xB8, 0xB5),
             notice: Color32::from_rgb(0xF6, 0xC3, 0x5B),
+            link: Color32::from_rgb(0xA8, 0xC7, 0xFA),
+            on_link: Color32::from_rgb(0x06, 0x2E, 0x6F),
         }
     }
 

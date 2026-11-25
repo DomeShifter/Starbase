@@ -429,6 +429,12 @@ impl Link {
         false
     }
 
+    /// Never comment-only either: a commenter's saves to a server document are refused by the
+    /// server, and say so.
+    pub fn comment_only(&self) -> bool {
+        false
+    }
+
     /// File › Make a copy: saves what isn't saved yet, then copies the file ("Copy of <name>",
     /// beside it; on the server, beside it or in your own folder) and opens the copy in a window
     /// of its own.

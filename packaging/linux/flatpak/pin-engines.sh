@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Sets the GridCraft and WordCraft `commit:` lines in the Flatpak manifest to the commits in
-# starsheets/upstream.pin and stardocs/upstream.pin, so the pin files stay the one place an engine
+# Sets the GridCraft, WordCraft and DeckCraft `commit:` lines in the Flatpak manifest to the
+# commits in starsheets/, stardocs/ and slides/upstream.pin, so the pin files stay the one place an engine
 # bump is made. CI runs it before every Flatpak build and warns when the committed manifest was
 # behind; run it by hand after a bump to keep the committed manifest current.
 #
@@ -11,7 +11,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 MANIFEST="$ROOT/packaging/linux/flatpak/io.github.DomeShifter.Starbase.yml"
 check=false; [[ "${1:-}" == --check ]] && check=true
 behind=0
-for pair in starsheets:gridcraft stardocs:wordcraft; do
+for pair in starsheets:gridcraft stardocs:wordcraft slides:deckcraft; do
   ws="${pair%%:*}" engine="${pair##*:}"
   pin=$(sed -n 's/^commit = "\([0-9a-f]\{40\}\)"/\1/p' "$ROOT/$ws/upstream.pin")
   [[ -n "$pin" ]] || { echo "no commit in $ws/upstream.pin" >&2; exit 2; }

@@ -46,6 +46,8 @@ starbase-connect = { path = "../../starsheets/crates/connect" }
 # Native tests of the window (src/shell_tests.rs): egui_kittest's accessibility tree, no GPU.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 egui_kittest = { workspace = true }
+# Reads the .docx WordCraft writes (comment_ids.rs: comment ids survive a save).
+zip = { workspace = true }
 egui = { workspace = true, features = ["default_fonts"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

@@ -17,13 +17,14 @@
 name: Flatpak
 on:
   push:
+    # Not on tags: release.yml calls this workflow for a version tag (and publishes the result).
     branches: [main]
-    tags: ["v*"]
-    paths: ["starsheets/**", "stardocs/**", "packaging/**", ".github/workflows/flatpak.yml"]
+    paths: ["starsheets/**", "stardocs/**", "slides/**", "packaging/**", ".github/workflows/flatpak.yml"]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths: ["packaging/**", ".github/workflows/flatpak.yml"]
   workflow_dispatch:
-  workflow_call: # from release.yml (later)
+  workflow_call: # from release.yml
 
 permissions:
   contents: read
@@ -43,6 +44,7 @@ env:
 jobs:
   sources:
     name: Cargo sources and engine pins
+    if: ${{ github.event.pull_request.draft != true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -61,7 +63,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/gen" out
           curl -fsSL -o "$RUNNER_TEMP/gen/flatpak-cargo-generator.py" "$GENERATOR_URL"
           echo "$GENERATOR_SHA256  $RUNNER_TEMP/gen/flatpak-cargo-generator.py" | sha256sum -c -
-          for ws in starsheets stardocs; do
+          for ws in starsheets stardocs slides; do
             python3 "$RUNNER_TEMP/gen/flatpak-cargo-generator.py" "$ws/Cargo.lock" -o "out/cargo-sources-$ws.json"
             # One replacement per git revision (the generator keeps one per repository).
             python3 packaging/linux/flatpak/vendor-config.py "$ws/Cargo.lock" "out/cargo-sources-$ws.json"
@@ -77,6 +79,7 @@ jobs:
 
   build:
     name: Build the Flatpak (x86_64)
+    if: ${{ github.event.pull_request.draft != true }}
     needs: sources
     runs-on: ubuntu-24.04
     timeout-minutes: 180
@@ -178,6 +181,7 @@ jobs:
 
   smoke:
     name: Smoke test (install the bundle)
+    if: ${{ github.event.pull_request.draft != true }}
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -202,6 +206,7 @@ jobs:
         run: |
           flatpak run "$APP_ID" --version
           flatpak run --command=stardocs "$APP_ID" --version | grep '^stardocs '
+          flatpak run --command=starslides "$APP_ID" --version | grep '^starslides '
           flatpak run --command=starbase-open "$APP_ID" --explain /tmp/x.xlsx
           flatpak run --command=ls "$APP_ID" /app/bin /app/share/applications /app/share/icons/hicolor
       # The sandbox resolves xdg-documents from the user-dirs file, as on a desktop.
@@ -237,6 +242,12 @@ jobs:
       - name: Starbase Docs stays up
         run: |
           set +e; timeout -k 10 15 dbus-run-session -- xvfb-run -a flatpak run --command=stardocs "$APP_ID"; code=$?; set -e
+          echo "exit code $code"
+          test "$code" = 124
+          ls -la "$HOME/Documents/Starbase"
+      - name: Starbase Slides stays up
+        run: |
+          set +e; timeout -k 10 15 dbus-run-session -- xvfb-run -a flatpak run --command=starslides "$APP_ID"; code=$?; set -e
           echo "exit code $code"
           test "$code" = 124
           ls -la "$HOME/Documents/Starbase"

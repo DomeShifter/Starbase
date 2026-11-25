@@ -15,7 +15,8 @@
 /// Inter Regular and Bold, in the program.
 const INTER: [&[u8]; 2] = [include_bytes!("../fonts/Inter-Regular.ttf"), include_bytes!("../fonts/Inter-Bold.ttf")];
 
-/// The faces fetched after start, from `more/`.
+/// The faces fetched after start, from `more/` (the desktop program has them in it: [`MORE_BYTES`]).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code, reason = "the browser's list; the tests check it"))]
 pub const MORE: [&str; 13] = [
     "Inter-Italic.ttf",
     "LiberationSans-Regular.ttf",
@@ -39,9 +40,33 @@ pub fn add() {
     if added < INTER.len() {
         log::warn!("Inter (the default slide font) didn't load fully");
     }
+    // The desktop program carries the rest in it too: nothing to fetch.
+    #[cfg(not(target_arch = "wasm32"))]
+    for bytes in MORE_BYTES {
+        db.add_font(bytes.to_vec());
+    }
 }
 
+/// [`MORE`]'s files, in the desktop program.
+#[cfg(not(target_arch = "wasm32"))]
+const MORE_BYTES: [&[u8]; 13] = [
+    include_bytes!("../fonts/more/Inter-Italic.ttf"),
+    include_bytes!("../fonts/more/LiberationSans-Regular.ttf"),
+    include_bytes!("../fonts/more/LiberationSans-Bold.ttf"),
+    include_bytes!("../fonts/more/LiberationSans-Italic.ttf"),
+    include_bytes!("../fonts/more/LiberationSans-BoldItalic.ttf"),
+    include_bytes!("../fonts/more/Carlito-Regular.ttf"),
+    include_bytes!("../fonts/more/Carlito-Bold.ttf"),
+    include_bytes!("../fonts/more/Carlito-Italic.ttf"),
+    include_bytes!("../fonts/more/Carlito-BoldItalic.ttf"),
+    include_bytes!("../fonts/more/Caladea-Regular.ttf"),
+    include_bytes!("../fonts/more/Caladea-Bold.ttf"),
+    include_bytes!("../fonts/more/Caladea-Italic.ttf"),
+    include_bytes!("../fonts/more/Caladea-BoldItalic.ttf"),
+];
+
 /// The families DeckCraft can draw with now (the test hook reports them).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code, reason = "the browser's test hook; the tests check it"))]
 pub fn families() -> Vec<String> {
     deckcraft_fonts::FontDb::global().families()
 }

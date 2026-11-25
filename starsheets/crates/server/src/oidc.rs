@@ -208,14 +208,43 @@ pub fn host_of(url: &str) -> String {
 }
 
 /// A page to go back to after signing in: only a path on this server (never `//host` or
-/// `/\host`, which browsers treat as another site).
+/// `/\host`, which browsers treat as another site), also once percent-escapes are decoded (up to
+/// three times: `/%2F%2Fhost`, `/%5Chost`, `/%09/host`), in case anything on the way decodes
+/// them. The web app checks `?next=` the same way (app/src/continueto.rs).
 pub fn safe_next(next: &str) -> Option<String> {
-    let ok = next.starts_with('/')
-        && !next.starts_with("//")
-        && !next.contains('\\')
-        && next.len() <= 2000
-        && !next.chars().any(|c| c.is_control() || c.is_whitespace());
+    // Visible ASCII only (no spaces, no control characters, nothing a Location header can't
+    // hold: `/é` arrives here already decoded from `/%C3%A9`).
+    let mut ok = next.starts_with('/') && next.len() <= 2000 && next.chars().all(|c| c.is_ascii_graphic());
+    let mut form = next.to_string();
+    for _ in 0..4 {
+        ok &= !form.starts_with("//") && !form.contains('\\') && !form.chars().any(char::is_control);
+        let decoded = percent_decode(&form);
+        if !ok || decoded == form {
+            break;
+        }
+        form = decoded;
+    }
     ok.then(|| next.to_string())
+}
+
+/// `%XX` escapes decoded (others left as they are; bytes that aren't UTF-8 become U+FFFD).
+fn percent_decode(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        let hex = |c: u8| (c as char).to_digit(16);
+        if b[i] == b'%'
+            && let (Some(h), Some(l)) = (b.get(i + 1).and_then(|&c| hex(c)), b.get(i + 2).and_then(|&c| hex(c)))
+        {
+            out.push((h * 16 + l) as u8);
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// `path` with `?key=value` (or `&key=value`) added.

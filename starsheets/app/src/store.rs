@@ -50,13 +50,15 @@ pub(crate) trait Store {
     fn start_dir(&self) -> Option<String> {
         None
     }
-    /// Whether presentations can be made here: Starbase Slides runs in the browser only, so the
-    /// desktop app offers no "New presentation".
+    /// Whether presentations can be made here ("New presentation"): in the browser, and on the
+    /// desktop with Starbase Slides beside the Drive.
     fn has_slides(&self) -> bool {
         false
     }
     /// Starts a new presentation (a named .pptx) in `folder`, in Starbase Slides.
-    fn new_presentation(&self, _folder: &str) {}
+    fn new_presentation(&self, _folder: &str) -> Result<(), String> {
+        Err("Presentations can't be made here.".into())
+    }
     /// Whether [`Store::open`] opens every kind of file itself (this computer's own files: Sheets,
     /// Docs, else the system's default app), instead of the Drive's preview or download.
     fn opens_any_file(&self) -> bool {
@@ -109,6 +111,18 @@ pub fn is_doc(name: &str) -> bool {
 /// Whether a file is a presentation (Starbase Slides, in the browser).
 pub fn is_slides(name: &str) -> bool {
     name.to_lowercase().ends_with(".pptx")
+}
+
+/// The desktop program that opens a file: Starbase Slides, Docs or Sheets.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "the desktop's; the web opens pages"))]
+pub fn program_for(name: &str) -> &'static str {
+    if is_slides(name) {
+        "starslides"
+    } else if is_doc(name) {
+        "stardocs"
+    } else {
+        "starsheets"
+    }
 }
 
 /// The app logo the home screen shows for a file: Slides, Docs or Sheets.
@@ -222,10 +236,11 @@ impl Store for ServerStore {
         true
     }
 
-    fn new_presentation(&self, folder: &str) {
+    fn new_presentation(&self, folder: &str) -> Result<(), String> {
         if let Some(w) = web_sys::window() {
             let _ = w.location().set_href(&crate::files::slides_url("", &format!("&folder={}", enc(folder))));
         }
+        Ok(())
     }
 
     fn pick_files(&self, got: Box<dyn Fn(String, Vec<u8>)>) {
@@ -263,7 +278,7 @@ impl Store for ServerStore {
 
 #[cfg(test)]
 mod tests {
-    use super::{dec, enc, is_doc, is_slides};
+    use super::{dec, enc, is_doc, is_slides, program_for};
 
     #[test]
     fn encodes_like_encode_uri_component() {
@@ -281,5 +296,6 @@ mod tests {
         assert!(is_doc("Letter.DOCX") && is_doc("notes.odt"));
         assert!(!is_doc("Budget.xlsx"));
         assert!(is_doc("Talk.PPTX") && is_slides("Talk.PPTX") && !is_slides("Letter.docx"));
+        assert_eq!([program_for("Talk.pptx"), program_for("Letter.docx"), program_for("Budget.xlsx")], ["starslides", "stardocs", "starsheets"]);
     }
 }

@@ -177,6 +177,10 @@ impl TestHook {
 /// Runs one id as the menus and toolbar would, but hands back a result or an error.
 fn run(ctx: &egui::Context, app: &mut SheetApp, home: &mut Home, id: &str, params: Value) -> Result<Value, String> {
     // The avatar menu's dialogs (account.rs), on either screen.
+    if id == "account:menu" {
+        crate::account::open_menu(ctx)?;
+        return Ok(json!({ "opened": id }));
+    }
     if let Some(what) = id.strip_prefix("account:") {
         crate::account::request(ctx, what)?;
         return Ok(json!({ "opened": id }));
@@ -186,6 +190,28 @@ fn run(ctx: &egui::Context, app: &mut SheetApp, home: &mut Home, id: &str, param
     }
     if home.active {
         return Err(format!("`{id}` needs a spreadsheet open (this is the home screen)"));
+    }
+    // The clipboard, which a script can't reach: `clip:copy` copies the selection as Ctrl+C does
+    // and answers the text and HTML it puts on the clipboard; `clip:paste {text, html?, values?}`
+    // pastes as Ctrl+V (Ctrl+Shift+V with `values`) does when the browser hands those over.
+    if id == "clip:copy" {
+        return app.run("edit.copy", json!({"html": true}));
+    }
+    if id == "clip:paste" {
+        let text = params.get("text").and_then(Value::as_str).ok_or("clip:paste needs `text`")?.to_string();
+        let html = params.get("html").and_then(Value::as_str).map_or(JsValue::NULL, JsValue::from_str);
+        if let Some(w) = web_sys::window() {
+            let _ = js_sys::Reflect::set(&w, &"__ssPasteHtml".into(), &html);
+        }
+        if params.get("values").and_then(Value::as_bool) == Some(true) {
+            crate::shell::paste_values(app, &text);
+        } else {
+            app.paste_external(text);
+        }
+        return match app.message.take() {
+            Some((_, text)) => Err(text),
+            None => Ok(json!({ "done": id })),
+        };
     }
     let entry = id.starts_with("panel:") || id.starts_with("ui:") || matches!(id, "edit.copy" | "edit.cut" | "edit.paste");
     // Menu entries that run engine commands themselves (Sort sheet, Freeze…) answer like commands.
@@ -280,8 +306,11 @@ fn formula_images_ready(app: &SheetApp) -> Vec<String> {
 
 fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
     let others: Vec<Value> = crate::live::others().iter().map(|o| json!({ "username": o.username, "name": o.name })).collect();
+    if !crate::account::app_shown() {
+        return json!({ "screen": "signin", "account": crate::account::test_state(ctx) });
+    }
     if p.home.active {
-        return json!({ "screen": "home", "home": p.home.test_state() });
+        return json!({ "screen": "home", "home": p.home.test_state(), "account": crate::account::test_state(ctx) });
     }
     let Some(doc) = p.app.session.active() else {
         return json!({ "screen": "sheet", "file": null });
@@ -364,6 +393,7 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
         "alternating": wb.active().map(crate::altcolours::state),
         "pivot": crate::pivotpanel::state(&*p.app),
         "imagesReady": formula_images_ready(&*p.app),
+        "linkCard": crate::linkcard::shown(),
         "history": p.files.history_state(),
         "cell": cell,
         "format": format,

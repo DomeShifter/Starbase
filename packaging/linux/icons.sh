@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stage the three Starbase menu icons as a hicolor icon theme, from the apps' own SVGs, so the
+# Stage the four Starbase menu icons as a hicolor icon theme, from the apps' own SVGs, so the
 # artwork lives in one place (the app folders) and nothing generated is committed here.
 #
 #   packaging/linux/icons.sh <dest>     e.g. <AppDir>/usr/share/icons  or  /app/share/icons
@@ -18,6 +18,7 @@ ID=io.github.DomeShifter.Starbase
 
 SHEETS_SVG="$ROOT/starsheets/app/favicon.svg"
 DOCS_SVG="$ROOT/stardocs/app/icons/stardocs_logo.svg"
+SLIDES_SVG="$ROOT/slides/app/icons/starslides_logo.svg"
 DRIVE_SVG="$ROOT/starsheets/app/stardrive.svg"
 if [[ ! -f "$DRIVE_SVG" ]]; then
   echo "warning: $DRIVE_SVG not found (icons branch not merged yet); using the Starbase Sheets icon for Starbase Drive" >&2
@@ -74,4 +75,5 @@ stage() {
 stage "$DRIVE_SVG" "$ID"
 stage "$SHEETS_SVG" "$ID.Sheets"
 stage "$DOCS_SVG" "$ID.Docs"
+stage "$SLIDES_SVG" "$ID.Slides"
 echo "icons staged in $DEST/hicolor"

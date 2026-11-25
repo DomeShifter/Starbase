@@ -118,6 +118,7 @@ pub fn migrate(store: &Store) -> io::Result<usize> {
 /// starts empty. Returns where the folder went.
 pub fn retire(store: &Store, username: &str) -> io::Result<Option<String>> {
     sharing::forget_person(store, username)?;
+    crate::commenting::forget_person(store, username);
     let _ = fs::remove_file(prefs_path(store, username));
     let owner = sharing::server_owner(store);
     if !store.spaces || username.is_empty() || owner.is_empty() || owner == username || !store.full(username).is_dir() {

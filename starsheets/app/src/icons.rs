@@ -89,6 +89,9 @@ const ICONS: &[(&str, &[u8])] = &[
     ("label", include_bytes!("../icons/label.svg")),
     ("link", include_bytes!("../icons/link.svg")),
     ("link_off", include_bytes!("../icons/link_off.svg")),
+    // A generic globe for the link card: never a site's own icon (fetching one would be a request).
+    ("language", include_bytes!("../icons/language.svg")),
+    ("open_in_new", include_bytes!("../icons/open_in_new.svg")),
     ("lock", include_bytes!("../icons/lock.svg")),
     ("menu", include_bytes!("../icons/menu.svg")),
     ("note_add", include_bytes!("../icons/note_add.svg")),

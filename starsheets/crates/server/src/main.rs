@@ -15,7 +15,9 @@
 
 mod auth;
 mod backup;
+mod commenting;
 mod devices;
+mod docx_comments;
 mod findpath;
 mod guard;
 mod live;
@@ -246,11 +248,19 @@ fn cookie_reply(value: &str, max_age: u64, body: Value, secure: bool) -> Respons
 
 /// Sends the browser on to `location` (single sign-on), setting `cookies`.
 fn see_other(location: &str, cookies: &[String]) -> Response<Body> {
-    let mut b = Response::builder().status(303).header(header::LOCATION, location).header(header::CACHE_CONTROL, "no-store");
+    // Built without a fallible builder: an address a header can't hold (only visible ASCII can)
+    // goes to "/" instead of panicking (safe_next already refuses such addresses).
+    let mut r = Response::new(Body::empty());
+    *r.status_mut() = axum::http::StatusCode::SEE_OTHER;
+    let h = r.headers_mut();
+    h.insert(header::LOCATION, header::HeaderValue::from_str(location).unwrap_or(header::HeaderValue::from_static("/")));
+    h.insert(header::CACHE_CONTROL, header::HeaderValue::from_static("no-store"));
     for c in cookies {
-        b = b.header(header::SET_COOKIE, c);
+        if let Ok(v) = header::HeaderValue::from_str(c) {
+            h.append(header::SET_COOKIE, v);
+        }
     }
-    b.body(Body::empty()).unwrap()
+    r
 }
 
 /// The cookie that ties a sign-in at the identity provider to this browser. SameSite=Lax: the
@@ -1073,6 +1083,8 @@ async fn gate(
                 Err(error(403, "You don't have access to that."))
             } else if want == Role::Owner {
                 Err(error(403, "Only its owner can do that."))
+            } else if have == Role::Comment {
+                Err(error(403, "You can only comment on that."))
             } else {
                 Err(error(403, "You can only view that."))
             }
@@ -1857,6 +1869,21 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
     if m == "GET" && p.len() == 3 && p[0] == "files" && p[2] == "thumb" {
         return thumb(&app, me, p[1].clone(), &headers).await;
     }
+    if m == "PUT"
+        && p.len() == 2
+        && p[0] == "files"
+        && let Some(resp) = commenting::put(
+            &app,
+            me.clone(),
+            p[1].clone(),
+            headers.get(header::IF_MATCH).and_then(|v| v.to_str().ok()).map(str::to_string),
+            headers.get("x-comment-ids").and_then(|v| v.to_str().ok()).map(str::to_string),
+            body.clone(),
+        )
+        .await
+    {
+        return resp;
+    }
     if m == "PUT" && p.len() == 3 && p[0] == "files" && p[2] == "thumb" {
         return put_thumb(&app, me, p[1].clone(), &q, body).await;
     }
@@ -2111,6 +2138,15 @@ async fn serve() {
 mod tests {
     use super::*;
     use tower::ServiceExt;
+
+    #[test]
+    fn a_redirect_a_header_cant_hold_goes_home_instead_of_panicking() {
+        // A line break can't be in a header ("/é" can, as raw bytes; safe_next refuses both).
+        let r = see_other("/a\nb", &["a=b".into()]);
+        assert_eq!((r.status().as_u16(), &r.headers()[header::LOCATION]), (303, &header::HeaderValue::from_static("/")));
+        assert_eq!(r.headers()[header::SET_COOKIE], "a=b");
+        assert_eq!(see_other("/docs/?file=1", &[]).headers()[header::LOCATION], "/docs/?file=1");
+    }
 
     #[test]
     fn settings_take_the_new_name_and_the_old_one() {

@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# Build the Starbase AppImage from two already-built native binaries.
+# Build the Starbase AppImage from already-built native binaries.
 #
-#   packaging/linux/appimage.sh --starsheets <path> --stardocs <path> [--starbase-open <path>] [--version <v>]
+#   packaging/linux/appimage.sh --starsheets <path> --stardocs <path> [--starslides <path>]
+#                               [--starbase-open <path>] [--version <v>]
 #
+# --starslides adds Starbase Slides (slides/app) and its menu entry; without it the AppImage is
+# built without Slides (a warning says so).
 # --starbase-open adds the file manager's open handler (starsheets/crates/open) and its hidden
 # "Open with" entry; without it the AppImage is built without the handler (a warning says so).
 #
@@ -25,20 +28,22 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 ID=io.github.DomeShifter.Starbase
 
-SHEETS_BIN="" DOCS_BIN="" OPEN_BIN="" VERSION="${STARBASE_VERSION:-}"
+SHEETS_BIN="" DOCS_BIN="" SLIDES_BIN="" OPEN_BIN="" VERSION="${STARBASE_VERSION:-}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --starsheets) SHEETS_BIN="$2"; shift 2 ;;
     --stardocs) DOCS_BIN="$2"; shift 2 ;;
+    --starslides) SLIDES_BIN="$2"; shift 2 ;;
     --starbase-open) OPEN_BIN="$2"; shift 2 ;;
     --version) VERSION="$2"; shift 2 ;;
-    -h | --help) sed -n '2,22p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,26p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 [[ -x "$SHEETS_BIN" ]] || { echo "error: --starsheets <executable> is required" >&2; exit 2; }
 [[ -x "$DOCS_BIN" ]] || { echo "error: --stardocs <executable> is required" >&2; exit 2; }
 [[ -z "$OPEN_BIN" || -x "$OPEN_BIN" ]] || { echo "error: --starbase-open needs an executable" >&2; exit 2; }
+[[ -z "$SLIDES_BIN" || -x "$SLIDES_BIN" ]] || { echo "error: --starslides needs an executable" >&2; exit 2; }
 if [[ -z "$VERSION" ]]; then
   VERSION="$(git -C "$ROOT" describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || true)"
   VERSION="${VERSION:-0.0.0-dev}"
@@ -64,6 +69,13 @@ echo "==> Starbase $VERSION AppImage for $ARCH"
 install -Dm755 "$SHEETS_BIN" "$APPDIR/usr/bin/starsheets"
 install -Dm755 "$DOCS_BIN" "$APPDIR/usr/bin/stardocs"
 ENTRIES=("$ID" "$ID.Sheets" "$ID.Docs")
+# Starbase Slides: a real menu entry, like Docs (an extra one; the metainfo keeps one launchable).
+if [[ -n "$SLIDES_BIN" ]]; then
+  install -Dm755 "$SLIDES_BIN" "$APPDIR/usr/bin/starslides"
+  ENTRIES+=("$ID.Slides")
+else
+  echo "warning: no --starslides given: this AppImage has no Starbase Slides" >&2
+fi
 # The open handler: a hidden "Open with" entry (NoDisplay=true), so the metainfo keeps its one
 # launchable. Inside the AppImage it starts Sheets or Docs through the AppImage itself ($APPIMAGE).
 if [[ -n "$OPEN_BIN" ]]; then

@@ -12,6 +12,7 @@ without clicking at screen positions. Without `test` it is not there. Code: `src
 | `starsheets.type(text)` | Enters `text` into the active cell, as typing it and pressing Enter would, but stays on the cell. `=` starts a formula. | request number |
 | `starsheets.key(name)` | One key: Enter, shift+Enter, Tab, shift+Tab, Up/Down/Left/Right (with shift+ to extend, ctrl+ to jump), ctrl+Home, Delete, Backspace, ctrl+z, ctrl+y, ctrl+a, ctrl+b, ctrl+i, ctrl+u. | request number |
 | `starsheets.wait(n)` | Waits (up to 10 s) for request `n`'s answer. | promise of a JSON string |
+| `starsheets.run('clip:copy')` / `run('clip:paste', {text, html?, values?})` | The clipboard, which a script can't reach: `clip:copy` copies the selection as Ctrl+C does and answers the `text` and `html` it puts on the clipboard; `clip:paste` pastes them as Ctrl+V does when the browser hands them over (Ctrl+Shift+V with `values: true`). Copy in one tab, paste in another, to test pasting between tabs. | request number |
 
 Requests are answered at the start of the next frame. Each answer is `{"ok": value}` or
 `{"err": "message"}`; it also lands in `starsheets.last`, with its number in `starsheets.done`.
@@ -63,3 +64,9 @@ opens the viewer; `home:photos:key {key}` with `next`, `prev`, `zoomin`, `zoomou
 
 The avatar menu's dialogs open with `starsheets.run("account:profile")` (also `account:password`,
 `account:people`), on either screen.
+
+**Signed out and the account menu.** Every snapshot has `account`: `shown` (Drive or a file may
+be drawn), `signedIn`, `user`, `signInPage` (the sign-in page is up), `menuOpen` (the avatar's
+account menu) and `next` (where signing in goes on to, from `?next=`). Signed out the snapshot is
+`screen: "signin"` with only `account`. `starsheets.run("account:menu")` opens the account menu
+as clicking the avatar does.

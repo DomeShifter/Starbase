@@ -16,6 +16,9 @@ mod calcpreview;
 mod cfpanel;
 mod chartpanel;
 mod colourpicker;
+// The web app's "continue to" after sign-in; its check is also tested natively.
+#[cfg(any(target_arch = "wasm32", test))]
+mod continueto;
 #[cfg(target_arch = "wasm32")]
 mod copyto;
 mod currency;
@@ -70,6 +73,8 @@ mod spelling;
 mod store;
 #[cfg(target_arch = "wasm32")]
 mod testhook;
+#[cfg(target_arch = "wasm32")]
+mod textmenu;
 mod theme;
 #[cfg(not(target_arch = "wasm32"))]
 mod updates;
