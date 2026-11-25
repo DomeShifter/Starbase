@@ -540,3 +540,58 @@ fn excels_full_grid_becomes_sized_when_a_delete_reaches_its_end() {
     s.execute("home.deleteRows", json!({"rows": "101:1048576"})).unwrap();
     assert_eq!(size(&s), (Some(100), None));
 }
+
+/// Review of PR #69, 1: a change that only resizes the grid is part of its fingerprint, so a
+/// tab whose replay sized it differently is caught.
+#[test]
+fn a_resize_alone_changes_the_fingerprint() {
+    let mut a = session();
+    let before = wb(&a);
+    a.execute("sheet.addRows", json!({"count": 10})).unwrap();
+    let after = wb(&a);
+    let mut other = (*after).clone();
+    Arc::make_mut(&mut other.sheets[0]).grid_rows = Some(1005);
+    assert_ne!(change_fingerprint(&before, &after), change_fingerprint(&before, &other));
+    assert_ne!(change_fingerprint(&before, &after), change_fingerprint(&before, &before));
+}
+
+/// Review of PR #69, 2: protocol 9 carries grid sizes; a tab on protocol 8 must reload rather
+/// than drop them.
+#[test]
+fn the_protocol_says_grid_sizes_travel() {
+    const _: () = assert!(PROTOCOL >= 9);
+    let hello: ToServer = serde_json::from_str(r#"{"t":"hello","c":{"file":"f","build":"old","client":"t","protocol":8}}"#).unwrap();
+    assert!(matches!(hello, ToServer::Hello { protocol: 8, .. }), "an old tab's hello still reads, so the server can tell it to reload");
+}
+
+/// Review of PR #69, 3: a sheet that arrives with a grid too small for what it holds (another
+/// tab's state, the server's copy) grows to show everything; a broken size is brought into range.
+#[test]
+fn an_arriving_sheet_never_hides_data() {
+    let mut a = session();
+    a.execute("cell.set", json!({"cell": "C60", "input": "below"})).unwrap();
+    let before = wb(&a);
+    let mut small = (*before).clone();
+    Arc::make_mut(&mut small.sheets[0]).grid_rows = Some(1);
+    let patch = make_patch(&before, &small);
+    let got = apply_patch(&before, &patch).unwrap();
+    assert_eq!(got.sheets[0].row_count(), 60, "the state patch can't hide C60");
+    let mut broken = (*before).clone();
+    let sh = Arc::make_mut(&mut broken.sheets[0]);
+    sh.grid_rows = Some(0);
+    sh.grid_cols = Some(u32::MAX);
+    let back = workbook_from_json(&workbook_json(&broken), None).unwrap();
+    assert_eq!((back.sheets[0].grid_rows, back.sheets[0].grid_cols), (Some(60), Some(gridcraft_engine::core::MAX_COLS)));
+}
+
+/// Review of PR #69, 4: what a formula spills past the end grows the grid (Google shows #REF!
+/// there; growing keeps one rule: a sheet's size never hides what it holds), the same in a replay.
+#[test]
+fn a_spill_past_the_end_grows_the_grid() {
+    let mut a = session();
+    let mut b = copy_of(&a);
+    a.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(2000)"})).unwrap();
+    assert_eq!(wb(&a).sheets[0].row_count(), 2000);
+    replay(&mut a, &mut b);
+    assert_eq!(wb(&b).sheets[0].row_count(), 2000);
+}

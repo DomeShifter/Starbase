@@ -177,7 +177,7 @@ async fn connection(
             Some(Ok(Message::Text(t))) => match serde_json::from_str::<ToServer>(&t) {
                 Ok(ToServer::Hello { file, build, client, protocol, have }) => {
                     // Only a different protocol needs the tab to reload (not every new build).
-                    if protocol != sync::PROTOCOL {
+                    if needs_reload(protocol) {
                         crate::log::note(&app.store, &format!("tab of {} on an older Starbase (build {build:?}) asked to reload", who(&user)));
                         let _ = socket.send(Message::Text(text(&ToClient::Reload).into())).await;
                         return;
@@ -1101,6 +1101,12 @@ impl Room {
     }
 }
 
+/// Whether a tab speaking `protocol` must reload first: any other protocol than ours, older or
+/// newer (protocol 9: a tab on 8 would drop sheets' grid sizes and so show data the others can't).
+fn needs_reload(protocol: u32) -> bool {
+    protocol != sync::PROTOCOL
+}
+
 /// Writes `wb` over file `id`, as long as the file on disk is still `expected` (never over a
 /// change made outside StarSheets). The .xlsx is made before taking the server's file lock.
 /// Returns the file's new version. `sheet`: the sheet the file opens on (the last editor's).
@@ -1246,6 +1252,36 @@ mod tests {
 
     fn print(t: &Tab) -> String {
         sync::fingerprint(&t.session.active().unwrap().wb)
+    }
+
+    #[test]
+    fn a_tab_on_an_older_protocol_reloads() {
+        assert!(needs_reload(8), "protocol 8 knows no grid sizes");
+        assert!(needs_reload(sync::PROTOCOL + 1));
+        assert!(!needs_reload(sync::PROTOCOL));
+    }
+
+    /// One person makes the sheet smaller while another types below the new end: the typing
+    /// isn't lost, the grid grows to hold it (on the server and in the first person's tab).
+    #[test]
+    fn shrinking_while_someone_types_below_keeps_the_typing() {
+        let (app, file, dir) = app();
+        let mut a = join(&app, &file, "a");
+        let mut b = join(&app, &file, "b");
+        edit(&app, &file, &mut a, "home.deleteRows", json!({"rows": "51:1048576"}));
+        take_applied(&mut a);
+        take_applied(&mut b);
+        // b types before it hears that a made the sheet 40 rows (b's change is on an older base);
+        // the server runs b's typing after a's delete, so the grid grows back to hold it.
+        edit(&app, &file, &mut a, "home.deleteRows", json!({"rows": "41:50"}));
+        edit(&app, &file, &mut b, "cell.set", json!({"cell": "B45", "input": "typed"}));
+        for _ in 0..2 {
+            take_applied(&mut a);
+        }
+        let sh = a.session.active().unwrap().wb.sheets[0].clone();
+        assert_eq!(sh.value(gridcraft_engine::core::CellRef::parse("B45").unwrap()), gridcraft_engine::core::Value::Text("typed".into()));
+        assert!(sh.row_count() >= 45, "the grid grew to hold it: {}", sh.row_count());
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
