@@ -254,6 +254,11 @@ impl eframe::App for WebShell {
             return;
         }
         self.files.logic(&mut self.app, ctx);
+        // External content (IMAGE pictures): blocked in spreadsheets that aren't this person's own.
+        if let Some(d) = self.app.session.active() {
+            let file = self.files.linked().filter(|(uid, _)| *uid == d.uid).map(|(_, id)| id);
+            crate::external::note_doc(d.uid, file.as_deref(), d.path.is_some(), ctx);
+        }
         // Live editing: send this tab's changes, apply everyone else's (live.rs).
         self.live.logic(&mut self.app, ctx, &self.files);
         self.share.logic(&self.app, ctx, &self.files);
