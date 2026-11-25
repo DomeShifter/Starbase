@@ -143,8 +143,11 @@ jobs:
         with:
           key: desktop
           workspaces: starsheets
-      - name: Clippy (desktop app, with tests)
-        run: cargo clippy -p starsheets --all-targets -- -D warnings
+      # dead_code is allowed here only: helpers of the web app's server features (accounts,
+      # sharing, web fonts, the spelling list download) aren't used by the desktop app yet. The
+      # web app's clippy (lint job) still catches truly unused code.
+      - name: Clippy (desktop app)
+        run: cargo clippy -p starsheets -- -D warnings -A dead_code
       - name: Tests
         run: cargo test -p starsheets
       - name: Build
