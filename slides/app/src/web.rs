@@ -60,7 +60,9 @@ pub fn start() {
                         return Ok(Box::new(presenter) as Box<dyn eframe::App>);
                     }
                     let inbox: Inbox = Inbox::default();
-                    let mut services = services(inbox.clone(), cc.egui_ctx.clone());
+                    let mode = crate::theme::Mode::parse(&crate::prefs::get(crate::theme::KEY).unwrap_or_default());
+                    let shell = Shell::new(mode);
+                    let mut services = services(inbox.clone(), cc.egui_ctx.clone(), shell.presenter_flag());
                     if let Some(bridge) = &app_bridge {
                         bridge.connect(&mut services, cc.egui_ctx.clone());
                     }
@@ -91,11 +93,21 @@ pub fn start() {
                         crate::host::Bridge::set_author(&mut app, &author);
                     }
                     crate::api::install(&mut app, cc.egui_ctx.clone());
-                    let mode = crate::theme::Mode::parse(&crate::prefs::get(crate::theme::KEY).unwrap_or_default());
                     let hook = crate::testhook::TestHook::install(&cc.egui_ctx);
                     let fonts = Rc::new(Cell::new(0));
                     crate::fonts::fetch_more(fonts.clone(), cc.egui_ctx.clone());
-                    Ok(Box::new(WebShell { app, inbox, bridge: app_bridge, link, shell: Shell::new(mode), hook, dirty, fonts, fonts_seen: 0 }))
+                    Ok(Box::new(WebShell {
+                        app,
+                        inbox,
+                        bridge: app_bridge,
+                        link,
+                        shell,
+                        hook,
+                        dirty,
+                        fonts,
+                        fonts_seen: 0,
+                        fullscreen: crate::fullscreen::Fullscreen::new(),
+                    }))
                 }),
             )
             .await;
@@ -108,9 +120,7 @@ pub fn start() {
         if let Some(el) = document.get_element_by_id(LOADING_ID) {
             match result {
                 Ok(()) => el.remove(),
-                Err(e) => {
-                    el.set_inner_html(&format!("<p>Starbase Slides failed to start: {e:?}</p><p>A browser with WebGL2 is required.</p>"))
-                }
+                Err(e) => el.set_inner_html(&format!("<p>Starbase Slides failed to start: {e:?}</p><p>A browser with WebGL2 is required.</p>")),
             }
         }
     });
@@ -142,6 +152,8 @@ struct WebShell {
     /// last drawn with: when more arrive, the slides are drawn again in them.
     fonts: Rc<Cell<usize>>,
     fonts_seen: usize,
+    /// A slideshow fills the screen.
+    fullscreen: crate::fullscreen::Fullscreen,
 }
 
 impl eframe::App for WebShell {
@@ -164,6 +176,7 @@ impl eframe::App for WebShell {
             bridge.report_dirty(&self.app);
         }
         self.dirty.set(self.app.session.documents().iter().any(|d| d.is_dirty()));
+        self.fullscreen.tick(&mut self.app, ctx);
         if self.app.show.is_none()
             && let Some(host) = self.app.services.presenter.as_mut()
         {
@@ -204,7 +217,7 @@ impl eframe::App for WebShell {
 }
 
 /// Web services: the browser file picker (bytes arrive through the inbox) and downloads.
-fn services(inbox: Inbox, ctx: egui::Context) -> Services {
+fn services(inbox: Inbox, ctx: egui::Context, asked_presenter: Rc<Cell<bool>>) -> Services {
     let open_inbox = inbox.clone();
     let presenter = match crate::presenter::BrowserHost::new(ctx.clone()) {
         Ok(host) => Some(Box::new(host) as Box<dyn deckcraft_ui_egui::presenter::Host>),
@@ -242,8 +255,20 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
             }
         })),
         inbox: Some(inbox),
+        // DeckCraft opens its presenter window when there are two screens. A browser tells only
+        // through `screen.isExtended` (Chromium); otherwise only View › Presenter view asks for it,
+        // and Slideshow shows the slides alone, full screen, as Google Slides does.
+        displays: Some(Box::new(move || Some(if asked_presenter.get() || screen_extended() { 2 } else { 1 }))),
         ..Default::default()
     }
+}
+
+/// Whether the browser says the screen is part of a multi-screen setup (`screen.isExtended`).
+fn screen_extended() -> bool {
+    web_sys::window()
+        .and_then(|w| w.screen().ok())
+        .and_then(|s| js_sys::Reflect::get(&s, &"isExtended".into()).ok())
+        .is_some_and(|v| v.as_bool() == Some(true))
 }
 
 fn push_inbox(inbox: &Inbox, event: InboxEvent) {

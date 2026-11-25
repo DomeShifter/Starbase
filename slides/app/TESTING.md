@@ -29,7 +29,21 @@ whether DeckCraft's half and egui are dark too).
 
 Our own commands: `slides.new`, `slides.home`, `slides.rename {name}`, `slides.download {format:
 pptx|pdf|outline}`, `slides.theme {mode: system|light|dark}`, `slides.textBox`, `slides.shape
-{preset}`.
+{preset}`, `slides.presenter` (View › Presenter view: the show plus the presenter window).
+
+Also in `state()`: `fullscreen`, `presenterView`, `perf` (DeckCraft's frame and render ms); and
+`starslides.readyAt` (ms after the page started loading when the app was up), for speed checks.
+
+## Slideshow and presenter view (browser)
+
+- Slideshow (the button, F5, Ctrl+Enter) shows the slides alone, full screen. Firefox allows full
+  screen only from inside the click or key press, so `src/fullscreen.rs` asks for it in that DOM
+  event and starts the show itself; a show started by a menu or a script stays in the tab.
+  Leaving full screen (Esc) ends the show.
+- The presenter window opens for View › Presenter view, or by itself when the browser reports a
+  second screen (`screen.isExtended`, Chromium). A blocked popup leaves an "Open presenter window"
+  button on the page; ending the show removes it.
+- The smoke test checks all of this in Firefox (headless). Chrome is not on the build machine.
 
 DeckCraft's own page API, `window.deckcraft` (`execute`, `docInspect`, `uiInspect` …), is always
 there as well.

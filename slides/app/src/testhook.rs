@@ -101,6 +101,9 @@ impl TestHook {
         set("state", state.as_ref());
         set("wait", wait.as_ref());
         set("done", &JsValue::from(0));
+        // When the app was up (ms since the page started loading), for speed checks.
+        let ready = window.performance().map_or(0.0, |p| p.now());
+        set("readyAt", &JsValue::from(ready));
         set("last", &JsValue::NULL);
         run.forget();
         state.forget();
@@ -162,6 +165,9 @@ fn snapshot(app: &mut SlideApp, shell: &Shell, drive: Option<&dyn Drive>, ctx: &
         "status": app.status.as_ref().map(|(m, _)| m.clone()),
         "author": app.session.prefs.author,
         "fonts": crate::fonts::families(),
+        "fullscreen": crate::fullscreen::is_on(),
+        "presenterView": app.ui.presenter_view,
+        "perf": {"frameMs": app.perf.frame_ms, "renderMs": app.perf.render_ms, "fps": app.perf.fps},
         "theme": crate::theme::state(app, shell.mode, ctx),
     })
 }

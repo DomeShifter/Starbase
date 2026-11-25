@@ -23,6 +23,8 @@ mod theme;
 #[cfg(any(target_arch = "wasm32", test))]
 mod api;
 #[cfg(target_arch = "wasm32")]
+mod fullscreen;
+#[cfg(target_arch = "wasm32")]
 mod host;
 #[cfg(target_arch = "wasm32")]
 mod presenter;
