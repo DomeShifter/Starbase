@@ -657,7 +657,7 @@ fn is_on(app: &mut WordApp, flags: &Flags, key: &str) -> bool {
 }
 
 /// The caret paragraph's formatting, its style's included (what WordCraft's own buttons read).
-fn selection_para(app: &WordApp) -> wordcraft_doc::resolve::ResolvedPara {
+pub(crate) fn selection_para(app: &WordApp) -> wordcraft_doc::resolve::ResolvedPara {
     wordcraft_engine::cmd::para::selection_para(&app.session)
 }
 
@@ -1514,7 +1514,10 @@ impl Tools<'_> {
             }
             Group::Lists => {
                 tool(app, ui, "format_list_bulleted", "Bulleted list (Ctrl+Shift+8)", "para.bullets", json!({}), false);
+                list_styles(app, ui, "Bullet styles", "para.bullets", BULLET_STYLES);
                 tool(app, ui, "format_list_numbered", "Numbered list (Ctrl+Shift+7)", "para.numbering", json!({}), false);
+                list_styles(app, ui, "Numbering styles", "para.numbering", NUMBER_STYLES);
+                tool(app, ui, "checklist", "Checklist (Ctrl+Shift+9)", "list.checklist", json!({}), false);
                 tool(app, ui, "format_indent_decrease", "Decrease indent (Ctrl+[)", "para.outdent", json!({}), false);
                 tool(app, ui, "format_indent_increase", "Increase indent (Ctrl+])", "para.indent", json!({}), false);
                 tool(app, ui, "format_clear", "Clear formatting (Ctrl+\\)", "format.clear", json!({}), false);
@@ -1631,6 +1634,7 @@ impl Shell {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // Your avatar at the far right, as in Starbase Sheets and Slides: a small menu
                 // with who you are and the way back to the home screen.
+                #[cfg(target_arch = "wasm32")]
                 if let Some((name, username, colour)) = link.and_then(Link::me) {
                     ui.add_space(8.0);
                     let r = crate::share::avatar(ui, &name, &colour, 32.0).on_hover_text(format!("{name} ({username})"));
@@ -2088,6 +2092,47 @@ fn tool(app: &mut WordApp, ui: &mut Ui, icon: &str, tip: &str, id: &str, p: Valu
     if r.on_hover_text(tip).clicked() {
         run(app, id, p);
     }
+}
+
+/// Bullet styles of the toolbar's little arrow beside the bulleted-list button (label, kind).
+const BULLET_STYLES: &[(&str, &str)] = &[
+    ("\u{25CF}", "bullet"),
+    ("\u{25CB}", "\u{25CB}"),
+    ("\u{25A0}", "\u{25A0}"),
+    ("\u{25B6}", "\u{27A2}"),
+    ("\u{25C6}", "\u{2756}"),
+    ("\u{2605}", "\u{2605}"),
+];
+/// Numbering styles of the arrow beside the numbered-list button (label, kind).
+const NUMBER_STYLES: &[(&str, &str)] = &[
+    ("1. 2. 3.", "numbered"),
+    ("1) 2) 3)", "numberedParen"),
+    ("a. b. c.", "lowerLetter"),
+    ("i. ii. iii.", "lowerRoman"),
+    ("A. B. C.", "upperLetter"),
+    ("1. a. i.", "outline"),
+];
+
+/// Docs' small arrow after a list button: a grid of styles applied to the caret's list.
+fn list_styles(app: &mut WordApp, ui: &mut Ui, tip: &str, id: &str, styles: &[(&str, &str)]) {
+    // Narrow, so the arrow reads as part of the list button before it.
+    ui.scope(|ui| {
+        ui.spacing_mut().button_padding = vec2(0.0, 4.0);
+        ui.spacing_mut().item_spacing.x = 0.0;
+        icon_menu(ui, "arrow_drop_down", tip, |ui| {
+            egui::Grid::new(tip).spacing(vec2(4.0, 4.0)).show(ui, |ui| {
+                for (i, (label, kind)) in styles.iter().enumerate() {
+                    if ui.add(Button::new(RichText::new(*label).size(15.0)).min_size(vec2(64.0, 36.0))).on_hover_text(*label).clicked() {
+                        run(app, id, json!({ "kind": kind }));
+                        ui.close();
+                    }
+                    if i % 3 == 2 {
+                        ui.end_row();
+                    }
+                }
+            });
+        });
+    });
 }
 
 fn icon_menu(ui: &mut Ui, icon: &str, tip: &str, add: impl FnOnce(&mut Ui)) {

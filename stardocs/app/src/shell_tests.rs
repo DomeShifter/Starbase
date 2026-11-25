@@ -885,3 +885,28 @@ fn commenting_allows_comments_only() {
     assert_eq!(comment_text(&mut h, id), "Nice");
     assert_eq!(body_text(&mut h), "Shared words");
 }
+
+/// The little arrows beside the list buttons pick a style for the caret's list, and the style
+/// survives a save as .docx.
+#[test]
+fn list_style_arrows_apply_and_round_trip_docx() {
+    let mut h = window(1400.0);
+    let got = catch_downloads(&mut h);
+    type_text(&mut h, "One");
+    click(&mut h, "Numbering styles");
+    click(&mut h, "A. B. C.");
+    let fmt = |app: &WordApp| {
+        let n = crate::shell::selection_para(app).numbering.expect("in a list");
+        app.session.doc.numbering.level(n.num, n.level).map(|l| l.format)
+    };
+    assert_eq!(fmt(&h.state().app), Some(wordcraft_doc::section::NumFormat::UpperLetter));
+    menu(&mut h, &["File", "Make a copy"]);
+    let (name, bytes) = got.borrow_mut().pop().expect("a copy was downloaded");
+    let back = wordcraft_engine::io::open_bytes(&name, &bytes).unwrap();
+    use wordcraft_doc::section::NumFormat;
+    assert!(back.numbering.abstracts.iter().any(|a| a.levels.first().is_some_and(|l| l.format == NumFormat::UpperLetter)), "A. B. C. survives .docx");
+    click(&mut h, "Bullet styles");
+    click(&mut h, "\u{25A0}");
+    assert_eq!(fmt(&h.state().app), Some(wordcraft_doc::section::NumFormat::Bullet));
+    assert!(h.query_by_label("Checklist (Ctrl+Shift+9)").is_some(), "the checklist button sits beside the list buttons");
+}
