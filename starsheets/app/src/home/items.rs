@@ -66,13 +66,19 @@ impl Home {
                         .on_hover_text(tip)
                         .clicked()
                 };
-                if toggle(ui, "grid_view", !self.list, "Grid") {
+                let photos = self.photo_folder().is_some();
+                if toggle(ui, "grid_view", !self.list && !photos, "Grid") {
                     self.list = false;
                     self.store.set_setting("starsheets_home_list", "0");
+                    self.photos.set_on(&self.store, false);
                 }
-                if toggle(ui, "view_list", self.list, "List") {
+                if toggle(ui, "view_list", self.list && !photos, "List") {
                     self.list = true;
                     self.store.set_setting("starsheets_home_list", "1");
+                    self.photos.set_on(&self.store, false);
+                }
+                if self.store.has_photos() && toggle(ui, "photo_library", photos, "View as photos") {
+                    self.photos.set_on(&self.store, true);
                 }
                 ui.add_space(house::S);
                 self.sort_menu(ui);
@@ -89,6 +95,10 @@ impl Home {
         ui.add_space(house::M);
         if self.view == Some(View::Bin) && self.search.trim().is_empty() {
             self.bin_ui(ui);
+            return;
+        }
+        if let Some(folder) = self.photo_folder() {
+            self.photos.ui(ui, &self.store, &folder);
             return;
         }
         let (folders, files) = self.contents();

@@ -57,6 +57,11 @@ pub(crate) trait Store {
     }
     /// Starts a new presentation (a named .pptx) in `folder`, in Starbase Slides.
     fn new_presentation(&self, _folder: &str) {}
+    /// Whether "View as photos" works here: a Starbase server's photo index (api/photos), not
+    /// a folder on this computer.
+    fn has_photos(&self) -> bool {
+        false
+    }
     /// The Starbase server the desktop app is connected to (remote.rs); None on this computer's
     /// own files.
     #[cfg(not(target_arch = "wasm32"))]
@@ -205,6 +210,10 @@ impl Store for ServerStore {
     }
 
     fn has_slides(&self) -> bool {
+        true
+    }
+
+    fn has_photos(&self) -> bool {
         true
     }
 

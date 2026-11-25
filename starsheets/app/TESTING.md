@@ -7,7 +7,7 @@ without clicking at screen positions. Without `test` it is not there. Code: `src
 
 | Call | What it does | Returns |
 |---|---|---|
-| `starsheets.run(id, params)` | Runs what a menu or toolbar entry runs: a GridCraft command (`home.bold`, `home.insertSheet`, `edit.undo` …), a `panel:` id (our panels and file actions) or a `ui:` dialog; the ids are the ones in `src/shell.rs`. Entries worked out from the active cell (`panel:sortSheet {desc}`, `panel:freeze {rows|cols: n or "current"}`, `panel:moveColumnLeft/Right`, `panel:randomise {seed?}`, `panel:trimWhitespace`) run like commands and answer `{"done": id}` or an error. On the home screen: `home:folder {path}`, `home:search {text}`, `home:refresh`, `home:recent`, `home:starred`, `home:shared`, `home:bin`, and `home:opens {id}` (what opening that file would do, without opening it: `{"opens": "editor" | "preview" | "download", "url"}`). `params` is a JSON string or an object; leave it out for `{}`. | request number |
+| `starsheets.run(id, params)` | Runs what a menu or toolbar entry runs: a GridCraft command (`home.bold`, `home.insertSheet`, `edit.undo` …), a `panel:` id (our panels and file actions) or a `ui:` dialog; the ids are the ones in `src/shell.rs`. Entries worked out from the active cell (`panel:sortSheet {desc}`, `panel:freeze {rows|cols: n or "current"}`, `panel:moveColumnLeft/Right`, `panel:randomise {seed?}`, `panel:trimWhitespace`) run like commands and answer `{"done": id}` or an error. On the home screen: `home:folder {path}`, `home:search {text}`, `home:refresh`, `home:recent`, `home:starred`, `home:shared`, `home:bin`, the Photos commands below, and `home:opens {id}` (what opening that file would do, without opening it: `{"opens": "editor" | "preview" | "download", "url"}`). `params` is a JSON string or an object; leave it out for `{}`. | request number |
 | `starsheets.state()` | Takes a snapshot (below). | request number |
 | `starsheets.type(text)` | Enters `text` into the active cell, as typing it and pressing Enter would, but stays on the cell. `=` starts a formula. | request number |
 | `starsheets.key(name)` | One key: Enter, shift+Enter, Tab, shift+Tab, Up/Down/Left/Right (with shift+ to extend, ctrl+ to jump), ctrl+Home, Delete, Backspace, ctrl+z, ctrl+y, ctrl+a, ctrl+b, ctrl+i, ctrl+u. | request number |
@@ -50,6 +50,16 @@ by a hash of its cookie). Its `expires` (seconds since 1970) set to now − 1 en
 open page's next request answers 401 with `"renew": true` and the page renews at a quiet moment.
 Set to now + 60 before loading the page, the page renews within a minute without any request
 failing. Moving `made` back 11 minutes makes a fresh sign-in too old to set a password or link.
+
+**Photos** ("View as photos", `src/home/photos.rs` and `viewer.rs`): `home:photos {on}` flips the
+switch; `home:photos:enable` turns Photos on for the folder shown (as the "Turn on" button does);
+`home:photos:sub {on}` and `home:photos:order {newest}` change the listing; `home:photos:open {index}`
+opens the viewer; `home:photos:key {key}` with `next`, `prev`, `zoomin`, `zoomout`, `fit`, `play`,
+`pause` or `close`; `home:photos:slideshow {every, shuffle, play}`. The snapshot's `home.photos` has
+`on`, `shown`, `enabled`, `canEnable`, `count`, `waiting`, `textures` (`count`, `bytes`, `budget`,
+`asking`), the first 60 `items` (`thumb`/`large`/`original`: whether that texture is loaded) and
+`viewer` (`index`, `zoom`, `playing`, `shuffle`, `every`, `showing`: which size is on screen).
+`scripts/photos-grid-smoke.sh` runs all of it in a browser.
 
 The avatar menu's dialogs open with `starsheets.run("account:profile")` (also `account:password`,
 `account:people`), on either screen.
