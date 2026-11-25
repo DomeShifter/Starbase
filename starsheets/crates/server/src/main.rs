@@ -2396,6 +2396,14 @@ mod tests {
         }
         let after: Vec<Vec<u8>> = starbase_templates::ALL.iter().map(|t| starbase_templates::bytes(t.key).unwrap().to_vec()).collect();
         assert_eq!(before, after, "the templates are unchanged");
+        // The Drive opened without `dir` (no folder known yet): the copy goes to the person's
+        // own top folder, never to a folder with an empty name.
+        for url in ["/api/templates/monthly-budget", "/api/templates/monthly-budget?folder="] {
+            let g = send(&app, &ip, "POST", url, &boss, &[], vec![]).await;
+            assert_eq!(g.status, 201, "{url}: {:?}", g.json);
+            assert_eq!(g.json["folder"], "boss", "{url}: into the top folder");
+            assert_eq!(send(&app, &ip, "POST", url, &vic, &[], vec![]).await.json["folder"], "vic", "{url}: vic's own top folder");
+        }
         assert_eq!(send(&app, &ip, "POST", "/api/templates/nope", &boss, &[], vec![]).await.status, 404);
         assert_eq!(send(&app, &ip, "GET", "/api/templates/cv", &boss, &[], vec![]).await.status, 404);
     }
