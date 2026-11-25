@@ -49,15 +49,14 @@ enum Kind {
 fn kind(name: &str) -> Option<Kind> {
     let base = name.rsplit(['/', '\\']).next().unwrap_or(name).to_lowercase();
     match base.as_str() {
-        "readme" | "license" | "licence" | "copying" | "authors" | "changelog" | "notice"
-        | "todo" => return Some(Kind::Plain),
+        "readme" | "license" | "licence" | "copying" | "authors" | "changelog" | "notice" | "todo" => return Some(Kind::Plain),
         "makefile" | "dockerfile" | "containerfile" => return Some(Kind::Code("sh")),
         _ => {}
     }
     let (_, ext) = base.rsplit_once('.')?;
     Some(match ext {
-        "txt" | "text" | "log" | "out" | "ini" | "cfg" | "conf" | "properties" | "gitignore"
-        | "gitattributes" | "editorconfig" | "env" | "srt" | "vtt" => Kind::Plain,
+        "txt" | "text" | "log" | "out" | "ini" | "cfg" | "conf" | "properties" | "gitignore" | "gitattributes" | "editorconfig" | "env" | "srt"
+        | "vtt" => Kind::Plain,
         "md" | "markdown" | "mdown" | "mkd" => Kind::Markdown,
         "csv" => Kind::Table(','),
         "tsv" | "tab" => Kind::Table('\t'),
@@ -65,20 +64,17 @@ fn kind(name: &str) -> Option<Kind> {
         "rs" => Kind::Code("rs"),
         "py" | "pyw" | "pyi" => Kind::Code("py"),
         "js" | "mjs" | "cjs" | "jsx" | "ts" | "tsx" => Kind::Code("js"),
-        "sh" | "bash" | "zsh" | "fish" | "bashrc" | "zshrc" | "profile" | "rb" | "pl" | "r"
-        | "ps1" => Kind::Code("sh"),
+        "sh" | "bash" | "zsh" | "fish" | "bashrc" | "zshrc" | "profile" | "rb" | "pl" | "r" | "ps1" => Kind::Code("sh"),
         "yaml" | "yml" => Kind::Code("yaml"),
         "toml" => Kind::Code("toml"),
         "sql" => Kind::Code("sql"),
         "c" | "h" => Kind::Code("c"),
         "cpp" | "cc" | "cxx" | "hpp" | "hh" | "hxx" => Kind::Code("cpp"),
         // C-like enough for the built-in highlighter: comments, strings, numbers.
-        "java" | "go" | "cs" | "kt" | "kts" | "swift" | "scala" | "dart" | "php" | "groovy"
-        | "gradle" | "proto" => Kind::Code("cpp"),
+        "java" | "go" | "cs" | "kt" | "kts" | "swift" | "scala" | "dart" | "php" | "groovy" | "gradle" | "proto" => Kind::Code("cpp"),
         "jsonc" | "json5" => Kind::Code("json"),
-        "html" | "htm" | "xhtml" | "xml" | "svg" | "css" | "scss" | "sass" | "less" | "lua"
-        | "vue" | "svelte" | "bat" | "cmd" | "tex" | "diff" | "patch" | "nix" | "jsonl"
-        | "ndjson" => Kind::Code(""),
+        "html" | "htm" | "xhtml" | "xml" | "svg" | "css" | "scss" | "sass" | "less" | "lua" | "vue" | "svelte" | "bat" | "cmd" | "tex" | "diff"
+        | "patch" | "nix" | "jsonl" | "ndjson" => Kind::Code(""),
         _ => return None,
     })
 }
@@ -102,19 +98,10 @@ struct Decoded {
 fn decode(bytes: &[u8]) -> Decoded {
     let truncated = bytes.len() > MAX_BYTES;
     let b = &bytes[..bytes.len().min(MAX_BYTES)];
-    let mut d = Decoded {
-        truncated,
-        ..Decoded::default()
-    };
+    let mut d = Decoded { truncated, ..Decoded::default() };
     if b.starts_with(&[0xFF, 0xFE]) || b.starts_with(&[0xFE, 0xFF]) {
         let le = b[0] == 0xFF;
-        let units = b[2..].chunks_exact(2).map(|c| {
-            if le {
-                u16::from_le_bytes([c[0], c[1]])
-            } else {
-                u16::from_be_bytes([c[0], c[1]])
-            }
-        });
+        let units = b[2..].chunks_exact(2).map(|c| if le { u16::from_le_bytes([c[0], c[1]]) } else { u16::from_be_bytes([c[0], c[1]]) });
         d.utf16 = true;
         d.text = char::decode_utf16(units)
             .map(|r| {
@@ -271,14 +258,8 @@ fn parse_markdown(text: &str) -> (Vec<Block>, bool) {
             });
         }
         fn push(&mut self, text: &str, code: bool) {
-            let span = Span {
-                text: text.to_owned(),
-                bold: self.bold > 0,
-                italic: self.italic > 0,
-                strike: self.strike > 0,
-                code,
-                link: self.link.clone(),
-            };
+            let span =
+                Span { text: text.to_owned(), bold: self.bold > 0, italic: self.italic > 0, strike: self.strike > 0, code, link: self.link.clone() };
             if let Some((rows, _)) = &mut self.table {
                 if let Some(cell) = rows.last_mut().and_then(|r| r.last_mut()) {
                     cell.push(span);
@@ -329,9 +310,7 @@ fn parse_markdown(text: &str) -> (Vec<Block>, bool) {
                 Tag::CodeBlock(k) => {
                     md.flush();
                     let lang = match k {
-                        CodeBlockKind::Fenced(l) => {
-                            l.split([' ', ',']).next().unwrap_or("").to_owned()
-                        }
+                        CodeBlockKind::Fenced(l) => l.split([' ', ',']).next().unwrap_or("").to_owned(),
                         CodeBlockKind::Indented => String::new(),
                     };
                     md.code = Some((lang, String::new()));
@@ -501,12 +480,7 @@ fn prepare(name: &str, bytes: &[u8]) -> Prepared {
         }
         _ => String::new(),
     };
-    Prepared {
-        text: d.text,
-        numbers,
-        notes,
-        body,
-    }
+    Prepared { text: d.text, numbers, notes, body }
 }
 
 /// The view switches, shared by every preview (remembered while the app runs).
@@ -536,20 +510,13 @@ pub fn show(ui: &mut egui::Ui, name: &str, bytes: &[u8]) {
         }
     };
     let opts_id = Id::new("textpreview.opts");
-    let mut o = ui.data(|d| d.get_temp::<Opts>(opts_id)).unwrap_or(Opts {
-        wrap: false,
-        numbers: true,
-        tree: false,
-    });
+    let mut o = ui.data(|d| d.get_temp::<Opts>(opts_id)).unwrap_or(Opts { wrap: false, numbers: true, tree: false });
 
     ui.horizontal_wrapped(|ui| {
         match &p.body {
             Body::Text(_) => {
                 ui.checkbox(&mut o.wrap, "Wrap lines");
-                ui.add_enabled(
-                    !o.wrap,
-                    egui::Checkbox::new(&mut o.numbers, "Line numbers"),
-                );
+                ui.add_enabled(!o.wrap, egui::Checkbox::new(&mut o.numbers, "Line numbers"));
             }
             Body::Json(..) => {
                 ui.selectable_value(&mut o.tree, false, "Text");
@@ -573,16 +540,13 @@ pub fn show(ui: &mut egui::Ui, name: &str, bytes: &[u8]) {
         Body::Text(lang) => text_view(ui, &p.text, &p.numbers, lang, o),
         Body::Json(_, pretty) if !o.tree => text_view(ui, pretty, "", "json", o),
         Body::Json(v, _) => {
-            ScrollArea::both()
-                .id_salt("textpreview.json")
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    let mut budget = MAX_NODES;
-                    json_tree(ui, "root", v, Id::new("textpreview.json.root"), 0, &mut budget);
-                    if budget == 0 {
-                        ui.weak(format!("Showing the first {MAX_NODES} values."));
-                    }
-                });
+            ScrollArea::both().id_salt("textpreview.json").auto_shrink([false, false]).show(ui, |ui| {
+                let mut budget = MAX_NODES;
+                json_tree(ui, "root", v, Id::new("textpreview.json.root"), 0, &mut budget);
+                if budget == 0 {
+                    ui.weak(format!("Showing the first {MAX_NODES} values."));
+                }
+            });
         }
         Body::Markdown(blocks) => markdown_view(ui, blocks),
         Body::Table(rows) => table_view(ui, rows),
@@ -599,38 +563,21 @@ fn text_view(ui: &mut egui::Ui, text: &str, numbers: &str, lang: &str, o: Opts) 
     let font = mono(ui);
     let theme = CodeTheme::from_style(ui.style()).with_font_id(font.clone());
     let job = highlight(ui.ctx(), ui.style(), &theme, text, lang);
-    let area = if o.wrap {
-        ScrollArea::vertical()
-    } else {
-        ScrollArea::both()
-    };
-    area.id_salt("textpreview.text")
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            ui.horizontal_top(|ui| {
-                if o.numbers && !o.wrap && !numbers.is_empty() {
-                    let color = ui.visuals().weak_text_color();
-                    let nums = LayoutJob::simple(numbers.to_owned(), font, color, f32::INFINITY);
-                    ui.add(Label::new(nums).selectable(false));
-                }
-                let mode = if o.wrap {
-                    TextWrapMode::Wrap
-                } else {
-                    TextWrapMode::Extend
-                };
-                ui.add(Label::new(job).selectable(true).wrap_mode(mode));
-            });
+    let area = if o.wrap { ScrollArea::vertical() } else { ScrollArea::both() };
+    area.id_salt("textpreview.text").auto_shrink([false, false]).show(ui, |ui| {
+        ui.horizontal_top(|ui| {
+            if o.numbers && !o.wrap && !numbers.is_empty() {
+                let color = ui.visuals().weak_text_color();
+                let nums = LayoutJob::simple(numbers.to_owned(), font, color, f32::INFINITY);
+                ui.add(Label::new(nums).selectable(false));
+            }
+            let mode = if o.wrap { TextWrapMode::Wrap } else { TextWrapMode::Extend };
+            ui.add(Label::new(job).selectable(true).wrap_mode(mode));
         });
+    });
 }
 
-fn json_tree(
-    ui: &mut egui::Ui,
-    key: &str,
-    v: &serde_json::Value,
-    id: Id,
-    depth: usize,
-    budget: &mut usize,
-) {
+fn json_tree(ui: &mut egui::Ui, key: &str, v: &serde_json::Value, id: Id, depth: usize, budget: &mut usize) {
     use serde_json::Value;
     if *budget == 0 {
         return;
@@ -638,24 +585,18 @@ fn json_tree(
     *budget -= 1;
     match v {
         Value::Object(m) => {
-            egui::CollapsingHeader::new(format!("{key}  {{…}} {} keys", m.len()))
-                .id_salt(id)
-                .default_open(depth < 2)
-                .show(ui, |ui| {
-                    for (k, c) in m {
-                        json_tree(ui, k, c, id.with(k), depth + 1, budget);
-                    }
-                });
+            egui::CollapsingHeader::new(format!("{key}  {{…}} {} keys", m.len())).id_salt(id).default_open(depth < 2).show(ui, |ui| {
+                for (k, c) in m {
+                    json_tree(ui, k, c, id.with(k), depth + 1, budget);
+                }
+            });
         }
         Value::Array(a) => {
-            egui::CollapsingHeader::new(format!("{key}  […] {} items", a.len()))
-                .id_salt(id)
-                .default_open(depth < 2)
-                .show(ui, |ui| {
-                    for (i, c) in a.iter().enumerate() {
-                        json_tree(ui, &i.to_string(), c, id.with(i), depth + 1, budget);
-                    }
-                });
+            egui::CollapsingHeader::new(format!("{key}  […] {} items", a.len())).id_salt(id).default_open(depth < 2).show(ui, |ui| {
+                for (i, c) in a.iter().enumerate() {
+                    json_tree(ui, &i.to_string(), c, id.with(i), depth + 1, budget);
+                }
+            });
         }
         _ => {
             ui.horizontal(|ui| {
@@ -667,93 +608,71 @@ fn json_tree(
 }
 
 fn markdown_view(ui: &mut egui::Ui, blocks: &[Block]) {
-    ScrollArea::vertical()
-        .id_salt("textpreview.md")
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            let body = egui::TextStyle::Body.resolve(ui.style()).size;
-            for (i, b) in blocks.iter().enumerate() {
-                match b {
-                    Block::Text {
-                        spans,
-                        heading,
-                        indent,
-                        quote,
-                        bullet,
-                    } => {
-                        if *heading > 0 {
-                            ui.add_space(6.0);
-                        }
-                        let size = body
-                            * match heading {
-                                1 => 1.9,
-                                2 => 1.55,
-                                3 => 1.3,
-                                4 => 1.15,
-                                5 => 1.05,
-                                _ => 1.0,
-                            };
-                        ui.horizontal_wrapped(|ui| {
-                            ui.add_space(f32::from(*indent) * 18.0);
-                            ui.spacing_mut().item_spacing.x = 0.0;
-                            if let Some(b) = bullet {
-                                ui.label(format!("{b} "));
-                            }
-                            for s in spans {
-                                span(ui, s, size, *heading > 0, *quote);
-                            }
-                        });
-                        if *heading == 1 || *heading == 2 {
-                            ui.separator();
-                        }
+    ScrollArea::vertical().id_salt("textpreview.md").auto_shrink([false, false]).show(ui, |ui| {
+        let body = egui::TextStyle::Body.resolve(ui.style()).size;
+        for (i, b) in blocks.iter().enumerate() {
+            match b {
+                Block::Text { spans, heading, indent, quote, bullet } => {
+                    if *heading > 0 {
+                        ui.add_space(6.0);
                     }
-                    Block::Code { lang, text, indent } => {
-                        ui.horizontal(|ui| {
-                            ui.add_space(f32::from(*indent) * 18.0);
-                            egui::Frame::new()
-                                .fill(ui.visuals().extreme_bg_color)
-                                .inner_margin(6.0)
-                                .corner_radius(4.0)
-                                .show(ui, |ui| {
-                                    let theme = CodeTheme::from_style(ui.style());
-                                    let job = highlight(ui.ctx(), ui.style(), &theme, text, lang);
-                                    ScrollArea::horizontal().id_salt(("md.code", i)).show(
-                                        ui,
-                                        |ui| {
-                                            ui.add(
-                                                Label::new(job)
-                                                    .selectable(true)
-                                                    .wrap_mode(TextWrapMode::Extend),
-                                            );
-                                        },
-                                    );
-                                });
-                        });
-                    }
-                    Block::Rule => {
+                    let size = body
+                        * match heading {
+                            1 => 1.9,
+                            2 => 1.55,
+                            3 => 1.3,
+                            4 => 1.15,
+                            5 => 1.05,
+                            _ => 1.0,
+                        };
+                    ui.horizontal_wrapped(|ui| {
+                        ui.add_space(f32::from(*indent) * 18.0);
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        if let Some(b) = bullet {
+                            ui.label(format!("{b} "));
+                        }
+                        for s in spans {
+                            span(ui, s, size, *heading > 0, *quote);
+                        }
+                    });
+                    if *heading == 1 || *heading == 2 {
                         ui.separator();
                     }
-                    Block::Table { rows, head } => {
-                        egui::Grid::new(("md.table", i))
-                            .striped(true)
-                            .show(ui, |ui| {
-                                for (r, row) in rows.iter().enumerate() {
-                                    for cell in row {
-                                        ui.horizontal_wrapped(|ui| {
-                                            ui.spacing_mut().item_spacing.x = 0.0;
-                                            for s in cell {
-                                                span(ui, s, body, r < *head, false);
-                                            }
-                                        });
-                                    }
-                                    ui.end_row();
-                                }
-                            });
-                    }
                 }
-                ui.add_space(4.0);
+                Block::Code { lang, text, indent } => {
+                    ui.horizontal(|ui| {
+                        ui.add_space(f32::from(*indent) * 18.0);
+                        egui::Frame::new().fill(ui.visuals().extreme_bg_color).inner_margin(6.0).corner_radius(4.0).show(ui, |ui| {
+                            let theme = CodeTheme::from_style(ui.style());
+                            let job = highlight(ui.ctx(), ui.style(), &theme, text, lang);
+                            ScrollArea::horizontal().id_salt(("md.code", i)).show(ui, |ui| {
+                                ui.add(Label::new(job).selectable(true).wrap_mode(TextWrapMode::Extend));
+                            });
+                        });
+                    });
+                }
+                Block::Rule => {
+                    ui.separator();
+                }
+                Block::Table { rows, head } => {
+                    egui::Grid::new(("md.table", i)).striped(true).show(ui, |ui| {
+                        for (r, row) in rows.iter().enumerate() {
+                            for cell in row {
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 0.0;
+                                    for s in cell {
+                                        span(ui, s, body, r < *head, false);
+                                    }
+                                });
+                            }
+                            ui.end_row();
+                        }
+                    });
+                }
             }
-        });
+            ui.add_space(4.0);
+        }
+    });
 }
 
 fn span(ui: &mut egui::Ui, s: &Span, size: f32, strong: bool, weak: bool) {
@@ -795,42 +714,33 @@ fn table_view(ui: &mut egui::Ui, rows: &[Vec<String>]) {
     let row_h = ui.text_style_height(&egui::TextStyle::Body) + 6.0;
     let cell = |ui: &mut egui::Ui, text: &str, strong: bool| {
         let flat = text.replace('\n', " ");
-        let t = if strong {
-            RichText::new(flat).strong()
-        } else {
-            RichText::new(flat)
-        };
+        let t = if strong { RichText::new(flat).strong() } else { RichText::new(flat) };
         let r = ui.add(Label::new(t).truncate());
         if text.len() > 40 || text.contains('\n') {
             r.on_hover_text(text);
         }
     };
-    ScrollArea::horizontal()
-        .id_salt("textpreview.table.h")
-        .show(ui, |ui| {
-            TableBuilder::new(ui)
-                .id_salt("textpreview.table")
-                .striped(true)
-                .resizable(true)
-                .auto_shrink([false, false])
-                .columns(
-                    Column::initial(140.0).at_least(40.0).clip(true).resizable(true),
-                    cols,
-                )
-                .header(row_h, |mut h| {
+    ScrollArea::horizontal().id_salt("textpreview.table.h").show(ui, |ui| {
+        TableBuilder::new(ui)
+            .id_salt("textpreview.table")
+            .striped(true)
+            .resizable(true)
+            .auto_shrink([false, false])
+            .columns(Column::initial(140.0).at_least(40.0).clip(true).resizable(true), cols)
+            .header(row_h, |mut h| {
+                for c in 0..cols {
+                    h.col(|ui| cell(ui, header.get(c).map_or("", String::as_str), true));
+                }
+            })
+            .body(|b| {
+                b.rows(row_h, body.len(), |mut row| {
+                    let r = &body[row.index()];
                     for c in 0..cols {
-                        h.col(|ui| cell(ui, header.get(c).map_or("", String::as_str), true));
+                        row.col(|ui| cell(ui, r.get(c).map_or("", String::as_str), false));
                     }
-                })
-                .body(|b| {
-                    b.rows(row_h, body.len(), |mut row| {
-                        let r = &body[row.index()];
-                        for c in 0..cols {
-                            row.col(|ui| cell(ui, r.get(c).map_or("", String::as_str), false));
-                        }
-                    });
                 });
-        });
+            });
+    });
 }
 
 #[cfg(test)]
@@ -931,11 +841,7 @@ mod tests {
         for (bytes, text, lossy, utf16, truncated) in cases {
             let d = decode(bytes);
             assert_eq!(d.text, *text, "{bytes:?}");
-            assert_eq!(
-                (d.lossy, d.utf16, d.truncated),
-                (*lossy, *utf16, *truncated),
-                "{bytes:?}"
-            );
+            assert_eq!((d.lossy, d.utf16, d.truncated), (*lossy, *utf16, *truncated), "{bytes:?}");
         }
     }
 
@@ -993,9 +899,7 @@ mod tests {
             panic!("{:?}", blocks[0]);
         };
         assert_eq!((*heading, spans[0].text.as_str()), (1, "Title"));
-        let Block::Text { spans, .. } = &blocks[1] else {
-            panic!()
-        };
+        let Block::Text { spans, .. } = &blocks[1] else { panic!() };
         assert!(spans.iter().any(|s| s.italic && s.text == "em"));
         assert!(spans.iter().any(|s| s.bold && s.text == "bold"));
         let links: Vec<_> = spans.iter().filter_map(|s| s.link.as_deref()).collect();
@@ -1004,29 +908,15 @@ mod tests {
         let bullets: Vec<_> = blocks
             .iter()
             .filter_map(|b| match b {
-                Block::Text {
-                    bullet: Some(b),
-                    indent,
-                    ..
-                } => Some((b.as_str(), *indent)),
+                Block::Text { bullet: Some(b), indent, .. } => Some((b.as_str(), *indent)),
                 _ => None,
             })
             .collect();
         assert_eq!(bullets, [("•", 1), ("•", 1), ("1.", 2), ("•", 1)]);
-        assert!(
-            blocks
-                .iter()
-                .any(|b| matches!(b, Block::Text { quote: true, .. }))
-        );
-        assert!(blocks.iter().any(
-            |b| matches!(b, Block::Code { lang, text, .. } if lang == "rust" && text == "fn main() {}")
-        ));
+        assert!(blocks.iter().any(|b| matches!(b, Block::Text { quote: true, .. })));
+        assert!(blocks.iter().any(|b| matches!(b, Block::Code { lang, text, .. } if lang == "rust" && text == "fn main() {}")));
         assert!(blocks.contains(&Block::Rule));
-        let Some(Block::Table { rows, head }) =
-            blocks.iter().find(|b| matches!(b, Block::Table { .. }))
-        else {
-            panic!()
-        };
+        let Some(Block::Table { rows, head }) = blocks.iter().find(|b| matches!(b, Block::Table { .. })) else { panic!() };
         assert_eq!((*head, rows.len(), rows[1][1][0].code), (1, 2, true));
         let last = blocks.last().unwrap();
         assert!(matches!(last, Block::Text { spans, .. } if spans[0].text == "[x] "));
@@ -1047,12 +937,8 @@ mod tests {
 
     #[test]
     fn line_numbers() {
-        let cases: &[(&[u8], &str)] = &[
-            (b"x", "1"),
-            (b"a\nb\nc\n", "1\n2\n3"),
-            (b"a\r\nb", "1\n2"),
-            (&[b'\n'; 10], " 1\n 2\n 3\n 4\n 5\n 6\n 7\n 8\n 9\n10"),
-        ];
+        let cases: &[(&[u8], &str)] =
+            &[(b"x", "1"), (b"a\nb\nc\n", "1\n2\n3"), (b"a\r\nb", "1\n2"), (&[b'\n'; 10], " 1\n 2\n 3\n 4\n 5\n 6\n 7\n 8\n 9\n10")];
         for (bytes, want) in cases {
             assert_eq!(prepare("a.txt", bytes).numbers, *want, "{bytes:?}");
         }
@@ -1083,16 +969,10 @@ mod tests {
         ];
         for dark in [false, true] {
             for (name, bytes, label) in &cases {
-                let mut h = Harness::builder()
-                    .with_size(egui::vec2(900.0, 600.0))
-                    .build_ui(|ui| {
-                        ui.ctx().set_visuals(if dark {
-                            egui::Visuals::dark()
-                        } else {
-                            egui::Visuals::light()
-                        });
-                        show(ui, name, bytes);
-                    });
+                let mut h = Harness::builder().with_size(egui::vec2(900.0, 600.0)).build_ui(|ui| {
+                    ui.ctx().set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+                    show(ui, name, bytes);
+                });
                 h.run();
                 assert!(h.query_by_label(label).is_some(), "{name}: no {label:?}");
             }
