@@ -362,6 +362,7 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
         "alternating": wb.active().map(crate::altcolours::state),
         "pivot": crate::pivotpanel::state(&*p.app),
         "imagesReady": formula_images_ready(&*p.app),
+        "linkCard": crate::linkcard::shown(),
         "history": p.files.history_state(),
         "cell": cell,
         "format": format,
