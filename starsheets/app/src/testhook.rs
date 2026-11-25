@@ -267,6 +267,17 @@ fn key(app: &mut SheetApp, on_home: bool, name: &str) -> Result<Value, String> {
 /// The app as JSON: which screen, and on a spreadsheet the file, sheets, selection, the active
 /// cell's value and formula, its main formatting, saving and the other people in the file; on the
 /// home screen what it lists.
+/// The IMAGE addresses on the active sheet whose pictures have arrived.
+fn formula_images_ready(app: &SheetApp) -> Vec<String> {
+    let Some(sh) = app.session.active().and_then(|d| d.wb.active()) else { return Vec::new() };
+    sh.cells
+        .iter()
+        .filter_map(|(_, c)| c.formula.as_ref().map(|f| f.text.clone()))
+        .filter_map(|t| t.split('"').nth(1).filter(|_| t.to_ascii_uppercase().contains("IMAGE(")).map(str::to_string))
+        .filter(|u| gridcraft_ui_egui::formula_graphics::ready(u))
+        .collect()
+}
+
 fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
     let others: Vec<Value> = crate::live::others().iter().map(|o| json!({ "username": o.username, "name": o.name })).collect();
     if p.home.active {
@@ -349,6 +360,8 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
             "cells": s.cells.iter().map(|(c, t)| json!([c.a1(), t])).collect::<Vec<_>>(),
         })),
         "alternating": wb.active().map(crate::altcolours::state),
+        "pivot": crate::pivotpanel::state(&*p.app),
+        "imagesReady": formula_images_ready(&*p.app),
         "history": p.files.history_state(),
         "cell": cell,
         "format": format,

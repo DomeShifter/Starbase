@@ -39,8 +39,8 @@ Google's function list (support.google.com/docs/table/25273, downloaded and pars
 | JOIN | Join a range with a delimiter | S | Wrapper on TEXTJOIN |
 | REGEXMATCH | TRUE/FALSE regex test | S | Wrapper on REGEXTEST |
 | IMPORTRANGE | Pull a range from another spreadsheet | M | Between Starbase files only: needs the server to resolve a file id/URL, check the person's access, and recalc on change |
-| SPARKLINE | In-cell mini chart from a formula | M | Engine has Excel sparklines (`insert.sparkline`) to draw with; needs a formula-driven renderer + Google's options map |
-| IMAGE | Picture in a cell from a URL | S–M | Pictures in cells exist; needs a server fetch proxy (CORS) |
+| SPARKLINE | In-cell mini chart from a formula (done 2026-11-25) | M | Engine has Excel sparklines (`insert.sparkline`) to draw with; needs a formula-driven renderer + Google's options map |
+| IMAGE | Picture in a cell from a URL (done 2026-11-25, browser fetch: CORS sites only) | S–M | Pictures in cells exist; needs a server fetch proxy (CORS) |
 | COUNTUNIQUE | Count distinct values | S | `=COUNTA(UNIQUE(…))` equivalent |
 | FLATTEN | Range to one column | S | TOCOL equivalent |
 | GOOGLEFINANCE | Live and historic prices | – | Not building (Google data) |
@@ -88,7 +88,7 @@ Google's function list (support.google.com/docs/table/25273, downloaded and pars
 | Chart: stepped area, gauge, geo, org chart, timeline, table chart, scorecard | Chart editor › Chart type | Missing | Low–Med | M each | Scorecard (one big number with change) is the most used of these on dashboards; geo needs map data |
 | Chart editor: trendlines, data labels, axis min/max, log scale, error bars, aggregate, "use row 1 as headers", switch rows/columns | Chart editor › Customise / Setup | Partly / Engine-only | Med | S–M | Panel has style, titles, slice colours, series colour, trendline options, legend, gridlines, vertical axis Min/Max (2026-11-25; no log scale). `chart.addElement`, `chart.switchRowColumn` exist |
 | Pivot table + editor | Insert › Pivot table | Has (GridCraft's Excel-style field pane) | High | S–M | `ui-egui/src/pivot_pane.rs`, `pivot.*`. Restyle it as Sheets' side panel ("Rows / Columns / Values / Filters", "Suggested") |
-| Pivot: calculated field, group by date/number, filter by condition, show as % of | Pivot editor | Engine-only | Med | S | `pivot.calculatedField`, `pivot.group`, `pivot.filter`, `pivot.valueSettings` |
+| Pivot: calculated field, group by date/number, filter by condition, show as % of | Pivot editor | Has (2026-11-25: side panel; condition filter ticks matching items; no number grouping) | Med | S | `pivot.calculatedField`, `pivot.group`, `pivot.filter`, `pivot.valueSettings` |
 | Image in cell / over cells | Insert › Image | Has | Med | – | |
 | Drawing (shapes, text boxes, arrows) | Insert › Drawing | Engine-only | Low–Med | M | `insert.shape`, `insert.textBox`, `object.*`; Sheets uses a separate drawing canvas |
 | Function sub-menu, all functions list | Insert › Function / Help › Function list | Has | High | – | |
@@ -120,7 +120,7 @@ Google's function list (support.google.com/docs/table/25273, downloaded and pars
 | Sort range A→Z / Z→A / advanced (several columns, header row) | Data › Sort range | Has | High | – | |
 | **Sort sheet** (by column, whole sheet keeping a frozen header) | Data › Sort sheet | Has | High | S | `menuactions.rs` |
 | Filter: by values, by condition, filter by cell value | Data › Create a filter | Has | High | – | `data.filter`, right-click "Filter by cell value" |
-| Filter / sort by colour (fill, text, conditional formatting colours) | Filter menu | Has (fill and text; not conditional-format colours) | Med | – | On the roadmap ("later: sort/filter by colour, filter by condition") |
+| Filter / sort by colour (fill, text, conditional formatting colours) | Filter menu | Has (2026-11-25: conditional-format colours too) | Med | – | On the roadmap ("later: sort/filter by colour, filter by condition") |
 | **Filter views** (personal, named, shareable by URL; temporary views for viewers) | Data › Create filter view | Has (named, per person, saved in the file; no sort inside a view, no `?fvid=` link yet) | High (in shared sheets) | M | Biggest everyday gap for shared sheets: live editing makes one person's filter hide rows for everyone. Needs per-person view state on the server (not in the .xlsx) + URL `?fvid=` |
 | Group by view | Data › Create group by view | Missing | Low–Med | M | New (2025-26) Tables feature; GROUPBY function exists |
 | Slicer | Data › Add a slicer | Partly | Med | S–M | `insert.slicer` is GridCraft's Excel slicer (tables/pivots). Sheets' slicer works on any chart/pivot range with condition or values and "set current filters as default" |
@@ -176,6 +176,8 @@ Google's function list (support.google.com/docs/table/25273, downloaded and pars
 15. **Version history upgrade**: more than 6 versions, named versions, who changed what (and later per-cell edit history), using the authors the live server already knows.
 
 _Batch 1 (2026-11-24) did 1–4, 6 and 9 except moving rows; batch 3 (2026-11-25) did the rest of the cheap ones: 5 (Alternating colours), 9 (Move row up/down) and 10 (Smart Fill; AutoComplete was already on). Only Paste special › Conditional formatting only is still missing from 2 (engine)._
+
+_Batch 4 (2026-11-25): 7 (pivot editor panel: calculated field, group by date, show as %, filter by values or condition; not number grouping), 13 (colour filter/sort now with conditional-format colours), the IMAGE + SPARKLINE half of 14, and Smart Fill's grey preview. IMPORTRANGE waits on a server design._
 
 _Batch 2 (2026-11-25): 8 done as far as the engine goes (trendline options; axis min/max needs engine fields), 11 done without a side panel or commenter role, 12 only Create/Remove filter; 7, 12 (filter views) and 13 wait on GridCraft changes (starsheets/ROADMAP.md lists them)._
 
