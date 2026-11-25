@@ -11,6 +11,11 @@ new features and the last one for fixes.
   Settings are now `STARBASE_*`; the old `STARSHEETS_*` names still work.
 
 ### Added
+- Filter views as in Google Sheets (Data › Filter views): create one, or save the sheet's filter
+  as one; each has a name and a range and is listed in the menu to reopen. An open view filters
+  only for you, in a dark bar above the grid (rename, change the range, duplicate, delete, ✕ to
+  close). Views are saved in the .xlsx; Excel ignores them. Sorting inside a view isn't there yet.
+- Filter by colour and Sort by colour in a column's filter menu (fill colour or text colour).
 - Drop-downs as in Google Sheets: "Allow multiple selections" (tick boxes in the list, the cell
   holds "a, b"), and the Chip / Arrow / Plain text display styles, with chips drawn as coloured
   pills. Excel opens such files as ordinary drop-downs.
