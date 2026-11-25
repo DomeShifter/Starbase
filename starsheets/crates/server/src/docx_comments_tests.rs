@@ -324,3 +324,23 @@ fn damaged_or_doubled_parts_are_refused() {
     let long = comment(5, "Mal", &"x".repeat(MAX_COMMENT_CHARS + 1), "10000001");
     assert!(merge(&s, &sent(MARKED, &long, "", &[]), &me()).is_err());
 }
+
+/// Files as Starbase Docs (WordCraft) really writes them: the server's document, and the same
+/// opened, "world" commented and the comment replied to (a reply has no marks of its own).
+#[test]
+fn a_comment_and_reply_as_starbase_docs_writes_them() {
+    let s: &[u8] = include_bytes!("testdata/wordcraft-s.docx");
+    let u: &[u8] = include_bytes!("testdata/wordcraft-u.docx");
+    let out = merged(s, u);
+    let d = part(&out, "word/document.xml");
+    assert!(
+        d.contains(r#"<w:t xml:space="preserve">Hello </w:t></w:r><w:commentRangeStart w:id="0"/><w:commentRangeStart w:id="1"/><w:r><w:rPr><w:b/><w:bCs/></w:rPr><w:t xml:space="preserve">world</w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r><w:commentRangeEnd w:id="1"/><w:r><w:commentReference w:id="1"/></w:r></w:p>"#),
+        "{d}"
+    );
+    let c = part(&out, "word/comments.xml");
+    assert!(c.contains(">Nice<") && c.contains(">Agreed<") && !c.contains("WordCraft User"), "{c}");
+    let x = part(&out, "word/commentsExtended.xml");
+    assert_eq!(x.matches("paraIdParent").count(), 1, "{x}");
+    // Saved again unchanged: nothing to do.
+    assert_eq!(merge(&out, u, &me_owning(&[0, 1])).unwrap(), None);
+}
