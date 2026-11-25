@@ -59,7 +59,8 @@ impl Notes {
         {
             let at = d.selection.active;
             // A comment's text doesn't carry over: a note written there replaces the comment.
-            let text = d.wb.active().and_then(|sh| sh.comments.get(&at)).filter(|c| !comments::is_comment(c)).map(|c| c.text.clone()).unwrap_or_default();
+            let text =
+                d.wb.active().and_then(|sh| sh.comments.get(&at)).filter(|c| !comments::is_comment(c)).map(|c| c.text.clone()).unwrap_or_default();
             self.editing = Some((d.uid, at, text));
             self.focus = true;
         }

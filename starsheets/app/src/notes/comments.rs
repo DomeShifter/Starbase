@@ -263,7 +263,9 @@ fn header(ui: &mut Ui, author: &str, tag: Option<&str>, controls: bool) -> (bool
             return;
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let more = ui.add(egui::Button::new(RichText::new("⋮").size(18.0).color(theme::TEXT_DIM)).frame_when_inactive(false)).on_hover_text("More options");
+            let more = ui
+                .add(egui::Button::new(RichText::new("⋮").size(18.0).color(theme::TEXT_DIM)).frame_when_inactive(false))
+                .on_hover_text("More options");
             egui::Popup::menu(&more).id(egui::Id::unique("starsheets_comment_more")).show(|ui| {
                 crate::shell::menu_style_width(ui, 160.0);
                 if house::menu_row(ui, None, "Edit", "", tag.is_none()) {
@@ -276,7 +278,8 @@ fn header(ui: &mut Ui, author: &str, tag: Option<&str>, controls: bool) -> (bool
                 }
             });
             let (label, tip) = if tag.is_some() { ("↺", "Re-open") } else { ("✓", "Mark as resolved and hide discussion") };
-            tick = ui.add(egui::Button::new(RichText::new(label).size(18.0).color(house::BLUE)).frame_when_inactive(false)).on_hover_text(tip).clicked();
+            tick =
+                ui.add(egui::Button::new(RichText::new(label).size(18.0).color(house::BLUE)).frame_when_inactive(false)).on_hover_text(tip).clicked();
         });
     });
     (tick, hit)
