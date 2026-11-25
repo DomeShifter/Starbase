@@ -1,0 +1,19 @@
+[package]
+name = "starbase-connect"
+description = "The desktop apps' link to a Starbase server: device sign-in, the token in the system keyring, the files API"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+# Desktop only (the web app is on the server's own site and signs in with its cookie). Used by
+# Starbase Sheets (starsheets/app) and Starbase Docs (stardocs/app, by path).
+[dependencies]
+serde_json = "1"
+# HTTP: rustls with the computer's own certificates (a home CA added to the system works), as
+# the server's single sign-on does.
+ureq = { version = "3.5", default-features = false, features = ["rustls", "platform-verifier"] }
+# The device token: the system keyring (Secret Service on Linux, Credential Manager, Keychain).
+keyring = "4.2"

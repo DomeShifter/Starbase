@@ -49,7 +49,7 @@ jobs:
       - name: Fetch GridCraft at the pinned commit of our fork
         run: scripts/fetch-upstream.sh
       - name: System libraries for egui's native backends
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-dev libxkbcommon-dev libwayland-dev pkg-config
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-dev libxkbcommon-dev libwayland-dev pkg-config libxkbcommon-x11-0
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -87,7 +87,7 @@ jobs:
       - name: Fetch WordCraft at the pinned commit of our fork
         run: scripts/fetch-upstream.sh
       - name: System libraries for egui's native backends
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-dev libxkbcommon-dev libwayland-dev pkg-config
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-dev libxkbcommon-dev libwayland-dev pkg-config libxkbcommon-x11-0
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:

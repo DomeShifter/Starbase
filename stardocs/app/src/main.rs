@@ -24,6 +24,7 @@
 mod bundled_fonts;
 mod icons;
 mod looks;
+mod mystyles;
 mod prefs;
 mod shell;
 mod shortcuts;
@@ -51,11 +52,15 @@ mod web;
 // The desktop: the document is a local file (`localfile` stands where the browser's server link
 // does), and there is no Share dialog without a server.
 #[cfg(not(target_arch = "wasm32"))]
+mod connect;
+#[cfg(not(target_arch = "wasm32"))]
 mod localfile;
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
 #[cfg(not(target_arch = "wasm32"))]
 mod native_stubs;
+#[cfg(not(target_arch = "wasm32"))]
+mod serverfile;
 #[cfg(not(target_arch = "wasm32"))]
 use localfile as server;
 #[cfg(not(target_arch = "wasm32"))]

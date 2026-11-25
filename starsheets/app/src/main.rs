@@ -51,6 +51,8 @@ mod panels;
 mod prefs;
 mod protectpanel;
 mod refs;
+#[cfg(not(target_arch = "wasm32"))]
+mod remote;
 mod settings;
 #[cfg(target_arch = "wasm32")]
 mod share;

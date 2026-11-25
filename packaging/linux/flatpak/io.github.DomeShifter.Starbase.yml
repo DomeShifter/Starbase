@@ -120,7 +120,16 @@ modules:
           - repo
           - dist
           - docs
-          - starsheets
+          # Of starsheets/, only the desktop's connect crate (and the workspace file it takes its
+          # version from) is needed here.
+          - starsheets/app
+          - starsheets/crates/server
+          - starsheets/crates/sync
+          - starsheets/upstream
+          - starsheets/target
+          - starsheets/docs
+          - starsheets/docker
+          - starsheets/scripts
           - stardocs/target
           - stardocs/upstream
       # WordCraft: our fork's `stardocs` branch at the commit in stardocs/upstream.pin. Keep the

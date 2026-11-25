@@ -16,6 +16,10 @@ that the ID points to (github.com/DomeShifter/Starbase). Flatpak exports any des
 icon whose name starts with the app ID, which is why the other two entries are
 `….Starbase.Sheets` and `….Starbase.Docs`.
 
+The AppImage and the tar bundle no system libraries. Desktops already have what they need, but a
+bare system or container must add `libxkbcommon-x11-0` (Debian/Ubuntu; the X11 keyboard library),
+or the programs don't start under X11. The Flatpak gets it from its runtime.
+
 ## Files
 
 | File | What it is |
