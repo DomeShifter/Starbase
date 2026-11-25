@@ -297,6 +297,14 @@ impl eframe::App for WebShell {
             let parts = crate::testhook::Parts { app: &mut self.app, home: &mut self.home, files: &self.files, compact: self.shell.compact };
             test.process(ui.ctx(), parts);
         }
+        // Signed out, or not yet known: the sign-in page (index.html) or first-time setup and
+        // sign-up (account.rs dialogs) on a plain page, with nothing of Drive or a file behind.
+        if !crate::account::app_shown() {
+            let ctx = ui.ctx().clone();
+            ui.painter().rect_filled(ui.max_rect(), 0.0, crate::theme::PAGE);
+            self.account.ui(&ctx);
+            return;
+        }
         let open = (!self.home.active).then(|| self.app.session.active().map(|d| d.display_title())).flatten();
         set_tab_title(open.as_deref());
         if self.home.active {

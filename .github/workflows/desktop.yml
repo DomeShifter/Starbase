@@ -1,5 +1,6 @@
-# Starbase desktop package (docs/research/desktop-plan.md, P2 + P5): builds both desktop programs
-# (starsheets: Starbase Drive + Starbase Sheets; stardocs: Starbase Docs), packs them into one
+# Starbase desktop package (docs/research/desktop-plan.md, P2 + P5): builds the desktop programs
+# (starsheets: Starbase Drive + Starbase Sheets; stardocs: Starbase Docs; starslides: Starbase
+# Slides), packs them into one
 # AppImage with packaging/linux/appimage.sh, and checks that it starts on a clean machine.
 # The AppImage and its .zsync are kept as the `starbase-appimage` artifact.
 #
@@ -14,7 +15,7 @@ name: Desktop
 on:
   push:
     branches: [main]
-    paths: ["starsheets/**", "stardocs/**", "packaging/**", ".github/workflows/desktop.yml"]
+    paths: ["starsheets/**", "stardocs/**", "slides/**", "packaging/**", ".github/workflows/desktop.yml"]
   # Pull requests only when the packaging changes: the apps' own workflows already build and test
   # the desktop programs on every app change.
   pull_request:
@@ -120,9 +121,49 @@ jobs:
           path: stardocs/target/release/stardocs
           retention-days: 3
 
+  starslides:
+    name: Build starslides (ubuntu-22.04)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: slides
+    steps:
+      # DeckCraft's build needs more disk than the runner leaves free; deleting runs in the background.
+      - name: Make disk space (in the background)
+        working-directory: /
+        run: sudo nohup rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL >/dev/null 2>&1 &
+      - uses: actions/checkout@v7
+      # The scripts use tomllib (Python 3.11+); ubuntu-22.04 ships 3.10.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Fetch DeckCraft at the pinned commit of our fork
+        run: scripts/fetch-upstream.sh
+      - name: System libraries for egui's native backends
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-dev libxkbcommon-dev libwayland-dev pkg-config libxkbcommon-x11-0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # The same build as the Starbase Slides workflow's native job (main and tags): one cache.
+          shared-key: slides-native-release-2204
+          workspaces: slides
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build
+        run: cargo build --release -p starslides
+      - name: Version and the C library it needs
+        run: |
+          target/release/starslides --version
+          objdump -T target/release/starslides | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-starslides
+          path: slides/target/release/starslides
+          retention-days: 3
+
   appimage:
     name: AppImage (x86_64)
-    needs: [starsheets, stardocs]
+    needs: [starsheets, stardocs, starslides]
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
@@ -137,6 +178,10 @@ jobs:
         with:
           name: desktop-stardocs
           path: bin
+      - uses: actions/download-artifact@v8
+        with:
+          name: desktop-starslides
+          path: bin
       - name: Version
         env:
           # A pull request's own commit, not the merge commit GitHub tests it as.
@@ -149,8 +194,8 @@ jobs:
         env:
           DIST: ${{ github.workspace }}/dist
         run: |
-          chmod +x bin/starsheets bin/stardocs bin/starbase-open
-          packaging/linux/appimage.sh --starsheets bin/starsheets --stardocs bin/stardocs --starbase-open bin/starbase-open
+          chmod +x bin/starsheets bin/stardocs bin/starslides bin/starbase-open
+          packaging/linux/appimage.sh --starsheets bin/starsheets --stardocs bin/stardocs --starslides bin/starslides --starbase-open bin/starbase-open
           ls -la dist
           {
             echo "### Starbase AppImage $STARBASE_VERSION"
@@ -201,12 +246,13 @@ jobs:
           ls -la dist
           "$app" --version
           "$app" stardocs --version | grep '^stardocs '
+          "$app" starslides --version | grep '^starslides '
           "$app" starsheets --version
           "$app" starbase-open --explain "$PWD/x.xlsx"
           # The runtime reads its own --appimage-* options only without APPIMAGE_EXTRACT_AND_RUN.
           env -u APPIMAGE_EXTRACT_AND_RUN "$app" --appimage-extract >/dev/null
           ls squashfs-root squashfs-root/usr/bin
-          if ldd squashfs-root/usr/bin/starsheets squashfs-root/usr/bin/stardocs squashfs-root/usr/bin/starbase-open | grep 'not found'; then exit 1; fi
+          if ldd squashfs-root/usr/bin/starsheets squashfs-root/usr/bin/stardocs squashfs-root/usr/bin/starslides squashfs-root/usr/bin/starbase-open | grep 'not found'; then exit 1; fi
           env -u APPIMAGE_EXTRACT_AND_RUN "$app" --appimage-updateinformation; echo
       - name: Starbase Drive (the home) stays up for 15 s
         run: |
@@ -225,6 +271,13 @@ jobs:
         run: |
           export HOME="$RUNNER_TEMP/home-docs"; mkdir -p "$HOME"
           set +e; timeout 15 xvfb-run -a "$(ls "$GITHUB_WORKSPACE"/dist/*.AppImage)" stardocs; code=$?; set -e
+          echo "exit code $code"
+          test "$code" = 124
+          test -d "$HOME/Documents/Starbase"
+      - name: Starbase Slides stays up
+        run: |
+          export HOME="$RUNNER_TEMP/home-slides"; mkdir -p "$HOME"
+          set +e; timeout 15 xvfb-run -a "$(ls "$GITHUB_WORKSPACE"/dist/*.AppImage)" starslides; code=$?; set -e
           echo "exit code $code"
           test "$code" = 124
           test -d "$HOME/Documents/Starbase"
