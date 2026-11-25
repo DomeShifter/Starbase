@@ -14,14 +14,13 @@ name: Desktop
 on:
   push:
     branches: [main]
-    tags: ["v*"]
     paths: ["starsheets/**", "stardocs/**", "packaging/**", ".github/workflows/desktop.yml"]
   # Pull requests only when the packaging changes: the apps' own workflows already build and test
   # the desktop programs on every app change.
   pull_request:
     paths: ["packaging/**", ".github/workflows/desktop.yml"]
   workflow_dispatch:
-  workflow_call: # from release.yml (later)
+  workflow_call: # from release.yml: a vX.Y.Z tag builds the AppImage there (signed and attached)
 
 permissions:
   contents: read
@@ -146,12 +145,8 @@ jobs:
             du -h dist/*.AppImage
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      # SIGNING PLACEHOLDER (desktop-plan.md P5): SHA256SUMS + a detached GPG signature with the
-      # project's release key go here, once that key exists as a repository secret (the owner
-      # creates it). Until then the AppImage is unsigned.
-      - name: Sign (not yet, needs the project's release key)
-        if: false
-        run: echo "gpg --detach-sign --armor SHA256SUMS"
+      # Signing happens in release.yml (job "sign"): the release key is used only for tagged
+      # releases, never on branch or pull-request builds.
       - uses: actions/upload-artifact@v7
         with:
           name: starbase-appimage

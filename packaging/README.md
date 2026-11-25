@@ -112,3 +112,17 @@ The commands for a local build are in the manifest's header.
 8. AppImage desktop integration tools (Gear Lever, AppImageLauncher) install only the root
    (Starbase Drive) entry. The Starbase Sheets and Starbase Docs entries and their file associations work fully
    only in the Flatpak (and the later deb/rpm).
+
+## Checking a download
+
+Every Linux download on a release is signed with the Starbase release key
+(`packaging/linux/starbase-release-signing.asc`, fingerprint
+`7704 529F 91C0 B0CE C578  9097 F9BF 4A64 BA9E 1715`):
+
+```sh
+gpg --import starbase-release-signing.asc
+gpg --verify SHA256SUMS.asc SHA256SUMS      # "Good signature from Starbase release signing"
+sha256sum --check --ignore-missing SHA256SUMS
+```
+
+Each file also has its own `.asc` signature (`gpg --verify Starbase-x86_64.AppImage.asc`).
