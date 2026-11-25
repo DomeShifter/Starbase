@@ -169,8 +169,11 @@ jobs:
     env:
       APPIMAGE_EXTRACT_AND_RUN: 1
     steps:
-      - name: Headless X server with OpenGL
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb libgl1-mesa-dri libxkbcommon-x11-0
+      # Starbase Sheets draws with wgpu (Vulkan, or OpenGL ES through EGL), Starbase Docs with
+      # OpenGL. Runners have no GPU: Mesa's software drivers (lavapipe for Vulkan, llvmpipe for
+      # GL) stand in, as on a desktop with no GPU driver installed.
+      - name: Headless X server, software Vulkan and OpenGL
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb libgl1-mesa-dri libegl1 libegl-mesa0 libvulkan1 mesa-vulkan-drivers libxkbcommon-x11-0
       - uses: actions/download-artifact@v8
         with:
           name: starbase-appimage
