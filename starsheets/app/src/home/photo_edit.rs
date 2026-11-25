@@ -282,7 +282,8 @@ impl Editor {
     }
 
     /// The picture itself, made no bigger than 1024 px (the thumbnails show the edited view, so
-    /// the editor starts from the original file).
+    /// the editor starts from the original file). Both decoders apply the EXIF orientation, so
+    /// `render` gets the upright picture it expects.
     fn load_source(&mut self, ctx: &egui::Context, store: &Backend) {
         let max = PREVIEW.min(ctx.input(|i| i.max_texture_side) as u32);
         let (inbox, ctx2) = (self.inbox.clone(), ctx.clone());
@@ -476,6 +477,11 @@ impl Editor {
         }
         if !self.dirty() {
             self.copy_now(ctx, store);
+            return;
+        }
+        // The sliders keep every field in range; this is the last check before anything is sent.
+        if let Err(e) = self.edits.validate() {
+            self.error = Some(format!("These edits can't be saved: {e}"));
             return;
         }
         self.saving = true;
