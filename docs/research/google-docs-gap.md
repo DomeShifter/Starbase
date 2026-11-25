@@ -21,7 +21,7 @@ _Research only, 2026-11-24. Sources: `stardocs/app/src/shell.rs` (MENUS + toolba
 | Download .odt / .rtf / .txt / .html / .md / .epub | File › Download | Engine-only (not epub) | Med | S | The `formats` crate has odt, rtf, txt, html, markdown, latex and mht writers; `file.saveAs` with an extension. No EPUB |
 | Import other formats on open | File › Open | Engine (docx/odt/rtf/txt/md…) | Med | S | Wire the home-screen upload to accept them |
 | Email as attachment / email collaborators | File › Email | Missing | Low | M | Needs mail on the server; skip |
-| Version history (list, name, restore, copy) | File › Version history (Ctrl+Alt+Shift+H) | Engine-only, in memory | High | M | `file.versions` keeps versions per session only. The server needs to store versions (snapshots per save, named versions) |
+| Version history (list, name, restore, copy) | File › Version history (Ctrl+Alt+Shift+H) | Has | High | – | Kept on the server (every save, thinned like Google's, `KEEP` cap); panel in `versions.rs`; editors only |
 | See who changed what / show editors | Version history | Missing | Med | M | Depends on server version history; tracked changes do part of it |
 | Autosave + "Saved" | Title row | Has | High | – | `server.rs` |
 | Live co-editing (cursors, live edits) | Built in | Missing (one writer; a 409 makes a copy) | High | L | StarSheets has a live-sync Rust server; a text CRDT/OT for a WordCraft doc is a big job |
@@ -120,7 +120,7 @@ _Research only, 2026-11-24. Sources: `stardocs/app/src/shell.rs` (MENUS + toolba
 11. **Citations** menu for students (`references.citation/bibliography/citationStyle/sources`).
 
 **Medium jobs (M), high value:**
-12. **Version history kept on the server**: snapshots on save, named versions, restore, make a copy. The engine side (`file.versions`) exists in memory only.
+12. ~~**Version history kept on the server**: snapshots on save, named versions, restore, make a copy.~~ Done: File › Version history.
 13. **Checklists**: tick boxes that strike through, Ctrl+Shift+9. Needs engine work; content-control check boxes are a possible base.
 14. **Smart chips, first set**: `@date` (date picker), `@person` (server users), dropdown chip. Engine base: `insert.dateField`, `developer.datePicker`, `developer.dropDown`.
 15. **Make a copy** (File menu + server) and a **commenter** share role.

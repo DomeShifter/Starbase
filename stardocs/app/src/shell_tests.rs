@@ -723,3 +723,21 @@ fn menu_rows_are_even_and_line_up() {
         close_menus(&mut h);
     }
 }
+
+/// File › Version history, as in Docs: the menu and Ctrl+Alt+Shift+H open the panel on the
+/// right. Without a Starbase server there is no history, and the panel says so.
+#[test]
+fn version_history_opens_from_the_menu_and_its_keys() {
+    let mut h = window(1400.0);
+    menu(&mut h, &["File", "Version history", "See version history"]);
+    let s = h.state_mut().state();
+    assert_eq!(s["dialogs"]["versionHistory"], true, "{s}");
+    assert_eq!(s["versions"]["error"], crate::versions::NO_SERVER);
+    h.get_by_label_contains("needs a Starbase server");
+    click(&mut h, "Close");
+    assert_eq!(h.state_mut().state()["dialogs"]["versionHistory"], false);
+    keys(&mut h, Modifiers::COMMAND | Modifiers::ALT | Modifiers::SHIFT, Key::H);
+    assert_eq!(h.state_mut().state()["dialogs"]["versionHistory"], true, "Ctrl+Alt+Shift+H");
+    menu(&mut h, &["File", "Version history", "Name current version"]);
+    assert_eq!(h.state_mut().state()["dialogs"]["nameVersion"], true);
+}

@@ -28,6 +28,7 @@ mod prefs;
 mod shell;
 mod shortcuts;
 mod theme;
+mod versions;
 mod wordcount;
 
 #[cfg(any(target_arch = "wasm32", test))]

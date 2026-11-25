@@ -105,6 +105,23 @@ struct State {
     /// in read-only mode once (`view_applied`).
     view_only: bool,
     view_applied: bool,
+    /// Where opened documents go (the app's inbox), kept from [`Link::open`] for version history.
+    inbox: Option<Inbox>,
+    /// An earlier version shown from version history (read-only, nothing saved), or the way back
+    /// to the document under way; `preview_applied`: Viewing has been switched on for it.
+    preview: Preview,
+    preview_applied: bool,
+    /// The server's version history reply, for the panel ([`Link::take_history`]).
+    history: Option<Result<Vec<crate::versions::Version>, String>>,
+}
+
+#[derive(Default, Clone, PartialEq)]
+enum Preview {
+    #[default]
+    None,
+    Showing(String),
+    /// The document itself is being read again; nothing is saved until it is.
+    Returning,
 }
 
 #[derive(Clone)]
@@ -233,18 +250,26 @@ impl Link {
                 let shown = link.state.borrow().name.clone();
                 let _ = d(if shown.is_empty() { name } else { &shown }, bytes);
             }
-            link.save(name, bytes.to_vec());
+            // An earlier version on show (version history) is never saved over the document.
+            if !link.previewing() {
+                link.save(name, bytes.to_vec());
+            }
             Ok(())
         }));
     }
 
     /// Reads the document from the server into the app (as a dropped file).
     pub fn open(&self, inbox: Inbox) {
+        self.state.borrow_mut().inbox = Some(inbox.clone());
         let Some(id) = self.state.borrow().id.clone() else { return };
         let link = self.clone();
         wasm_bindgen_futures::spawn_local(async move {
             match fetch("GET", &api(&format!("api/files/{id}")), None, None).await {
                 Ok((200, headers, bytes)) => {
+                    // Back from an earlier version: the document is editable again from here.
+                    if link.state.borrow().preview == Preview::Returning {
+                        link.state.borrow_mut().preview = Preview::None;
+                    }
                     let name = header(&headers, "X-File-Name")
                         .map(|n| serde_json::from_str::<String>(&n).unwrap_or(n))
                         .unwrap_or_else(|| "Document.docx".into());
@@ -352,6 +377,25 @@ impl Link {
         if let Some((name, bytes)) = again {
             self.save(&name, bytes);
         }
+        // Version history shows an earlier version: read-only, and nothing of it is saved. Once
+        // the document itself is back, editing is too.
+        let (previewing, was_applied) = {
+            let mut s = self.state.borrow_mut();
+            let was = s.preview_applied;
+            s.preview_applied = s.preview != Preview::None;
+            (s.preview_applied, was)
+        };
+        if previewing {
+            if !was_applied {
+                crate::shell::set_mode(app, crate::shell::Mode::Viewing);
+            }
+            app.session.dirty = false;
+            self.state.borrow_mut().dirty_since = None;
+            return;
+        }
+        if was_applied && !self.view_only() {
+            crate::shell::set_mode(app, crate::shell::Mode::Editing);
+        }
         let apply_view = {
             let mut s = self.state.borrow_mut();
             let apply = s.view_only && !s.view_applied;
@@ -444,6 +488,144 @@ impl Link {
                 }
                 Ok((code, _, body)) => link.news(format!("Couldn't rename: {}", reason(code, &body))),
                 Err(e) => link.news(format!("Couldn't rename: {e}")),
+            }
+            link.ctx.request_repaint();
+        });
+    }
+
+    /// Documents on the server have a version history (the desktop's local files don't).
+    pub fn has_history(&self) -> bool {
+        true
+    }
+
+    /// Asks the server for the version history; the answer comes through [`Self::take_history`].
+    pub fn load_history(&self) {
+        let Some(id) = self.id() else {
+            self.state.borrow_mut().history = Some(Ok(Vec::new()));
+            return;
+        };
+        let link = self.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let r = match fetch("GET", &api(&format!("api/files/{id}/history")), None, None).await {
+                Ok((200, _, body)) => Ok(crate::versions::parse(&serde_json::from_slice(&body).unwrap_or_default())),
+                Ok((403, ..)) => Err("Only people who can edit this document can see its version history.".to_string()),
+                Ok((code, _, body)) => Err(format!("Couldn't load the version history ({}).", reason(code, &body))),
+                Err(e) => Err(format!("Couldn't reach the server: {e}")),
+            };
+            link.state.borrow_mut().history = Some(r);
+            link.ctx.request_repaint();
+        });
+    }
+
+    pub fn take_history(&self) -> Option<Result<Vec<crate::versions::Version>, String>> {
+        self.state.borrow_mut().history.take()
+    }
+
+    /// The earlier version shown, if any.
+    pub fn previewing(&self) -> bool {
+        self.state.borrow().preview != Preview::None
+    }
+
+    /// Shows an earlier version, read-only: nothing is saved while it is shown.
+    pub fn show_version(&self, v: &str) {
+        let (Some(id), Some(inbox)) = (self.id(), self.state.borrow().inbox.clone()) else { return };
+        self.state.borrow_mut().preview = Preview::Showing(v.to_string());
+        let link = self.clone();
+        let v = v.to_string();
+        wasm_bindgen_futures::spawn_local(async move {
+            match fetch("GET", &api(&format!("api/files/{id}/versions/{}", enc(&v))), None, None).await {
+                // Only if it is still the one asked for (another may have been picked since).
+                Ok((200, _, bytes)) if link.state.borrow().preview == Preview::Showing(v.clone()) => {
+                    let name = link.name();
+                    inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
+                }
+                Ok((200, ..)) => {}
+                Ok((code, _, body)) => link.news(format!("Couldn't show that version ({})", reason(code, &body))),
+                Err(e) => link.news(format!("Couldn't reach the server: {e}")),
+            }
+            link.ctx.request_repaint();
+        });
+    }
+
+    /// Back from an earlier version to the document as it is now.
+    pub fn end_preview(&self) {
+        if !matches!(self.state.borrow().preview, Preview::Showing(_)) {
+            return;
+        }
+        self.state.borrow_mut().preview = Preview::Returning;
+        if let Some(inbox) = self.state.borrow().inbox.clone() {
+            self.open(inbox);
+        }
+    }
+
+    /// Puts version `v` back. The server keeps the document as it was as a version first, so the
+    /// restore makes a new version and deletes nothing.
+    pub fn restore_version(&self, v: &str, label: &str) {
+        let Some(id) = self.id() else { return };
+        let link = self.clone();
+        let (v, label) = (v.to_string(), label.to_string());
+        wasm_bindgen_futures::spawn_local(async move {
+            match fetch("POST", &api(&format!("api/files/{id}/versions/{}/restore", enc(&v))), None, None).await {
+                Ok((200, ..)) => {
+                    link.state.borrow_mut().preview = Preview::Returning;
+                    if let Some(inbox) = link.state.borrow().inbox.clone() {
+                        link.open(inbox);
+                    }
+                    link.news(format!("Restored the version from {label}"));
+                    link.load_history();
+                }
+                Ok((code, _, body)) => link.news(format!("Couldn't restore that version ({})", reason(code, &body))),
+                Err(e) => link.news(format!("Couldn't reach the server: {e}")),
+            }
+            link.ctx.request_repaint();
+        });
+    }
+
+    /// Makes a new document from version `v` ("Copy of <name>", beside this one, or in the
+    /// person's own folder when they can't add files here) and opens it in a new tab.
+    pub fn copy_version(&self, v: &str) {
+        let Some(id) = self.id() else { return };
+        let link = self.clone();
+        let v = v.to_string();
+        wasm_bindgen_futures::spawn_local(async move {
+            let url = if v == crate::versions::CURRENT { format!("api/files/{id}") } else { format!("api/files/{id}/versions/{}", enc(&v)) };
+            let bytes = match fetch("GET", &api(&url), None, None).await {
+                Ok((200, _, bytes)) => bytes,
+                Ok((code, _, body)) => return link.news(format!("Couldn't copy that version ({})", reason(code, &body))),
+                Err(e) => return link.news(format!("Couldn't reach the server: {e}")),
+            };
+            let (name, folder) = (link.name(), link.state.borrow().folder.clone());
+            let copy = format!("Copy of {name}");
+            let mut r = link.create(&folder, &copy, &bytes).await;
+            if matches!(r, Ok((403, ..))) {
+                r = link.create("", &copy, &bytes).await;
+            }
+            match r {
+                Ok((200 | 201, _, body)) => {
+                    let v: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+                    let made = v["name"].as_str().unwrap_or(&copy).to_string();
+                    link.news(format!("Made \"{made}\""));
+                    if let (Some(new), Some(w)) = (v["id"].as_str(), web_sys::window()) {
+                        let _ = w.open_with_url_and_target(&format!("?file={}", enc(new)), "_blank");
+                    }
+                }
+                Ok((code, _, body)) => link.news(format!("Couldn't make a copy ({})", reason(code, &body))),
+                Err(e) => link.news(format!("Couldn't reach the server: {e}")),
+            }
+            link.ctx.request_repaint();
+        });
+    }
+
+    /// Names version `v` (`current`: the document as it is now); an empty name removes it.
+    pub fn name_version(&self, v: &str, name: &str) {
+        let Some(id) = self.id() else { return };
+        let link = self.clone();
+        let url = api(&format!("api/files/{id}/versions/{}/name?name={}", enc(v), enc(name)));
+        wasm_bindgen_futures::spawn_local(async move {
+            match fetch("POST", &url, None, None).await {
+                Ok((200, ..)) => link.load_history(),
+                Ok((code, _, body)) => link.news(format!("Couldn't name the version ({})", reason(code, &body))),
+                Err(e) => link.news(format!("Couldn't reach the server: {e}")),
             }
             link.ctx.request_repaint();
         });

@@ -625,7 +625,7 @@ impl Files {
                         open = false;
                     }
                     crate::house::form_style(ui);
-                    crate::house::note(ui, "Earlier copies are kept each time the file saves (the last 6).");
+                    crate::house::note(ui, "Earlier copies are kept each time the file saves: all from the last day, then fewer the older they get.");
                     if vs.is_empty() {
                         ui.label("No earlier versions yet.");
                     }
