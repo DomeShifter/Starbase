@@ -117,6 +117,9 @@ impl Home {
                     }
                     Key::Backspace => self.go_up(),
                     Key::A if modifiers.command => self.selected = self.order(),
+                    // Undo the last move, rename, New folder or Move to bin. Not while typing:
+                    // a focused text box (rename, search) returned above and keeps its own undo.
+                    Key::Z if modifiers.command && !modifiers.shift => self.undo(ctx),
                     _ => {}
                 },
                 _ => {}

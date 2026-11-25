@@ -29,6 +29,7 @@ mod photos;
 mod sidebar;
 #[cfg(target_arch = "wasm32")]
 mod test;
+mod undo;
 mod viewer;
 
 const LEFT: f32 = 256.0;
@@ -113,6 +114,10 @@ enum Reply {
     Download(String, Vec<u8>),
     /// Who has access to the item in Details.
     Access(Item, Json),
+    /// One request of an undoable action answered: what it did (None: nothing), or why not.
+    Did(u64, Result<Option<undo::Step>, String>),
+    /// One request of an undo answered.
+    Undone(Result<(), String>),
     Error(String),
 }
 
@@ -187,6 +192,8 @@ pub struct Home {
     fetching: usize,
     /// "View as photos" (photos.rs, viewer.rs).
     photos: photos::PhotoMode,
+    /// What Ctrl+Z undoes, and the "Moved to … Undo" note (undo.rs).
+    undo: undo::Undo,
     error: Option<String>,
     /// A folder to open once the list arrives (?dir= in the address).
     open_dir: Option<String>,
@@ -209,6 +216,10 @@ fn name_of(path: &str) -> &str {
 
 fn parent_of(path: &str) -> &str {
     path.rsplit_once('/').map_or("", |(p, _)| p)
+}
+
+fn join(folder: &str, name: &str) -> String {
+    if folder.is_empty() { name.to_string() } else { format!("{folder}/{name}") }
 }
 
 fn space_of(path: &str) -> &str {
@@ -240,6 +251,23 @@ fn call(
     body: Option<Vec<u8>>,
     then: impl FnOnce(Vec<u8>) -> Reply + 'static,
 ) {
+    call_any(store, inbox, ctx, method, url, body, move |r| match r {
+        Ok(bytes) => then(bytes),
+        Err((_, e)) => Reply::Error(e),
+    });
+}
+
+/// As [`call`], but `then` also gets a refusal: (status, the server's words). 401 asks to sign
+/// in and comes back with empty words.
+fn call_any(
+    store: &Backend,
+    inbox: &Rc<RefCell<Vec<Reply>>>,
+    ctx: &egui::Context,
+    method: Method,
+    url: String,
+    body: Option<Vec<u8>>,
+    then: impl FnOnce(Result<Vec<u8>, (u16, String)>) -> Reply + 'static,
+) {
     let (inbox2, ctx2) = (inbox.clone(), ctx.clone());
     store.call(
         ctx,
@@ -248,17 +276,17 @@ fn call(
         body,
         Box::new(move |answer| {
             let reply = match answer {
-                Ok((s, bytes)) if s < 400 => then(bytes),
+                Ok((s, bytes)) if s < 400 => then(Ok(bytes)),
                 Ok((401, _)) => {
                     #[cfg(target_arch = "wasm32")]
                     crate::account::ask_sign_in();
-                    Reply::Error(String::new())
+                    then(Err((401, String::new())))
                 }
                 Ok((s, bytes)) => {
                     let v: Json = serde_json::from_slice(&bytes).unwrap_or_default();
-                    Reply::Error(v["error"].as_str().map_or(format!("The server said {s}."), str::to_string))
+                    then(Err((s, v["error"].as_str().map_or(format!("The server said {s}."), str::to_string))))
                 }
-                Err(e) => Reply::Error(e),
+                Err(e) => then(Err((0, e))),
             };
             inbox2.borrow_mut().push(reply);
             ctx2.request_repaint();
@@ -764,6 +792,7 @@ impl Home {
                 Reply::Refresh => self.refresh(ctx),
                 Reply::NewFolder(path) => {
                     self.refresh(ctx);
+                    self.undo.made(path.clone());
                     self.selected = vec![Item::Folder(path.clone())];
                     self.renaming = Some((Item::Folder(path.clone()), name_of(&path).to_string(), true));
                     self.just_made = Some(path);
@@ -783,6 +812,23 @@ impl Home {
                         *a = Some(v);
                     }
                 }
+                Reply::Did(group, r) => {
+                    let now = ctx.input(|i| i.time);
+                    let step = match r {
+                        Ok(step) => step,
+                        Err(e) => {
+                            if !e.is_empty() {
+                                self.error = Some(e);
+                            }
+                            None
+                        }
+                    };
+                    self.undo.answered(group, step, now);
+                    if !self.undo.waiting.contains_key(&group) {
+                        self.refresh(ctx);
+                    }
+                }
+                Reply::Undone(r) => self.undone(ctx, r),
                 Reply::Download(name, bytes) => {
                     if let Err(e) = self.store.download(&name, &bytes) {
                         self.error = Some(e);
@@ -881,6 +927,7 @@ impl Home {
         self.move_to_ui(&ctx);
         self.details_ui(&ctx);
         self.pending_move_ui(&ctx);
+        self.note_ui(&ctx);
         // The photo viewer covers everything and takes the keys while it's open.
         if !viewer::ui(&mut self.photos, &ctx, &self.store) {
             self.keys(&ctx);

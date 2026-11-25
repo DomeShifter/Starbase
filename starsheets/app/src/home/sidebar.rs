@@ -6,7 +6,8 @@ impl Home {
     pub(super) fn left_ui(&mut self, ui: &mut Ui) {
         // New: a spreadsheet, a folder, or files from this computer.
         let here = self.here();
-        // The house's raised button: white, 16 px corners, a soft shadow, the + icon.
+        // The house's raised button with the + icon: a light blue tint (Google's "Compose" blue)
+        // so it stands out from the page, and 48 px tall rather than 56 (to-do 3 row 17).
         let label = RichText::new("New").size(15.0).color(theme::TEXT);
         let button = match crate::icons::icon("add") {
             Some(img) => egui::Button::image_and_text(img.fit_to_exact_size(vec2(24.0, 24.0)), label),
@@ -14,10 +15,10 @@ impl Home {
         };
         let new = egui::Frame::NONE
             .corner_radius(16)
-            .shadow(egui::epaint::Shadow { offset: [0, 1], blur: 6, spread: 0, color: Color32::from_black_alpha(50) })
+            .shadow(egui::epaint::Shadow { offset: [0, 1], blur: 4, spread: 0, color: Color32::from_black_alpha(36) })
             .show(ui, |ui| {
-                ui.spacing_mut().button_padding = vec2(house::L, house::M);
-                ui.add(button.fill(Color32::WHITE).corner_radius(16).min_size(vec2(112.0, 56.0)).stroke(Stroke::NONE))
+                ui.spacing_mut().button_padding = vec2(house::L, house::S);
+                ui.add(button.fill(theme::ON).corner_radius(16).min_size(vec2(104.0, 48.0)).stroke(Stroke::NONE))
             })
             .inner;
         egui::Popup::menu(&new).show(|ui| {

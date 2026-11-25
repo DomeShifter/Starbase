@@ -198,6 +198,16 @@ fn claim_file(dir: &Path, stem: &str, ext: &str, keep: Option<&Path>) -> std::io
     Err(std::io::Error::other("no free name"))
 }
 
+/// Exactly `name` in `dir` (an Undo putting something back), or a refusal when it's taken.
+fn exact_path(dir: &Path, name: &str, keep: Option<&Path>) -> Result<PathBuf, Answer> {
+    let p = dir.join(name);
+    if keep == Some(p.as_path()) || fs::symlink_metadata(&p).is_err() {
+        Ok(p)
+    } else {
+        Err(refuse(409, &format!("Something called \u{201c}{name}\u{201d} is there now, so it wasn't put back.")))
+    }
+}
+
 /// A free name in `dir` without creating it (for a rename or a move onto it).
 fn free_path(dir: &Path, stem: &str, ext: &str, keep: Option<&Path>) -> PathBuf {
     for n in 1..10_000 {
@@ -785,6 +795,17 @@ pub(crate) fn answer(root: &Path, data: &Path, method: Method, url: &str, body: 
             let Ok(m) = fs::metadata(&path) else { return refuse(404, "That file isn't there any more.") };
             let dir = path.parent().unwrap_or(root).to_path_buf();
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            // An Undo (?from=<path>): still where the action being undone left it. Ids here are
+            // paths, so a file moved since has usually gone from this one already.
+            if let Some(from) = q.get("from")
+                && rel(root, from).ok().as_ref() != Some(&path)
+            {
+                return refuse(409, &format!("\u{201c}{name}\u{201d} has been moved or renamed since, so it was left where it is."));
+            }
+            let moved = |to: &Path| {
+                let rp = rel_text(root, to);
+                json!({ "name": to.file_name().map(|n| n.to_string_lossy().into_owned()), "id": enc(&rp) })
+            };
             match (method, rest) {
                 (Method::Get, []) => fs::read(&path).map_or_else(io, |b| Ok((200, b))),
                 (Method::Delete, []) => match trash::delete(&path) {
@@ -807,21 +828,36 @@ pub(crate) fn answer(root: &Path, data: &Path, method: Method, url: &str, body: 
                 (Method::Post, ["rename"]) => {
                     let (stem, _) = split_name(&clean_name(&qs("name")));
                     let (_, ext) = split_name(&name);
-                    let to = free_path(&dir, &stem, &ext, Some(&path));
+                    let to = if q.contains_key("exact") {
+                        match exact_path(&dir, &format!("{stem}{ext}"), Some(&path)) {
+                            Ok(p) => p,
+                            Err(a) => return a,
+                        }
+                    } else {
+                        free_path(&dir, &stem, &ext, Some(&path))
+                    };
                     match fs::rename(&path, &to) {
-                        Ok(()) => reply(200, json!({ "name": to.file_name().map(|n| n.to_string_lossy().into_owned()) })),
+                        Ok(()) => reply(200, moved(&to)),
                         Err(e) => io(e),
                     }
                 }
                 (Method::Post, ["move"]) => {
                     let to_dir = place!(&qs("folder"));
                     if to_dir == dir {
-                        return reply(200, json!({ "name": name }));
+                        return reply(200, moved(&path));
                     }
-                    let (stem, ext) = split_name(&name);
-                    let to = free_path(&to_dir, &stem, &ext, None);
+                    let to = match q.get("as") {
+                        Some(want) => match exact_path(&to_dir, &clean_name(want), None) {
+                            Ok(p) => p,
+                            Err(a) => return a,
+                        },
+                        None => {
+                            let (stem, ext) = split_name(&name);
+                            free_path(&to_dir, &stem, &ext, None)
+                        }
+                    };
                     match fs::rename(&path, &to) {
-                        Ok(()) => reply(200, json!({ "name": to.file_name().map(|n| n.to_string_lossy().into_owned()) })),
+                        Ok(()) => reply(200, moved(&to)),
                         Err(e) => io(e),
                     }
                 }
@@ -862,6 +898,10 @@ pub(crate) fn answer(root: &Path, data: &Path, method: Method, url: &str, body: 
             if path == root {
                 return refuse(400, "That's the top of your files.");
             }
+            // An Undo of New folder (?if_empty=1): not once something has been put in it.
+            if q.contains_key("if_empty") && fs::read_dir(&path).map(|mut d| d.next().is_some()).unwrap_or(true) {
+                return refuse(409, "That folder has things in it now, so it was left as it is.");
+            }
             match trash::delete(&path) {
                 Ok(()) => reply(200, json!({ "ok": true })),
                 Err(e) => refuse(500, &format!("Couldn't move it to the Trash: {e}")),
@@ -874,7 +914,13 @@ pub(crate) fn answer(root: &Path, data: &Path, method: Method, url: &str, body: 
             }
             let parent = path.parent().unwrap_or(root).to_path_buf();
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            // An Undo: ?exact=1 (rename) or ?as=<name> (move): that name or nothing.
+            let want = q.get("as").map(|a| clean_name(a)).or_else(|| q.contains_key("exact").then(|| clean_name(&qs("name"))));
             let to = match *what {
+                "rename" if want.is_some() => match exact_path(&parent, want.as_deref().unwrap_or_default(), Some(&path)) {
+                    Ok(p) => p,
+                    Err(a) => return a,
+                },
                 "rename" => free_path(&parent, &clean_name(&qs("name")), "", Some(&path)),
                 _ => {
                     let into = place!(&qs("to"));
@@ -884,8 +930,17 @@ pub(crate) fn answer(root: &Path, data: &Path, method: Method, url: &str, body: 
                     if *what == "move" && into == parent {
                         return reply(200, json!({ "path": rel_text(root, &path) }));
                     }
-                    let name = if *what == "copy" && into == parent { format!("Copy of {name}") } else { name };
-                    free_path(&into, &name, "", None)
+                    if *what == "move"
+                        && let Some(w) = &want
+                    {
+                        match exact_path(&into, w, None) {
+                            Ok(p) => p,
+                            Err(a) => return a,
+                        }
+                    } else {
+                        let name = if *what == "copy" && into == parent { format!("Copy of {name}") } else { name };
+                        free_path(&into, &name, "", None)
+                    }
                 }
             };
             let done = if *what == "copy" { copy_dir(&path, &to) } else { fs::rename(&path, &to) };
@@ -1060,6 +1115,36 @@ mod tests {
         assert_eq!(s, 400, "not inside itself");
         let (s, _) = call(&root, Method::Get, &format!("api/files/{}", enc("../outside.xlsx")), None);
         assert_eq!(s, 400, "never outside the folder");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// The Drive's Undo on this computer's files: checked like the server's (store.rs).
+    #[test]
+    fn undo_puts_things_back_or_says_why_not() {
+        let root = temp("undo");
+        fs::create_dir_all(root.join("A")).unwrap();
+        fs::create_dir_all(root.join("B")).unwrap();
+        fs::write(root.join("A/a.xlsx"), b"x").unwrap();
+        let (_, v) = call(&root, Method::Post, &format!("api/files/{}/move?folder=B", enc("A/a.xlsx")), None);
+        let id = v["id"].as_str().unwrap().to_string();
+        assert_eq!(dec(&id), "B/a.xlsx", "the new id comes back");
+        let back = format!("api/files/{id}/move?folder=A&from={}&as=a.xlsx", enc("B/a.xlsx"));
+        // The old name taken meanwhile: refused, nothing moved.
+        fs::write(root.join("A/a.xlsx"), b"other").unwrap();
+        assert_eq!(call(&root, Method::Post, &back, None).0, 409);
+        assert!(root.join("B/a.xlsx").is_file() && !root.join("A/a (2).xlsx").exists());
+        fs::remove_file(root.join("A/a.xlsx")).unwrap();
+        assert_eq!(call(&root, Method::Post, &back, None).0, 200);
+        assert_eq!(fs::read(root.join("A/a.xlsx")).unwrap(), b"x");
+        // A folder made, then something put in it: its Undo leaves it alone.
+        fs::create_dir_all(root.join("N")).unwrap();
+        fs::write(root.join("N/x.txt"), b"x").unwrap();
+        assert_eq!(call(&root, Method::Delete, "api/folders?path=N&if_empty=1", None).0, 409);
+        assert!(root.join("N/x.txt").is_file());
+        let (s, v) = call(&root, Method::Post, "api/folders/move?path=N&to=B&as=N", None);
+        assert_eq!((s, v["path"].as_str()), (200, Some("B/N")));
+        fs::create_dir_all(root.join("N")).unwrap();
+        assert_eq!(call(&root, Method::Post, "api/folders/move?path=B%2FN&to=&as=N", None).0, 409);
         let _ = fs::remove_dir_all(&root);
     }
 
