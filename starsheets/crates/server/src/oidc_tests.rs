@@ -768,9 +768,15 @@ fn settings_groups_and_pages() {
         "/%252F%252Fevil.example",
         "/%5Cevil.example",
         "/%09/evil.example",
+        "/%0A/evil.example",
+        "/\t/evil.example",
+        "/\n/evil.example",
+        "/é",
     ] {
-        assert!(safe_next(bad).is_none(), "{bad}");
+        assert!(safe_next(bad).is_none(), "{bad:?}");
     }
+    assert!(safe_next(&format!("/{}", "a".repeat(1999))).is_some());
+    assert!(safe_next(&format!("/{}", "a".repeat(2000))).is_none());
 }
 
 #[test]

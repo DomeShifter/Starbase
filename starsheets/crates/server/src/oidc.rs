@@ -212,7 +212,9 @@ pub fn host_of(url: &str) -> String {
 /// three times: `/%2F%2Fhost`, `/%5Chost`, `/%09/host`), in case anything on the way decodes
 /// them. The web app checks `?next=` the same way (app/src/continueto.rs).
 pub fn safe_next(next: &str) -> Option<String> {
-    let mut ok = next.starts_with('/') && next.len() <= 2000 && !next.chars().any(char::is_whitespace);
+    // Visible ASCII only (no spaces, no control characters, nothing a Location header can't
+    // hold: `/é` arrives here already decoded from `/%C3%A9`).
+    let mut ok = next.starts_with('/') && next.len() <= 2000 && next.chars().all(|c| c.is_ascii_graphic());
     let mut form = next.to_string();
     for _ in 0..4 {
         ok &= !form.starts_with("//") && !form.contains('\\') && !form.chars().any(char::is_control);

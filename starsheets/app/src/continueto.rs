@@ -13,7 +13,8 @@
 /// `/%09/host` are refused too, in case anything on the way decodes them. (The server's copy:
 /// crates/server/src/oidc.rs `safe_next`.)
 pub fn safe_next(next: &str) -> Option<String> {
-    let mut ok = next.starts_with('/') && next.len() <= 2000 && !next.chars().any(char::is_whitespace);
+    // Visible ASCII only, as the server (a Location header can't hold anything else).
+    let mut ok = next.starts_with('/') && next.len() <= 2000 && next.chars().all(|c| c.is_ascii_graphic());
     let mut form = next.to_string();
     for _ in 0..4 {
         ok &= !form.starts_with("//") && !form.contains('\\') && !form.chars().any(char::is_control);
@@ -120,6 +121,8 @@ mod tests {
             "/docs/?x=%5c",
             "/%09/evil.example",
             "/%0A/evil.example",
+            // Not ASCII (what `/%C3%A9` decodes to).
+            "/é",
         ] {
             assert!(safe_next(bad).is_none(), "{bad:?}");
         }
