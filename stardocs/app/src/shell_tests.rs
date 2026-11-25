@@ -779,3 +779,38 @@ fn a_selected_picture_gets_the_picture_tools_in_the_toolbar() {
     click(&mut h, "Image options");
     assert_eq!(h.state_mut().state()["dialogs"]["wordcraft"], true, "Image options opens WordCraft's size dialog");
 }
+
+/// Whether the document's Heading 1 style is italic.
+fn heading1_italic(h: &Harness<'static, Win>) -> bool {
+    h.state().app.session.doc.styles.get("Heading1").and_then(|st| st.chr.italic).unwrap_or(false)
+}
+
+/// Format › Paragraph styles › Options, as Docs: save the styles as my defaults, reset to Docs'
+/// own, use mine again (one undo step), and new documents start with mine.
+#[test]
+fn paragraph_style_options_save_reset_and_use_my_default_styles() {
+    let mut h = window(1400.0);
+    menu(&mut h, &["Format", "Paragraph styles", "Options"]);
+    assert!(is_greyed(&h, "Use my default styles"), "nothing saved yet");
+    close_menus(&mut h);
+    run(&mut h, "text.insert", json!({"text": "Chapter"}));
+    run(&mut h, "para.style", json!({"style": "Heading 1"}));
+    run(&mut h, "select.all", json!({}));
+    run(&mut h, "format.italic", json!({}));
+    run(&mut h, "styles.updateToMatch", json!({"style": "Heading 1"}));
+    assert!(heading1_italic(&h), "Heading 1 updated to match");
+    menu(&mut h, &["Format", "Paragraph styles", "Options", "Save as my default styles"]);
+    menu(&mut h, &["Format", "Paragraph styles", "Options", "Reset styles"]);
+    assert!(!heading1_italic(&h), "Reset styles: Docs' own Heading 1");
+    menu(&mut h, &["Format", "Paragraph styles", "Options", "Use my default styles"]);
+    assert!(heading1_italic(&h), "Use my default styles");
+    run(&mut h, "edit.undo", json!({}));
+    assert!(!heading1_italic(&h), "one undo step");
+    let mut doc = wordcraft_engine::blank_document(&Default::default());
+    crate::shell::docs_defaults(&mut doc);
+    assert_eq!(doc.styles.get("Heading1").and_then(|st| st.chr.italic), Some(true), "a new document starts with my default styles");
+    // The style box's Options, through the test hook's commands too.
+    let Win { app, shell, .. } = h.state_mut();
+    assert_eq!(shell.test_command(app, None, "stardocs.resetStyles", json!({})), Ok(json!(true)));
+    assert!(!heading1_italic(&h));
+}

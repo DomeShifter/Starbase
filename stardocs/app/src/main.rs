@@ -24,6 +24,7 @@
 mod bundled_fonts;
 mod icons;
 mod looks;
+mod mystyles;
 mod prefs;
 mod shell;
 mod shortcuts;

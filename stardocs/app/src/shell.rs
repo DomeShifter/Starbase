@@ -72,6 +72,14 @@ pub fn picture_menu(app: &mut WordApp, ui: &mut Ui) {
     menu_items(app, ui, &mut Flags::default(), IMAGE, None);
 }
 
+/// Format › Paragraph styles › Options, also at the foot of the toolbar's style box, as in Docs
+/// (`mystyles.rs`).
+pub const STYLE_OPTIONS: &[Item] = &[
+    Cmd("Save as my default styles", "stardocs.saveMyStyles", NO, ""),
+    Cmd("Use my default styles", "stardocs.useMyStyles", NO, ""),
+    Cmd("Reset styles", "stardocs.resetStyles", NO, ""),
+];
+
 /// The menus, in Google Docs' order and wording. An id starting `ui.dialog:` opens that
 /// WordCraft dialog.
 pub const MENUS: &[(&str, &[Item])] = &[
@@ -317,6 +325,8 @@ pub const MENUS: &[(&str, &[Item])] = &[
                             Cmd("Update 'Heading 6' to match", "styles.updateToMatch", r#"{"style":"Heading 6"}"#, ""),
                         ],
                     ),
+                    Sep,
+                    Sub("Options", STYLE_OPTIONS),
                 ],
             ),
             Sub(
@@ -579,7 +589,7 @@ const FLAGS_KEY: &str = "stardocs.flags";
 
 /// Where the flags are kept: the browser's `localStorage`, or a per-thread map in native tests.
 #[cfg(target_arch = "wasm32")]
-mod store {
+pub(crate) mod store {
     fn storage() -> Option<web_sys::Storage> {
         web_sys::window()?.local_storage().ok()?
     }
@@ -593,7 +603,7 @@ mod store {
     }
 }
 #[cfg(not(target_arch = "wasm32"))]
-mod store {
+pub(crate) mod store {
     use std::{cell::RefCell, collections::HashMap};
     thread_local!(static MAP: RefCell<HashMap<String, String>> = RefCell::default());
     pub fn get(key: &str) -> Option<String> {
@@ -672,6 +682,7 @@ pub fn greyed(app: &WordApp, id: &str) -> bool {
     match id {
         "table.merge" => wordcraft_engine::cmd::table::selected_cells(&app.session).len() < 2,
         "stardocs.restartNumbering" => !in_numbered_list(app),
+        "stardocs.useMyStyles" => !crate::mystyles::have_saved(),
         // Format › Image: WordCraft's crop mode, and the items it keys to a selected picture.
         "ui.crop" => !wordcraft_ui_egui::widgets::enabled(app, id),
         "ui.changePicture" | "view.altTextPane" => app.session.why_disabled("picture.reset").is_some(),
@@ -732,6 +743,9 @@ fn is_own(id: &str) -> bool {
             | "stardocs.restartNumbering"
             | "stardocs.versionHistory"
             | "stardocs.nameVersion"
+            | "stardocs.saveMyStyles"
+            | "stardocs.useMyStyles"
+            | "stardocs.resetStyles"
     )
 }
 
@@ -744,6 +758,9 @@ fn run_menu(app: &mut WordApp, ctx: &egui::Context, flags: &mut Flags, link: Opt
         ("stardocs.restartNumbering", _) => flags.restart = true,
         ("stardocs.versionHistory", _) => flags.history = true,
         ("stardocs.nameVersion", _) => flags.name_version = true,
+        ("stardocs.saveMyStyles", _) => crate::mystyles::save(app),
+        ("stardocs.useMyStyles", _) => crate::mystyles::use_saved(app),
+        ("stardocs.resetStyles", _) => crate::mystyles::reset(app),
         // Someone who may only view the document stays in Viewing.
         ("stardocs.editing" | "stardocs.suggesting", Some(link)) if link.view_only() => app.status("You can view this document but not change it"),
         ("stardocs.editing", _) => set_mode(app, Mode::Editing),
@@ -794,10 +811,17 @@ fn download_as(app: &mut WordApp, link: Option<&Link>, ext: &str) -> Result<(), 
     }
 }
 
+/// A new blank document: Docs' look ([`docs_look`]), then my default styles if saved
+/// (Format › Paragraph styles › Options, `mystyles.rs`).
+pub fn docs_defaults(doc: &mut wordcraft_doc::Document) {
+    docs_look(doc);
+    crate::mystyles::apply_saved(doc);
+}
+
 /// Google Docs' look for a new blank document: Arial, 11 pt body text, and Arial for the
 /// headings too (WordCraft's Normal template uses Aptos 12 pt). The margins are already 1 inch
 /// (2.54 cm) all round in WordCraft's blank document; they are set again here so they stay so.
-pub fn docs_defaults(doc: &mut wordcraft_doc::Document) {
+pub fn docs_look(doc: &mut wordcraft_doc::Document) {
     use wordcraft_doc::styles::{BODY_FONT, HEADING_FONT};
     const FONT: &str = "Arial";
     let styles = std::sync::Arc::make_mut(&mut doc.styles);
@@ -1418,6 +1442,8 @@ impl Tools<'_> {
                             ui.close();
                         }
                     }
+                    ui.separator();
+                    ui.menu_button("Options", |ui| menu_items(app, ui, &mut Flags::default(), STYLE_OPTIONS, None));
                 });
             }
             Group::Font => {
