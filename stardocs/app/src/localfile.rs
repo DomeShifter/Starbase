@@ -240,19 +240,26 @@ fn is_document(name: &str) -> bool {
 pub struct Folders {
     /// Where new documents go: `~/Documents/Starbase`.
     pub documents: PathBuf,
-    /// Our own data (the recent list): `$XDG_DATA_HOME/starbase`.
+    /// Our own data (the recent list): `$XDG_DATA_HOME/starbase`; Starbase's settings folder on
+    /// Windows and macOS (`%APPDATA%\Starbase`, `~/Library/Application Support/Starbase`).
     pub data: PathBuf,
 }
 
 impl Folders {
-    /// The user's folders (XDG on Linux), or `None` without a home folder.
+    /// The user's folders (XDG on Linux, the system's on Windows and macOS), or `None` without a
+    /// home folder.
     pub fn of_user() -> Option<Self> {
         // USERPROFILE: Windows has no HOME (as Starbase Sheets' localstore.rs does).
         let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).filter(|h| !h.is_empty()).map(PathBuf::from)?;
-        let data = std::env::var_os("XDG_DATA_HOME").filter(|d| !d.is_empty()).map_or_else(|| home.join(".local/share"), PathBuf::from);
+        let data = match std::env::var_os("XDG_DATA_HOME").filter(|d| !d.is_empty()) {
+            Some(d) => PathBuf::from(d).join("starbase"),
+            None if cfg!(any(windows, target_os = "macos")) => starbase_connect::config_dir().unwrap_or_else(|| home.join(".starbase")),
+            None => home.join(".local/share/starbase"),
+        };
         let config = std::env::var_os("XDG_CONFIG_HOME").filter(|d| !d.is_empty()).map_or_else(|| home.join(".config"), PathBuf::from);
-        let docs = documents_dir(&home, &config).unwrap_or_else(|| home.join("Documents"));
-        Some(Self { documents: docs.join("Starbase"), data: data.join("starbase") })
+        // Windows: the Documents Known Folder, which OneDrive can move; macOS: ~/Documents.
+        let docs = starbase_connect::system_documents_dir().or_else(|| documents_dir(&home, &config)).unwrap_or_else(|| home.join("Documents"));
+        Some(Self { documents: docs.join("Starbase"), data })
     }
 }
 

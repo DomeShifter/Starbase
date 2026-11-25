@@ -77,10 +77,14 @@ const THUMB_MAX: u64 = 8 * 1024 * 1024;
 
 // ------------------------------------------------------------ places
 
-/// `~/Documents` (the XDG documents folder on Linux), or None without a home folder.
+/// `~/Documents`: the XDG documents folder on Linux, the system's on Windows (its Known Folder,
+/// which OneDrive can move) and macOS; None without a home folder.
 pub(crate) fn documents_dir() -> Option<PathBuf> {
     if let Some(d) = std::env::var_os("XDG_DOCUMENTS_DIR").filter(|d| !d.is_empty()) {
         return Some(PathBuf::from(d));
+    }
+    if let Some(d) = starbase_connect::system_documents_dir() {
+        return Some(d);
     }
     let home = PathBuf::from(std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?);
     let config = std::env::var_os("XDG_CONFIG_HOME").map_or_else(|| home.join(".config"), PathBuf::from);
@@ -115,14 +119,16 @@ pub(crate) fn data_dir() -> PathBuf {
     if let Some(d) = std::env::var_os("STARBASE_DATA_DIR").filter(|d| !d.is_empty()) {
         return PathBuf::from(d);
     }
-    let base = std::env::var_os("XDG_DATA_HOME").filter(|d| !d.is_empty()).map(PathBuf::from).or_else(|| {
-        if cfg!(windows) {
-            std::env::var_os("APPDATA").map(PathBuf::from)
+    // Windows and macOS: Starbase's settings folder (%APPDATA%\Starbase, ~/Library/Application
+    // Support/Starbase), as Starbase Docs keeps its own there.
+    let base = std::env::var_os("XDG_DATA_HOME").filter(|d| !d.is_empty()).map(|d| PathBuf::from(d).join("starbase")).or_else(|| {
+        if cfg!(any(windows, target_os = "macos")) {
+            starbase_connect::config_dir()
         } else {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share"))
+            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share/starbase"))
         }
     });
-    base.unwrap_or_else(std::env::temp_dir).join("starbase")
+    base.unwrap_or_else(|| std::env::temp_dir().join("starbase"))
 }
 
 /// "4 Mar 2026, 14:05" in local time.
