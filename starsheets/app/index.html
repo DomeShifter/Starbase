@@ -198,15 +198,12 @@
       window.__ssPasteHtml = html;
     }, true);
     // Menu Paste (Edit > Paste, a cell's right-click Paste) must paste what Ctrl+V would: the real
-    // clipboard. The app's paste is synchronous but the async clipboard API is not, so the page reads
-    // the clipboard (text + HTML) ahead of time, on a right-click or a press in the menu bar, and
-    // the app picks it up with __ssMenuClip. Only on a secure context; elsewhere (plain http) or when
-    // the browser refuses, __ssMenuClip gives null and the app falls back to its own last copy / hint.
-    window.__ssClip = null;
-    window.__ssClipForget = function () { window.__ssClip = null; };
-    window.__ssClipPrefetch = async function () {
+    // clipboard. The app calls this when the item is chosen; it reads the clipboard (text + HTML)
+    // and the app then pastes it like Ctrl+V. Resolves {text, html}, or null when the page may not
+    // read (plain http, browser refused, empty): the app then uses its own last copy.
+    window.__ssPasteRead = async function () {
       const c = navigator.clipboard;
-      if (!window.isSecureContext || !c) return;
+      if (!window.isSecureContext || !c) return null;
       try {
         let text = null, html = null;
         if (c.read) {
@@ -217,20 +214,11 @@
         } else if (c.readText) {
           text = await c.readText();
         }
-        window.__ssClip = text ? { text, html } : null;
+        return text ? { text, html } : null;
       } catch (_) {
-        try { const t = await c.readText(); window.__ssClip = t ? { text: t, html: null } : null; }
-        catch (_) { window.__ssClip = null; }
+        try { const t = await c.readText(); return t ? { text: t, html: null } : null; }
+        catch (_) { return null; }
       }
-    };
-    window.addEventListener('pointerdown', (e) => {
-      if (e.button === 2 || e.clientY < 70) window.__ssClipPrefetch();
-    }, true);
-    window.__ssMenuClip = function () {
-      const c = window.__ssClip;
-      if (!c) return null;
-      window.__ssPasteHtml = c.html;
-      return c.text;
     };
     window.__ssCopyEvent = null;
     for (const t of ['copy', 'cut']) {

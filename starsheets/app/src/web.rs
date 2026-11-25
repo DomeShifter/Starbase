@@ -258,6 +258,7 @@ impl eframe::App for WebShell {
         self.live.logic(&mut self.app, ctx, &self.files);
         self.share.logic(&self.app, ctx, &self.files);
         self.copyto.logic(&self.app, ctx, &self.files);
+        take_menu_paste(&mut self.app);
         self.files.take_imports(&mut self.app, &self.inbox, ctx);
         self.webfonts.logic(&self.app, ctx);
         crate::spelling::logic(&self.app, ctx);
@@ -450,18 +451,58 @@ fn page_copy(text: &str, html: Option<&str>) -> bool {
     f.call2(&JsValue::NULL, &JsValue::from_str(text), &html).is_ok_and(|v| v.is_truthy())
 }
 
-/// Text for menu Paste: what the page read from the real clipboard (index.html `__ssMenuClip`, with
-/// its HTML left for `take_paste_html`), the same data Ctrl+V gets; else StarSheets' own last copy
-/// (plain http, or the browser refused); else None (the "use Ctrl+V" hint).
-fn menu_paste_text() -> Option<String> {
-    let w = web_sys::window()?;
-    let from_page = js_sys::Reflect::get(&w, &"__ssMenuClip".into())
-        .ok()
-        .and_then(|f| f.dyn_into::<js_sys::Function>().ok())
-        .and_then(|f| f.call0(&JsValue::NULL).ok())
-        .and_then(|v| v.as_string())
-        .filter(|t| !t.is_empty());
-    from_page.or_else(crate::editmenu::last_copy)
+/// What a page clipboard read gave: text and HTML, or nothing.
+type PageClip = Option<(String, Option<String>)>;
+
+thread_local! {
+    /// Answers of the page's clipboard reads, waiting for the next frame (`take_menu_paste`).
+    static MENU_PASTE: std::cell::RefCell<Vec<PageClip>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Menu Paste (Edit > Paste, a cell's right-click Paste): start the page's async clipboard read
+/// (index.html `__ssPasteRead`) inside the click; the answer is queued and `take_menu_paste`
+/// pastes it next frame the way Ctrl+V does. False when the page can't read at all.
+fn menu_paste_start(ctx: &egui::Context) -> bool {
+    let Some(w) = web_sys::window() else { return false };
+    if !w.is_secure_context() {
+        return false;
+    }
+    let Some(f) = js_sys::Reflect::get(&w, &"__ssPasteRead".into()).ok().and_then(|f| f.dyn_into::<js_sys::Function>().ok()) else {
+        return false;
+    };
+    let Ok(promise) = f.call0(&JsValue::NULL).and_then(|p| p.dyn_into::<js_sys::Promise>()) else { return false };
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let got = wasm_bindgen_futures::JsFuture::from(promise).await.ok().and_then(|v| {
+            let text = js_sys::Reflect::get(&v, &"text".into()).ok()?.as_string().filter(|t| !t.is_empty())?;
+            let html = js_sys::Reflect::get(&v, &"html".into()).ok().and_then(|h| h.as_string());
+            Some((text, html))
+        });
+        MENU_PASTE.with(|q| q.borrow_mut().push(got));
+        ctx.request_repaint();
+    });
+    true
+}
+
+/// Applies the clipboard read a menu Paste started: its text and HTML through the same
+/// `paste_external` as Ctrl+V; when the page couldn't read, StarSheets' own last copy, else the
+/// engine's own clipboard (which says "Nothing to paste." if empty).
+fn take_menu_paste(app: &mut gridcraft_ui_egui::SheetApp) {
+    let answers: Vec<_> = MENU_PASTE.with(|q| std::mem::take(&mut *q.borrow_mut()));
+    for answer in answers {
+        match answer {
+            Some((text, html)) => {
+                if let Some(w) = web_sys::window() {
+                    let _ = js_sys::Reflect::set(&w, &"__ssPasteHtml".into(), &html.map_or(JsValue::NULL, |h| JsValue::from_str(&h)));
+                }
+                app.paste_external(text.replace("\r\n", "\n"));
+            }
+            None => match crate::editmenu::last_copy() {
+                Some(text) => app.paste_external(text),
+                None => app.run_or_alert("edit.paste", serde_json::json!({})),
+            },
+        }
+    }
 }
 
 fn services(inbox: Inbox, ctx: egui::Context) -> Services {
@@ -469,8 +510,13 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
     let picture_ctx = ctx.clone();
     Services {
         copy_html: Some(Box::new(copy_html)),
-        // Menu Paste: the real clipboard (read ahead by the page), else StarSheets' own last copy.
-        paste_text: Some(Box::new(menu_paste_text)),
+        // Menu Paste: read the real clipboard when chosen (answered next frame, take_menu_paste);
+        // plain http / no clipboard API: StarSheets' own last copy.
+        paste_start: Some(Box::new({
+            let ctx = ctx.clone();
+            move || menu_paste_start(&ctx)
+        })),
+        paste_text: Some(Box::new(crate::editmenu::last_copy)),
         // The HTML that came with this paste (index.html keeps it from the browser's paste event).
         paste_html: Some(Box::new(take_paste_html)),
         open_async: Some(Box::new(move || {
@@ -531,15 +577,6 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
 const MAX_PASTE_HTML: u32 = 8 * 1024 * 1024;
 
 /// The clipboard HTML of the paste being handled, taken so a later paste never sees it.
-/// Our own copy replaces the clipboard: drop what the page read ahead of it.
-fn forget_page_clip() {
-    if let Some(w) = web_sys::window()
-        && let Ok(f) = js_sys::Reflect::get(&w, &"__ssClipForget".into()).and_then(|f| f.dyn_into::<js_sys::Function>())
-    {
-        let _ = f.call0(&JsValue::NULL);
-    }
-}
-
 fn take_paste_html() -> Option<String> {
     let w = web_sys::window()?;
     let value = js_sys::Reflect::get(&w, &"__ssPasteHtml".into()).ok()?;
@@ -555,7 +592,6 @@ fn take_paste_html() -> Option<String> {
 /// Start inside the copy gesture; deferring `write` can lose browser user activation.
 fn copy_html(html: &str, text: &str) -> Result<(), String> {
     crate::editmenu::remember_copy(text);
-    forget_page_clip();
     let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
     let window = web_sys::window().ok_or("no window")?;
     // The page's copy bridge first (see index.html), on https too: it fills the browser's own
