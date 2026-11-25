@@ -1692,6 +1692,7 @@ impl Shell {
             None if link.is_some() => {
                 // A new document has no name until its first save: Docs' "Untitled document",
                 // which the first save keeps as the file's name unless it is renamed here.
+                #[cfg(target_arch = "wasm32")]
                 if app.session.file_name.is_none() && app.session.path.is_none() && app.session.doc.core.title.is_empty() {
                     app.session.file_name = Some(UNTITLED.to_string());
                 }
@@ -1767,6 +1768,7 @@ impl Shell {
 }
 
 /// What Docs calls a document that has no name yet.
+#[cfg(target_arch = "wasm32")]
 pub const UNTITLED: &str = "Untitled document";
 
 /// Docs' menu rows: 32 px tall whatever they hold, 16 px from the sides.
