@@ -11,7 +11,7 @@ use starbase_templates::{ALL, Kind, Template};
 struct Open(String);
 
 fn key() -> egui::Id {
-    egui::Id::new("templates_gallery")
+    egui::Id::unique("templates_gallery")
 }
 
 /// Opens the gallery: the copy will be made in `folder`.
@@ -92,8 +92,8 @@ fn card(ui: &mut Ui, t: &Template) -> egui::Response {
             });
         })
         .response;
-    let r = ui.interact(r.rect, egui::Id::new(("template", t.key)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t.name));
+    let r = ui.interact(r.rect, egui::Id::unique(("template", t.key)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t.name));
     r
 }
 
