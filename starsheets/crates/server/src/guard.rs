@@ -3,16 +3,16 @@
 //! - Cross-site requests: a request that changes something (anything but GET/HEAD) and the live
 //!   editing WebSocket must come from a page of this server. Browsers send an `Origin` header with
 //!   those requests; when there is one, it must name the host the request was sent to (or
-//!   STARSHEETS_PUBLIC_URL). No custom header or content type is needed, so StarDocs' plain
+//!   STARBASE_PUBLIC_URL). No custom header or content type is needed, so StarDocs' plain
 //!   same-origin fetches keep working.
-//! - Host names (against DNS rebinding): with STARSHEETS_PUBLIC_URL or STARSHEETS_ALLOWED_HOSTS
+//! - Host names (against DNS rebinding): with STARBASE_PUBLIC_URL or STARBASE_ALLOWED_HOSTS
 //!   set, the server answers only to those names, IP addresses and localhost. Without them it
 //!   answers to any name, so a home server reached by its IP or a proxy name works as before.
 //! - How many requests run at once, and the browser safety headers on every answer.
 //! - A token-bucket limit on sign-in, sign-up and setup tries (per username and per address).
 //!
 //! The address of whoever is asking is the connection's own, unless that is a proxy listed in
-//! STARSHEETS_TRUSTED_PROXY: then X-Forwarded-For (and X-Forwarded-Proto/-Host) are believed.
+//! STARBASE_TRUSTED_PROXY: then X-Forwarded-For (and X-Forwarded-Proto/-Host) are believed.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -29,11 +29,11 @@ use axum::middleware::Next;
 pub struct Config {
     /// Proxies (addresses or `address/bits` ranges) whose X-Forwarded-* headers are believed.
     pub trusted: Vec<(IpAddr, u8)>,
-    /// STARSHEETS_PUBLIC_URL's host (and port), lower case, e.g. `sheets.example.com`.
+    /// STARBASE_PUBLIC_URL's host (and port), lower case, e.g. `sheets.example.com`.
     pub public: Option<String>,
-    /// STARSHEETS_ALLOWED_HOSTS: more host names the server answers to.
+    /// STARBASE_ALLOWED_HOSTS: more host names the server answers to.
     pub hosts: Vec<String>,
-    /// STARSHEETS_SECURE_COOKIE: always mark the sign-in cookie Secure (HTTPS only).
+    /// STARBASE_SECURE_COOKIE: always mark the sign-in cookie Secure (HTTPS only).
     pub secure_cookie: bool,
 }
 
@@ -60,13 +60,13 @@ fn parse_range(s: &str) -> Option<(IpAddr, u8)> {
 impl Config {
     /// From settings looked up by `get` (the environment, or a test's own).
     pub fn from(get: impl Fn(&str) -> Option<String>) -> Config {
-        let trusted = get("STARSHEETS_TRUSTED_PROXY").map(|v| list(&v).filter_map(parse_range).collect()).unwrap_or_default();
-        let public = get("STARSHEETS_PUBLIC_URL").map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).map(|v| {
+        let trusted = get("STARBASE_TRUSTED_PROXY").map(|v| list(&v).filter_map(parse_range).collect()).unwrap_or_default();
+        let public = get("STARBASE_PUBLIC_URL").map(|v| v.trim().to_string()).filter(|v| !v.is_empty()).map(|v| {
             let rest = v.split_once("://").map_or(v.as_str(), |(_, r)| r);
             rest.split('/').next().unwrap_or("").to_lowercase()
         });
-        let hosts = get("STARSHEETS_ALLOWED_HOSTS").map(|v| list(&v).map(|h| host_name(h).to_string()).collect()).unwrap_or_default();
-        let secure_cookie = get("STARSHEETS_SECURE_COOKIE").is_some_and(|v| yes(&v));
+        let hosts = get("STARBASE_ALLOWED_HOSTS").map(|v| list(&v).map(|h| host_name(h).to_string()).collect()).unwrap_or_default();
+        let secure_cookie = get("STARBASE_SECURE_COOKIE").is_some_and(|v| yes(&v));
         Config { trusted, public: public.filter(|p| !p.is_empty()), hosts, secure_cookie }
     }
 
@@ -98,7 +98,7 @@ fn in_range(ip: IpAddr, net: IpAddr, bits: u8) -> bool {
 /// The settings from the environment (read once).
 pub fn config() -> &'static Config {
     static CONFIG: OnceLock<Config> = OnceLock::new();
-    CONFIG.get_or_init(|| Config::from(|k| std::env::var(k).ok()))
+    CONFIG.get_or_init(|| Config::from(crate::setting))
 }
 
 /// The address the connection came from (axum's ConnectInfo), if known.
@@ -129,7 +129,7 @@ pub fn client_ip(peer: Option<IpAddr>, headers: &HeaderMap, cfg: &Config) -> Opt
 }
 
 /// Whether the browser reached us over HTTPS (said by a trusted proxy), or the cookie should be
-/// Secure anyway (STARSHEETS_SECURE_COOKIE).
+/// Secure anyway (STARBASE_SECURE_COOKIE).
 pub fn secure(peer: Option<IpAddr>, headers: &HeaderMap, cfg: &Config) -> bool {
     cfg.secure_cookie
         || (peer.is_some_and(|p| cfg.trusts(p))
@@ -163,7 +163,7 @@ pub fn check(method: &Method, uri: &axum::http::Uri, headers: &HeaderMap, peer: 
             || cfg.public.as_deref().map(host_name).is_some_and(|p| p == name)
             || cfg.hosts.contains(&name);
         if !known {
-            return Err((421, "This server doesn't answer to that name. Its owner can add it to STARSHEETS_ALLOWED_HOSTS."));
+            return Err((421, "This server doesn't answer to that name. Its owner can add it to STARBASE_ALLOWED_HOSTS."));
         }
     }
     let changes = !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS);
@@ -361,10 +361,10 @@ mod tests {
     #[test]
     fn settings() {
         let c = cfg(&[
-            ("STARSHEETS_TRUSTED_PROXY", "10.0.0.1, 172.16.0.0/12"),
-            ("STARSHEETS_PUBLIC_URL", "https://Sheets.Example.com/"),
-            ("STARSHEETS_ALLOWED_HOSTS", "nas.local,files:8080"),
-            ("STARSHEETS_SECURE_COOKIE", "1"),
+            ("STARBASE_TRUSTED_PROXY", "10.0.0.1, 172.16.0.0/12"),
+            ("STARBASE_PUBLIC_URL", "https://Sheets.Example.com/"),
+            ("STARBASE_ALLOWED_HOSTS", "nas.local,files:8080"),
+            ("STARBASE_SECURE_COOKIE", "1"),
         ]);
         assert_eq!(c.public.as_deref(), Some("sheets.example.com"));
         assert_eq!(c.hosts, vec!["nas.local".to_string(), "files".to_string()]);
@@ -375,14 +375,14 @@ mod tests {
 
     #[test]
     fn who_is_asking_and_over_what() {
-        let c = cfg(&[("STARSHEETS_TRUSTED_PROXY", "10.0.0.1")]);
+        let c = cfg(&[("STARBASE_TRUSTED_PROXY", "10.0.0.1")]);
         let h = headers(&[("x-forwarded-for", "6.6.6.6, 1.2.3.4"), ("x-forwarded-proto", "https")]);
         assert_eq!(client_ip(ip("10.0.0.1"), &h, &c), ip("1.2.3.4"), "from a trusted proxy: the last address it added");
         assert_eq!(client_ip(ip("9.9.9.9"), &h, &c), ip("9.9.9.9"), "anyone else can't choose their address");
         assert!(secure(ip("10.0.0.1"), &h, &c));
         assert!(!secure(ip("9.9.9.9"), &h, &c), "X-Forwarded-Proto only from a trusted proxy");
         assert!(!secure(ip("10.0.0.1"), &headers(&[]), &c), "plain HTTP on a home network");
-        assert!(secure(None, &headers(&[]), &cfg(&[("STARSHEETS_SECURE_COOKIE", "yes")])));
+        assert!(secure(None, &headers(&[]), &cfg(&[("STARBASE_SECURE_COOKIE", "yes")])));
     }
 
     #[test]
@@ -402,9 +402,9 @@ mod tests {
         // Behind a proxy that changes Host: the public address, or X-Forwarded-Host from a trusted proxy.
         let proxied = headers(&[("host", "127.0.0.1:8080"), ("origin", "https://sheets.example.com"), ("x-forwarded-host", "sheets.example.com")]);
         assert_eq!(check(&Method::POST, &uri, &proxied, ip("10.0.0.1"), &open).unwrap_err().0, 403);
-        let c = cfg(&[("STARSHEETS_TRUSTED_PROXY", "10.0.0.1")]);
+        let c = cfg(&[("STARBASE_TRUSTED_PROXY", "10.0.0.1")]);
         assert!(check(&Method::POST, &uri, &proxied, ip("10.0.0.1"), &c).is_ok());
-        let c = cfg(&[("STARSHEETS_PUBLIC_URL", "https://sheets.example.com")]);
+        let c = cfg(&[("STARBASE_PUBLIC_URL", "https://sheets.example.com")]);
         assert!(check(&Method::POST, &uri, &proxied, None, &c).is_ok());
         // Host names: open by default; with an allow-list, the listed names, IPs and localhost.
         let rebound = headers(&[("host", "attacker.example")]);
@@ -413,7 +413,7 @@ mod tests {
         for h in ["sheets.example.com", "192.168.1.5:8080", "[::1]:8080", "localhost:8080"] {
             assert!(check(&Method::GET, &uri, &headers(&[("host", h)]), None, &c).is_ok(), "{h}");
         }
-        let c = cfg(&[("STARSHEETS_ALLOWED_HOSTS", "nas.local")]);
+        let c = cfg(&[("STARBASE_ALLOWED_HOSTS", "nas.local")]);
         assert!(check(&Method::GET, &uri, &headers(&[("host", "NAS.local:8080")]), None, &c).is_ok());
         assert!(check(&Method::GET, &"/healthz".parse().unwrap(), &rebound, None, &c).is_ok());
     }

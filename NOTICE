@@ -3,7 +3,7 @@ Copyright (c) 2026 the Starbase contributors.
 Licensed under the MIT License or the Apache License, Version 2.0, at your option
 (LICENSE-MIT, LICENSE-APACHE).
 
-StarDocs (stardocs/) is built on WordCraft (https://github.com/storytold/wordcraft):
+Starbase Docs (stardocs/) is built on WordCraft (https://github.com/storytold/wordcraft):
 Copyright (c) 2026 ArtCraft Team and the WordCraft contributors, MIT OR Apache-2.0.
 WordCraft's code is fetched at build time (stardocs/scripts/fetch-upstream.sh) and is not
 redistributed in this repository, except stardocs/app/src/{web,host,api,prefs,save_fallback,main}.rs,

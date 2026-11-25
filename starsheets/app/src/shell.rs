@@ -944,7 +944,7 @@ fn title_and_menus(app: &mut SheetApp, ui: &mut Ui, title_draft: &mut Option<Str
             Some(img) => ui.add(img.sense(egui::Sense::click())),
             None => ui.add(egui::Label::new(RichText::new("★").size(26.0).color(theme::BLUE)).sense(egui::Sense::click())),
         };
-        if logo.on_hover_text("StarSheets home").clicked() {
+        if logo.on_hover_text("Starbase Drive").clicked() {
             ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique("starsheets_files_request"), "home".to_string()));
         }
         ui.vertical(|ui| {
@@ -1404,14 +1404,14 @@ fn run_steps(app: &mut SheetApp, id: &str, params: &serde_json::Value) {
     let steps = match crate::menuactions::steps(&app.session, id, params) {
         Ok(steps) => steps,
         Err(e) => {
-            app.message = Some(("StarSheets".into(), e));
+            app.message = Some(("Starbase Sheets".into(), e));
             return;
         }
     };
     let n = steps.len();
     for (cmd, p) in steps {
         if let Err(e) = app.run(cmd, p) {
-            app.message = Some(("StarSheets".into(), e));
+            app.message = Some(("Starbase Sheets".into(), e));
             return;
         }
     }

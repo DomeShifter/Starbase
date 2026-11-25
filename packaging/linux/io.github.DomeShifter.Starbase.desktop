@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=StarDrive
+Name=Starbase Drive
 GenericName=Office Files
 Comment=Browse, open and share your spreadsheets and documents
 Exec=starsheets --home

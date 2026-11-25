@@ -5,13 +5,13 @@ An open-source office suite you host yourself: **Starbase Drive** (files), **Sta
 with your files kept as ordinary `.xlsx` and `.docx` on your own disk.
 
 Status: early preview. Starbase Sheets is usable; Starbase Docs and Starbase Drive are newer and
-rougher. (Parts of the code, the sign-in screen and the settings still use the older names StarSheets,
-StarDocs and StarDrive.)
+rougher. (The apps were called StarSheets, StarDocs and StarDrive until November 2026; folder and
+program names in the code still use the old names.)
 
 | Part | Folder | Engine |
 |---|---|---|
-| StarDocs | `stardocs/` | [WordCraft](https://github.com/storytold/wordcraft), our fork's `stardocs` branch |
-| StarSheets + the home screen (StarDrive) + the file server | `starsheets/` (history from [DomeShifter/StarSheets](https://github.com/DomeShifter/StarSheets), which moved here) | [GridCraft](https://github.com/storytold/gridcraft), our fork's `starsheets` branch |
+| Starbase Docs | `stardocs/` | [WordCraft](https://github.com/storytold/wordcraft), our fork's `stardocs` branch |
+| Starbase Sheets + Starbase Drive (the home screen) + the file server | `starsheets/` (history from [DomeShifter/StarSheets](https://github.com/DomeShifter/StarSheets), which moved here) | [GridCraft](https://github.com/storytold/gridcraft), our fork's `starsheets` branch |
 
 ## Install
 
@@ -38,13 +38,13 @@ Step-by-step guides: [Docker and Compose](docs/install/docker.md) ·
 
 ## Building
 
-Every push builds both apps on GitHub Actions (workflows `StarSheets` and `StarDocs`); the built
+Every push builds both apps on GitHub Actions (workflows `StarSheets` and `StarDocs`, named after the folders' old app names); the built
 sites are kept as the `starsheets-web` and `stardocs-web` artifacts. A suite version tag
 (`vX.Y.Z`) runs the `Release` workflow: both apps are rebuilt and tested, put in one image
 (`docker/Dockerfile`), pushed to `ghcr.io/domeshifter/starbase` and a draft release is made from
 [CHANGELOG.md](CHANGELOG.md). Running `Release` by hand builds the image without publishing it.
 
-## Building StarDocs (web)
+## Building Starbase Docs (web)
 ```
 cd stardocs
 scripts/fetch-upstream.sh          # WordCraft at the pinned commit + generated Cargo.toml

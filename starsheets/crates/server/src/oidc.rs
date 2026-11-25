@@ -9,10 +9,10 @@
 //! only there). The account is the one linked to that provider's sign-in (issuer and subject,
 //! never email or username), or a new one. Then it is an ordinary session (auth.rs).
 //!
-//! Password sign-in keeps working alongside, unless STARSHEETS_OIDC_ONLY is on (then only for
+//! Password sign-in keeps working alongside, unless STARBASE_OIDC_ONLY is on (then only for
 //! owners).
 //!
-//! A session made through single sign-on lasts STARSHEETS_OIDC_SESSION_HOURS (12 by default),
+//! A session made through single sign-on lasts STARBASE_OIDC_SESSION_HOURS (12 by default),
 //! not 30 days: then the app goes back to the provider without asking (`prompt=none`), so
 //! someone removed or demoted there is noticed within that time.
 
@@ -57,15 +57,15 @@ const REFRESH_AT_START: Duration = Duration::from_secs(30);
 /// `__Host-` prefix (HOST_COOKIE), which a sibling subdomain can't set.
 pub const COOKIE: &str = "starsheets_oidc";
 pub const HOST_COOKIE: &str = "__Host-starsheets_oidc";
-/// How long a session made through single sign-on lasts unless STARSHEETS_OIDC_SESSION_HOURS
+/// How long a session made through single sign-on lasts unless STARBASE_OIDC_SESSION_HOURS
 /// says otherwise.
 pub const SESSION_HOURS: u64 = 12;
-/// Where the provider sends people back to (the end of STARSHEETS_OIDC_REDIRECT_URL).
+/// Where the provider sends people back to (the end of STARBASE_OIDC_REDIRECT_URL).
 pub const CALLBACK: &str = "api/oidc/callback";
 
 // ---------------------------------------------------------------- settings
 
-/// The STARSHEETS_OIDC_* settings (docs/oidc.md).
+/// The STARBASE_OIDC_* settings (docs/oidc.md).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Config {
     pub issuer: String,
@@ -74,10 +74,10 @@ pub struct Config {
     pub redirect: String,
     pub scopes: Vec<String>,
     pub label: String,
-    /// The provider's name as people know it (STARSHEETS_OIDC_LABEL, else the issuer's host),
+    /// The provider's name as people know it (STARBASE_OIDC_LABEL, else the issuer's host),
     /// shown in People.
     pub provider: String,
-    /// STARSHEETS_OIDC_AUTO_CREATE when set. Unset: on with STARSHEETS_OIDC_ALLOWED_GROUP,
+    /// STARBASE_OIDC_AUTO_CREATE when set. Unset: on with STARBASE_OIDC_ALLOWED_GROUP,
     /// else it follows the server's sign-up setting (see `makes_accounts`).
     pub auto_create: Option<bool>,
     pub groups_claim: String,
@@ -98,31 +98,31 @@ fn safe_scheme(url: &Url) -> bool {
 
 impl Config {
     /// From settings looked up by `get` (the environment, or a test's own). `Ok(None)`: single
-    /// sign-on is off (no STARSHEETS_OIDC_ISSUER).
+    /// sign-on is off (no STARBASE_OIDC_ISSUER).
     pub fn from(get: impl Fn(&str) -> Option<String>) -> Result<Option<Config>, String> {
-        let v = |k: &str| get(&format!("STARSHEETS_OIDC_{k}")).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        let v = |k: &str| get(&format!("STARBASE_OIDC_{k}")).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         let yes = |k: &str, default: bool| v(k).map_or(default, |s| matches!(s.to_lowercase().as_str(), "1" | "true" | "on" | "yes"));
         let Some(issuer) = v("ISSUER") else { return Ok(None) };
-        let issuer_url = Url::parse(&issuer).map_err(|e| format!("STARSHEETS_OIDC_ISSUER isn't a web address: {e}"))?;
+        let issuer_url = Url::parse(&issuer).map_err(|e| format!("STARBASE_OIDC_ISSUER isn't a web address: {e}"))?;
         if !safe_scheme(&issuer_url) {
-            return Err("STARSHEETS_OIDC_ISSUER must start with https:// (plain http:// only for localhost, while testing).".into());
+            return Err("STARBASE_OIDC_ISSUER must start with https:// (plain http:// only for localhost, while testing).".into());
         }
-        IssuerUrl::new(issuer.clone()).map_err(|e| format!("STARSHEETS_OIDC_ISSUER isn't a web address: {e}"))?;
-        let client_id = v("CLIENT_ID").ok_or("STARSHEETS_OIDC_ISSUER is set, but STARSHEETS_OIDC_CLIENT_ID isn't.")?;
-        let redirect = v("REDIRECT_URL").ok_or("STARSHEETS_OIDC_ISSUER is set, but STARSHEETS_OIDC_REDIRECT_URL isn't.")?;
-        let url = Url::parse(&redirect).map_err(|e| format!("STARSHEETS_OIDC_REDIRECT_URL isn't a web address: {e}"))?;
+        IssuerUrl::new(issuer.clone()).map_err(|e| format!("STARBASE_OIDC_ISSUER isn't a web address: {e}"))?;
+        let client_id = v("CLIENT_ID").ok_or("STARBASE_OIDC_ISSUER is set, but STARBASE_OIDC_CLIENT_ID isn't.")?;
+        let redirect = v("REDIRECT_URL").ok_or("STARBASE_OIDC_ISSUER is set, but STARBASE_OIDC_REDIRECT_URL isn't.")?;
+        let url = Url::parse(&redirect).map_err(|e| format!("STARBASE_OIDC_REDIRECT_URL isn't a web address: {e}"))?;
         if !matches!(url.scheme(), "http" | "https") || !url.path().ends_with(&format!("/{CALLBACK}")) || url.query().is_some() {
             return Err(format!(
-                "STARSHEETS_OIDC_REDIRECT_URL must be the address StarSheets is opened at followed by {CALLBACK}, for example https://sheets.example.com/{CALLBACK}"
+                "STARBASE_OIDC_REDIRECT_URL must be the address Starbase is opened at followed by {CALLBACK}, for example https://sheets.example.com/{CALLBACK}"
             ));
         }
         if !safe_scheme(&url) {
-            return Err("STARSHEETS_OIDC_REDIRECT_URL must start with https:// (plain http:// only for localhost, while testing).".into());
+            return Err("STARBASE_OIDC_REDIRECT_URL must start with https:// (plain http:// only for localhost, while testing).".into());
         }
         let client_secret = match v("CLIENT_SECRET_FILE") {
             Some(path) => Some(
                 std::fs::read_to_string(&path)
-                    .map_err(|e| format!("Can't read STARSHEETS_OIDC_CLIENT_SECRET_FILE ({path}): {e}"))?
+                    .map_err(|e| format!("Can't read STARBASE_OIDC_CLIENT_SECRET_FILE ({path}): {e}"))?
                     .trim()
                     .to_string(),
             ),
@@ -137,12 +137,12 @@ impl Config {
         }
         let label: String = v("BUTTON_LABEL").unwrap_or_else(|| "Sign in with SSO".into()).chars().filter(|c| !c.is_control()).take(60).collect();
         let skew = match v("CLOCK_SKEW") {
-            Some(s) => s.parse::<u64>().ok().filter(|n| *n <= 3600).ok_or("STARSHEETS_OIDC_CLOCK_SKEW is a number of seconds (0 to 3600).")?,
+            Some(s) => s.parse::<u64>().ok().filter(|n| *n <= 3600).ok_or("STARBASE_OIDC_CLOCK_SKEW is a number of seconds (0 to 3600).")?,
             None => 60,
         };
         let session_hours = match v("SESSION_HOURS") {
             Some(s) => {
-                s.parse::<u64>().ok().filter(|n| (1..=720).contains(n)).ok_or("STARSHEETS_OIDC_SESSION_HOURS is a number of hours (1 to 720).")?
+                s.parse::<u64>().ok().filter(|n| (1..=720).contains(n)).ok_or("STARBASE_OIDC_SESSION_HOURS is a number of hours (1 to 720).")?
             }
             None => SESSION_HOURS,
         };
@@ -171,14 +171,14 @@ impl Config {
         let mut w = Vec::new();
         if self.auto_create == Some(true) && self.allowed_group.is_none() {
             w.push(
-                "Single sign-on: STARSHEETS_OIDC_AUTO_CREATE is on and STARSHEETS_OIDC_ALLOWED_GROUP isn't set, so EVERYONE who can sign in at the identity provider gets an account here.".into(),
+                "Single sign-on: STARBASE_OIDC_AUTO_CREATE is on and STARBASE_OIDC_ALLOWED_GROUP isn't set, so EVERYONE who can sign in at the identity provider gets an account here.".into(),
             );
         }
         w
     }
 
     /// Whether someone signing in through the provider for the first time gets an account:
-    /// STARSHEETS_OIDC_AUTO_CREATE when set; else yes with STARSHEETS_OIDC_ALLOWED_GROUP (the
+    /// STARBASE_OIDC_AUTO_CREATE when set; else yes with STARBASE_OIDC_ALLOWED_GROUP (the
     /// provider decides who), else only when the owner lets people make their own account
     /// (sign-up on, with no code: a code can't be given at the provider).
     pub fn makes_accounts(&self, store: &Store) -> bool {
@@ -188,7 +188,7 @@ impl Config {
         })
     }
 
-    /// The address StarSheets is opened at (the redirect URL without api/oidc/callback).
+    /// The address Starbase is opened at (the redirect URL without api/oidc/callback).
     pub fn base(&self) -> &str {
         self.redirect.strip_suffix(CALLBACK).unwrap_or(&self.redirect)
     }
@@ -252,7 +252,7 @@ impl Http {
             .max_redirects(0)
             .http_status_as_error(false)
             .timeout_global(Some(Duration::from_secs(15)))
-            .user_agent(concat!("StarSheets/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("Starbase/", env!("CARGO_PKG_VERSION")))
             .tls_config(tls)
             .build();
         Http(ureq::Agent::new_with_config(config))
@@ -291,9 +291,9 @@ fn why(e: &dyn std::error::Error) -> String {
 /// words; "" for other problems.
 pub fn certificate_hint(why: &str) -> &'static str {
     if why.contains("CaUsedAsEndEntity") {
-        " (The identity provider's certificate is marked as a certificate authority (CA:TRUE), as the usual `openssl req -x509` one-liner makes it. StarSheets refuses such a certificate even when you trust it, while browsers and curl accept it. Make one with `basicConstraints=critical,CA:FALSE` instead: see docs/oidc.md, \"Your own certificate\".)"
+        " (The identity provider's certificate is marked as a certificate authority (CA:TRUE), as the usual `openssl req -x509` one-liner makes it. Starbase refuses such a certificate even when you trust it, while browsers and curl accept it. Make one with `basicConstraints=critical,CA:FALSE` instead: see docs/oidc.md, \"Your own certificate\".)"
     } else if why.contains("UnknownIssuer") {
-        " (StarSheets doesn't trust the identity provider's certificate. If you made it yourself, add it to the list StarSheets trusts with SSL_CERT_FILE: see docs/oidc.md, \"Your own certificate\".)"
+        " (Starbase doesn't trust the identity provider's certificate. If you made it yourself, add it to the list Starbase trusts with SSL_CERT_FILE: see docs/oidc.md, \"Your own certificate\".)"
     } else {
         ""
     }
@@ -612,7 +612,7 @@ impl Oidc {
 /// Run under the store lock.
 ///
 /// Found by (issuer, subject) only. Made when there is none and `Config::makes_accounts`, with a username from the provider (made unique) and no password. Owner only through
-/// STARSHEETS_OIDC_OWNER_GROUP, checked again at every sign-in (the last owner always stays
+/// STARBASE_OIDC_OWNER_GROUP, checked again at every sign-in (the last owner always stays
 /// one). On a new server the owner is still made with the setup code, unless an owner group
 /// is set and this person is in it.
 pub fn account(store: &Store, cfg: &Config, who: &Identity, link: Option<&str>) -> Result<User, &'static str> {

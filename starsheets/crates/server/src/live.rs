@@ -166,7 +166,7 @@ async fn connection(app: Shared, mut socket: WebSocket, user: Option<crate::auth
                 Ok(ToServer::Hello { file, build, client, protocol, have }) => {
                     // Only a different protocol needs the tab to reload (not every new build).
                     if protocol != sync::PROTOCOL {
-                        crate::log::note(&app.store, &format!("tab of {} on an older StarSheets (build {build:?}) asked to reload", who(&user)));
+                        crate::log::note(&app.store, &format!("tab of {} on an older Starbase (build {build:?}) asked to reload", who(&user)));
                         let _ = socket.send(Message::Text(text(&ToClient::Reload).into())).await;
                         return;
                     }
@@ -177,7 +177,7 @@ async fn connection(app: Shared, mut socket: WebSocket, user: Option<crate::auth
                 // A tab older than protocol 3 sends `{"t": "hello", …}` without "c": it reads our
                 // Reload (`{"t": "reload"}`) the same as before, and gets the new app.
                 Err(_) if t.contains("\"hello\"") => {
-                    crate::log::note(&app.store, &format!("tab of {} on an older StarSheets asked to reload", who(&user)));
+                    crate::log::note(&app.store, &format!("tab of {} on an older Starbase asked to reload", who(&user)));
                     let _ = socket.send(Message::Text(text(&ToClient::Reload).into())).await;
                     return;
                 }
@@ -217,7 +217,7 @@ async fn connection(app: Shared, mut socket: WebSocket, user: Option<crate::auth
         tokio::task::spawn_blocking(move || app.store.path_of(&file).ok().flatten().is_some_and(|p| crate::store::is_doc(&p))).await.unwrap_or(false)
     };
     if is_doc {
-        let _ = socket.send(Message::Text(text(&ToClient::Message { text: "That file is a document: open it in StarDocs.".into() }).into())).await;
+        let _ = socket.send(Message::Text(text(&ToClient::Message { text: "That's a document: open it in Starbase Docs.".into() }).into())).await;
         return;
     }
     let can_edit = role >= crate::sharing::Role::Edit;
@@ -542,7 +542,7 @@ impl Room {
                 }
                 let _ = out.send(text(&self.welcome(have, can_edit, &client)));
                 let undo_as = format!("{}/{tab}", user.as_ref().map_or("", |u| u.username.as_str()));
-                // Without sign-in (STARSHEETS_AUTH=off) people are guests, numbered as they come.
+                // Without sign-in (STARBASE_AUTH=off) people are guests, numbered as they come.
                 let person = match user.clone() {
                     Some(u) => sync::Person { client: client.clone(), username: u.username, name: u.name, colour: u.colour },
                     None => {
@@ -970,7 +970,7 @@ impl Room {
         crate::log::note(
             &self.app.store,
             &format!(
-                "{} changed outside StarSheets; {}",
+                "{} changed outside Starbase; {}",
                 self.path.clone().unwrap_or_default(),
                 match &kept {
                     Some(Ok(n)) => format!("unsaved changes kept in {n}"),
@@ -985,12 +985,12 @@ impl Room {
         self.reload();
         let text = match kept {
             Some(Ok(name)) => format!(
-                "This file was changed outside StarSheets (for example in Excel). You're now seeing that version; the changes made here in the last few seconds are kept in \u{201c}{name}\u{201d} in the same folder."
+                "This file was changed outside Starbase (for example in Excel). You're now seeing that version; the changes made here in the last few seconds are kept in \u{201c}{name}\u{201d} in the same folder."
             ),
             Some(Err(why)) => {
-                format!("This file was changed outside StarSheets, and the last few seconds of changes made here couldn't be kept: {why}")
+                format!("This file was changed outside Starbase, and the last few seconds of changes made here couldn't be kept: {why}")
             }
-            None => "This file was changed outside StarSheets (for example in Excel), so it was opened again.".to_string(),
+            None => "This file was changed outside Starbase (for example in Excel), so it was opened again.".to_string(),
         };
         self.all(&ToClient::Message { text });
     }
@@ -1051,8 +1051,8 @@ impl Room {
         let path = store.path_of(&self.file).map_err(|e| e.to_string())?.ok_or("the file is gone")?;
         let folder = crate::store::parent_of(&path);
         let (stem, _) = crate::store::split_name(&crate::store::base_of(&path));
-        let name =
-            store.claim_name(&folder, &format!("{stem} (StarSheets copy {})", crate::store::readable_stamp()), ".xlsx", None).map_err(|e| e.msg)?;
+        let wanted = format!("{stem} (Starbase Sheets copy {})", crate::store::readable_stamp());
+        let name = store.claim_name(&folder, &wanted, ".xlsx", None).map_err(|e| e.msg)?;
         let bytes = gridcraft_engine::io::save_bytes(wb, &name).map_err(|e| e.to_string())?;
         store.write_file(&store.full(&crate::store::join(&folder, &name)), &bytes).map_err(|e| e.to_string())?;
         Ok(name)
@@ -1331,7 +1331,7 @@ mod tests {
         take_applied(&mut a);
         std::fs::write(dir.join("t.csv"), "a,b\ntheirs,9\n").unwrap();
         assert!(matches!(next(&mut a), ToClient::Reset { .. }));
-        assert!(message(&mut a).contains("StarSheets copy"));
+        assert!(message(&mut a).contains("Starbase Sheets copy"));
         app.rooms.send(&app, &file, RoomMsg::Leave { client: "a".into() });
         std::thread::sleep(Duration::from_millis(400));
         assert!(std::fs::read_to_string(dir.join("t.csv")).unwrap().contains("theirs"), "their version is untouched");
@@ -1339,7 +1339,7 @@ mod tests {
             .unwrap()
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().to_string())
-            .filter(|n| n.contains("StarSheets copy"))
+            .filter(|n| n.contains("Starbase Sheets copy"))
             .collect();
         assert_eq!(copies.len(), 1, "{copies:?}");
         let _ = std::fs::remove_dir_all(dir);

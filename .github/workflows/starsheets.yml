@@ -244,5 +244,5 @@ jobs:
           awk -v v="$VERSION" '$0 ~ "^## \\[" v "\\]" {on=1; next} on && /^## \[/ {exit} on && !/^\[[^]]*\]: http/ {print}' CHANGELOG.md > notes.md
           [ -s notes.md ] || { echo "CHANGELOG.md has no section for $VERSION"; exit 1; }
           printf '\n---\n**Docker:** `docker run -p 8080:8080 -v starsheets:/data ghcr.io/domeshifter/starsheets:%s` (see docker/compose.yml)\n' "$VERSION" >> notes.md
-          gh release create "$GITHUB_REF_NAME" --draft --title "StarSheets $VERSION" --notes-file notes.md "starsheets-web-$VERSION.zip"
+          gh release create "$GITHUB_REF_NAME" --draft --title "Starbase Sheets $VERSION" --notes-file notes.md "starsheets-web-$VERSION.zip"
 

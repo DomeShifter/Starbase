@@ -61,8 +61,7 @@ docker logs starbase   # shows the setup code
 ```
 
 Use your own time zone in `TZ` (it sets the hour backups run; without it, UTC). Open
-`http://<container address>:8080` and make the owner's account with the setup code (the screen
-may still say StarSheets). Starbase Docs is at `/docs/`.
+`http://<container address>:8080` and make the owner's account with the setup code. Starbase Docs is at `/docs/`.
 
 ## Backups
 

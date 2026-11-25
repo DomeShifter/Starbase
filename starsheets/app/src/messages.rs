@@ -89,9 +89,9 @@ pub fn plain_error(text: &str) -> String {
         let start = text.find("formula ").map_or(0, |i| i + "formula ".len());
         let end = text.find("it does not parse").unwrap_or(text.len()).max(start);
         let formula = text[start..end].trim().trim_end_matches('—').trim().trim_matches(|c| c == '`' || c == '"');
-        return format!("StarSheets can't read the formula ={}. {}", formula.trim_start_matches('='), formula_hint(formula));
+        return format!("Starbase Sheets can't read the formula ={}. {}", formula.trim_start_matches('='), formula_hint(formula));
     }
-    text.replace("GridCraft", "StarSheets").replace("; Excel would reject the saved file", "")
+    text.replace("GridCraft", "Starbase Sheets").replace("; Excel would reject the saved file", "")
 }
 
 /// Sheets' words for the messages people meet most.
@@ -185,7 +185,11 @@ impl Messages {
             return;
         };
         self.question_shown = true;
-        let title = if q.title.is_empty() || q.title == "GridCraft" { "Heads up".to_string() } else { q.title.replace("GridCraft", "StarSheets") };
+        let title = if q.title.is_empty() || q.title == "GridCraft" {
+            "Heads up".to_string()
+        } else {
+            q.title.replace("GridCraft", "Starbase Sheets")
+        };
         let mut labels = vec!["Cancel"];
         labels.extend(q.choices.iter().map(|(l, _)| l.as_str()));
         let mut closed = false;
@@ -219,7 +223,7 @@ mod tests {
             "{m}"
         );
         let m = super::plain_error("invalid rule formula \"ISEVEN(ROW(), TRUE))\" — it does not parse; Excel would reject the saved file");
-        assert!(m.starts_with("StarSheets can't read the formula =ISEVEN(ROW(), TRUE)). "), "{m}");
+        assert!(m.starts_with("Starbase Sheets can't read the formula =ISEVEN(ROW(), TRUE)). "), "{m}");
         assert!(super::formula_hint("SUM(A1:A3").contains("add \")\""));
         assert!(super::formula_hint("IF(A1=\"x,1)").contains("quotation mark"));
     }

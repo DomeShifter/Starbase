@@ -99,7 +99,7 @@ pub fn start() {
         if let Some(el) = document.get_element_by_id(LOADING_ID) {
             match result {
                 Ok(()) => el.remove(),
-                Err(e) => el.set_inner_html(&format!("<p>StarSheets failed to start: {e:?}</p><p>A browser with WebGPU or WebGL2 is required.</p>")),
+                Err(e) => el.set_inner_html(&format!("<p>Starbase failed to start: {e:?}</p><p>A browser with WebGPU or WebGL2 is required.</p>")),
             }
         }
     });
@@ -794,9 +794,9 @@ fn install_wake(ctx: &egui::Context) {
     wake.forget();
 }
 
-/// The browser tab's title and icon: the open file's name only (no ".xlsx", no "StarSheets") with
-/// the StarSheets icon, as Google Sheets' tab shows the file's name; "StarDrive" with the
-/// StarDrive icon on the home screen. eframe's web runner ignores `ViewportCommand::Title`, so the
+/// The browser tab's title and icon: the open file's name only (no ".xlsx", no "Starbase Sheets") with
+/// the StarSheets icon, as Google Sheets' tab shows the file's name; "Starbase Drive" with the
+/// Starbase Drive icon on the home screen. eframe's web runner ignores `ViewportCommand::Title`, so the
 /// page's own `document.title` and icon links (index.html) are set here, and only when they change.
 fn set_tab_title(file: Option<&str>) {
     thread_local!(static SHOWN: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) });
@@ -809,7 +809,7 @@ fn set_tab_title(file: Option<&str>) {
                 .map_or(name, |e| &name[..name.len() - e.len()]);
             if stem.trim().is_empty() { "Untitled spreadsheet".to_string() } else { stem.to_string() }
         }
-        None => "StarDrive".to_string(),
+        None => "Starbase Drive".to_string(),
     };
     let icon = if file.is_some() { "favicon" } else { "stardrive" };
     let shown = format!("{icon}\n{title}");

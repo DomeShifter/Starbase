@@ -1,6 +1,6 @@
 [package]
 name = "starsheets-sync"
-description = "Live editing for StarSheets, shared by the server and the web app: messages, replaying a change, workbook patches, fingerprints"
+description = "Live editing for Starbase Sheets, shared by the server and the web app: messages, replaying a change, workbook patches, fingerprints"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

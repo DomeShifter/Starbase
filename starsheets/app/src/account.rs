@@ -178,7 +178,7 @@ enum Reply {
         signup_code: bool,
         signed_in: bool,
         user: Option<Me>,
-        /// Single sign-on (STARSHEETS_OIDC_*), when the server has it.
+        /// Single sign-on (STARBASE_OIDC_*), when the server has it.
         sso: Option<Sso>,
     },
     /// Looked again whether this tab is still signed in (the live connection kept failing).
@@ -263,7 +263,7 @@ fn sso_from(v: &Json) -> Option<Sso> {
 }
 
 /// Goes back to the identity provider without asking (`prompt=none`) to renew a session made
-/// through single sign-on (STARSHEETS_OIDC_SESSION_HOURS), coming back to this page (the same
+/// through single sign-on (STARBASE_OIDC_SESSION_HOURS), coming back to this page (the same
 /// file, which opens again from the server: callers make sure nothing is waiting to be saved).
 fn renew_sso() {
     // Once: going again while the page is already on its way would restart the trip (and use up
@@ -889,7 +889,7 @@ impl Account {
                         if f == current {
                             label.push_str("  · in use");
                         } else if with_files.contains(&f) || (f.is_empty() && v["top_has_files"].as_bool().unwrap_or(false)) {
-                            label.push_str("  · has StarSheets files");
+                            label.push_str("  · has Starbase files");
                         }
                         p.text(egui::pos2(x + 28.0, r.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(14.0), theme::TEXT);
                         if resp.clicked() {
@@ -906,13 +906,13 @@ impl Account {
                     ui.radio_value(
                         &mut self.storage_use,
                         true,
-                        "Use the StarSheets files already in that folder (accounts there too: you may need to sign in again)",
+                        "Use the Starbase files already in that folder (accounts there too: you may need to sign in again)",
                     );
                     ui.radio_value(&mut self.storage_use, false, "Move my files there");
                 } else {
                     house::note(
                         ui,
-                        "Your spreadsheets, folders, versions, bin and accounts move there. Nobody can have a spreadsheet open while it happens; StarSheets restarts afterwards (a few seconds).",
+                        "Your spreadsheets, folders, versions, bin and accounts move there. Nobody can have a spreadsheet open while it happens; Starbase restarts afterwards (a few seconds).",
                     );
                 }
             }
@@ -1152,7 +1152,7 @@ impl Account {
         }
     }
 
-    /// After a change of folder: "StarSheets is restarting…" until the server answers again
+    /// After a change of folder: "Starbase is restarting…" until the server answers again
     /// (checked once a second), then the page starts again.
     fn restarting_ui(&mut self, ctx: &egui::Context) {
         let Some(since) = self.restarting else { return };
@@ -1167,7 +1167,7 @@ impl Account {
             });
         }
         house::dialog(ctx, "starsheets_restarting", 360.0, "Moving to the new folder", None, |ui| {
-            house::text(ui, "StarSheets is restarting in its new folder. This page starts again by itself in a few seconds.");
+            house::text(ui, "Starbase is restarting in its new folder. This page starts again by itself in a few seconds.");
         });
     }
 
@@ -1235,11 +1235,11 @@ impl Account {
 
     fn setup(&mut self, ctx: &egui::Context) {
         let mut go = false;
-        house::dialog(ctx, "starsheets_setup", 400.0, "Welcome to StarSheets", None, |ui| {
+        house::dialog(ctx, "starsheets_setup", 400.0, "Welcome to Starbase", None, |ui| {
             house::note(ui, "This server has no accounts yet. Make yours: you'll be its owner and can add other people afterwards.");
             house::note(
                 ui,
-                "The setup code is printed in the server's log when it starts (with Docker: docker logs followed by the container's name). If the server was started with STARSHEETS_PASSWORD, that is the code.",
+                "The setup code is printed in the server's log when it starts (with Docker: docker logs followed by the container's name). If the server was started with STARBASE_PASSWORD (or the older STARSHEETS_PASSWORD), that is the code.",
             );
             if let Some(sso) = self.sso.as_ref().filter(|s| s.owner_group) {
                 house::note(ui, "Or, if you are in the owner group at your sign-in service, sign in with it: you become the owner.");

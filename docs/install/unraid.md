@@ -29,7 +29,7 @@ Parameters*), so the files belong to `nobody:users` like your other shares, and 
 ## 3. First sign-in
 
 Click the container's icon › **Logs** to see the setup code, then **WebUI**. Make the owner's
-account with the code (the screen may still say StarSheets); add other people from your
+account with the code; add other people from your
 avatar › People. Starbase Docs is at `/docs/`.
 
 ## Backups

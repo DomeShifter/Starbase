@@ -4,7 +4,7 @@
 //! subject. No sign-in through other companies.
 //!
 //! The first account is the owner's. It is made in the app with a setup code from the server's
-//! log (or STARSHEETS_PASSWORD when set), so nobody else can claim a new server first. The owner
+//! log (or STARBASE_PASSWORD when set), so nobody else can claim a new server first. The owner
 //! adds other people, or lets them make their own account (sign-up, off unless the owner turns
 //! it on, optionally with a code). Everyone can change their own name, colour and password.
 
@@ -396,7 +396,7 @@ pub fn unlink(store: &Store, username: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Makes `username` an owner or not because of STARSHEETS_OIDC_OWNER_GROUP. Only takes away
+/// Makes `username` an owner or not because of STARBASE_OIDC_OWNER_GROUP. Only takes away
 /// what the group gave: an owner made with the setup code stays one, whatever group the
 /// sign-in they link is in (so linking can't lock them out). Never takes it from the last owner
 /// (nobody could manage the server then). Unchanged: the account as it is.
@@ -445,7 +445,7 @@ pub fn free_username(store: &Store, wanted: &str) -> String {
 
 /// Adds an account for someone signing in through single sign-on: linked to their provider's
 /// sign-in, with no password (password sign-in always fails for it). Owner only when asked
-/// (`owner`: the provider says they are in STARSHEETS_OIDC_OWNER_GROUP).
+/// (`owner`: the provider says they are in STARBASE_OIDC_OWNER_GROUP).
 pub fn add_linked(store: &Store, wanted: &str, name: &str, iss: &str, sub: &str, owner: bool) -> Result<User, String> {
     let username = free_username(store, wanted);
     let name = clean_display(name).or_else(|_| clean_display(&username))?;
@@ -546,7 +546,7 @@ pub fn fresh_sso_session_made(store: &Store, token: &str) -> Option<f64> {
     if fresh { sso_session_made(store, token) } else { None }
 }
 
-/// Whether a session made through single sign-on has ended (STARSHEETS_OIDC_SESSION_HOURS) but
+/// Whether a session made through single sign-on has ended (STARBASE_OIDC_SESSION_HOURS) but
 /// may be renewed at the provider: the app then goes there without asking.
 pub fn session_renewable(store: &Store, token: &str) -> bool {
     let sessions = store.load_json(&sessions_path(store));
@@ -597,30 +597,30 @@ pub fn session_user(store: &Store, token: &str) -> Option<User> {
 
 // ---------------------------------------------------------------- the setup code
 
-/// The shortest setup code accepted in STARSHEETS_PASSWORD.
+/// The shortest setup code accepted in STARBASE_PASSWORD.
 pub const MIN_SETUP_CODE: usize = 12;
 
-/// Why a setup code given in STARSHEETS_PASSWORD is too easy to guess (None: it's fine). The
+/// Why a setup code given in STARBASE_PASSWORD is too easy to guess (None: it's fine). The
 /// server refuses to start with one, so nobody else can claim a new server first.
 pub fn weak_setup_code(code: &str) -> Option<String> {
     let code = code.trim();
     if code.eq_ignore_ascii_case("change-me") {
-        Some("STARSHEETS_PASSWORD is still \"change-me\", the example from the instructions. Remove it (a random setup code is then printed in the log) or set your own long one.".into())
+        Some("STARBASE_PASSWORD is still \"change-me\", the example from the instructions. Remove it (a random setup code is then printed in the log) or set your own long one.".into())
     } else if code.chars().count() < MIN_SETUP_CODE {
         Some(format!(
-            "STARSHEETS_PASSWORD is too short to be a safe setup code: use at least {MIN_SETUP_CODE} characters, or remove it (a random setup code is then printed in the log)."
+            "STARBASE_PASSWORD is too short to be a safe setup code: use at least {MIN_SETUP_CODE} characters, or remove it (a random setup code is then printed in the log)."
         ))
     } else {
         None
     }
 }
 
-/// The setup code given in STARSHEETS_PASSWORD, if any.
+/// The setup code given in STARBASE_PASSWORD, if any.
 pub fn given_setup_code() -> Option<String> {
-    std::env::var("STARSHEETS_PASSWORD").ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    crate::setting("STARBASE_PASSWORD").map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
 }
 
-/// The code that makes the owner account on a new server: STARSHEETS_PASSWORD when set, else one
+/// The code that makes the owner account on a new server: STARBASE_PASSWORD when set, else one
 /// made on first start and kept in STORE/.starsheets/setup-code.
 pub fn setup_code(store: &Store) -> String {
     if let Some(given) = given_setup_code() {

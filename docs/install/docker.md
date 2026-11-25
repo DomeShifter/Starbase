@@ -6,8 +6,8 @@ Starbase is one container, `ghcr.io/domeshifter/starbase`. It holds Starbase She
 machine with Docker, Intel/AMD or ARM (a Raspberry Pi 4 or 5 works). Other guides:
 [Proxmox](proxmox.md), [TrueNAS SCALE](truenas.md), [Unraid](unraid.md).
 
-The suite was renamed recently: the sign-in screen and the log may still say **StarSheets**, and
-the settings still start with `STARSHEETS_`. It is the same thing.
+Settings start with `STARBASE_`. Older guides used `STARSHEETS_` (the suite's earlier name): those
+names still work, and when both are set the `STARBASE_` one wins.
 
 | What | Where |
 |---|---|
@@ -68,7 +68,7 @@ nobody else on your network can claim the server first:
 
 - By default a random code is printed in the log on first start: `docker logs starbase`, or
   `docker compose logs starbase` with Compose. Look for `setup code:`.
-- Or choose your own with `-e STARSHEETS_PASSWORD="a-long-code-only-you-know"` (12 characters or
+- Or choose your own with `-e STARBASE_PASSWORD="a-long-code-only-you-know"` (12 characters or
   more; the server refuses to start with a shorter one). It isn't needed once the owner exists.
 
 The owner then adds other people (avatar › People), or turns on sign-up. Everyone signs in with a
@@ -172,17 +172,17 @@ To stay on one version, use a tag such as `ghcr.io/domeshifter/starbase:0.1.0` i
 ## From outside your home
 
 Put it behind your reverse proxy with HTTPS (browsers only allow full clipboard use on secure
-pages) and set `STARSHEETS_PUBLIC_URL=https://office.example.com`. The proxy must pass WebSockets
+pages) and set `STARBASE_PUBLIC_URL=https://office.example.com`. The proxy must pass WebSockets
 through for live editing. Settings for proxies: [deploy.md, Security settings](../../starsheets/docs/deploy.md).
 
 ## Other settings
 
 | Setting | What it does |
 |---|---|
-| `STARSHEETS_PASSWORD` | Your own setup code for the owner's account (12+ characters) |
-| `STARSHEETS_AUTH=off` | No sign-in at all, for a private network you trust |
-| `STARSHEETS_OIDC_*` | Single sign-on through your own sign-in service ([details](../../starsheets/docs/oidc.md)) |
-| `STARSHEETS_PUBLIC_URL` | The address people use from outside, e.g. `https://office.example.com` |
+| `STARBASE_PASSWORD` | Your own setup code for the owner's account (12+ characters) |
+| `STARBASE_AUTH=off` | No sign-in at all, for a private network you trust |
+| `STARBASE_OIDC_*` | Single sign-on through your own sign-in service ([details](../../starsheets/docs/oidc.md)) |
+| `STARBASE_PUBLIC_URL` | The address people use from outside, e.g. `https://office.example.com` |
 | `TZ` | Time zone for the backup hour, e.g. `Europe/London` (default UTC) |
 | `LOCATION` | How the apps tell people where files are kept ("Saved to …"; default "the server") |
 | `KEEP` | How many earlier versions of each file to keep (default 6) |

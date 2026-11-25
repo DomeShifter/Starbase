@@ -452,7 +452,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Cmd("Search the menus", "tools.search", NO, "Alt+/"),
             Cmd("Keyboard shortcuts", "stardocs.shortcuts", NO, "Ctrl+/"),
             Sep,
-            Cmd("About StarDocs", "ui.dialog:about", NO, ""),
+            Cmd("About Starbase Docs", "ui.dialog:about", NO, ""),
         ],
     ),
 ];
@@ -857,7 +857,7 @@ impl Shell {
             ("stardocs.share", None) => return Err("sharing needs a Starbase server document".into()),
             ("stardocs.customColour", _) => self.custom = Some(BLUE),
             _ if is_own(id) => run_menu(app, &ctx, &mut self.flags, link, id, params),
-            _ => return Err(format!("{id}: not a StarDocs command")),
+            _ => return Err(format!("{id}: not a Starbase Docs command")),
         }
         ctx.request_repaint();
         Ok(json!(true))
@@ -1385,7 +1385,7 @@ impl Shell {
                     link.home();
                 }
             } else {
-                logo.on_hover_text("StarDocs");
+                logo.on_hover_text("Starbase Docs");
             }
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;

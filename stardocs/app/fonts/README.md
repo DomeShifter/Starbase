@@ -3,7 +3,7 @@
 Arimo (Regular, Bold, Italic, Bold Italic) by Steve Matteson, from the ChromeOS core fonts release
 `croscorefonts-1.31.0` (https://commondatastorage.googleapis.com/chromeos-localmirror/distfiles/croscorefonts-1.31.0.tar.bz2),
 licensed under the Apache License 2.0 (`LICENSE-APACHE`). Arimo is drawn to Arial's widths, so
-StarDocs draws Arial text (a new document's default font) in it and lines break where they do in
+Starbase Docs draws Arial text (a new document's default font) in it and lines break where they do in
 Word and Google Docs. WordCraft already treats Arimo as Arial's twin; the app only has to load it
 (`add_bundled_fonts` in `stardocs/app/src/web.rs`).
 
