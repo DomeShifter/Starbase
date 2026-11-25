@@ -50,7 +50,7 @@ pub async fn route(
     if p.first().map(String::as_str) != Some("photos") {
         return None;
     }
-    if p.len() >= 2 && (p[1] == "albums" || p[1] == "places") {
+    if p.len() >= 2 && (p[1] == "albums" || p[1] == "places" || p[1] == "events") {
         return Some(super::albums::route(app, m, p, q, me, body).await);
     }
     if p.len() == 3 && p[1] == "edits" {
