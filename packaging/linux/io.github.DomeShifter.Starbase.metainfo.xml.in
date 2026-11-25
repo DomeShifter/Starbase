@@ -116,6 +116,8 @@
           <li>Docs: make a copy, download in every format, picture toolbar and your own default styles</li>
           <li>Drive: a photo grid with a slideshow, and a new sign-in page and account menu</li>
           <li>Saves to a server that failed are tried again by themselves</li>
+          <li>Sharing: a Commenter role, and Sheets pastes keep formulas, formatting and rules between tabs and files</li>
+          <li>A Windows installer preview (unsigned) is published alongside</li>
         </ul>
       </description>
     </release>
