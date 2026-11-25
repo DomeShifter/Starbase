@@ -646,6 +646,7 @@ impl Shell {
             .exact_size(48.0)
             .frame(Frame::NONE.fill(theme::PAGE).inner_margin(Margin { left: 12, right: 12, top: 4, bottom: 6 }))
             .show(ui, |ui| self.toolbar(app, ui));
+        crate::external::bar(ui);
         self.views.ui(app, ui);
     }
 

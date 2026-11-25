@@ -274,6 +274,36 @@ pub fn note_opened(store: &Store, user: &User, file: &str) -> io::Result<()> {
     save_prefs(store, &user.username, &p)
 }
 
+// ---------------------------------------------------------------- external content
+
+/// The most files whose external-content choice is kept per person (oldest dropped first).
+const MAX_EXTERNAL: usize = 2000;
+
+/// Whether `user` lets formulas in `file` fetch from the web (IMAGE pictures), as in Excel and
+/// Google Sheets: a choice they made ("Allow" in the bar, or a file marked blocked when it came
+/// from outside) wins; otherwise only their own files are allowed (`own`: in their own folder
+/// and last changed by them). docs/privacy.md, "External content".
+pub fn external_allowed(store: &Store, user: &User, file: &str, own: bool) -> bool {
+    match prefs(store, &user.username).get("external").and_then(|m| m.get(file)).and_then(Value::as_bool) {
+        Some(choice) => choice,
+        None => own,
+    }
+}
+
+/// Remembers `user`'s choice for `file` (true: allowed; false: blocked until they allow it).
+pub fn set_external(store: &Store, user: &User, file: &str, allowed: bool) -> io::Result<()> {
+    let mut p = prefs(store, &user.username);
+    let mut all = p.get("external").and_then(Value::as_object).cloned().unwrap_or_default();
+    all.remove(file);
+    while all.len() >= MAX_EXTERNAL {
+        let Some(first) = all.keys().next().cloned() else { break };
+        all.remove(&first);
+    }
+    all.insert(file.to_string(), json!(allowed));
+    p.insert("external".into(), Value::Object(all));
+    save_prefs(store, &user.username, &p)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,5 +432,17 @@ mod tests {
         assert_eq!(starred(&s, &bob), vec!["d:x".to_string()]);
         assert!(starred(&s, &ann).is_empty() && opened(&s, &bob).contains_key(&q1));
         let _ = fs::remove_dir_all(&s.root);
+    }
+
+    #[test]
+    fn external_content_is_own_files_only_until_allowed() {
+        let s = store();
+        let ann = User { username: "ann".into(), name: "Ann".into(), colour: String::new(), owner: false };
+        assert!(external_allowed(&s, &ann, "f1", true), "own file: as before");
+        assert!(!external_allowed(&s, &ann, "f2", false), "someone else's: blocked");
+        set_external(&s, &ann, "f2", true).unwrap();
+        assert!(external_allowed(&s, &ann, "f2", false), "remembered once allowed");
+        set_external(&s, &ann, "f1", false).unwrap();
+        assert!(!external_allowed(&s, &ann, "f1", true), "an upload marked blocked stays blocked");
     }
 }
