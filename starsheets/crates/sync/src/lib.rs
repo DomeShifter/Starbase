@@ -305,6 +305,8 @@ pub fn apply_cmd(s: &mut Session, sheet: usize, sel: &Selection, id: &str, param
         return Err("no workbook".into());
     };
     let (view_sheet, view_sel, undo, redo) = (d.wb.active_sheet(), d.selection.clone(), d.undo.clone(), d.redo.clone());
+    // This tab's sheet by identity: someone else's new sheet before it moves it along.
+    let view_uid = d.wb.sheets.get(view_sheet).map(|sh| sh.uid.get());
     d.wb.set_active_sheet(sheet.min(d.wb.sheets.len().saturating_sub(1)));
     d.selection = sel.clone();
     let own = InputLocale::current();
@@ -323,7 +325,8 @@ pub fn apply_cmd(s: &mut Session, sheet: usize, sel: &Selection, id: &str, param
     if let Some(d) = s.active_mut() {
         d.undo = undo;
         d.redo = redo;
-        d.wb.set_active_sheet(view_sheet.min(d.wb.sheets.len().saturating_sub(1)));
+        let back = view_uid.and_then(|u| d.wb.sheets.iter().position(|sh| sh.uid.get() == u)).unwrap_or(view_sheet);
+        d.wb.set_active_sheet(back.min(d.wb.sheets.len().saturating_sub(1)));
         d.selection = view_sel;
     }
     s.sync_log = log;
@@ -697,6 +700,7 @@ fn hash_sheet_shape(h: &mut Fnv, i: usize, sh: &Sheet) {
     h.json(&sh.merges);
     h.json(&sh.cols);
     h.json(&sh.rows);
+    h.json(&(sh.grid_rows, sh.grid_cols));
 }
 
 fn hash_sheet(h: &mut Fnv, i: usize, sh: &Sheet) {

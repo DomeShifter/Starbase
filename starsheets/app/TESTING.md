@@ -18,7 +18,7 @@ Requests are answered at the start of the next frame. Each answer is `{"ok": val
 A `panel:` or `ui:` id answers `{"opened": id}`: the panel shows on the frame after.
 
 **The snapshot.** On a spreadsheet: `screen: "sheet"`, `file` (its name), `fileId`, `folder`,
-`sheet`, `sheetIndex`, `sheets`, `active` (A1), `selection` (`A1:B3,D4`), `freeze` (`{rows, cols}` or null), `smartFill` (`{at, cells: [[A1, text]…]}` the suggestion for the active cell, or null), `alternating` (each banding: `{range, header, band1, band2, footer}`), `pivot` (the pivot table the active cell is in, as GridCraft stores it, or null), `imagesReady` (IMAGE addresses on the sheet whose pictures arrived), `cell` (`value` as
+`sheet`, `sheetIndex`, `sheets`, `active` (A1), `selection` (`A1:B3,D4`), `freeze` (`{rows, cols}` or null), `grid` (`{rows, cols, sized}`: the sheet's grid size; `sized` false = Excel's full grid), `smartFill` (`{at, cells: [[A1, text]…]}` the suggestion for the active cell, or null), `alternating` (each banding: `{range, header, band1, band2, footer}`), `pivot` (the pivot table the active cell is in, as GridCraft stores it, or null), `imagesReady` (IMAGE addresses on the sheet whose pictures arrived), `cell` (`value` as
 shown, `number`, `input`, `formula` or null, `note` text or null, `comment` `{author, text, replies, resolved}` or null, `validation` `{kind, items, multiple, display, itemColors}` or null), `format` (`bold`, `italic`, `underline`, `strike`,
 `font`, `size`, `numberFormat`, `hAlign`, `wrap`), `saved` and `saveStatus` (the words the save
 symbol shows), `dirty`, `canUndo`, `canRedo`, `live`, `peers` (other people in the file) and
