@@ -6220,6 +6220,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "form_urlencoded",
+ "futures-util",
  "gridcraft-engine",
  "hex",
  "jiff 0.2.46",

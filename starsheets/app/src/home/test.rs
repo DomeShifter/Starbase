@@ -24,12 +24,16 @@ impl Home {
             "search": self.search,
             "error": self.error,
             "folders": folders.iter().map(|f| json!({ "path": f.path, "name": name_of(&f.path) })).collect::<Vec<_>>(),
-            "files": files.iter().map(|f| json!({ "id": f.id, "name": f.name, "folder": f.folder, "starred": f.starred })).collect::<Vec<_>>(),
+            "files": files
+                .iter()
+                .map(|f| json!({ "id": f.id, "name": f.name, "folder": f.folder, "starred": f.starred, "kind": super::items::file_kind(&f.name) }))
+                .collect::<Vec<_>>(),
         })
     }
 
     /// `home:folder` {path}, `home:search` {text}, `home:refresh`, `home:recent`, `home:starred`,
-    /// `home:shared`, `home:bin`.
+    /// `home:shared`, `home:bin`; `home:opens` {id} says what opening that file does (without
+    /// opening it): `{"opens": "editor" | "preview" | "download", "url"}`.
     pub(crate) fn test_run(&mut self, ctx: &egui::Context, id: &str, params: &Json) -> Result<Json, String> {
         let text = |key: &str| params.get(key).and_then(Json::as_str).map(str::to_string);
         match id {
@@ -39,6 +43,16 @@ impl Home {
             }
             "home:search" => self.search = text("text").unwrap_or_default(),
             "home:refresh" => self.refresh(ctx),
+            "home:opens" => {
+                let id = text("id").ok_or("home:opens needs {id}")?;
+                let f = self.file(&id).ok_or("no such file listed")?;
+                let (opens, url) = match super::items::opens_as(&f.name) {
+                    super::items::Opens::Editor => ("editor", crate::files::file_url(&id, &f.name)),
+                    super::items::Opens::Preview => ("preview", Self::preview_url(&id)),
+                    super::items::Opens::Download => ("download", format!("api/files/{id}")),
+                };
+                return Ok(json!({ "opens": opens, "url": url }));
+            }
             "home:recent" => self.navigate(View::Recent),
             "home:starred" => self.navigate(View::Starred),
             "home:shared" => self.navigate(View::Shared(None)),

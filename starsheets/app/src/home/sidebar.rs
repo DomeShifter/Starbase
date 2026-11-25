@@ -42,7 +42,7 @@ impl Home {
             if house::menu_row(ui, Some("upload"), "Upload files…", "", true) {
                 let (store, inbox, ctx) = (self.store.clone(), self.inbox.clone(), ui.ctx().clone());
                 self.store.pick_files(Box::new(move |name, bytes| {
-                    let url = format!("api/files?name={}&folder={}", enc(&name), enc(&folder));
+                    let url = format!("api/files?name={}&folder={}&as_is=1", enc(&name), enc(&folder));
                     call(&store, &inbox, &ctx, Method::Post, url, Some(bytes), refresh_after);
                 }));
             }

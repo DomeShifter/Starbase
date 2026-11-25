@@ -1190,6 +1190,12 @@ fn list_files(inbox: Rc<RefCell<Vec<Reply>>>, ctx: egui::Context) {
             .as_array()
             .into_iter()
             .flatten()
+            // The editor's Open dialog: spreadsheets and documents only (the server lists every
+            // file since the any-file Drive; photos and the like open from the Drive).
+            .filter(|f| {
+                let n = f["name"].as_str().unwrap_or("").to_lowercase();
+                [".xlsx", ".xlsm", ".xls", ".csv", ".ods", ".docx", ".odt"].iter().any(|x| n.ends_with(x))
+            })
             .map(|f| crate::filebrowser::FileInfo {
                 id: s(f, "id"),
                 name: s(f, "name"),

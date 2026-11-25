@@ -16,7 +16,9 @@ path = "src/main.rs"
 axum = { version = "0.8", features = ["ws"] }
 gridcraft-engine = { workspace = true }
 starsheets-sync = { path = "../sync", features = ["thumbs"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs", "net", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs", "net", "time", "io-util"] }
+# Streams big files (downloads, video previews) from disk instead of reading them whole.
+futures-util = { version = "0.3", default-features = false }
 serde_json = { workspace = true }
 rand = "0.10"
 mime_guess = "2"

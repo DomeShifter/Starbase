@@ -24,6 +24,9 @@ use serde_json::{Map, Value, json};
 /// Days something stays in the bin before it's deleted for good.
 pub const BIN_DAYS: i64 = 30;
 
+/// Files the apps edit (Sheets and Docs). Every other file is stored, listed, shared, moved and
+/// binned the same way, but has no versions and is never opened in a live room: the Drive
+/// previews it (preview.rs) or downloads it.
 pub const EXTS: [&str; 7] = [".xlsx", ".xlsm", ".xls", ".csv", ".ods", ".docx", ".odt"];
 
 /// Documents (StarDocs) rather than spreadsheets: stored, listed, shared and versioned like any
@@ -34,6 +37,12 @@ pub const DOC_EXTS: [&str; 2] = [".docx", ".odt"];
 pub fn is_doc(name: &str) -> bool {
     let lower = name.to_lowercase();
     DOC_EXTS.iter().any(|x| lower.ends_with(x))
+}
+
+/// Whether a file is one the apps edit (a spreadsheet or a document): only these keep versions.
+pub fn is_editable(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    EXTS.iter().any(|x| lower.ends_with(x))
 }
 
 /// A request that can't be done: (http status, message).
@@ -243,6 +252,30 @@ pub fn split_name(name: &str) -> (String, String) {
     if is_sheet_ext(&ext) { (stem, ext) } else { (name.to_string(), ".xlsx".to_string()) }
 }
 
+/// An existing file's (stem, extension), whatever its type: a moved, copied or restored file
+/// keeps its own extension. Same as [`split_name`] for spreadsheets and documents.
+pub fn split_existing(name: &str) -> (String, String) {
+    splitext(name)
+}
+
+/// The (stem, extension) of the new name `typed` for an existing file `old`: a spreadsheet or
+/// document as before ([`split_name`], keeping the old extension); any other file keeps its own
+/// extension (none, if it had none), and typing that extension again doesn't double it.
+fn renamed(old: &str, typed: &str) -> (String, String) {
+    let (_, old_ext) = split_existing(old);
+    if is_editable(old) {
+        let (stem, ext) = split_name(typed);
+        return (stem, if old_ext.is_empty() { ext } else { old_ext });
+    }
+    let lower = typed.to_lowercase();
+    let stem = if !old_ext.is_empty() && lower.ends_with(&old_ext.to_lowercase()) && typed.len() > old_ext.len() {
+        typed[..typed.len() - old_ext.len()].to_string()
+    } else {
+        typed.to_string()
+    };
+    (stem, old_ext)
+}
+
 fn numbered(stem: &str, n: u32, ext: &str) -> String {
     if n == 1 { format!("{stem}{ext}") } else { format!("{stem} ({n}){ext}") }
 }
@@ -408,9 +441,17 @@ impl Store {
             if name.starts_with('.') {
                 continue;
             }
-            if fs::metadata(e.path()).map(|m| m.is_dir()).unwrap_or(false) {
+            // A symbolic link counts only when it leads somewhere inside the store, and a linked
+            // folder only when it isn't one this one is inside (no endless loops).
+            let linked = e.file_type().map(|t| t.is_symlink()).unwrap_or(true);
+            if linked && !self.link_ok(&e.path()) {
+                continue;
+            }
+            let Ok(meta) = fs::metadata(e.path()) else { continue };
+            if meta.is_dir() {
                 dirs.push(name);
-            } else if EXTS.iter().any(|x| name.to_lowercase().ends_with(x)) {
+            } else if meta.is_file() {
+                // Every kind of file (not sockets or pipes, which can't be read like one).
                 files.push(join(here, &name));
             }
         }
@@ -419,6 +460,33 @@ impl Store {
         for d in dirs {
             self.walk_dir(&join(here, &d), files, folders);
         }
+    }
+
+    /// Whether symbolic link `link` leads inside the store (and, for a folder, not to a folder
+    /// it is itself inside).
+    fn link_ok(&self, link: &Path) -> bool {
+        let (Ok(root), Ok(to)) = (fs::canonicalize(&self.root), fs::canonicalize(link)) else { return false };
+        if !to.starts_with(&root) || to == root {
+            return false;
+        }
+        if to.is_dir() {
+            let here = link.parent().and_then(|p| fs::canonicalize(p).ok()).unwrap_or_default();
+            return !here.starts_with(&to);
+        }
+        true
+    }
+
+    /// The file at `relpath` on disk, if it is a plain file inside the store: never one a
+    /// symbolic link (of the file or of a folder on the way) takes outside it, never a pipe, never
+    /// a hidden one. Every read and write of a file by id goes through this.
+    pub fn safe_file(&self, relpath: &str) -> Option<PathBuf> {
+        if relpath.split('/').any(|p| p.is_empty() || p.starts_with('.')) {
+            return None;
+        }
+        let full = self.full(relpath);
+        let root = fs::canonicalize(&self.root).ok()?;
+        let real = fs::canonicalize(&full).ok()?;
+        (real.starts_with(&root) && real != root && fs::metadata(&real).ok()?.is_file()).then_some(full)
     }
 
     /// Where file `id` is now. The index is trusted while the file is still at the path it
@@ -666,7 +734,11 @@ impl Store {
         if p.len() == 1 && method == "POST" {
             let folder = rel(qs(q, "folder"))?;
             self.need_folder(&folder)?;
-            let (stem, ext) = split_name(&clean_name(qs(q, "name")));
+            // ?as_is=1: a file uploaded to the Drive keeps its name and type, whatever it is
+            // (photo.jpg stays photo.jpg); otherwise a name that isn't a spreadsheet or document
+            // gets .xlsx, as before.
+            let cleaned = clean_name(qs(q, "name"));
+            let (stem, ext) = if qs(q, "as_is") == Some("1") { split_existing(&cleaned) } else { split_name(&cleaned) };
             let name = self.claim_name(&folder, &stem, &ext, None)?;
             let path = join(&folder, &name);
             self.write_file(&self.full(&path), body)?;
@@ -681,7 +753,7 @@ impl Store {
         }
         let fid = p[1].as_str();
         let path = index.get(fid).cloned().ok_or_else(|| Bad::new(404, "no such file"))?;
-        let fpath = self.full(&path);
+        let fpath = self.safe_file(&path).ok_or_else(|| Bad::new(404, "no such file"))?;
         let rest: Vec<&str> = p[2..].iter().map(String::as_str).collect();
         match (rest.as_slice(), method) {
             ([], "GET") => {
@@ -695,7 +767,10 @@ impl Store {
                 {
                     return Ok(Reply::Json(json!({"error": "changed elsewhere", "name": base_of(&path)}), 409));
                 }
-                self.keep_version(fid, &fpath)?;
+                // Versions are for Sheets and Docs files; another file is just replaced.
+                if is_editable(&path) {
+                    self.keep_version(fid, &fpath)?;
+                }
                 self.write_file(&fpath, body)?;
                 ok(json!({"version": self.version_of(&fpath)?, "name": base_of(&path), "folder": parent_of(&path)}))
             }
@@ -705,9 +780,7 @@ impl Store {
             }
             (["rename"], "POST") => {
                 let folder = parent_of(&path);
-                let (stem, ext) = split_name(&clean_name(qs(q, "name")));
-                let (_, old_ext) = split_name(&base_of(&path));
-                let ext = if old_ext.is_empty() { ext } else { old_ext };
+                let (stem, ext) = renamed(&base_of(&path), &clean_name(qs(q, "name")));
                 let name = self.claim_name(&folder, &stem, &ext, Some(&path))?;
                 let new = join(&folder, &name);
                 if new != path {
@@ -723,7 +796,7 @@ impl Store {
                 if folder == parent_of(&path) {
                     return ok(json!({"name": base_of(&path)}));
                 }
-                let (stem, ext) = split_name(&base_of(&path));
+                let (stem, ext) = split_existing(&base_of(&path));
                 let name = self.claim_name(&folder, &stem, &ext, None)?;
                 move_any(&fpath, &self.full(&folder).join(&name))?;
                 index.insert(fid.to_string(), join(&folder, &name));
@@ -734,7 +807,7 @@ impl Store {
                 let parent = parent_of(&path);
                 let folder = rel(Some(qs(q, "folder").unwrap_or(&parent)))?;
                 self.need_folder(&folder)?;
-                let (mut stem, ext) = split_name(&base_of(&path));
+                let (mut stem, ext) = split_existing(&base_of(&path));
                 if folder == parent {
                     stem = format!("Copy of {stem}");
                 }
@@ -914,7 +987,7 @@ impl Store {
                     move_any(&src, &self.full(&t))?;
                     t
                 } else {
-                    let (stem, ext) = split_name(&base_of(&original));
+                    let (stem, ext) = split_existing(&base_of(&original));
                     let t = join(&folder, &self.claim_name(&folder, &stem, &ext, None)?);
                     fs::rename(&src, self.full(&t))?;
                     t
@@ -996,6 +1069,13 @@ mod tests {
         assert_eq!(split_name("Letter.docx"), ("Letter".into(), ".docx".into()));
         assert!(is_doc("a/Letter.DOCX") && is_doc("b.odt") && !is_doc("c.xlsx"));
         assert_eq!(split_name(".xlsx"), (".xlsx".into(), ".xlsx".into()));
+        assert_eq!(split_existing("photo.JPG"), ("photo".into(), ".JPG".into()));
+        assert_eq!(split_existing("README"), ("README".into(), String::new()));
+        assert_eq!(renamed("photo.jpg", "Trip"), ("Trip".into(), ".jpg".into()));
+        assert_eq!(renamed("photo.jpg", "Trip.JPG"), ("Trip".into(), ".jpg".into()));
+        assert_eq!(renamed("README", "NOTES"), ("NOTES".into(), String::new()));
+        assert_eq!(renamed("Budget.xlsx", "Plan.txt"), ("Plan.txt".into(), ".xlsx".into()));
+        assert!(is_editable("a.CSV") && is_editable("b.docx") && !is_editable("c.png"));
         assert_eq!(splitext("a.b.csv"), ("a.b".into(), ".csv".into()));
         assert!(rel(Some("a/../b")).is_err());
         assert_eq!(rel(Some("\\a//b/")).unwrap(), "a/b");
