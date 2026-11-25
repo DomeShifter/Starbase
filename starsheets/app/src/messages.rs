@@ -185,11 +185,8 @@ impl Messages {
             return;
         };
         self.question_shown = true;
-        let title = if q.title.is_empty() || q.title == "GridCraft" {
-            "Heads up".to_string()
-        } else {
-            q.title.replace("GridCraft", "Starbase Sheets")
-        };
+        let title =
+            if q.title.is_empty() || q.title == "GridCraft" { "Heads up".to_string() } else { q.title.replace("GridCraft", "Starbase Sheets") };
         let mut labels = vec!["Cancel"];
         labels.extend(q.choices.iter().map(|(l, _)| l.as_str()));
         let mut closed = false;

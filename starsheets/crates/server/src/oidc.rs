@@ -121,10 +121,7 @@ impl Config {
         }
         let client_secret = match v("CLIENT_SECRET_FILE") {
             Some(path) => Some(
-                std::fs::read_to_string(&path)
-                    .map_err(|e| format!("Can't read STARBASE_OIDC_CLIENT_SECRET_FILE ({path}): {e}"))?
-                    .trim()
-                    .to_string(),
+                std::fs::read_to_string(&path).map_err(|e| format!("Can't read STARBASE_OIDC_CLIENT_SECRET_FILE ({path}): {e}"))?.trim().to_string(),
             ),
             None => v("CLIENT_SECRET"),
         }
