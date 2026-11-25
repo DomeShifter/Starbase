@@ -189,7 +189,7 @@ its thumbnails stay sharp.
 | `STARBASE_PHOTOS_WORKERS` | 2 | Pictures read at once. Each one runs at low CPU priority and idle disk priority. |
 | `STARBASE_PHOTOS_CHILD_MB` | 1536 (at least 512) | The memory limit of each child process that decodes a picture. |
 | `STARBASE_PHOTOS_RESCAN` | 600 on a network share, 3600 on a local disk | Seconds between full rescans (at least 30). |
-| `STARBASE_PHOTOS_CACHE` | `/cache/photos` when a volume is mounted at `/cache`, else `<storage>/.starsheets/photos-cache` (the log says so) | Where the index (`index.sqlite`) and thumbnails go. Use a local disk when the storage folder is on a NAS share. |
+| `STARBASE_PHOTOS_CACHE` | `/cache/photos` when a volume is mounted at `/cache`; else, if the storage folder is on a network share, a local per-user folder (`$XDG_CACHE_HOME` or `~/.cache`, else `/var/cache`, then `starbase/photos/<id>`); else `<storage>/.starsheets/photos-cache` (the log says which and why) | Where the index (`index.sqlite`) and thumbnails go. Always a local disk: SQLite's locking does not work on NAS shares. |
 | `STARBASE_PHOTOS_CACHE_MB` | 20480 | The most the thumbnails may take. Past it, the least recently shown ones go first. |
 
 Workers × child memory is kept within half of the server's memory limit (the container's
@@ -200,6 +200,16 @@ The cache is never inside anyone's folder and is left out of backups. Deleting i
 picture is read again. The same goes for a damaged index: it is moved aside
 (`index.sqlite.broken-<time>`) and rebuilt. Thumbnails of deleted pictures, or of folders where
 Photos was turned off, are deleted straight away.
+
+## Photos and NAS storage
+
+SQLite cannot lock files on network shares (CIFS/SMB, NFS, FUSE, 9p), so the index and thumbnails
+never go on one. The server checks the storage folder's file system and picks a local folder by
+itself (see `STARBASE_PHOTOS_CACHE` above); the log line `Photos: index and thumbnails in ...`
+says where and why. In Docker, keep the index across container rebuilds with the `./photos-cache:/cache`
+volume that `docker/compose.yml` already has. If the index still can't open, the owner sees
+"Photos needs a local disk for its index..." and everyone else sees "Photos isn't set up on this
+server yet".
 
 ## Finding changes
 
