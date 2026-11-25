@@ -887,12 +887,14 @@ impl Editor {
         for k in knobs() {
             let mut v = (k.get)(&self.edits);
             let exposure = k.key == "exposure";
-            let fmt = move |v: f32| if exposure { format!("{v:+.2}") } else { format!("{:+}", v.round() as i32) };
+            let fmt = move |v: f32| shown(exposure, v);
             if slider_row(ui, k.label, &mut v, k.min, k.max, 0.0, fmt) {
                 (k.set)(&mut self.edits, v);
             }
             ui.add_space(house::XS);
         }
+        // Room under the last slider so it never sits against the panel's edge.
+        ui.add_space(house::XL);
     }
 
     fn filters_panel(&mut self, ui: &mut Ui) {
@@ -1183,6 +1185,13 @@ fn drag_crop(c: Crop, g: Grab, dx: f32, dy: f32, aspect: Option<f32>, frame: f32
         }
     }
     n
+}
+
+/// What an Adjust slider shows: every one on the same -100..+100 scale. Brightness is stored in
+/// stops (-5..+5), so it is shown times 20.
+fn shown(exposure: bool, v: f32) -> String {
+    let v = if exposure { v * 20.0 } else { v };
+    format!("{:+}", v.round() as i32)
 }
 
 /// A slider row: the label, its value at the right, the slider under them. A double click puts
@@ -1533,6 +1542,26 @@ mod tests {
         h.key_up(Key::Backslash);
         h.run();
         assert!(!h.state().ed.comparing);
+    }
+
+    #[test]
+    fn sliders_share_one_scale_and_a_double_click_resets() {
+        let mut h = harness(reply(true, &[]));
+        let c = egui::Context::default();
+        let store = h.state().store.clone();
+        h.state_mut().ed.test_run(&c, &store, "slider", &json!({"key": "exposure", "value": 0.8})).unwrap();
+        h.state_mut().ed.test_run(&c, &store, "slider", &json!({"key": "contrast", "value": 40})).unwrap();
+        h.run();
+        assert_eq!(shown(true, 0.8), "+16");
+        assert_eq!(shown(true, -5.0), "-100");
+        assert_eq!(shown(false, 40.0), "+40");
+        assert!(h.query_by_label("+0.80").is_none(), "no stops shown");
+        assert!(h.query_by_label("+16").is_some());
+        let s = h.get_all_by_role(egui::accesskit::Role::Slider).nth(1).unwrap();
+        s.click();
+        s.click();
+        h.run();
+        assert_eq!(h.state().ed.edits.contrast, 0, "double click resets");
     }
 
     #[test]
