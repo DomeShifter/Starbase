@@ -19,6 +19,7 @@ impl Home {
             None => Json::Null,
         };
         json!({
+            "photos": self.photos.test_state(self.photo_folder().is_some()),
             "view": view,
             "loading": self.loading,
             "search": self.search,
@@ -60,9 +61,76 @@ impl Home {
                 self.navigate(View::Bin);
                 self.load_bin(ctx);
             }
+            id if id.starts_with("home:photos") => return self.photos_test(ctx, id, params),
             _ => return Err(format!("unknown home screen command `{id}`")),
         }
         ctx.request_repaint();
         Ok(json!({ "done": id }))
+    }
+
+    /// `home:photos` {on}, `home:photos:enable`, `home:photos:sub` {on}, `home:photos:order`
+    /// {newest}, `home:photos:open` {index}, `home:photos:key` {key: next, prev, close, zoomin,
+    /// zoomout, fit, play, pause}, `home:photos:slideshow` {every, shuffle, play}.
+    fn photos_test(&mut self, ctx: &egui::Context, id: &str, params: &Json) -> Result<Json, String> {
+        let flag = |k: &str, d: bool| params.get(k).and_then(Json::as_bool).unwrap_or(d);
+        let now = ctx.input(|i| i.time);
+        let folder = self.photo_folder();
+        let pm = &mut self.photos;
+        match id {
+            "home:photos" => pm.set_on(&self.store, flag("on", true)),
+            "home:photos:enable" => {
+                let f = folder.ok_or("no folder is shown as photos")?;
+                pm.switch(ctx, &self.store, &f, true);
+            }
+            "home:photos:sub" | "home:photos:order" => {
+                if id == "home:photos:sub" {
+                    pm.sub = flag("on", true);
+                } else {
+                    pm.newest_first = flag("newest", true);
+                }
+                if let Some(f) = folder {
+                    pm.pics.clear();
+                    pm.list(ctx, &self.store, &f);
+                }
+            }
+            "home:photos:open" => {
+                let i = params.get("index").and_then(Json::as_u64).unwrap_or(0) as usize;
+                if i >= pm.pics.len() {
+                    return Err("no such picture".into());
+                }
+                pm.viewer = Some(super::viewer::Viewer::new(i, pm.pics.len()));
+            }
+            "home:photos:key" | "home:photos:slideshow" => {
+                let v = pm.viewer.as_mut().ok_or("the viewer isn't open")?;
+                if id == "home:photos:slideshow" {
+                    if let Some(e) = params.get("every").and_then(Json::as_f64) {
+                        v.every = e;
+                    }
+                    if let Some(sh) = params.get("shuffle").and_then(Json::as_bool) {
+                        v.set_shuffle(sh, (now * 1000.0) as u64);
+                    }
+                    if flag("play", true) {
+                        v.play(now);
+                    } else {
+                        v.playing = false;
+                    }
+                } else {
+                    match params.get("key").and_then(Json::as_str).unwrap_or("") {
+                        "next" => v.step(1),
+                        "prev" => v.step(-1),
+                        "zoomin" => v.zoom = (v.zoom * 1.5).min(8.0),
+                        "zoomout" => v.zoom = (v.zoom / 1.5).max(1.0),
+                        "fit" => v.zoom = 1.0,
+                        "play" => v.play(now),
+                        "pause" => v.playing = false,
+                        "close" => pm.viewer = None,
+                        k => return Err(format!("unknown key `{k}`")),
+                    }
+                }
+            }
+            _ => return Err(format!("unknown photos command `{id}`")),
+        }
+        ctx.request_repaint();
+        Ok(serde_json::json!({ "done": id }))
     }
 }
