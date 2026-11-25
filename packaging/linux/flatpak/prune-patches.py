@@ -6,8 +6,9 @@ winit forks, also ones we never build (egui_demo_lib, egui_kittest, ...). Online
 about an unused patch. In the Flatpak build each git source is replaced by a vendored copy that
 holds just the crates in Cargo.lock (flatpak-cargo-generator vendors what the lockfile lists), so
 Cargo stops with "patch location ... does not contain packages matching `egui_demo_lib`".
-Dropping those entries changes nothing that gets built: they were unused, and --locked proves the
-resolution is the same.
+Cargo.lock records them as [[patch.unused]] blocks, which are dropped too, so --locked still
+passes. Nothing that gets built changes: the entries were unused, and --locked proves the rest of
+the resolution is the same.
 
 Usage (in the workspace folder, during the Flatpak build only):
     python3 prune-patches.py Cargo.toml Cargo.lock
@@ -33,4 +34,12 @@ for line in open(manifest, encoding="utf-8").read().splitlines(keepends=True):
     out.append(line)
 
 open(manifest, "w", encoding="utf-8").write("".join(out))
+
+# Cargo.lock: drop the [[patch.unused]] block of each dropped entry (blocks end at a blank line).
+blocks = open(lockfile, encoding="utf-8").read().split("\n\n")
+kept = [b for b in blocks
+        if not (b.lstrip().startswith("[[patch.unused]]")
+                and re.search(r'^name = "([^"]+)"', b, re.M).group(1) in dropped)]
+text = "\n\n".join(kept)
+open(lockfile, "w", encoding="utf-8").write(text if text.endswith("\n") else text + "\n")
 print(f"{manifest}: dropped unused patches: {', '.join(dropped) or 'none'}")
