@@ -235,3 +235,16 @@ the file's first bytes, not its name. Only JPEG, PNG, WebP and GIF (first frame)
 and height are checked from the header before decoding: at most 30000 pixels a side, 50 million
 pixels (150 million for JPEG, which is decoded scaled down). A crash is one `failed` picture, never
 the server.
+
+## Albums and Places
+
+Albums are virtual (one small JSON file per person next to the server's other settings, holding file ids). An album only shows a picture to someone who may see it. Code: `crates/server/src/photos/albums.rs`. All routes need a signed-in person.
+
+| Call | Answer |
+|---|---|
+| `GET /api/photos/albums` | `{"albums": [{"id", "name", "count", "cover": {"id", "v"}}]}` (`count` = pictures I can see) |
+| `POST /api/photos/albums` `{"name", "files"?}` | `{"id", "name", "count"}` |
+| `GET /api/photos/albums/ID` | `{"id", "name", "photos": [as the folder listing], "waiting"}`, newest first |
+| `POST /api/photos/albums/ID/rename` `{"name"}`, `/add` `{"files"}`, `/remove` `{"files"}`, `/delete` | `{"id", "name", "count"}` or `{"deleted": true}`; the pictures stay where they are |
+| `GET /api/photos/places` | `{"places": [{"name", "count", "cover"}]}`: pictures with a GPS position I may know (same rule as `gps` above), grouped by the nearest town of 25,000+ people within 80 km (bundled GeoNames list, CC BY 4.0, no network), else by position rounded to 0.1 degree (`52.1°N, 0.2°E`) |
+| `GET /api/photos/places?place=NAME` | `{"place", "photos", "waiting"}` |

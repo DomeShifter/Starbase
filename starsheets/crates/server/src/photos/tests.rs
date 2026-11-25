@@ -436,6 +436,8 @@ fn inotify_sees_a_new_picture() {
 
 // ---------------------------------------------------------------- through the router
 
+#[path = "albums_tests.rs"]
+mod albums_tests;
 #[path = "edits_tests.rs"]
 mod edits_tests;
 #[path = "export_tests.rs"]
