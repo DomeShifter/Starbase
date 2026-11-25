@@ -13,7 +13,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use super::decode::Meta;
 
 /// The schema version this server writes.
-pub const SCHEMA: i32 = 2;
+pub const SCHEMA: i32 = 3;
 
 /// Where a picture is in the work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -179,10 +179,20 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             COMMIT;",
         )?;
     }
+    if v < 3 {
+        // Faces and people (faces.rs, ml.rs): kept by thumbnail key, so a renamed or moved
+        // picture keeps them; derived like everything here, except the names people give.
+        conn.execute_batch(super::faces::SCHEMA_V3)?;
+    }
     Ok(())
 }
 
 impl Index {
+    /// The connection, for the faces tables (faces.rs).
+    pub(super) fn conn(&self) -> &Connection {
+        &self.conn
+    }
+
     /// Opens (or makes) the index at `path`. Only this server uses it, so it holds the file
     /// for itself (`locking_mode=EXCLUSIVE`): then the write-ahead log needs no shared-memory
     /// file, which network file systems (a store on a NAS share) don't do reliably.

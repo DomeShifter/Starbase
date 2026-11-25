@@ -236,3 +236,12 @@ Albums are virtual (one small JSON file per person next to the server's other se
 | `POST /api/photos/albums/ID/rename` `{"name"}`, `/add` `{"files"}`, `/remove` `{"files"}`, `/delete` | `{"id", "name", "count"}` or `{"deleted": true}`; the pictures stay where they are |
 | `GET /api/photos/places` | `{"places": [{"name", "count", "cover"}]}`: pictures with a GPS position I may know (same rule as `gps` above), grouped by the nearest town of 25,000+ people within 80 km (bundled GeoNames list, CC BY 4.0, no network), else by position rounded to 0.1 degree (`52.1°N, 0.2°E`) |
 | `GET /api/photos/places?place=NAME` | `{"place", "photos", "waiting"}` |
+
+## People (faces)
+
+Off by default. The server owner turns it on in Photos › People (`POST /api/photos/faces {"on": true}`), or `STARBASE_PHOTOS_FACES=on|off` decides. Needs a build with `--features ml` (ONNX Runtime) and the model files in `STARBASE_ML_MODELS` (default `<photos cache>/models`): `face_detection_yunet_2023mar.onnx` (YuNet, MIT) and `glintr100.onnx` (AuraFace v1, Apache-2.0) or, with `STARBASE_FACES_MODEL=sface`, `face_recognition_sface_2021dec.onnx` (Apache-2.0). `STARBASE_ML_THREADS` sets the ONNX threads (default a quarter of the cores). Faces, embeddings and names are kept in the photo index in the cache folder, never in anyone's folder.
+
+- `GET /api/photos/faces`, `POST /api/photos/faces {"on"}` (owner): on/off, missing model files, progress.
+- `GET /api/photos/people`: named `people` and unnamed `groups`, each `{"id", "name", "count", "cover": {"id", "v", "box"}}`; only faces in pictures I may see.
+- `GET /api/photos/people/ID`: its `faces` and `photos`.
+- `POST /api/photos/people/ID/name {"name"}`, `/merge {"into"}`, `/remove {"face"}`.

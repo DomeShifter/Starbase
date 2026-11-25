@@ -399,6 +399,7 @@ fn clone_for_test(p: &Photos) -> Photos {
         made: AtomicU64::new(0),
         cache_bytes: AtomicU64::new(0),
         stop: AtomicBool::new(true),
+        ml: super::ml::State::new(super::ml::MlConfig::from_env()),
     }
 }
 

@@ -19,6 +19,7 @@ pub(in crate::home) enum Tab {
     Photos,
     Albums,
     Places,
+    People,
 }
 
 impl Tab {
@@ -28,6 +29,7 @@ impl Tab {
             Tab::Photos => "photos",
             Tab::Albums => "albums",
             Tab::Places => "places",
+            Tab::People => "people",
         }
     }
 }
@@ -41,6 +43,8 @@ pub(in crate::home) struct Card {
     pub count: u64,
     /// The cover picture's id and content tag.
     pub cover: Option<(String, String)>,
+    /// People: the face on the cover (x, y, w, h, 0..1).
+    pub bx: Option<[f32; 4]>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -65,9 +69,10 @@ pub(in crate::home) struct Albums {
     pub selected: HashSet<String>,
     text: String,
     ask: Ask,
+    pub ppl: super::people::People,
 }
 
-fn cards(v: &Json, key: &str) -> Vec<Card> {
+pub(super) fn cards(v: &Json, key: &str) -> Vec<Card> {
     v[key]
         .as_array()
         .into_iter()
@@ -77,13 +82,17 @@ fn cards(v: &Json, key: &str) -> Vec<Card> {
             name: c["name"].as_str().unwrap_or("").to_string(),
             count: c["count"].as_u64().unwrap_or(0),
             cover: c["cover"]["id"].as_str().zip(c["cover"]["v"].as_str()).map(|(a, b)| (a.to_string(), b.to_string())),
+            bx: c["cover"]["box"].as_array().filter(|b| b.len() == 4).map(|b| {
+                let n = |i: usize| b[i].as_f64().unwrap_or(0.0) as f32;
+                [n(0), n(1), n(2), n(3)]
+            }),
         })
         .collect()
 }
 
 type Inbox = Arc<Mutex<Vec<Got>>>;
 
-fn get(ctx: &egui::Context, store: &Backend, inbox: &Inbox, url: &str, wrap: impl FnOnce(Json) -> Got + 'static) {
+pub(super) fn get(ctx: &egui::Context, store: &Backend, inbox: &Inbox, url: &str, wrap: impl FnOnce(Json) -> Got + 'static) {
     let (inbox, ctx2) = (inbox.clone(), ctx.clone());
     store.call(
         ctx,
@@ -142,6 +151,7 @@ impl Albums {
         match t {
             Tab::Albums => self.albums = cards(v, "albums"),
             Tab::Places => self.places = cards(v, "places"),
+            Tab::People => self.ppl.take(v),
             Tab::Photos => {}
         }
     }
@@ -197,9 +207,12 @@ impl PhotoMode {
     /// Left nav.
     pub(super) fn nav_ui(&mut self, ui: &mut Ui, _store: &Backend) {
         ui.add_space(house::S);
-        for (t, label, icon) in
-            [(Tab::Photos, "Photos", "photo_library"), (Tab::Albums, "Albums", "collections"), (Tab::Places, "Places", "location_on")]
-        {
+        for (t, label, icon) in [
+            (Tab::Photos, "Photos", "photo_library"),
+            (Tab::Albums, "Albums", "collections"),
+            (Tab::Places, "Places", "location_on"),
+            (Tab::People, "People", "face"),
+        ] {
             let on = self.alb.tab == t;
             let b = egui::Button::new(RichText::new(format!("  {label}")).size(house::BODY).color(theme::TEXT))
                 .fill(if on { theme::SHARE } else { Color32::TRANSPARENT })
@@ -226,6 +239,12 @@ impl PhotoMode {
         }
         self.loading = false;
         self.waiting = v["waiting"].as_u64().unwrap_or(0);
+        if t == Tab::People {
+            self.alb.ppl.take_faces(v);
+            if let (Some(o), Some(n)) = (self.alb.open.as_mut(), v["name"].as_str()) {
+                o.name = n.to_string();
+            }
+        }
         let pics = Self::parse_pics(v);
         self.alb.selected.retain(|id| pics.iter().any(|p| &p.id == id));
         self.set_pics(pics);
@@ -342,7 +361,7 @@ impl PhotoMode {
         }
     }
 
-    fn pill(&self, ui: &mut Ui, label: &str, on: bool) -> bool {
+    pub(super) fn pill(&self, ui: &mut Ui, label: &str, on: bool) -> bool {
         ui.add(
             egui::Button::new(RichText::new(label).size(house::BODY).color(theme::TEXT))
                 .fill(if on { theme::SHARE } else { Color32::WHITE })

@@ -18,6 +18,7 @@ use egui::{Color32, Rect, RichText, Sense, Ui, pos2, vec2};
 use serde_json::Value as Json;
 
 mod albums;
+mod people;
 
 use super::viewer::Viewer;
 use crate::house;
@@ -72,6 +73,8 @@ pub(super) enum Got {
     Opened(albums::Tab, String, Json),
     /// An album changed: ask again.
     Changed,
+    /// A person changed (people.rs): what the opened one is called now.
+    PersonIs(Option<String>),
 }
 
 /// Textures within a budget of bytes, least recently drawn going first.
@@ -342,6 +345,7 @@ impl PhotoMode {
                 Got::Cards(t, v) => self.alb.take_cards(t, &v),
                 Got::Opened(t, key, v) => self.take_opened(t, &key, &v),
                 Got::Changed => self.alb.changed(ctx, store, &self.inbox),
+                Got::PersonIs(id) => self.people_changed(ctx, store, id),
                 Got::Listed(f, sub, v) => {
                     if Some(&f) == self.folder.as_ref() && sub == self.sub && self.alb.tab == albums::Tab::Photos {
                         self.take_list(&v);
@@ -491,6 +495,7 @@ impl PhotoMode {
             ui.separator();
             ui.vertical(|ui| match self.alb.tab {
                 albums::Tab::Photos => self.folder_ui(ui, store, folder),
+                albums::Tab::People => self.people_ui(ui, store),
                 _ => self.cards_ui(ui, store),
             });
         });
@@ -712,6 +717,7 @@ impl PhotoMode {
             "error": self.error,
             "count": self.pics.len(),
             "albums": self.alb.test_state(),
+            "people": self.alb.ppl.test_state(),
             "textures": { "count": self.tex.len(), "bytes": self.tex.total, "budget": self.tex.budget, "asking": self.asking.len() },
             "items": self.pics.iter().take(60).map(|p| json!({
                 "id": p.id, "name": p.name, "taken": p.taken, "state": p.state, "v": p.v,

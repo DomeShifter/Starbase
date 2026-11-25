@@ -98,9 +98,9 @@ fn clean_name(v: &Value) -> Result<String, Response<Body>> {
 }
 
 /// A picture I may see (id, path, whether its position may be given to me).
-type Seen = (String, String, bool);
+pub(super) type Seen = (String, String, bool);
 
-fn seen(a: &App, acc: &sharing::Access, id: &str) -> Option<Seen> {
+pub(super) fn seen(a: &App, acc: &sharing::Access, id: &str) -> Option<Seen> {
     let path = acc.file_paths.get(id)?;
     if media_of(path).is_none() || acc.file_role(id) < sharing::Role::View || a.store.safe_file(path).is_none() {
         return None;

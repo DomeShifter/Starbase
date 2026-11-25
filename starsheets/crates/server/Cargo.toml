@@ -59,6 +59,13 @@ image = { version = "0.25.10", default-features = false, features = ["jpeg", "pn
 jpeg-decoder = { version = "0.3.2", default-features = false }
 fast_image_resize = "6.2"
 notify = "9.0"
+# Face recognition (photos/ml.rs): ONNX Runtime, only with `--features ml`. 2.0 is still a
+# release candidate; using it was agreed by the project owner (2026-11).
+ort = { version = "=2.0.0-rc.10", optional = true }
+
+[features]
+# Face recognition in Photos (downloads the ONNX Runtime library at build time).
+ml = ["dep:ort"]
 
 [dev-dependencies]
 # Already in the build through axum; lets the tests send requests through the router.
