@@ -10,6 +10,9 @@ number goes up for new features and the last one for fixes.
 
 ## [Unreleased]
 
+### Added
+- Linux downloads on a release are signed with the Starbase release key: `SHA256SUMS`, `SHA256SUMS.asc` and a `.asc` per file (key: `packaging/linux/starbase-release-signing.asc`; how to check: `packaging/README.md`). The AppImage is now attached to the release too.
+
 ## [0.1.0] - 2026-11-25
 
 The first public release: an **early preview**. It works and we use it every day, but expect rough
