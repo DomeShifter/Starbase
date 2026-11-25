@@ -45,9 +45,16 @@ fn window(width: f32) -> Harness<'static, Win> {
         win,
     );
     steps(&mut h, 6);
+    remember_toolbar(&mut h);
+    h
+}
+
+/// Notes where the buttons are with no menu open (the toolbar's), for [`entry`]; again after
+/// the toolbar changes (a selected picture's tools).
+fn remember_toolbar(h: &mut Harness<'static, Win>) {
+    steps(h, 2);
     let toolbar = h.query_all(By::new().role(Role::Button)).map(|n| n.rect()).collect();
     h.state_mut().toolbar = toolbar;
-    h
 }
 
 /// Runs frames, passing input through WordCraft's raw input hook as the web runner does.
@@ -484,6 +491,8 @@ fn format_image_is_greyed_without_a_picture_and_wraps_a_selected_one() {
         run(&mut h, "select.all", json!({}));
     }
     assert_eq!(selected_picture(&h), Some(false), "an inline picture, selected");
+    // The toolbar now shows the picture tools, worded as some of the menu's entries.
+    remember_toolbar(&mut h);
     menu(&mut h, &["Format", "Image"]);
     for label in items {
         assert!(!is_greyed(&h, label), "{label} works on a selected picture");
@@ -745,4 +754,63 @@ fn version_history_opens_from_the_menu_and_its_keys() {
     assert_eq!(h.state_mut().state()["mode"], "editing", "back to editing once the history closes");
     menu(&mut h, &["File", "Version history", "Name current version"]);
     assert_eq!(h.state_mut().state()["dialogs"]["nameVersion"], true);
+}
+
+/// Docs' picture tools: with a picture selected the toolbar swaps its text tools for crop, image
+/// options, replace, reset and the five ways of wrapping text, the current one lit.
+#[test]
+fn a_selected_picture_gets_the_picture_tools_in_the_toolbar() {
+    let mut h = window(1400.0);
+    assert_eq!(h.state_mut().state()["toolbar"]["pictureTools"], false);
+    run(&mut h, "insert.picture", json!({"data": PNG, "width": 100}));
+    if selected_picture(&h).is_none() {
+        run(&mut h, "select.all", json!({}));
+    }
+    steps(&mut h, 2);
+    assert_eq!(h.state_mut().state()["toolbar"]["pictureTools"], true);
+    for label in ["Crop image", "Image options", "Replace image", "Reset image", "Behind text", "In front of text"] {
+        h.get(By::new().label(label));
+    }
+    assert!(h.query_by_label("Bold (Ctrl+B)").is_none(), "the text tools give way");
+    click(&mut h, "Wrap text");
+    assert_eq!(selected_picture(&h), Some(true), "Wrap text floats it");
+    click(&mut h, "In line with text");
+    assert_eq!(selected_picture(&h), Some(false), "back in line");
+    click(&mut h, "Image options");
+    assert_eq!(h.state_mut().state()["dialogs"]["wordcraft"], true, "Image options opens WordCraft's size dialog");
+}
+
+/// Whether the document's Heading 1 style is italic.
+fn heading1_italic(h: &Harness<'static, Win>) -> bool {
+    h.state().app.session.doc.styles.get("Heading1").and_then(|st| st.chr.italic).unwrap_or(false)
+}
+
+/// Format › Paragraph styles › Options, as Docs: save the styles as my defaults, reset to Docs'
+/// own, use mine again (one undo step), and new documents start with mine.
+#[test]
+fn paragraph_style_options_save_reset_and_use_my_default_styles() {
+    let mut h = window(1400.0);
+    menu(&mut h, &["Format", "Paragraph styles", "Options"]);
+    assert!(is_greyed(&h, "Use my default styles"), "nothing saved yet");
+    close_menus(&mut h);
+    run(&mut h, "text.insert", json!({"text": "Chapter"}));
+    run(&mut h, "para.style", json!({"style": "Heading 1"}));
+    run(&mut h, "select.all", json!({}));
+    run(&mut h, "format.italic", json!({}));
+    run(&mut h, "styles.updateToMatch", json!({"style": "Heading 1"}));
+    assert!(heading1_italic(&h), "Heading 1 updated to match");
+    menu(&mut h, &["Format", "Paragraph styles", "Options", "Save as my default styles"]);
+    menu(&mut h, &["Format", "Paragraph styles", "Options", "Reset styles"]);
+    assert!(!heading1_italic(&h), "Reset styles: Docs' own Heading 1");
+    menu(&mut h, &["Format", "Paragraph styles", "Options", "Use my default styles"]);
+    assert!(heading1_italic(&h), "Use my default styles");
+    run(&mut h, "edit.undo", json!({}));
+    assert!(!heading1_italic(&h), "one undo step");
+    let mut doc = wordcraft_engine::blank_document(&Default::default());
+    crate::shell::docs_defaults(&mut doc);
+    assert_eq!(doc.styles.get("Heading1").and_then(|st| st.chr.italic), Some(true), "a new document starts with my default styles");
+    // The style box's Options, through the test hook's commands too.
+    let Win { app, shell, .. } = h.state_mut();
+    assert_eq!(shell.test_command(app, None, "stardocs.resetStyles", json!({})), Ok(json!(true)));
+    assert!(!heading1_italic(&h));
 }

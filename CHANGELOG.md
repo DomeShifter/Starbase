@@ -10,6 +10,14 @@ number goes up for new features and the last one for fixes.
 
 ## [Unreleased]
 
+### Added
+- Starbase Docs: selecting a picture swaps the toolbar's text tools for the picture's, as in
+  Google Docs: crop, image options, replace, reset, and the five ways of wrapping text.
+- Starbase Docs: **my default styles**, as in Google Docs (Format › Paragraph styles › Options,
+  and Options in the style box): save this document's paragraph styles as your defaults, use
+  them in another document, or reset to Docs' own. New documents start with them. They are
+  kept in your browser (in the desktop program, until it closes).
+
 ## [0.1.0] - 2026-11-25
 
 The first public release: an **early preview**. It works and we use it every day, but expect rough
