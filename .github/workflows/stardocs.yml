@@ -113,7 +113,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Clippy
         run: cargo clippy -p stardocs-coedit --tests --no-deps -- -D warnings
-      - name: Convergence (10,000 two-user + 4,000 three-user + 4,000 typing-only sessions), transform pairs, 100-page cost
+      - name: Convergence (10,000 two-user + 4,000 three-user + 4,000 typing-only sessions, with undo), transform pairs + inverses, undo, 100-page cost
         run: cargo test -p stardocs-coedit -- --nocapture
 
   native:

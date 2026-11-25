@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::json;
 use stardocs_coedit::sim::body_pos;
-use stardocs_coedit::{Step, apply_all, diff, xform_lists};
+use stardocs_coedit::{Cont, Step, apply_all, diff, xform_lists};
 use wordcraft_doc::{Block, CharProps, Document, Paragraph};
 use wordcraft_engine::{Selection, Session};
 
@@ -42,6 +42,7 @@ fn keystroke_cost_100_pages() {
     let (mut cmd, mut dif, mut app, mut xf) = (vec![], vec![], vec![], vec![]);
     // A concurrent keystroke by someone else in the same paragraph, to transform over.
     let remote = vec![Step::Splice {
+        c: Cont::body(),
         block: 750,
         from: 5,
         to: 5,
