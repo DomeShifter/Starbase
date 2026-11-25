@@ -424,6 +424,14 @@ impl Link {
         go_home(&folder);
     }
 
+    /// File › New from a template…: the Drive's gallery in a new tab, for this document's folder.
+    pub fn templates(&self) {
+        let folder = self.state.borrow().folder.clone();
+        if let Some(w) = web_sys::window() {
+            let _ = w.open_with_url_and_target(&format!("../?templates=1&dir={}", enc(&folder)), "_blank");
+        }
+    }
+
     /// File › New document: a new tab, in this document's folder.
     pub fn new_document(&self) {
         let folder = self.state.borrow().folder.clone();

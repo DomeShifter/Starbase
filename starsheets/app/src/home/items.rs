@@ -107,7 +107,12 @@ impl Home {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             let a_folder = matches!(self.view, Some(View::Mine(_) | View::Everyone(_) | View::Shared(Some(_))));
             if folders.is_empty() && files.is_empty() && a_folder && !self.loading && self.search.trim().is_empty() {
-                empty_folder(ui, self.here().is_some());
+                let here = self.here();
+                if empty_folder(ui, here.is_some())
+                    && let Some(folder) = here
+                {
+                    super::templates::open(ui.ctx(), &folder);
+                }
             } else if folders.is_empty() && files.is_empty() {
                 let empty = if self.loading {
                     "Loading…"
@@ -702,7 +707,8 @@ fn one_line(p: &egui::Painter, text: String, size: f32, colour: Color32, width: 
 
 /// An empty folder, as in Google Drive: a round picture, "Drop files here" and how else to add
 /// something; for a folder you can only view, just that it is empty.
-fn empty_folder(ui: &mut Ui, can_add: bool) {
+/// The empty folder's picture and words; `true` when "Start from a template" was clicked.
+fn empty_folder(ui: &mut Ui, can_add: bool) -> bool {
     ui.vertical_centered(|ui| {
         ui.add_space(64.0);
         let (r, _) = ui.allocate_exact_size(vec2(120.0, 120.0), Sense::hover());
@@ -719,7 +725,12 @@ fn empty_folder(ui: &mut Ui, can_add: bool) {
         ui.label(RichText::new(head).size(house::TITLE).color(theme::TEXT));
         ui.add_space(house::XS);
         ui.label(RichText::new(sub).size(house::BODY).color(theme::TEXT_DIM));
-    });
+        can_add && {
+            ui.add_space(house::S);
+            ui.add(house::link("Start from a template")).clicked()
+        }
+    })
+    .inner
 }
 
 #[cfg(test)]

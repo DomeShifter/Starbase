@@ -102,6 +102,7 @@ static ICONS: &[(&str, &[u8])] = icons!(
 static MENU_ICONS: &[(&str, &str)] = &[
     // File
     ("New document", "description"),
+    ("New from a template…", "note_add"),
     ("Open", "folder_open"),
     ("Download", "download"),
     ("Rename", "drive_file_rename_outline"),

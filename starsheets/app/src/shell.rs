@@ -29,6 +29,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
         "File",
         &[
             Cmd("New spreadsheet", "panel:new", ""),
+            Cmd("New from a template…", "panel:templates", ""),
             Cmd("Open", "panel:open", "Ctrl+O"),
             Cmd("Import", "file.open", ""),
             Cmd("Make a copy", "panel:copy", ""),
@@ -1149,6 +1150,7 @@ fn save_symbol(ui: &mut Ui, dirty: bool) {
 /// The Material Symbols icon Sheets shows beside a menu item (docs/sheets-menus.md).
 pub const MENU_ICONS: &[(&str, &str)] = &[
     ("New spreadsheet", "note_add"),
+    ("New from a template…", "note_add"),
     ("Open", "folder_open"),
     ("Import", "upload"),
     ("Make a copy", "content_copy"),
@@ -1846,6 +1848,7 @@ mod tests {
         }
         let known = [
             "panel:new",
+            "panel:templates",
             "panel:open",
             "panel:copy",
             "panel:bin",

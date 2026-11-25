@@ -769,6 +769,10 @@ impl Home {
                 self.mixed = b[2] == b'1';
             }
             self.open_dir = self.store.start_dir();
+            if self.store.start_templates() {
+                let folder = self.open_dir.clone().unwrap_or_else(|| self.space.clone());
+                templates::open(ctx, &folder);
+            }
             self.photos.boot(&self.store);
             self.refresh(ctx);
         }
