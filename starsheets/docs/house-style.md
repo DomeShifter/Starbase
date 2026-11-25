@@ -141,3 +141,8 @@ open at a time. Changes in them show on the sheet straight away.
 
 Where a change can be shown before it is applied (colours, formats), show it in the sheet straight
 away; Cancel puts it back.
+
+## Filter view bar
+
+While a filter view is open, a dark bar (`house::VIEW_BAR`, Google's #3C4043) sits under the toolbar:
+white labels and text, text boxes in #5F6368, a ⋮ menu and ✕ at the right.
