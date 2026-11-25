@@ -1161,6 +1161,15 @@ mod tests {
         seen: Vec<ToClient>,
     }
 
+    /// Polls until the condition holds (at most 10 s): the room saves on its own thread, and a fixed
+    /// sleep flakes under load.
+    fn wait_until(mut cond: impl FnMut() -> bool) {
+        let end = std::time::Instant::now() + Duration::from_secs(10);
+        while !cond() && std::time::Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     fn app() -> (Shared, String, std::path::PathBuf) {
         app_with(false)
     }
@@ -1309,7 +1318,7 @@ mod tests {
         // Leaving saves at once.
         app.rooms.send(&app, &file, RoomMsg::Leave { client: "a".into() });
         app.rooms.send(&app, &file, RoomMsg::Leave { client: "b".into() });
-        std::thread::sleep(Duration::from_millis(400));
+        wait_until(|| std::fs::read_to_string(dir.join("t.csv")).map_or(false, |s| s.contains("from a") && s.contains("from b")));
         let saved = std::fs::read_to_string(dir.join("t.csv")).unwrap();
         assert!(saved.contains("from a") && saved.contains("from b"), "{saved}");
         let copies = std::fs::read_dir(dir.join(".starsheets/versions").join(&file)).unwrap().flatten();
@@ -1400,7 +1409,9 @@ mod tests {
         assert!(matches!(next(&mut a), ToClient::Reset { .. }));
         assert!(message(&mut a).contains("Starbase Sheets copy"));
         app.rooms.send(&app, &file, RoomMsg::Leave { client: "a".into() });
-        std::thread::sleep(Duration::from_millis(400));
+        wait_until(|| {
+            std::fs::read_dir(&dir).unwrap().flatten().any(|e| e.file_name().to_string_lossy().contains("Starbase Sheets copy"))
+        });
         assert!(std::fs::read_to_string(dir.join("t.csv")).unwrap().contains("theirs"), "their version is untouched");
         let copies: Vec<_> = std::fs::read_dir(&dir)
             .unwrap()
@@ -1643,7 +1654,7 @@ mod tests {
         edit(&app, &file, &mut a, "cell.set", json!({"cell": "A1", "input": "on Sheet1"}));
         take_applied(&mut a);
         app.rooms.send(&app, &file, RoomMsg::Leave { client: "a".into() });
-        std::thread::sleep(Duration::from_millis(400));
+        wait_until(|| opened(&dir) == 0);
         assert_eq!(opened(&dir), 0, "saved open on Sheet1, where the change was");
         let _ = std::fs::remove_dir_all(dir);
     }
