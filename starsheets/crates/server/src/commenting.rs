@@ -31,7 +31,6 @@
 //! file as it is now (else 409, as for anyone): otherwise an editor's newer text, saved between
 //! the commenter opening the file and saving it, would be undone by the commenter's older copy.
 
-use std::collections::BTreeMap;
 use std::io::Read;
 
 use axum::body::{Body, Bytes};
