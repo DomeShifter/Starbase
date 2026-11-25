@@ -143,6 +143,8 @@ jobs:
           shared-key: starsheets-native-dev
           workspaces: starsheets
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: exiftool (the GPS-stripping test needs the reference reader)
+        run: sudo apt-get install -y -qq libimage-exiftool-perl
       - name: Test
         run: cargo test -p starsheets -p starsheets-server -p starsheets-sync -p starbase-connect -p starbase-open -p starbase-photo-edit
       # Web-only helpers (accounts, sharing, web fonts, the spelling list download) are behind

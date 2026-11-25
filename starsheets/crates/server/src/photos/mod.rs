@@ -28,9 +28,14 @@
 //! Symbolic links are never followed (as everywhere in the store), and hidden files and
 //! folders (`.starsheets`, `.bin`) are skipped.
 
+pub mod crs;
 pub mod decode;
+pub mod edits;
+pub mod export;
 pub mod index;
+pub mod model;
 pub mod routes;
+pub mod sidecar;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Read;
@@ -186,6 +191,10 @@ struct Queue {
     set: HashSet<String>,
     working: usize,
 }
+
+/// What [`Photos::list`] found: pictures (path → size, modified ns) and their sidecars'
+/// stats (picture path → stat).
+type Listed = (HashMap<String, (u64, i64)>, HashMap<String, String>);
 
 /// Scans waiting for the scanner thread: (folder, deep, ticket).
 #[derive(Default)]
@@ -427,10 +436,40 @@ impl Photos {
         Ok(())
     }
 
+    /// The edits in the sidecar of the picture at `path` (none when it has no usable sidecar):
+    /// their hash for the index, and the edits themselves (what thumbnails are rendered with).
+    fn sidecar_edits(&self, path: &str) -> (index::Side, Option<model::Edits>) {
+        let (folder, name) = index::split(path);
+        let Some(dir) = sidecar::Folder::open(&self.store, folder) else { return (index::Side::default(), None) };
+        match dir.read(&sidecar::name_for(name)) {
+            Ok(Some(d)) => {
+                // Adobe's crop is relative to the stored picture: known once it has been read.
+                let geo = self.db().get(path).ok().flatten().filter(|r| r.meta.width > 0).map(|r| {
+                    let o = r.meta.orientation;
+                    let (w, h) = if (5..=8).contains(&o) { (r.meta.height, r.meta.width) } else { (r.meta.width, r.meta.height) };
+                    sidecar::Geo { width: w, height: h, orientation: o }
+                });
+                let edits = sidecar::read_for(&d.bytes, geo.as_ref()).ok().map(|p| p.edits).filter(|e| !e.is_identity());
+                (index::Side { edits: edits.as_ref().and_then(sidecar::edits_hash), stat: Some(d.stat) }, edits)
+            }
+            _ => (index::Side::default(), None),
+        }
+    }
+
+    /// Edits were saved for the picture at `path` (the edits API): its thumbnails are made
+    /// again with them, soon. Returns its new `v`, None when it hasn't been read yet.
+    pub fn edits_saved(&self, path: &str, side: &index::Side) -> Option<String> {
+        let key = self.db().edits_saved(path, side).ok().flatten()?;
+        if !decode::SIZES.iter().all(|&s| self.thumb_file(&key, s).is_some()) {
+            self.enqueue(vec![path.to_string()], true);
+        }
+        Some(routes::tag(&key).to_string())
+    }
+
     /// Deletes the thumbnails of these contents, unless a picture still has them.
     fn forget_thumbs(&self, hashes: Vec<String>) {
         for h in hashes {
-            if self.db().hash_used(&h).unwrap_or(true) {
+            if self.db().thumb_used(&h).unwrap_or(true) {
                 continue;
             }
             for size in decode::SIZES {
@@ -467,22 +506,32 @@ impl Photos {
             let _ = self.db().failed(path, size, mtime, None, "the file is too big", render);
             return;
         }
-        let mut hasher = Sha256::new();
-        let mut buf = vec![0u8; 64 * 1024];
-        loop {
-            match file.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => hasher.update(&buf[..n]),
-                Err(_) => return,
+        // Its edits (XMP sidecar): the thumbnails' key includes them.
+        let (side, edits) = self.sidecar_edits(path);
+        // Read before and unchanged since (only its sidecar changed): its hash stands.
+        let known_hash = self.db().get(path).ok().flatten().filter(|r| r.size == size && r.mtime_ns == mtime).and_then(|r| r.hash);
+        let hash = match known_hash {
+            Some(h) => h,
+            None => {
+                let mut hasher = Sha256::new();
+                let mut buf = vec![0u8; 64 * 1024];
+                loop {
+                    match file.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => hasher.update(&buf[..n]),
+                        Err(_) => return,
+                    }
+                }
+                hex::encode(hasher.finalize())
             }
-        }
-        drop(buf);
-        let hash = hex::encode(hasher.finalize());
-        // The same content was read before (a copy, or a move seen as delete + new).
-        let have_all = decode::SIZES.iter().all(|&s| self.thumb_file(&hash, s).is_some());
+        };
+        let key = sidecar::thumb_key(&hash, side.edits.as_deref());
+        // The same content (and edits) was read before (a copy, a move seen as delete + new, or
+        // edits undone).
+        let have_all = decode::SIZES.iter().all(|&s| self.thumb_file(&key, s).is_some());
         let known = if have_all { self.db().meta_of_hash(&hash).ok().flatten() } else { None };
         if let Some(meta) = known {
-            let _ = self.db().done(path, size, mtime, &hash, &meta, render);
+            let _ = self.db().done(path, size, mtime, &hash, &meta, render, &side);
             return;
         }
         // The same file again, from the start, for the decoder.
@@ -491,22 +540,22 @@ impl Photos {
             return; // changed while it was hashed: the next scan queues it again
         }
         let made = match WORKER_EXE.get() {
-            Some(exe) => decode::run_isolated(exe, file, self.cfg.child_memory),
+            Some(exe) => decode::run_isolated(exe, file, self.cfg.child_memory, edits.as_ref()),
             None => {
                 let mut bytes = Vec::new();
                 if file.take(MAX_FILE).read_to_end(&mut bytes).is_err() {
                     return;
                 }
-                decode::make_guarded(&bytes, &decode::Limits::for_memory(self.cfg.child_memory))
+                decode::make_guarded(&bytes, &decode::Limits::for_memory(self.cfg.child_memory), edits.as_ref())
             }
         };
         match made {
             Ok(made) => {
-                if made.thumbs.iter().any(|t| self.keep_thumb(&hash, t).is_err()) {
+                if made.thumbs.iter().any(|t| self.keep_thumb(&key, t).is_err()) {
                     let _ = self.db().failed(path, size, mtime, Some(&hash), "couldn't keep the thumbnails", render);
                     return;
                 }
-                let _ = self.db().done(path, size, mtime, &hash, &made.meta, render);
+                let _ = self.db().done(path, size, mtime, &hash, &made.meta, render, &side);
                 self.made.fetch_add(1, Ordering::Relaxed);
             }
             Err(why) => {
@@ -518,12 +567,14 @@ impl Photos {
     // ------------------------------------------------------------ finding files
 
     /// Picture files at and below `folder` (only that folder unless `deep`): path → (size,
-    /// modified ns). None when the folder isn't there (or is reached through a link).
-    fn list(&self, folder: &str, deep: bool) -> Option<HashMap<String, (u64, i64)>> {
+    /// modified ns), and the pictures' sidecars (`photo.jpg.xmp`): picture path → the sidecar's
+    /// stat. None when the folder isn't there (or is reached through a link).
+    fn list(&self, folder: &str, deep: bool) -> Option<Listed> {
         if !self.store.no_links(folder) || !std::fs::symlink_metadata(self.store.full(folder)).is_ok_and(|m| m.is_dir()) {
             return None;
         }
         let mut out = HashMap::new();
+        let mut sides = HashMap::new();
         let mut todo = vec![folder.to_string()];
         while let Some(here) = todo.pop() {
             let Ok(rd) = std::fs::read_dir(self.store.full(&here)) else { continue };
@@ -541,10 +592,15 @@ impl Photos {
                     }
                 } else if m.is_file() && media_of(&name).is_some() {
                     out.insert(rel, (m.len(), mtime_ns(&m)));
+                } else if m.is_file()
+                    && let Some(picture) = rel.strip_suffix(".xmp")
+                {
+                    sides.insert(picture.to_string(), sidecar::stat_of(&m));
                 }
             }
         }
-        Some(out)
+        sides.retain(|p, _| out.contains_key(p));
+        Some((out, sides))
     }
 
     /// The parts of `scopes` Photos is on for: a scope outside every such folder becomes the
@@ -574,10 +630,14 @@ impl Photos {
     fn scan(&self, scopes: &[(String, bool)]) -> usize {
         let scopes = self.covered_scopes(scopes);
         let mut present: HashMap<String, (u64, i64)> = HashMap::new();
+        let mut sides: HashMap<String, String> = HashMap::new();
         let mut gone_scopes = Vec::new();
         for (folder, deep) in &scopes {
             match self.list(folder, *deep) {
-                Some(found) => present.extend(found),
+                Some((found, side)) => {
+                    present.extend(found);
+                    sides.extend(side);
+                }
                 None => gone_scopes.push(folder.clone()),
             }
         }
@@ -615,22 +675,31 @@ impl Photos {
             match by_stat.get(&key) {
                 Some(to) if to.len() == 1 && gone_stat[&key] == 1 && r.hash.is_some() => ops.push(Op::Moved(r.path.clone(), to[0].clone())),
                 _ => {
-                    removed_hashes.extend(r.hash.clone());
+                    removed_hashes.extend(r.thumb_key().map(str::to_string));
                     ops.push(Op::Removed(r.path.clone()));
                 }
             }
         }
         let mut paths: Vec<&String> = present.keys().collect();
         paths.sort();
+        // Read pictures whose sidecar changed (edited in another app, or deleted): made again.
+        let mut edited = Vec::new();
         for p in paths {
             let (size, mtime) = present[p];
             // Unchanged rows need nothing.
-            if rows.get(p).is_some_and(|r| r.size == size && r.mtime_ns == mtime && r.state != State::Pending) {
+            if let Some(r) = rows.get(p)
+                && r.size == size
+                && r.mtime_ns == mtime
+                && r.state != State::Pending
+            {
+                if r.state == State::Ready && r.side.as_ref() != sides.get(p) {
+                    edited.push(p.clone());
+                }
                 continue;
             }
             ops.push(Op::Found(p.clone(), size, mtime));
         }
-        let mut wait = Vec::new();
+        let mut wait = edited;
         for chunk in ops.chunks(BATCH) {
             let r = self.db().batch(|ix| {
                 let mut w = Vec::new();
@@ -869,7 +938,7 @@ impl Photos {
     /// just made for a picture not yet marked done stays) and of older renderers; then, while
     /// the cache is over its size, the least recently shown. Counts the cache's size.
     fn clear_unused(&self) {
-        let Ok(used) = self.db().hashes() else { return };
+        let Ok(used) = self.db().thumb_keys() else { return };
         let Ok(dirs) = std::fs::read_dir(self.cache.join("thumbs")) else { return };
         let mut kept: Vec<(SystemTime, u64, PathBuf)> = Vec::new();
         for d in dirs.flatten() {

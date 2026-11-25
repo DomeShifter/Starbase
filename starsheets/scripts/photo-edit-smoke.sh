@@ -1,84 +1,71 @@
 #!/usr/bin/env bash
-# Smoke test of the photo editor (app/src/home/photo_edit.rs) in a real browser, against a running
-# test server with the test user ada (adapassword). Uploads 3 pictures into a new folder, opens the
-# viewer and then the editor through the test hook (app/TESTING.md, `home:photos:edit…`): opens on
-# the picture → a slider changes the edits and makes it dirty → the preview renders (time printed)
-# → undo/redo → each tab (screenshots light and dark) → filter + crop tools → Cancel with changes
-# asks first → Esc-free close. Save is checked against what the server says (writable or why not).
-# Prints PASS/FAIL lines; exit 1 on any FAIL.
-#   FF_SHOT=path/to/ff-shot.py scripts/photo-edit-smoke.sh BASE_URL [SHOT_DIR]
+# Smoke test of picture edits (docs/photos-api.md, "Edits") against a running test server with the
+# test users ada (adapassword, the owner) and bob (bobspassword). Through the API: upload a picture
+# to a new folder of ada's, turn Photos on → GET edits (none, writable) → PUT without If-Match 428,
+# bad edits 400, too big 413 → PUT saves (new etag, new thumb_v, listing's v follows) → a second save
+# from the old etag 409 → the thumbnail under the new v is made → export ("Save a copy": a new
+# JPEG of the edited size, a second one numbered, bob 403) → bob 403 → DELETE resets (v back to
+# the original). Prints PASS/FAIL lines; exit 1 on any FAIL. Needs python3 with no extra modules.
+#   scripts/photo-edit-smoke.sh BASE_URL
 set -uo pipefail
-BASE=${1:?usage: photo-edit-smoke.sh BASE_URL [SHOT_DIR]}
-FF=${FF_SHOT:?set FF_SHOT to ff-shot.py}
+BASE=${1:?usage: photo-edit-smoke.sh BASE_URL}
 W=$(mktemp -d)
-OUT=${2:-$W}
-mkdir -p "$OUT"
 fail=0
-curl -s -c "$W/cj" -o /dev/null -H 'content-type: application/json' -d '{"username":"ada","password":"adapassword"}' "$BASE/api/login"
-enc() { python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$1"; }
-folder=$(curl -s -b "$W/cj" -X POST "$BASE/api/folders?path=ada&name=$(enc "Edit smoke $(date +%s)")" | python3 -c 'import json,sys; print(json.load(sys.stdin)["path"])')
-# 3 colourful PNGs (a sky-to-ground gradient with a sun), made without an image library.
+ok() { if [ "$1" = 0 ]; then echo "PASS $2"; else echo "FAIL $2"; fail=1; fi; }
+login() { curl -s -c "$W/$1.cj" -o /dev/null -H 'content-type: application/json' -d "{\"username\":\"$1\",\"password\":\"$2\"}" "$BASE/api/login"; }
+login ada adapassword
+login bob bobspassword
+json() { python3 -c "import json,sys; d=json.load(sys.stdin); print(eval(sys.argv[1]))" "$1"; }
 python3 - "$W" <<'EOF'
 import struct, sys, zlib
-def px(x, y, w, h, i):
-    if (x - w * 0.7) ** 2 + (y - h * 0.3) ** 2 < (h * 0.12) ** 2:
-        return (250, 210, 80)
-    if y < h * 0.6:
-        t = y / (h * 0.6)
-        return (int(90 + 100 * t), int(150 + 60 * t), 235)
-    t = (y - h * 0.6) / (h * 0.4)
-    return (int(60 + 40 * i), int(140 - 60 * t), int(60 - 30 * t))
-def png(path, w, h, i):
-    raw = b"".join(b"\0" + bytes(v for x in range(w) for v in px(x, y, w, h, i)) for y in range(h))
-    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
-    open(path, "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw, 1)) + chunk(b"IEND", b""))
-for i, (w, h) in enumerate([(1600, 1066), (1000, 1400), (1400, 1400)]):
-    png(f"{sys.argv[1]}/pic{i}.png", w, h, i)
+w, h = 320, 200
+raw = b"".join(b"\0" + bytes(v for x in range(w) for v in (x * 255 // w, y * 255 // h, 128)) for y in range(h))
+chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
+open(sys.argv[1] + "/pic.png", "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 EOF
-for i in 0 1 2; do
-  curl -s -b "$W/cj" -o /dev/null --data-binary @"$W/pic$i.png" "$BASE/api/files?name=pic$i.png&as_is=1&folder=$(enc "$folder")"
-done
-echo "folder: $folder"
-LOGIN="js:fetch('/api/login',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({username:'ada',password:'adapassword'})}).then(r=>'login '+r.status)"
-GO="js:(location.href='/?test&dir=$(enc "$folder")','go');sleep:10"
-ST="starsheets.wait(starsheets.state()).then(s=>JSON.parse(s).ok.home.photos.photo_edit)"
-RUN() { echo "js:starsheets.wait(starsheets.run('$1',$2))"; }
-CHECK() { echo "js:$ST.then(p=>($1)?'PASS $2':'FAIL $2 '+JSON.stringify(p))"; }
-INFO() { echo "js:$ST.then(p=>'INFO $1 '+JSON.stringify($2).split(String.fromCharCode(34)).join(''))"; }
-OPEN="$LOGIN;$GO;$(RUN home:photos '{on:true}');sleep:2;$(RUN home:photos:enable '{}');sleep:8;$(RUN home:photos:open '{index:0}');sleep:3;$(RUN home:photos:edit '{open:true}');sleep:4"
-steps="$OPEN"
-steps+=";$(CHECK "p.open&&p.loaded&&p.source&&!p.dirty&&p.tab==='adjust'" 'opens on the picture, clean')"
-steps+=";$(CHECK 'p.writable||p.whyNot' 'save state is known (writable, or the reason why not)')"
-steps+=";$(INFO server '{writable:p.writable,whyNot:p.whyNot,foreign:p.foreign}')"
-steps+=";$(RUN home:photos:edit:slider "{key:'exposure',value:0.8}");$(RUN home:photos:edit:slider "{key:'saturation',value:40}");sleep:2"
-steps+=";$(CHECK 'p.dirty&&p.edits.exposure>0.7&&p.edits.saturation===40&&p.canUndo' 'sliders change the edits')"
-steps+=";$(CHECK "p.preview==='full'&&p.renders>=1" 'preview re-rendered')"
-steps+=";$(INFO 'render ms (1024 px, wasm)' 'p.renderMs')"
-steps+=";shot:$OUT/adjust.png"
-steps+=";$(RUN home:photos:edit:undo '{}');sleep:1;$(CHECK 'p.edits.saturation===0&&p.canRedo' 'undo')"
-steps+=";$(RUN home:photos:edit:redo '{}');sleep:1;$(CHECK 'p.edits.saturation===40' 'redo')"
-steps+=";$(RUN home:photos:edit:tab "{tab:'filters'}");$(RUN home:photos:edit:set "{filter:{name:'warm',amount:0.7}}");sleep:3"
-steps+=";$(CHECK "p.tab==='filters'&&p.edits.filter&&p.edits.filter.name==='warm'" 'filter set')"
-steps+=";shot:$OUT/filters.png"
-steps+=";$(RUN home:photos:edit:tab "{tab:'crop'}");$(RUN home:photos:edit:aspect "{name:'1:1'}");$(RUN home:photos:edit:set '{angle:5}');sleep:2"
-steps+=";$(CHECK "p.tab==='crop'&&p.edits.aspect==='1:1'&&p.edits.angle===5" 'crop tools')"
-steps+=";shot:$OUT/crop.png"
-steps+=";$(RUN home:photos:edit:compare '{on:true}');sleep:1;$(CHECK 'p.comparing' 'compare shows the original')"
-steps+=";$(RUN home:photos:edit:compare '{on:false}');sleep:1"
-steps+=";$(RUN home:photos:edit:save '{}');sleep:2"
-steps+=";$(CHECK 'p.writable?(!p.dirty||p.ask):(p.dirty&&p.whyNot)' 'save: saved, asked, or refused with a reason')"
-steps+=";$(INFO 'after save' '{dirty:p.dirty,ask:p.ask,error:p.error,message:p.message}')"
-steps+=";$(RUN home:photos:edit:cancel '{}');sleep:1"
-steps+=";$(CHECK 'p.open&&(p.ask||!p.dirty)' 'cancel with changes asks first')"
-steps+=";$(RUN home:photos:edit:answer '{yes:true}');sleep:1"
-steps+=";$(CHECK '!p.open' 'closed')"
-res=$("$FF" "$BASE/" "$OUT/end.png" --size 1400x900 --wait 3 --steps "$steps" 2>&1)
-echo "$res" | grep -o '"PASS[^"]*"\|"FAIL[^"]*\|"INFO[^"]*' | tr -d '"'
-echo "$res" | grep -q '"FAIL' && fail=1
-[ "$(echo "$res" | grep -c '"PASS')" -ge 12 ] || { echo "FAIL not every check ran"; echo "$res" | tail -5; fail=1; }
-# Each tab with the system in dark mode.
-for t in adjust filters crop; do
-  FF_DARK=1 "$FF" "$BASE/" "$OUT/$t-dark.png" --size 1400x900 --wait 3 --steps "$OPEN;$(RUN home:photos:edit:tab "{tab:'$t'}");$(RUN home:photos:edit:set "{exposure:0.5,vibrance:30,filter:{name:'vivid',amount:0.6}}");sleep:3" > /dev/null 2>&1
-done
-echo "screenshots: $OUT/{adjust,filters,crop}{,-dark}.png"
+tag=$(date +%s)
+enc() { python3 -c 'import sys,urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$1"; }
+folder=$(curl -s -b "$W/ada.cj" -X POST "$BASE/api/folders?path=ada&name=$(enc "Edits smoke $tag")" | json 'd.get("path","")')
+id=$(curl -s -b "$W/ada.cj" --data-binary @"$W/pic.png" "$BASE/api/files?name=pic.png&as_is=1&folder=$(enc "$folder")" | json 'd.get("id","")')
+[ -n "$folder" ] && [ -n "$id" ]; ok $? "a new folder with a picture"
+curl -s -b "$W/ada.cj" -o /dev/null -X POST "$BASE/api/photos/enable?folder=$(enc "$folder")"
+listed_v() { curl -s -b "$W/ada.cj" "$BASE/api/photos?folder=$(enc "$folder")" | json '(d["photos"] or [{}])[0].get("v")'; }
+for _ in $(seq 1 50); do v0=$(listed_v); [ "$v0" != None ] && break; sleep 0.2; done
+[ "$v0" != None ]; ok $? "picture read (v=$v0)"
+E="$BASE/api/photos/edits/$id"
+g=$(curl -s -b "$W/ada.cj" "$E")
+[ "$(echo "$g" | json '(d["etag"], d["writable"], d["foreign"], d["edits"]["exposure"], d["thumb_v"])')" = "('none', True, [], 0.0, '$v0')" ]; ok $? "GET: no edits yet, writable"
+code() { curl -s -o "$W/out" -w '%{http_code}' -b "$W/$1.cj" "${@:2}"; }
+[ "$(code ada -X PUT -d '{"exposure":1}' "$E")" = 428 ]; ok $? "PUT without If-Match: 428"
+[ "$(code ada -X PUT -H 'If-Match: none' -d '{"exposure":99}' "$E")" = 400 ]; ok $? "edits out of range: 400"
+python3 -c 'print("{\"aspect\":\"" + "x" * 17000 + "\"}")' > "$W/big.json"
+[ "$(code ada -X PUT -H 'If-Match: none' --data-binary @"$W/big.json" "$E")" = 413 ]; ok $? "over 16 KB: 413"
+[ "$(code ada -X PUT -H 'If-Match: none' -d '{"exposure":0.5,"crop":{"l":0.1,"t":0,"r":0.9,"b":1}}' "$E")" = 200 ]; ok $? "PUT saves"
+etag=$(json 'd["etag"]' < "$W/out"); v1=$(json 'd["thumb_v"]' < "$W/out")
+[ "$etag" != none ] && [ "$v1" != "$v0" ] && [ "$v1" != None ]; ok $? "new etag ($etag) and thumb_v ($v1)"
+[ "$(listed_v)" = "$v1" ]; ok $? "the listing's v follows"
+[ "$(code ada -X PUT -H 'If-Match: none' -d '{"contrast":5}' "$E")" = 409 ] && [ "$(json 'd["etag"]' < "$W/out")" = "$etag" ]; ok $? "a save from an old etag: 409 with the current etag"
+[ "$(curl -s -b "$W/ada.cj" "$E" | json '(d["edits"]["exposure"], d["source"])')" = "(0.5, 'starbase')" ]; ok $? "GET reads the saved edits"
+for _ in $(seq 1 50); do t=$(code ada "$BASE/api/photos/thumb/$id/256?v=$v1"); [ "$t" = 200 ] && break; sleep 0.2; done
+[ "$t" = 200 ]; ok $? "thumbnail under the new v"
+X="$BASE/api/photos/export/$id"
+[ "$(code ada -X POST -d '{}' "$X")" = 201 ] && [ "$(json 'd["name"]' < "$W/out")" = "pic (edited).jpg" ]; ok $? "export: a new file"
+newid=$(json 'd["id"]' < "$W/out")
+curl -s -b "$W/ada.cj" -o "$W/ex.jpg" "$BASE/api/files/$newid"
+size=$(python3 - "$W/ex.jpg" <<'PY'
+import struct, sys
+b = open(sys.argv[1], "rb").read(); i = 2
+while i + 9 < len(b) and b[i] == 0xFF:
+    m, n = b[i + 1], struct.unpack(">H", b[i + 2:i + 4])[0]
+    if m in (0xC0, 0xC1, 0xC2):
+        h, w = struct.unpack(">HH", b[i + 5:i + 9]); print(f"{w}x{h}"); break
+    i += 2 + n
+PY
+)
+[ "$size" = 256x200 ]; ok $? "export has the edits (crop 0.1-0.9 of 320 wide: $size)"
+[ "$(code ada -X POST -d '{"format":"png","max_side":100}' "$X")" = 201 ] && [ "$(code ada -X POST "$X")" = 201 ] && [ "$(json 'd["name"]' < "$W/out")" = "pic (edited) (2).jpg" ]; ok $? "never over a file: numbered"
+[ "$(code bob -X POST "$X")" = 403 ]; ok $? "export by someone else: 403"
+[ "$(code bob "$E")" = 403 ] && [ "$(code bob -X PUT -H "If-Match: $etag" -d '{}' "$E")" = 403 ]; ok $? "someone else: 403"
+[ "$(code ada -X DELETE -H "If-Match: $etag" "$E")" = 200 ] && [ "$(json '(d["etag"], d["thumb_v"])' < "$W/out")" = "('none', '$v0')" ]; ok $? "DELETE resets: sidecar gone, v back"
+rm -rf "$W"
 exit $fail

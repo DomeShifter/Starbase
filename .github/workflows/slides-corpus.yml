@@ -24,7 +24,7 @@ permissions:
 
 concurrency:
   group: slides-corpus-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # The DeckCraft release the Slides app is pinned to: tag and the commit it must point at.
