@@ -11,6 +11,18 @@ new features and the last one for fixes.
   Settings are now `STARBASE_*`; the old `STARSHEETS_*` names still work.
 
 ### Added
+- **Pivot table editor** as in Google Sheets: a side panel that opens when you click in a pivot
+  table, with Rows, Columns, Values and Filters and an Add button for each. Rows and columns have
+  an order and (for dates) Group by year, quarter, month or day; values have Summarise by and
+  Show as (% of row, column or grand total); Values › Add › Calculated field takes a formula over
+  the fields' names; filters work by values (tick boxes) or by condition (text contains, greater
+  than and so on: it ticks the items that match now).
+- **SPARKLINE** and **IMAGE** as in Google Sheets: a small line, column, win/loss or bar chart in
+  a cell (`=SPARKLINE(B2:B13, {"charttype","column";"color","green"})`), or a picture from a web
+  address (`=IMAGE("https://…")`; only from sites that let other pages load their pictures).
+- Filter by colour and Sort by colour also see colours from conditional formatting.
+- Smart Fill shows its suggestions in grey in the cells, and no longer suggests copying a row's
+  own text (such as a "Total" row) into the column.
 - **Format › Alternating colours**, as in Google Sheets: a side panel that bands the selected
   range's rows in two colours, with a header and footer colour if you want them; eight preset
   styles or your own colours, and Remove alternating colours. Saved as ordinary conditional

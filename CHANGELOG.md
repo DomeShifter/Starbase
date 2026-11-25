@@ -11,6 +11,9 @@ number goes up for new features and the last one for fixes.
 ## [Unreleased]
 
 ### Added
+- Starbase Sheets: a Google-style **pivot table editor** (calculated fields, group by date,
+  show as %, filter by values or condition), **SPARKLINE** and **IMAGE** in cells, filter and sort
+  by conditional-formatting colours, and grey Smart Fill previews.
 - Starbase Sheets: **Format › Alternating colours** (banded rows with header and footer colours,
   preset or your own, saved so Excel shows them too), **Smart Fill** suggestions (Ctrl+Shift+Y)
   and **Edit › Move › Row up / down**.
