@@ -348,7 +348,7 @@ impl Desktop {
             app.set_status("This computer isn't connected to a Starbase server: File › Connect to a server…, then open the presentation again.");
         }
         ctx.request_repaint();
-        let mode = crate::theme::Mode::parse(&crate::prefs::get(crate::theme::KEY).unwrap_or_default());
+        let mode = crate::theme::Mode::default();
         Self {
             app,
             shell: crate::shell::Shell::new(mode),
@@ -469,7 +469,7 @@ impl eframe::App for Desktop {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.shell.ui(&mut self.app, ui, Some(&self.link));
         self.app.ui(ui);
-        let pal = self.shell.palette(ui.ctx());
+        let pal = self.shell.palette();
         let app = &mut self.app;
         if let Some(server) = self.connect.ui(ui.ctx(), &pal, &mut |msg| app.set_status(msg)) {
             self.link.set_server(server.as_ref().map(|s| s.url.clone()));

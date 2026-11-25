@@ -112,12 +112,13 @@ fn parse_colour(c: &str) -> Color32 {
     Color32::from_hex(c).unwrap_or(Color32::from_rgb(0x5F, 0x63, 0x68))
 }
 
-fn avatar(ui: &mut Ui, name: &str, colour: &str, size: f32) {
-    let (rect, _) = ui.allocate_exact_size(vec2(size, size), egui::Sense::hover());
+pub(crate) fn avatar(ui: &mut Ui, name: &str, colour: &str, size: f32) -> egui::Response {
+    let (rect, r) = ui.allocate_exact_size(vec2(size, size), egui::Sense::click());
     let p = ui.painter();
     p.circle_filled(rect.center(), size / 2.0, parse_colour(colour));
     let letter: String = name.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().collect()).unwrap_or_else(|| "?".into());
     p.text(rect.center(), egui::Align2::CENTER_CENTER, letter, egui::FontId::proportional(size * 0.5), Color32::WHITE);
+    r
 }
 
 fn pick(ui: &mut Ui, id: &str, width: f32, current: &mut usize, labels: &[&str]) {

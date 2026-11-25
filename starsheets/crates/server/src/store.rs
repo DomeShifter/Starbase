@@ -174,8 +174,33 @@ fn thin(folder: &Path, meta: &mut Map<String, Value>, keep: usize, now: i64) -> 
         fs::remove_file(folder.join(n))?;
     }
     let names: BTreeSet<String> = kept.into_iter().map(|k| k.0).collect();
-    meta.retain(|k, _| k == "current" || names.contains(k));
+    meta.retain(|k, _| k == "current" || k == COUNTER || names.contains(k));
     Ok(())
+}
+
+/// The key in a file's `versions.json` holding the next version number: a counter that only goes
+/// up, so numbers are never reused after versions are thinned out, restored or the file moved.
+const COUNTER: &str = "next";
+
+/// Takes the next version number. First touch of a file made before numbering: its versions that
+/// have no number get 1, 2, … oldest first (after the highest number any already has).
+fn take_number(folder: &Path, meta: &mut Map<String, Value>) -> u64 {
+    let mut next = meta.get(COUNTER).and_then(Value::as_u64).unwrap_or(0);
+    let highest = meta.values().filter_map(|e| e.get("n").and_then(Value::as_u64)).max().unwrap_or(0);
+    next = next.max(highest + 1).max(1);
+    for name in version_names(folder) {
+        if let Some(Value::Object(e)) = meta.get_mut(&name) {
+            if e.get("n").is_none() {
+                e.insert("n".into(), json!(next));
+                next += 1;
+            }
+        } else if !meta.contains_key(&name) {
+            meta.insert(name, json!({"n": next}));
+            next += 1;
+        }
+    }
+    meta.insert(COUNTER.into(), json!(next + 1));
+    next
 }
 
 /// "YYYY-mm-dd HH:MM:SS" (UTC) for the activity log.
@@ -287,6 +312,103 @@ fn renamed(old: &str, typed: &str) -> (String, String) {
 
 fn numbered(stem: &str, n: u32, ext: &str) -> String {
     if n == 1 { format!("{stem}{ext}") } else { format!("{stem} ({n}){ext}") }
+}
+
+/// A picture's XMP sidecar (`photo.jpg.xmp`: its edits, photos/sidecar.rs) is part of it: it is
+/// renamed, moved, copied, binned and restored with it, so edits are never lost and a later file
+/// of the same name never inherits them. Only a plain file is carried, never a link.
+fn sidecar_of(file: &Path) -> PathBuf {
+    let mut s = file.as_os_str().to_owned();
+    s.push(".xmp");
+    PathBuf::from(s)
+}
+
+/// Moves (or copies) the picture `src` to `dst` (a name just claimed) together with its sidecar
+/// `side` (if it is a plain file), all or nothing. The sidecar goes first and never replaces a
+/// file already at `dst`'s sidecar name, which may be someone else's file in a shared folder: that
+/// refuses with 409 like a taken name. If the picture can't follow, the sidecar goes back.
+fn with_sidecar(src: &Path, side: &Path, dst: &Path, copy: bool) -> R<()> {
+    let drop_claim = || {
+        // The empty placeholder claim_name made, so a failed move leaves no stray file.
+        if fs::symlink_metadata(dst).is_ok_and(|m| m.is_file() && m.len() == 0) {
+            let _ = fs::remove_file(dst);
+        }
+    };
+    let mut carried = None;
+    if fs::symlink_metadata(side).is_ok_and(|m| m.is_file()) {
+        let to = sidecar_of(dst);
+        match if copy { copy_new(side, &to) } else { move_new(side, &to) } {
+            Ok(()) => carried = Some(to),
+            Err(e) => {
+                drop_claim();
+                return Err(if e.kind() == io::ErrorKind::AlreadyExists {
+                    Bad::new(409, "a file named like its edits (.xmp) is already there")
+                } else {
+                    e.into()
+                });
+            }
+        }
+    }
+    let moved = if copy { fs::copy(src, dst).map(|_| ()) } else { move_any(src, dst) };
+    if let Err(e) = moved {
+        if let Some(to) = carried {
+            let _ = if copy { fs::remove_file(&to) } else { move_new(&to, side) };
+        }
+        drop_claim();
+        return Err(e.into());
+    }
+    Ok(())
+}
+
+fn cpath(p: &Path) -> io::Result<std::ffi::CString> {
+    use std::os::unix::ffi::OsStrExt;
+    std::ffi::CString::new(p.as_os_str().as_bytes()).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))
+}
+
+/// Renames a file, failing with `AlreadyExists` instead of replacing one at `dst`: atomically by
+/// `renameat2(RENAME_NOREPLACE)`, else by link + unlink, else (another file system, or no hard
+/// links) by an exclusive copy and removal.
+fn move_new(src: &Path, dst: &Path) -> io::Result<()> {
+    let (s, d) = (cpath(src)?, cpath(dst)?);
+    // SAFETY: both are valid NUL-terminated paths; renameat2 only reads them.
+    let r = unsafe { libc::renameat2(libc::AT_FDCWD, s.as_ptr(), libc::AT_FDCWD, d.as_ptr(), libc::RENAME_NOREPLACE) };
+    if r == 0 {
+        return Ok(());
+    }
+    let e = io::Error::last_os_error();
+    if !matches!(e.raw_os_error(), Some(libc::EINVAL | libc::ENOSYS | libc::EXDEV)) {
+        return Err(e);
+    }
+    match fs::hard_link(src, dst) {
+        Ok(()) => return fs::remove_file(src),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return Err(e),
+        Err(_) => {}
+    }
+    copy_new(src, dst)?;
+    fs::remove_file(src)
+}
+
+/// Copies a file to `dst`, which must not exist yet (not even as a link: never followed), keeping
+/// its permissions and modified time.
+fn copy_new(src: &Path, dst: &Path) -> io::Result<()> {
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    let mut from = fs::File::options().read(true).custom_flags(libc::O_NOFOLLOW).open(src)?;
+    let m = from.metadata()?;
+    let mut to = fs::File::options().write(true).create_new(true).custom_flags(libc::O_NOFOLLOW).mode(m.permissions().mode() & 0o777).open(dst)?;
+    let done = io::copy(&mut from, &mut to).and_then(|_| to.sync_all());
+    if let Err(e) = done {
+        let _ = fs::remove_file(dst);
+        return Err(e);
+    }
+    if let Ok(t) = m.modified() {
+        let _ = to.set_modified(t);
+    }
+    Ok(())
+}
+
+/// Where the sidecar of `name` in a bin is kept (a hidden folder: not listed as its own item).
+fn binned_sidecar(bin: &Path, name: &str) -> PathBuf {
+    bin.join(".sidecars").join(format!("{name}.xmp"))
 }
 
 /// Moves a file or folder, copying when it has to cross file systems.
@@ -608,13 +730,16 @@ impl Store {
         let lower = path.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
         let (_, ext) = splitext(&lower);
         let file = format!("{stem}{}", if ext.is_empty() { ".xlsx" } else { &ext });
-        fs::copy(path, folder.join(&file))?;
         let mut meta = self.load_json(&folder.join(VERSIONS_META));
+        // Numbered before the new copy exists, so older unnumbered versions come first.
+        let number = take_number(&folder, &mut meta);
+        fs::copy(path, folder.join(&file))?;
         let current = match meta.remove("current") {
             Some(Value::Object(m)) => m,
             _ => Map::new(),
         };
         let mut entry = Map::new();
+        entry.insert("n".into(), json!(number));
         entry.insert("saved".into(), json!(saved));
         entry.insert("author".into(), json!(crate::spaces::last_change(self, fid).map(|c| c.0).unwrap_or_default()));
         for key in ["name", "restored_from"] {
@@ -639,7 +764,7 @@ impl Store {
             // Copies made before versions were described: the copy's own time.
             let saved = e.and_then(|e| e["saved"].as_i64()).unwrap_or(mtime(&m).0);
             out.push(json!({
-                "v": v, "modified": saved, "saved": saved, "size": m.len(),
+                "v": v, "number": e.and_then(|e| e["n"].as_u64()), "modified": saved, "saved": saved, "size": m.len(),
                 "author": e.and_then(|e| e["author"].as_str()).unwrap_or(""),
                 "name": e.and_then(|e| e["name"].as_str()).unwrap_or(""),
                 "restored_from": e.and_then(|e| e.get("restored_from")).cloned().unwrap_or(Value::Null),
@@ -690,7 +815,13 @@ impl Store {
         let file_ids: Map<String, Value> = index.iter().filter_map(|(id, p)| Some((under(p)?, json!(id)))).collect();
         let mut folders = self.load_folders();
         let folder_ids: Map<String, Value> = folders.iter().filter_map(|(id, p)| Some((under(p)?, json!(id)))).collect();
+        let was_file = self.full(relpath).is_file();
         move_any(&self.full(relpath), &bin.join(&target))?;
+        let side = sidecar_of(&self.full(relpath));
+        if was_file && fs::symlink_metadata(&side).is_ok_and(|m| m.is_file()) {
+            fs::create_dir_all(bin.join(".sidecars"))?;
+            move_any(&side, &binned_sidecar(&bin, &target))?;
+        }
         index.retain(|_, p| under(p).is_none());
         self.save_index(index)?;
         folders.retain(|_, p| under(p).is_none());
@@ -707,6 +838,11 @@ impl Store {
             let name = numbered(stem, n, ext);
             if own == Some(join(folder, &name).as_str()) {
                 return Ok(name);
+            }
+            // A left-over sidecar (or someone's file of that name) would be taken for this
+            // picture's edits, or block carrying its own: skip the name like a taken one.
+            if fs::symlink_metadata(sidecar_of(&self.full(folder).join(&name))).is_ok() {
+                continue;
             }
             match fs::OpenOptions::new().write(true).create_new(true).mode(0o664).open(self.full(folder).join(&name)) {
                 Ok(_) => return Ok(name),
@@ -839,7 +975,7 @@ impl Store {
                 let name = self.claim_name(&folder, &stem, &ext, Some(&path))?;
                 let new = join(&folder, &name);
                 if new != path {
-                    fs::rename(&fpath, self.full(&new))?;
+                    with_sidecar(&fpath, &sidecar_of(&fpath), &self.full(&new), false)?;
                     index.insert(fid.to_string(), new);
                     self.save_index(index)?;
                 }
@@ -853,7 +989,7 @@ impl Store {
                 }
                 let (stem, ext) = split_existing(&base_of(&path));
                 let name = self.claim_name(&folder, &stem, &ext, None)?;
-                move_any(&fpath, &self.full(&folder).join(&name))?;
+                with_sidecar(&fpath, &sidecar_of(&fpath), &self.full(&folder).join(&name), false)?;
                 index.insert(fid.to_string(), join(&folder, &name));
                 self.save_index(index)?;
                 ok(json!({"name": name}))
@@ -867,7 +1003,7 @@ impl Store {
                     stem = format!("Copy of {stem}");
                 }
                 let name = self.claim_name(&folder, &stem, &ext, None)?;
-                fs::copy(&fpath, self.full(&folder).join(&name))?;
+                with_sidecar(&fpath, &sidecar_of(&fpath), &self.full(&folder).join(&name), true)?;
                 let new_id = random_hex(8);
                 index.insert(new_id.clone(), join(&folder, &name));
                 self.save_index(index)?;
@@ -1044,7 +1180,7 @@ impl Store {
                 } else {
                     let (stem, ext) = split_existing(&base_of(&original));
                     let t = join(&folder, &self.claim_name(&folder, &stem, &ext, None)?);
-                    fs::rename(&src, self.full(&t))?;
+                    with_sidecar(&src, &binned_sidecar(&bin, name), &self.full(&t), false)?;
                     t
                 };
                 // The ids come back with it: versions and sharing are kept.
@@ -1096,7 +1232,8 @@ impl Store {
         if src.is_dir() {
             fs::remove_dir_all(&src)?
         } else {
-            fs::remove_file(&src)?
+            fs::remove_file(&src)?;
+            let _ = fs::remove_file(binned_sidecar(bin, name));
         }
         if let Some(info) = bins.remove(&self.bin_key(space, name))
             && let Some(ids) = info.get("files").and_then(Value::as_object)
@@ -1224,6 +1361,60 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    fn numbers(store: &Store, id: &str) -> Vec<u64> {
+        store.version_list(id).unwrap().iter().filter_map(|v| v["number"].as_u64()).collect()
+    }
+
+    #[test]
+    fn version_numbers_only_go_up_after_pruning_restore_and_moves() {
+        let dir = std::env::temp_dir().join(format!("starsheets-num-{}", random_hex(6)));
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("a.xlsx");
+        fs::write(&f, b"0").unwrap();
+        let store = Store { root: dir.clone(), keep: 2, spaces: false };
+        let id = store.synced_index().unwrap().keys().next().unwrap().clone();
+        for i in 1..=5 {
+            store.keep_version(&id, &f).unwrap();
+            fs::write(&f, format!("{i}")).unwrap();
+        }
+        // keep = 2: older ones were pruned, yet the newest keeps rising and nothing repeats.
+        let n = numbers(&store, &id);
+        assert!(n.len() <= 2, "{n:?}");
+        assert_eq!(n[0], 5, "newest first: {n:?}");
+        // Restore keeps the current file as a new, higher number.
+        let v = store.version_list(&id).unwrap()[0]["v"].as_str().unwrap().to_string();
+        let vdir = store.versions().join(&id);
+        fs::copy(vdir.join(&v), &f).unwrap();
+        store.keep_version(&id, &f).unwrap();
+        assert_eq!(numbers(&store, &id)[0], 6);
+        // A moved file keeps its id, so its counter.
+        fs::create_dir_all(dir.join("sub")).unwrap();
+        fs::rename(&f, dir.join("sub/a.xlsx")).unwrap();
+        store.keep_version(&id, &dir.join("sub/a.xlsx")).unwrap();
+        assert_eq!(numbers(&store, &id)[0], 7);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn version_numbers_start_after_the_highest_for_files_from_before_numbering() {
+        let dir = std::env::temp_dir().join(format!("starsheets-mig-{}", random_hex(6)));
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("a.xlsx");
+        fs::write(&f, b"x").unwrap();
+        let store = Store { root: dir.clone(), keep: 10, spaces: false };
+        let id = store.synced_index().unwrap().keys().next().unwrap().clone();
+        let vdir = store.versions().join(&id);
+        fs::create_dir_all(&vdir).unwrap();
+        for n in ["20260101-000000-0000.xlsx", "20260102-000000-0000.xlsx"] {
+            fs::write(vdir.join(n), b"old").unwrap();
+        }
+        store.keep_version(&id, &f).unwrap();
+        assert_eq!(numbers(&store, &id), vec![3, 2, 1]);
+        store.keep_version(&id, &f).unwrap();
+        assert_eq!(numbers(&store, &id)[0], 4);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn path_of_follows_a_file_moved_outside_starsheets() {
         let dir = std::env::temp_dir().join(format!("starsheets-store-{}", random_hex(6)));
@@ -1240,6 +1431,51 @@ mod tests {
         // Deleted: gone.
         let _ = fs::remove_file(dir.join("new/a.xlsx"));
         assert_eq!(store.path_of(&id).unwrap(), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sidecars_never_replace_or_follow_and_moves_are_all_or_nothing() {
+        let dir = std::env::temp_dir().join(format!("starsheets-side-{}", random_hex(6)));
+        fs::create_dir_all(dir.join("to")).unwrap();
+        let (pic, side) = (dir.join("a.jpg"), dir.join("a.jpg.xmp"));
+        fs::write(&pic, b"picture").unwrap();
+        fs::write(&side, b"ours").unwrap();
+        // Someone else's file at the destination's sidecar name: refused (409), nothing moved,
+        // their file untouched, the claimed placeholder gone.
+        fs::write(dir.join("to/b.jpg.xmp"), b"theirs").unwrap();
+        fs::write(dir.join("to/b.jpg"), b"").unwrap();
+        let e = with_sidecar(&pic, &side, &dir.join("to/b.jpg"), false).unwrap_err();
+        assert_eq!(e.code, 409);
+        assert_eq!(fs::read(dir.join("to/b.jpg.xmp")).unwrap(), b"theirs");
+        assert!(!dir.join("to/b.jpg").exists());
+        assert_eq!((fs::read(&pic).unwrap(), fs::read(&side).unwrap()), (b"picture".to_vec(), b"ours".to_vec()));
+        // A link at the sidecar name is neither followed nor replaced, by a copy or a move.
+        let outside = dir.join("outside");
+        fs::write(&outside, b"keep").unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join("to/c.jpg.xmp")).unwrap();
+        assert!(with_sidecar(&pic, &side, &dir.join("to/c.jpg"), true).is_err());
+        assert!(with_sidecar(&pic, &side, &dir.join("to/c.jpg"), false).is_err());
+        assert_eq!(fs::read(&outside).unwrap(), b"keep");
+        assert!(copy_new(&side, &dir.join("to/c.jpg.xmp")).is_err() && move_new(&side, &dir.join("to/c.jpg.xmp")).is_err());
+        // The picture can't follow (gone): the sidecar comes back.
+        let e = with_sidecar(&dir.join("missing.jpg"), &side, &dir.join("to/d.jpg"), false);
+        assert!(e.is_err() && side.exists() && !dir.join("to/d.jpg.xmp").exists());
+        // The normal case: both arrive, and a copy leaves both behind.
+        with_sidecar(&pic, &side, &dir.join("to/e.jpg"), true).unwrap();
+        assert_eq!(fs::read(dir.join("to/e.jpg.xmp")).unwrap(), b"ours");
+        with_sidecar(&pic, &side, &dir.join("to/f.jpg"), false).unwrap();
+        assert!(!pic.exists() && !side.exists() && dir.join("to/f.jpg.xmp").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_name_whose_sidecar_exists_counts_as_taken() {
+        let dir = std::env::temp_dir().join(format!("starsheets-claim-{}", random_hex(6)));
+        fs::create_dir_all(dir.join("f")).unwrap();
+        let store = Store { root: dir.clone(), keep: 3, spaces: false };
+        fs::write(dir.join("f/p.jpg.xmp"), b"theirs").unwrap();
+        assert_eq!(store.claim_name("f", "p", ".jpg", None).unwrap(), "p (2).jpg");
         let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -8,6 +8,8 @@
 //! - The next and previous pictures are asked for ahead of time.
 //! - Slideshow: every 3, 5 or 10 seconds, in order or shuffled.
 //!
+//! - Edit (or E) opens the editor (photo_edit.rs) over the viewer; it takes every key while open.
+//!
 //! Black in light and dark mode alike, like other photo viewers: the picture is what matters.
 
 use egui::{Color32, Key, Modifiers, Order, Rect, RichText, Sense, Vec2, pos2, vec2};
@@ -142,13 +144,20 @@ impl Viewer {
 
 /// Keys, buttons, drags and drawing; false when the viewer was closed.
 pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bool {
-    let Some(mut v) = pm.viewer.take() else { return false };
-    if pm.pics.is_empty() {
+    if pm.viewer.is_none() || pm.pics.is_empty() {
+        pm.viewer = None;
+        pm.editor = None;
         return false;
     }
+    if pm.editor.is_some() {
+        super::photo_edit::ui(pm, ctx, store);
+        return true;
+    }
+    let Some(mut v) = pm.viewer.take() else { return false };
     v.fit_list(pm.pics.len());
     let now = ctx.input(|i| i.time);
     let mut open = true;
+    let mut edit = false;
     // Keys first, so nothing behind the viewer gets them.
     ctx.input_mut(|i| {
         if i.consume_key(Modifiers::NONE, Key::Escape) {
@@ -178,6 +187,9 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
         if i.consume_key(Modifiers::NONE, Key::Num0) {
             v.zoom = 1.0;
             v.pan = Vec2::ZERO;
+        }
+        if i.consume_key(Modifiers::NONE, Key::E) {
+            edit = true;
         }
         if i.consume_key(Modifiers::NONE, Key::Home) {
             v.pos = 0;
@@ -292,6 +304,14 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
             if button(ui, "white_download", "Download") {
                 download(&id);
             }
+            let edit_icon = crate::icons::icon_in("edit", Color32::WHITE).map(|i| i.fit_to_exact_size(vec2(20.0, 20.0)));
+            let b = match edit_icon {
+                Some(img) => egui::Button::image_and_text(img, RichText::new("Edit").size(14.0).color(Color32::WHITE)),
+                None => egui::Button::new(RichText::new("Edit").size(14.0).color(Color32::WHITE)),
+            };
+            if ui.add(b.fill(Color32::from_white_alpha(40)).corner_radius(18).min_size(vec2(0.0, 36.0))).on_hover_text("Edit (E)").clicked() {
+                edit = true;
+            }
             if toggle(ui, "white_shuffle", if v.shuffle { "Shuffle: on" } else { "Shuffle: off" }, v.shuffle) {
                 let seed = (now * 1000.0) as u64;
                 v.set_shuffle(!v.shuffle, seed);
@@ -339,8 +359,18 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
     });
     if open {
         pm.viewer = Some(v);
+        if edit {
+            v_edit(pm, ctx, store);
+        }
     }
     open
+}
+
+fn v_edit(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) {
+    if let Some(v) = pm.viewer.as_mut() {
+        v.playing = false;
+    }
+    super::photo_edit::open(pm, ctx, store);
 }
 
 fn p_has_size(w: f32, h: f32) -> bool {

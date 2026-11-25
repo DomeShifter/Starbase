@@ -3,21 +3,17 @@
 //! dark set); DeckCraft draws the slide list, the canvas and its dialogs with its own light or
 //! dark tokens, switched with its `view.dark` command so both halves always match.
 //!
-//! The choice is View › Theme: Light, Dark or Match the system (the default), kept in the
-//! browser (`localStorage`, key [`KEY`]).
+//! Slides is light only, like Drive, Sheets and Docs, whatever the system prefers: there is no
+//! menu for it and nothing is remembered. [`Mode::Dark`] is kept for tests and the test hook.
 
 use deckcraft_ui_egui::SlideApp;
 use egui::Color32;
 use serde_json::json;
 
-/// Where the choice is kept in the browser.
-pub const KEY: &str = "starslides.theme";
-
-/// View › Theme.
+/// Light, or Dark (tests only).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Mode {
     #[default]
-    System,
     Light,
     Dark,
 }
@@ -25,27 +21,21 @@ pub enum Mode {
 impl Mode {
     pub fn parse(s: &str) -> Mode {
         match s {
-            "light" => Mode::Light,
             "dark" => Mode::Dark,
-            _ => Mode::System,
+            _ => Mode::Light,
         }
     }
 
     pub fn name(self) -> &'static str {
         match self {
-            Mode::System => "system",
             Mode::Light => "light",
             Mode::Dark => "dark",
         }
     }
 
-    /// Whether this choice means dark, with the system's preference for [`Mode::System`].
-    pub fn is_dark(self, ctx: &egui::Context) -> bool {
-        match self {
-            Mode::Light => false,
-            Mode::Dark => true,
-            Mode::System => ctx.input(|i| i.raw.system_theme) == Some(egui::Theme::Dark),
-        }
+    /// Whether this means dark (never the system's preference).
+    pub fn is_dark(self) -> bool {
+        self == Mode::Dark
     }
 }
 
@@ -153,7 +143,7 @@ fn brightness(dark: bool) -> deckcraft_ui_egui::theme::Brightness {
 pub fn state(app: &SlideApp, mode: Mode, ctx: &egui::Context) -> serde_json::Value {
     json!({
         "mode": mode.name(),
-        "dark": mode.is_dark(ctx),
+        "dark": mode.is_dark(),
         "deckcraftDark": app.ui.brightness == brightness(true),
         "eguiDark": ctx.global_style().visuals.dark_mode,
     })

@@ -103,6 +103,8 @@ struct State {
     retry: Option<(Vec<u8>, f64)>,
     /// The signed-in person's name from the server, until the page signs comments with it.
     author: Option<String>,
+    /// Who is signed in, for the avatar button: (name, username, colour).
+    me: Option<(String, String, String)>,
     /// When the next preview picture is due (after a save), and when the last one was sent (ms).
     thumb_due: Option<f64>,
     thumb_last: f64,
@@ -208,7 +210,12 @@ impl Link {
                 let user = &v["user"];
                 let name = user["name"].as_str().filter(|n| !n.trim().is_empty()).or_else(|| user["username"].as_str());
                 if let Some(name) = name.filter(|n| !n.trim().is_empty()) {
-                    link.state.borrow_mut().author = Some(name.to_string());
+                    let colour = user["colour"].as_str().unwrap_or("#5F6368").to_string();
+                    let username = user["username"].as_str().unwrap_or("").to_string();
+                    let mut s = link.state.borrow_mut();
+                    s.author = Some(name.to_string());
+                    s.me = Some((name.to_string(), username, colour));
+                    drop(s);
                     link.ctx.request_repaint();
                 }
             }
@@ -300,6 +307,11 @@ impl Link {
             }
             link.ctx.request_repaint();
         });
+    }
+
+    /// The signed-in person (name, username, colour), once the server has said.
+    pub fn me(&self) -> Option<(String, String, String)> {
+        self.state.borrow().me.clone()
     }
 
     /// The signed-in person's name, once, when the server has said it (see [`Self::ask_who`]).
