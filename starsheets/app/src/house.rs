@@ -569,3 +569,31 @@ mod tests {
         assert_eq!(super::BUTTON_RADIUS as f32 * 2.0, super::BUTTON_HEIGHT);
     }
 }
+
+static TOAST: std::sync::Mutex<Option<(String, f64)>> = std::sync::Mutex::new(None);
+
+/// A short confirmation at the bottom of the screen ("Sharing saved"). Shown for 2.5 s by `show_toast`.
+pub fn toast(ctx: &egui::Context, text: &str) {
+    let until = ctx.input(|i| i.time) + 2.5;
+    *TOAST.lock().unwrap_or_else(|e| e.into_inner()) = Some((text.to_string(), until));
+    ctx.request_repaint();
+}
+
+/// Draws the current toast, if any. Call once a frame from a screen that can raise one.
+pub fn show_toast(ctx: &egui::Context) {
+    let Some((text, until)) = TOAST.lock().unwrap_or_else(|e| e.into_inner()).clone() else { return };
+    if ctx.input(|i| i.time) >= until {
+        *TOAST.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        return;
+    }
+    egui::Area::new(egui::Id::unique("house_toast_area"))
+        .order(egui::Order::Tooltip)
+        .anchor(egui::Align2::CENTER_BOTTOM, vec2(0.0, -32.0))
+        .interactable(false)
+        .show(ctx, |ui| {
+            Frame::new().fill(Color32::from_rgb(40, 40, 40)).corner_radius(8).inner_margin(vec2(16.0, 10.0)).show(ui, |ui| {
+                ui.label(RichText::new(text).size(BODY).color(Color32::WHITE));
+            });
+        });
+    ctx.request_repaint_after(std::time::Duration::from_millis(200));
+}

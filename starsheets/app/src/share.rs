@@ -194,7 +194,10 @@ impl Share {
                     self.loaded = true;
                 }
                 Reply::Users(u) => self.users = u,
-                Reply::Saved => self.open = false,
+                Reply::Saved => {
+                    self.open = false;
+                    house::toast(ctx, "Sharing saved");
+                }
                 Reply::Error(e) => self.error = Some(e),
             }
         }
@@ -207,6 +210,7 @@ impl Share {
     }
 
     pub fn ui(&mut self, ctx: &egui::Context) {
+        house::show_toast(ctx);
         if !self.open {
             return;
         }
@@ -302,6 +306,7 @@ impl Share {
                         let _ = w.navigator().clipboard().write_text(&url);
                     }
                     self.copied = true;
+                    house::toast(ctx, "Link copied");
                 }
             });
             if self.copied {
@@ -317,7 +322,7 @@ impl Share {
                 None => {}
             }
         });
-        if close || cancel {
+        if close || cancel || ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
             self.open = false;
         } else if save && !self.busy {
             self.busy = true;

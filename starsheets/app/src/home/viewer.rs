@@ -35,6 +35,8 @@ pub(super) struct Viewer {
     pub shuffle: bool,
     /// The Info panel (ⓘ, or I) is open.
     pub info: bool,
+    /// The "Open with" menu is showing.
+    pub menu: bool,
     pub every: f64,
     pub next_at: f64,
     /// A sideways drag so far (not zoomed in).
@@ -82,6 +84,7 @@ impl Viewer {
             playing: false,
             shuffle: false,
             info: false,
+            menu: false,
             every: EVERY[1],
             next_at: 0.0,
             drag: 0.0,
@@ -146,6 +149,9 @@ impl Viewer {
 }
 
 /// Keys, buttons, drags and drawing; false when the viewer was closed.
+/// The Info panel's width: the picture shrinks to the left of it.
+const INFO_W: f32 = 300.0;
+
 pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bool {
     if pm.viewer.is_none() || pm.pics.is_empty() {
         pm.viewer = None;
@@ -161,10 +167,15 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
     let now = ctx.input(|i| i.time);
     let mut open = true;
     let mut edit = false;
+    let mut menu_at: Option<Rect> = None;
     // Keys first, so nothing behind the viewer gets them.
     ctx.input_mut(|i| {
         if i.consume_key(Modifiers::NONE, Key::Escape) {
-            open = false;
+            if v.menu {
+                v.menu = false;
+            } else {
+                open = false;
+            }
         }
         if i.consume_key(Modifiers::NONE, Key::ArrowRight) || i.consume_key(Modifiers::NONE, Key::PageDown) {
             v.step(1);
@@ -261,7 +272,9 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
         let (pw, ph) = (p.width.max(1) as f32, p.height.max(1) as f32);
         let (name, date) = (p.name.clone(), date_label(p.taken.as_deref(), p.modified));
         let id = p.id.clone();
-        let area = rect.shrink2(vec2(0.0, 56.0));
+        let side = if v.info { INFO_W } else { 0.0 };
+        let mut area = rect.shrink2(vec2(0.0, 56.0));
+        area.max.x -= side;
         let want_original = {
             let fit = (area.width() / pw).min(area.height() / ph);
             pw * fit * v.zoom * ctx.pixels_per_point() > LARGE as f32 + 1.0 && pw.max(ph) > LARGE as f32
@@ -309,15 +322,16 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
         bar_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if button(ui, "white_download", "Download") {
                 download(&id);
+                crate::house::toast(ctx, "Downloading the original");
             }
-            // The system's default app on the desktop; in the browser the file is downloaded.
-            if ui
+            // A small menu under the button: what can really be done with the original.
+            let with = ui
                 .add(egui::Button::new(RichText::new("Open with…").size(13.0).color(Color32::WHITE)).frame(false).min_size(vec2(40.0, 36.0)))
-                .on_hover_text(if cfg!(target_arch = "wasm32") { "Download the original" } else { "Open in your default app" })
-                .clicked()
-            {
-                download(&id);
+                .on_hover_text("Open this picture another way");
+            if with.clicked() {
+                v.menu = !v.menu;
             }
+            menu_at = Some(with.rect);
             if toggle(ui, "white_info", "Info (I)", v.info) {
                 v.info = !v.info;
             }
@@ -358,14 +372,49 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
                 v.zoom_by(1.0 / 1.5);
             }
         });
+        if v.menu
+            && let Some(at) = menu_at
+        {
+            let mut chosen = None;
+            let entries: &[&str] =
+                if cfg!(target_arch = "wasm32") { &["Download original", "Edit in Starbase editor"] } else { &["Edit in Starbase editor"] };
+            let r = egui::Area::new(egui::Id::unique("photo_open_with"))
+                .order(Order::Tooltip)
+                .fixed_pos(pos2(at.right() - 200.0, at.bottom() + 6.0))
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.set_width(200.0);
+                        for (k, e) in entries.iter().enumerate() {
+                            if ui.add(egui::Button::new(*e).frame(false).min_size(vec2(200.0, 32.0))).clicked() {
+                                chosen = Some(k);
+                            }
+                        }
+                    });
+                });
+            if let Some(k) = chosen {
+                v.menu = false;
+                match entries[k] {
+                    "Download original" => {
+                        download(&id);
+                        crate::house::toast(ctx, "Downloading the original");
+                    }
+                    _ => edit = true,
+                }
+            } else if ctx.input(|i| i.pointer.any_pressed())
+                && !r.response.contains_pointer()
+                && !menu_at.is_some_and(|b| ctx.input(|i| i.pointer.interact_pos().is_some_and(|p| b.contains(p))))
+            {
+                v.menu = false;
+            }
+        }
         if v.info
             && let Some(p) = pm.pics.get(v.index())
         {
             info_panel(ui, rect, p);
         }
-        // Arrows at the sides.
+        // Arrows at the sides (the right one beside the Info panel).
         if n > 1 {
-            for (icon, by, x) in [("white_chevron_left", -1, rect.left() + 36.0), ("white_chevron_right", 1, rect.right() - 36.0)] {
+            for (icon, by, x) in [("white_chevron_left", -1, rect.left() + 36.0), ("white_chevron_right", 1, rect.right() - 36.0 - side)] {
                 let r = Rect::from_center_size(pos2(x, rect.center().y), vec2(48.0, 48.0));
                 let hit = ui.interact(r, egui::Id::unique(("photo_arrow", by)), Sense::click());
                 painter.circle_filled(r.center(), 24.0, Color32::from_black_alpha(if hit.hovered() { 180 } else { 110 }));
@@ -379,6 +428,7 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
             }
         }
     });
+    crate::house::show_toast(ctx);
     if open {
         pm.viewer = Some(v);
         if edit {
@@ -423,7 +473,7 @@ fn human(b: u64) -> String {
 }
 
 fn info_panel(ui: &mut egui::Ui, rect: Rect, p: &super::photos::Pic) {
-    let panel = Rect::from_min_max(pos2(rect.right() - 300.0, rect.top() + 56.0), pos2(rect.right(), rect.bottom()));
+    let panel = Rect::from_min_max(pos2(rect.right() - INFO_W, rect.top() + 56.0), pos2(rect.right(), rect.bottom()));
     ui.painter().rect_filled(panel, 0, Color32::from_black_alpha(190));
     let mut c = ui.new_child(egui::UiBuilder::new().max_rect(panel.shrink(16.0)));
     c.label(RichText::new("Info").size(16.0).strong().color(Color32::WHITE));
