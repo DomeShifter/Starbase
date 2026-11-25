@@ -36,13 +36,7 @@ impl Home {
             for b in self.bin.clone() {
                 let (r, _) = ui.allocate_exact_size(vec2(w, ROW + 6.0), Sense::hover());
                 let p = ui.painter().clone();
-                if let Some(img) = crate::icons::icon(if b.folder {
-                    "folder"
-                } else if crate::store::is_doc(&b.original) {
-                    "stardocs"
-                } else {
-                    "starsheets"
-                }) {
+                if let Some(img) = crate::icons::icon(if b.folder { "folder" } else { crate::store::app_icon(&b.original) }) {
                     img.paint_at(ui, Rect::from_center_size(r.left_center() + vec2(20.0, 0.0), vec2(20.0, 20.0)));
                 }
                 p.text(r.left_center() + vec2(44.0, -8.0), Align2::LEFT_CENTER, name_of(&b.original), FontId::proportional(14.0), theme::TEXT);
