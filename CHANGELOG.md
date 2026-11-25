@@ -10,6 +10,11 @@ number goes up for new features and the last one for fixes.
 
 ## [Unreleased]
 
+### Added
+- Starbase Sheets: **Format › Alternating colours** (banded rows with header and footer colours,
+  preset or your own, saved so Excel shows them too), **Smart Fill** suggestions (Ctrl+Shift+Y)
+  and **Edit › Move › Row up / down**.
+
 ## [0.1.0] - 2026-11-25
 
 The first public release: an **early preview**. It works and we use it every day, but expect rough
