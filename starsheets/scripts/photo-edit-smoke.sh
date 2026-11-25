@@ -3,7 +3,8 @@
 # test users ada (adapassword, the owner) and bob (bobspassword). Through the API: upload a picture
 # to a new folder of ada's, turn Photos on → GET edits (none, writable) → PUT without If-Match 428,
 # bad edits 400, too big 413 → PUT saves (new etag, new thumb_v, listing's v follows) → a second save
-# from the old etag 409 → the thumbnail under the new v is made → bob 403 → DELETE resets (v back to
+# from the old etag 409 → the thumbnail under the new v is made → export ("Save a copy": a new
+# JPEG of the edited size, a second one numbered, bob 403) → bob 403 → DELETE resets (v back to
 # the original). Prints PASS/FAIL lines; exit 1 on any FAIL. Needs python3 with no extra modules.
 #   scripts/photo-edit-smoke.sh BASE_URL
 set -uo pipefail
@@ -47,6 +48,23 @@ etag=$(json 'd["etag"]' < "$W/out"); v1=$(json 'd["thumb_v"]' < "$W/out")
 [ "$(curl -s -b "$W/ada.cj" "$E" | json '(d["edits"]["exposure"], d["source"])')" = "(0.5, 'starbase')" ]; ok $? "GET reads the saved edits"
 for _ in $(seq 1 50); do t=$(code ada "$BASE/api/photos/thumb/$id/256?v=$v1"); [ "$t" = 200 ] && break; sleep 0.2; done
 [ "$t" = 200 ]; ok $? "thumbnail under the new v"
+X="$BASE/api/photos/export/$id"
+[ "$(code ada -X POST -d '{}' "$X")" = 201 ] && [ "$(json 'd["name"]' < "$W/out")" = "pic (edited).jpg" ]; ok $? "export: a new file"
+newid=$(json 'd["id"]' < "$W/out")
+curl -s -b "$W/ada.cj" -o "$W/ex.jpg" "$BASE/api/files/$newid"
+size=$(python3 - "$W/ex.jpg" <<'PY'
+import struct, sys
+b = open(sys.argv[1], "rb").read(); i = 2
+while i + 9 < len(b) and b[i] == 0xFF:
+    m, n = b[i + 1], struct.unpack(">H", b[i + 2:i + 4])[0]
+    if m in (0xC0, 0xC1, 0xC2):
+        h, w = struct.unpack(">HH", b[i + 5:i + 9]); print(f"{w}x{h}"); break
+    i += 2 + n
+PY
+)
+[ "$size" = 256x200 ]; ok $? "export has the edits (crop 0.1-0.9 of 320 wide: $size)"
+[ "$(code ada -X POST -d '{"format":"png","max_side":100}' "$X")" = 201 ] && [ "$(code ada -X POST "$X")" = 201 ] && [ "$(json 'd["name"]' < "$W/out")" = "pic (edited) (2).jpg" ]; ok $? "never over a file: numbered"
+[ "$(code bob -X POST "$X")" = 403 ]; ok $? "export by someone else: 403"
 [ "$(code bob "$E")" = 403 ] && [ "$(code bob -X PUT -H "If-Match: $etag" -d '{}' "$E")" = 403 ]; ok $? "someone else: 403"
 [ "$(code ada -X DELETE -H "If-Match: $etag" "$E")" = 200 ] && [ "$(json '(d["etag"], d["thumb_v"])' < "$W/out")" = "('none', '$v0')" ]; ok $? "DELETE resets: sidecar gone, v back"
 rm -rf "$W"

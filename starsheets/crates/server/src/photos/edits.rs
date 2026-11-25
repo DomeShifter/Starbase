@@ -82,7 +82,7 @@ const HEAD: u64 = 1024 * 1024;
 
 /// The picture's stored size and EXIF orientation, from its first bytes (headers only, no
 /// decoding): what Adobe's crop and orientation fields are relative to.
-fn geo_of(f: Option<&std::fs::File>) -> Option<Geo> {
+pub(super) fn geo_of(f: Option<&std::fs::File>) -> Option<Geo> {
     use std::io::Read;
     let mut head = Vec::new();
     f?.take(HEAD).read_to_end(&mut head).ok()?;

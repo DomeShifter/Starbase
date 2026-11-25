@@ -152,6 +152,36 @@ same folder (keeping the old file's permissions) and renamed over the old one, o
 the sidecar that was read: two saves can't both win, and another app's save in the meantime is a
 409, never lost.
 
+## Export ("Save a copy")
+
+`POST /api/photos/export/ID`, body (every field optional, at most 16 KB):
+
+```json
+{"format": "jpeg", "quality": 90, "max_side": null, "strip_location": true}
+```
+
+Makes a new file next to the picture with its saved edits: `photo (edited).jpg` (or `.png`),
+numbered when that name is taken (`photo (edited) (2).jpg`). It never replaces a file: it is
+saved like an upload. Answers 201 with `{"id", "name", "folder", "path"}`. Who may: anyone who may
+add files to the picture's folder (403 otherwise; 403 also for a picture they can't see). 400 for
+bad settings, 409 for a kind of picture Starbase can't edit yet (RAW, HEIC), 422 with the reason
+when the picture can't be exported (unreadable, too big).
+
+- `format`: `jpeg` (transparent parts become white) or `png`.
+- `max_side`: the longest side at most this (16 to 30000; never enlarged); `null` = full size.
+- `strip_location` (on unless set to `false`): no GPS position in the new file.
+
+The picture is turned upright (its EXIF orientation), rendered with the edits and encoded in the
+same locked-down child process as thumbnails, one export at a time. Metadata is rebuilt, not
+copied: only camera, lens, exposure settings, dates, artist and copyright from the EXIF, orientation
+set to 1, and the GPS position only when `strip_location` is `false`. Nothing else comes along:
+no XMP (where phones keep a second copy of the location), no MakerNotes, no embedded thumbnail. A
+JPEG keeps the original's colour profile; a PNG has no metadata.
+
+Thumbnails show the edits too: the picture is turned upright first, then rendered with them, in
+the same child process and limits. A cropped picture is decoded bigger (up to 4096 pixels), so
+its thumbnails stay sharp.
+
 ## Settings (environment)
 
 | Setting | Default | Meaning |

@@ -53,6 +53,9 @@ pub async fn route(
     if p.len() == 3 && p[1] == "edits" {
         return Some(super::edits::route(app, m, p[2].clone(), me, headers, body).await);
     }
+    if p.len() == 3 && p[1] == "export" {
+        return Some(super::export::route(app, m, p[2].clone(), me, body).await);
+    }
     let post = p.len() == 2 && (p[1] == "enable" || p[1] == "disable");
     if (m != "GET" && !post) || (m != "POST" && post) {
         return Some(error(405, if post { "use POST" } else { "use GET" }));
