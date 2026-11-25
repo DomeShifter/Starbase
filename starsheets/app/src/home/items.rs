@@ -553,7 +553,8 @@ impl Home {
                             format!("api/folders/rename?path={}&name={}", enc(p), enc(&text)),
                             Box::new(move |v: &Json| {
                                 let now = v["path"].as_str()?.to_string();
-                                (now != was).then_some(super::undo::Step::Folder { was, now })
+                                let id = v["id"].as_str().unwrap_or_default().to_string();
+                                (now != was).then_some(super::undo::Step::Folder { id, was, now })
                             }),
                         )
                     }

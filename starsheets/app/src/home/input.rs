@@ -100,7 +100,7 @@ impl Home {
                         self.paste_into(ctx, h);
                     }
                 }
-                egui::Event::Key { key, pressed: true, modifiers, .. } => match key {
+                egui::Event::Key { key, pressed: true, repeat, modifiers, .. } => match key {
                     Key::Enter if self.selected.len() == 1 => {
                         let item = self.selected[0].clone();
                         self.activate(ctx, &item);
@@ -119,7 +119,8 @@ impl Home {
                     Key::A if modifiers.command => self.selected = self.order(),
                     // Undo the last move, rename, New folder or Move to bin. Not while typing:
                     // a focused text box (rename, search) returned above and keeps its own undo.
-                    Key::Z if modifiers.command && !modifiers.shift => self.undo(ctx),
+                    // One undo per press: holding Ctrl+Z doesn't run through the whole list.
+                    Key::Z if modifiers.command && !modifiers.shift && !repeat => self.undo(ctx),
                     _ => {}
                 },
                 _ => {}

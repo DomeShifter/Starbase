@@ -23,8 +23,9 @@ pub(super) type Then = Box<dyn FnOnce(&Json) -> Option<Step>>;
 pub(super) enum Step {
     /// A file moved or renamed: `id` is now at path `now`, it was at `was`.
     File { id: String, was: String, now: String },
-    /// A folder moved or renamed from `was` to `now`.
-    Folder { was: String, now: String },
+    /// A folder moved or renamed from `was` to `now`; `id` (the server's, "" on this computer)
+    /// makes sure an undo moves this folder, not another that has taken its name since.
+    Folder { id: String, was: String, now: String },
     /// A folder made with New folder.
     Made { path: String },
     /// Something moved to the bin: its name in the bin, and where it was.
@@ -42,11 +43,11 @@ impl Step {
             Step::File { id, was, now } => {
                 (Method::Post, format!("api/files/{id}/move?folder={}&from={}&as={}", enc(&was_parent(was)), enc(now), enc(&was_name(was))))
             }
-            Step::Folder { was, now } if parent_of(was) == parent_of(now) => {
-                (Method::Post, format!("api/folders/rename?path={}&name={}&exact=1", enc(now), enc(&was_name(was))))
+            Step::Folder { id, was, now } if parent_of(was) == parent_of(now) => {
+                (Method::Post, format!("api/folders/rename?path={}&name={}&exact=1{}", enc(now), enc(&was_name(was)), id_q(id)))
             }
-            Step::Folder { was, now } => {
-                (Method::Post, format!("api/folders/move?path={}&to={}&as={}", enc(now), enc(&was_parent(was)), enc(&was_name(was))))
+            Step::Folder { id, was, now } => {
+                (Method::Post, format!("api/folders/move?path={}&to={}&as={}{}", enc(now), enc(&was_parent(was)), enc(&was_name(was)), id_q(id)))
             }
             Step::Made { path } => (Method::Delete, format!("api/folders?path={}&if_empty=1", enc(path))),
             Step::Binned { bin, original } => (Method::Post, format!("api/bin/restore?name={}&expect={}&exact=1", enc(bin), enc(original))),
@@ -61,6 +62,11 @@ impl Step {
             Step::Binned { original, .. } => name_of(original).to_string(),
         }
     }
+}
+
+/// `&id=…` for a folder's undo, when the server gave its id.
+fn id_q(id: &str) -> String {
+    if id.is_empty() { String::new() } else { format!("&id={}", enc(id)) }
 }
 
 /// What the person did in one go (one drag of three files is one action).
@@ -129,7 +135,7 @@ impl Undo {
         let w = self.waiting.remove(&group).expect("there");
         if w.naming {
             // The New folder's own name: undoing it removes the folder (as it is named now).
-            if let (Some(Step::Folder { was, now: named }), Some(top)) = (w.steps.first(), self.done.last_mut())
+            if let (Some(Step::Folder { was, now: named, .. }), Some(top)) = (w.steps.first(), self.done.last_mut())
                 && top.steps == [Step::Made { path: was.clone() }]
             {
                 top.steps = vec![Step::Made { path: named.clone() }];
@@ -273,8 +279,9 @@ mod tests {
         assert_eq!(req(moved), "api/files/f1/move?folder=me%2FA&from=me%2FB%2Fa%20(2).xlsx&as=a.xlsx");
         let renamed = Step::File { id: "f1".into(), was: "me/A/a.xlsx".into(), now: "me/A/b.xlsx".into() };
         assert_eq!(req(renamed), "api/files/f1/rename?name=a.xlsx&from=me%2FA%2Fb.xlsx&exact=1");
-        assert_eq!(req(Step::Folder { was: "me/X".into(), now: "me/B/X".into() }), "api/folders/move?path=me%2FB%2FX&to=me&as=X");
-        assert_eq!(req(Step::Folder { was: "me/X".into(), now: "me/Y".into() }), "api/folders/rename?path=me%2FY&name=X&exact=1");
+        let folder = |id: &str, was: &str, now: &str| Step::Folder { id: id.into(), was: was.into(), now: now.into() };
+        assert_eq!(req(folder("d7", "me/X", "me/B/X")), "api/folders/move?path=me%2FB%2FX&to=me&as=X&id=d7");
+        assert_eq!(req(folder("", "me/X", "me/Y")), "api/folders/rename?path=me%2FY&name=X&exact=1");
         assert_eq!(Step::Made { path: "me/N".into() }.undo_request(), (Method::Delete, "api/folders?path=me%2FN&if_empty=1".into()));
         assert_eq!(
             req(Step::Binned { bin: "a.xlsx".into(), original: "me/A/a.xlsx".into() }),
@@ -286,7 +293,7 @@ mod tests {
     fn an_action_is_kept_once_all_its_items_are_answered() {
         let mut u = Undo::default();
         let g = u.start("Moved to B".into(), 2, true);
-        u.answered(g, Some(Step::Folder { was: "A".into(), now: "B/A".into() }), 0.0);
+        u.answered(g, Some(Step::Folder { id: String::new(), was: "A".into(), now: "B/A".into() }), 0.0);
         assert!(u.done.is_empty() && u.note.is_none(), "one item still on its way");
         u.answered(g, None, 0.0);
         assert_eq!(u.done.len(), 1);
@@ -294,7 +301,7 @@ mod tests {
         // A New folder and its naming are one action: undoing it removes the named folder.
         u.made("me/New folder".into());
         let n = u.start_naming();
-        u.answered(n, Some(Step::Folder { was: "me/New folder".into(), now: "me/Plans".into() }), 0.0);
+        u.answered(n, Some(Step::Folder { id: String::new(), was: "me/New folder".into(), now: "me/Plans".into() }), 0.0);
         assert_eq!(u.done.len(), 2);
         assert_eq!(u.done[1].steps, [Step::Made { path: "me/Plans".into() }]);
         // Nothing done (every item failed): nothing to undo.
