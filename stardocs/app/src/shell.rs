@@ -508,6 +508,8 @@ pub struct Shell {
     /// The title being typed over (server documents: the file's name).
     renaming: Option<String>,
     share: crate::share::Share,
+    /// The "@" picker (smart chips).
+    chips: crate::chips::Chips,
     flags: Flags,
     shortcuts: crate::shortcuts::Shortcuts,
     word_count: crate::wordcount::WordCount,
@@ -987,6 +989,9 @@ impl Shell {
             app.set_picture_menu(Some(picture_menu));
         }
         self.flags.sync(before);
+        // Before the shortcuts: an open "@" picker takes Esc, Enter and the arrows.
+        let editable = !link.is_some_and(Link::view_only) && !app.session.view.commenting;
+        self.chips.ui(app, ui.ctx(), editable);
         self.keys(app, ui.ctx());
         egui::Panel::top("stardocs_head")
             .frame(egui::Frame::NONE.fill(PAGE).inner_margin(egui::Margin { left: 12, right: 16, top: 8, bottom: 6 }))
