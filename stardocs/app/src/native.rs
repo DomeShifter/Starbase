@@ -220,6 +220,18 @@ fn spawn(file: Option<&Path>) {
     }
 }
 
+/// A window of its own on document `id` on the connected server (`--server-file`).
+fn spawn_server(id: &str, name: &str) {
+    match std::env::current_exe() {
+        Ok(exe) => {
+            if let Err(e) = std::process::Command::new(exe).args(["--server-file", id, "--name", name]).spawn() {
+                log::error!("can't open another window: {e}");
+            }
+        }
+        Err(e) => log::error!("can't find this program to open another window: {e}"),
+    }
+}
+
 /// Where the editor's preferences (theme, interface size, editing options…) are kept, as the
 /// web app keeps them in `localStorage`.
 fn prefs_path() -> Option<PathBuf> {
@@ -420,6 +432,7 @@ impl eframe::App for Desktop {
         for r in self.link.take_requests() {
             match r {
                 Request::Open(path) => self.open(path),
+                Request::OpenServer(id, name) => spawn_server(&id, &name),
                 Request::New => spawn(None),
                 Request::Connect => self.connect.open(),
                 Request::Disconnect => {

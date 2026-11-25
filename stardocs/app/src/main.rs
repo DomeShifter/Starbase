@@ -22,6 +22,7 @@
 
 // The window and what it needs: both the browser and the desktop.
 mod bundled_fonts;
+mod download;
 mod icons;
 mod looks;
 mod mystyles;
