@@ -138,7 +138,7 @@ async fn a_commenters_save_keeps_only_their_comment_and_no_route_changes_the_tex
     assert_eq!(g.status, 200, "{:?}", g.json);
     let v2 = g.json["version"].as_str().unwrap().to_string();
     let now = send(&app, "GET", &format!("/api/files/{id}"), &boss, None, vec![]).await.bytes;
-    assert!(part(&now, "word/comments.xml").contains(r#"w:author="Ann Lee""#), "the server's name for her");
+    assert!(part(&now, "word/comments.xml").contains(r#"w:author="Ann Lee (ann)""#), "the server's name for her, with her username");
     assert!(part(&now, "word/document.xml").contains("commentRangeStart"));
     // Text added after the comment, and no comment changes: nothing written.
     let sent = commented_and(0, "Nice", "<w:p><w:r><w:t>EVIL</w:t></w:r></w:p>");

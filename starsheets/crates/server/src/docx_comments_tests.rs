@@ -7,7 +7,7 @@ use std::io::{Read, Write};
 
 use super::*;
 
-const NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
+const NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math""#;
 const CT: &str = r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#;
 const ROOT_RELS: &str = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
 const DOC_RELS: &str = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#;
@@ -17,7 +17,12 @@ fn me() -> Me {
 }
 
 fn me_owning(own: &[u32]) -> Me {
-    Me { name: "Mal".into(), initials: "M".into(), date: "2026-11-25T10:00:00Z".into(), own: own.iter().copied().collect() }
+    Me {
+        name: "Mal".into(),
+        initials: "M".into(),
+        date: "2026-11-25T10:00:00Z".into(),
+        own: own.iter().map(|id| (*id, "2026-11-25T10:00:00Z".to_string())).collect(),
+    }
 }
 
 fn zip_of(parts: &[(&str, Vec<u8>)]) -> Vec<u8> {
@@ -273,7 +278,10 @@ fn other_peoples_comments_stay_as_they_are() {
     assert!(part(&out, "word/comments.xml").contains("Ann says"));
     // Only a comment the server recorded as Mal's is his: one merely under his name isn't.
     let forged = sent(marked_ann, &comment(0, "Ann", "Ann says", "10000001"), r#"<w15:commentEx w15:paraId="10000001" w15:done="0"/>"#, &[]);
-    assert_eq!(merge(&out, &forged, &me()).unwrap().map(|m| m.deleted), None, "comment 1 isn't recorded as his");
+    assert_eq!(merge(&out, &forged, &me()).unwrap(), None, "comment 1 isn't recorded as his");
+    // Recorded with another date (the id used again for someone else's comment): not his either.
+    let other = Me { own: [(1, "2020-01-01T00:00:00Z".to_string())].into_iter().collect(), ..me() };
+    assert_eq!(merge(&out, &forged, &other).unwrap(), None, "same id, another comment");
     // Mal now owns comment 1: may edit, resolve and delete it; Ann's stays.
     let edit = sent(
         marked_ann,
@@ -343,4 +351,44 @@ fn a_comment_and_reply_as_starbase_docs_writes_them() {
     assert_eq!(x.matches("paraIdParent").count(), 1, "{x}");
     // Saved again unchanged: nothing to do.
     assert_eq!(merge(&out, u, &me_owning(&[0, 1])).unwrap(), None);
+}
+
+/// Second review: threads that can't be, many paragraphs, a parent deleted under a new reply,
+/// marks beside math, and spaces Word drops at the ends of text.
+#[test]
+fn threads_paragraphs_math_and_spaces() {
+    let s = server(PLAIN, &[]);
+    // A comment of 201 empty paragraphs (no characters, but each one written out).
+    let many = format!(r#"<w:comment w:id="5" w:author="Mal">{}</w:comment>"#, "<w:p/>".repeat(MAX_COMMENT_PARAS + 1));
+    assert!(merge(&s, &sent(MARKED, &many, "", &[]), &me()).is_err());
+    // Its own parent: kept as a comment of its own, no thread.
+    let selfish =
+        sent(MARKED, &comment(5, "Mal", "Me", "10000001"), r#"<w15:commentEx w15:paraId="10000001" w15:paraIdParent="10000001" w15:done="0"/>"#, &[]);
+    let out = merged(&s, &selfish);
+    assert!(!part(&out, "word/commentsExtended.xml").contains("paraIdParent"));
+    // Math (m:r holds w:t): the marks go before the math, never inside it.
+    let math = r#"<w:p><m:oMath><m:r><w:t>x</w:t></m:r></m:oMath><w:r><w:t>y</w:t></w:r></w:p>"#;
+    let s2 = server(math, &[]);
+    let u2 = sent(
+        r#"<w:p><w:commentRangeStart w:id="1"/><m:oMath><m:r><w:t>x</w:t></m:r></m:oMath><w:r><w:t>y</w:t></w:r><w:commentRangeEnd w:id="1"/></w:p>"#,
+        &comment(1, "Mal", "Sum", "10000001"),
+        "",
+        &[],
+    );
+    let d = part(&merged(&s2, &u2), "word/document.xml");
+    assert!(d.contains(r#"<w:p><w:commentRangeStart w:id="1"/><m:oMath>"#), "{d}");
+    // Without xml:space="preserve" Word drops the text's outer spaces: the halves do too.
+    let spaced = r#"<w:p><w:r><w:t> Hello world </w:t></w:r></w:p>"#;
+    let s3 = server(spaced, &[]);
+    let u3 = sent(
+        r#"<w:p><w:r><w:t xml:space="preserve">Hello </w:t></w:r><w:commentRangeStart w:id="1"/><w:r><w:t>world</w:t></w:r><w:commentRangeEnd w:id="1"/></w:p>"#,
+        &comment(1, "Mal", "Hi", "10000001"),
+        "",
+        &[],
+    );
+    let d = part(&merged(&s3, &u3), "word/document.xml");
+    assert!(
+        d.contains(r#"<w:t xml:space="preserve">Hello </w:t></w:r><w:commentRangeStart w:id="1"/><w:r><w:t xml:space="preserve">world</w:t>"#),
+        "{d}"
+    );
 }

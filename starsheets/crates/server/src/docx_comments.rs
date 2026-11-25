@@ -43,6 +43,14 @@ const MAX_NODES: u32 = 4_000_000;
 const MAX_DEPTH: usize = 256;
 const MAX_NEW: usize = 500;
 const MAX_COMMENT_CHARS: usize = 20_000;
+/// Paragraphs in one comment.
+const MAX_COMMENT_PARAS: usize = 200;
+/// Bytes of the sent comment parts read (they are small: a lot of text is a few hundred KB).
+const MAX_COMMENT_PART: usize = 4 * 1024 * 1024;
+/// How much one save may make the document bigger, in bytes.
+const MAX_GROWTH: usize = 2 * 1024 * 1024;
+/// Comments one person may have added to one document this way.
+pub const MAX_OWNED: usize = 2_000;
 
 /// Who is commenting, as the comments will say, and which comments are theirs.
 pub struct Me {
@@ -50,16 +58,17 @@ pub struct Me {
     pub initials: String,
     /// ISO 8601, UTC.
     pub date: String,
-    /// The comment ids the server recorded this person adding to this document.
-    pub own: HashSet<u32>,
+    /// The comments the server recorded this person adding to this document: id → the date
+    /// the server gave it (an id alone can be used again for someone else's comment).
+    pub own: HashMap<u32, String>,
 }
 
 /// A rebuilt document, and the comments it added and deleted (for the record of whose they are).
 #[derive(Debug, PartialEq)]
 pub struct Merged {
     pub bytes: Vec<u8>,
-    pub added: Vec<u32>,
-    pub deleted: Vec<u32>,
+    /// This person's comments in the result: id → date (the new record of whose they are).
+    pub own: HashMap<u32, String>,
 }
 
 /// The server's document with the commenter's comment changes from `sent`, or `None` when there
@@ -88,6 +97,9 @@ pub fn merge(server: &[u8], sent: &[u8], me: &Me) -> Result<Option<Merged>, Stri
     let u_doc = read(&mut uzip, "word/document.xml")?.ok_or("not a document")?;
     let u_com = read(&mut uzip, "word/comments.xml")?;
     let u_ext = read(&mut uzip, "word/commentsExtended.xml")?;
+    if u_com.as_ref().map_or(0, Vec::len) > MAX_COMMENT_PART || u_ext.as_ref().map_or(0, Vec::len) > MAX_COMMENT_PART {
+        return Err("too many comments at once".into());
+    }
 
     let s_doc = text(&s_doc)?;
     let s_com = s_com.as_deref().map(text).transpose()?;
@@ -119,23 +131,30 @@ pub fn merge(server: &[u8], sent: &[u8], me: &Me) -> Result<Option<Merged>, Stri
     let u_state = |id: u32| -> Option<&Extra> { u_extra.as_ref()?.get(u_comments.get(&id)?.para_id.as_ref()?) };
     let u_parent = |id: u32| u_state(id).and_then(|e| e.parent.as_deref()).and_then(|p| u_by_pid.get(p).copied());
 
-    let mine = |id: &u32| me.own.contains(id) && s_comments.get(id).is_some_and(|c| c.author == me.name);
+    let mine = |id: &u32| me.own.get(id).is_some_and(|date| s_comments.get(id).is_some_and(|c| !c.date.is_empty() && c.date == *date));
     let new: Vec<u32> = u_comments.keys().filter(|id| !s_comments.contains_key(id)).copied().collect();
     if new.len() > MAX_NEW {
         return Err("too many new comments at once".into());
     }
-    // Own comments gone from the sent file are deleted, unless a reply that stays hangs on them.
+    // Own comments gone from the sent file are deleted, unless a reply that stays (or a new one)
+    // hangs on them: each kept reply keeps its parent, and so on up (one pass, a worklist).
     let mut deleted: BTreeSet<u32> = s_comments.keys().filter(|id| mine(id) && !u_comments.contains_key(id)).copied().collect();
-    loop {
-        let held: Vec<u32> =
-            deleted.iter().filter(|id| s_comments.keys().any(|c| s_parent(*c) == Some(**id) && !deleted.contains(c))).copied().collect();
-        if held.is_empty() {
-            break;
-        }
-        for id in held {
-            deleted.remove(&id);
+    let mut stay: Vec<(u32, Option<u32>)> = s_comments.keys().filter(|c| !deleted.contains(c)).map(|c| (*c, s_parent(*c))).collect();
+    stay.extend(new.iter().map(|c| (*c, u_parent(*c))));
+    while let Some((_, parent)) = stay.pop() {
+        if let Some(p) = parent
+            && deleted.remove(&p)
+        {
+            stay.push((p, s_parent(p)));
         }
     }
+    // A new reply's parent: an existing comment that stays, or a new one that is no reply itself.
+    let parent_ok = |id: u32| -> Option<u32> {
+        let p = u_parent(id).filter(|p| *p != id)?;
+        let existing = s_comments.contains_key(&p) && !deleted.contains(&p);
+        let new_top = !s_comments.contains_key(&p) && u_comments.contains_key(&p) && u_parent(p).is_none();
+        (existing || new_top).then_some(p)
+    };
     let edited: BTreeMap<u32, Vec<String>> = s_comments
         .iter()
         .filter(|(id, c)| mine(id) && u_comments.get(id).is_some_and(|u| u.paras != c.paras))
@@ -149,7 +168,14 @@ pub fn merge(server: &[u8], sent: &[u8], me: &Me) -> Result<Option<Merged>, Stri
             (u != s_state(*id).is_some_and(|e| e.done)).then_some((*id, u))
         })
         .collect();
-    let long = |id: &u32| u_comments.get(id).is_some_and(|c| c.paras.iter().map(|p| p.chars().count()).sum::<usize>() > MAX_COMMENT_CHARS);
+    let long = |id: &u32| {
+        u_comments
+            .get(id)
+            .is_some_and(|c| c.paras.len() > MAX_COMMENT_PARAS || c.paras.iter().map(|p| p.chars().count()).sum::<usize>() > MAX_COMMENT_CHARS)
+    };
+    if me.own.len() + new.len() > MAX_OWNED {
+        return Err("you have too many comments on this document".into());
+    }
     if new.iter().chain(edited.keys()).any(long) {
         return Err("a comment is too long".into());
     }
@@ -182,9 +208,13 @@ pub fn merge(server: &[u8], sent: &[u8], me: &Me) -> Result<Option<Merged>, Stri
     let u_parsed = parse(&u_doc)?;
     let (u_paras, u_marks) = walk(&u_parsed)?;
     // Where each new comment goes: (paragraph, characters before) of its start and end.
+    let mut first_mark: HashMap<(u32, bool), Option<Place>> = HashMap::new();
+    for m in &u_marks {
+        first_mark.entry((m.id, m.start)).or_insert(m.para.map(|p| (p, m.off)));
+    }
     let mut places: BTreeMap<u32, (Place, Place)> = BTreeMap::new();
     for id in &new {
-        let find = |start: bool| u_marks.iter().find(|m| m.id == *id && m.start == start).and_then(|m| Some((m.para?, m.off)));
+        let find = |start: bool| first_mark.get(&(*id, start)).copied().flatten();
         if let (Some(a), Some(b)) = (find(true), find(false))
             && a <= b
         {
@@ -206,7 +236,7 @@ pub fn merge(server: &[u8], sent: &[u8], me: &Me) -> Result<Option<Merged>, Stri
             keep.push(*id);
             continue;
         }
-        match u_parent(*id) {
+        match parent_ok(*id) {
             Some(p) if places.contains_key(&p) => {
                 let at = places[&p];
                 places.insert(*id, at);
@@ -226,13 +256,27 @@ pub fn merge(server: &[u8], sent: &[u8], me: &Me) -> Result<Option<Merged>, Stri
             cuts.push(Cut { para: b.0, off: b.1, seq: (1, seq), xml: end_marks(&w, *id) });
         }
     }
-    let mut edits = place(&doc1, &d1_paras, &cuts, &w)?;
+    let mut edits = place(&doc1, &d1_paras, &cuts)?;
     let mut placed_beside: HashSet<u32> = HashSet::new();
+    // The existing comments' marks, found in one pass.
+    let mut starts: HashMap<u32, Node> = HashMap::new();
+    let mut refruns: HashMap<u32, Node> = HashMap::new();
+    if !beside.is_empty() {
+        for n in d1.descendants() {
+            if is(&n, W, "commentRangeStart")
+                && let Some(id) = attr_id(&n)
+            {
+                starts.entry(id).or_insert(n);
+            } else if is(&n, W, "commentReference")
+                && let Some(id) = attr_id(&n)
+                && let Some(r) = n.parent().filter(|r| is(r, W, "r"))
+            {
+                refruns.entry(id).or_insert(r);
+            }
+        }
+    }
     for (seq, (id, parent)) in beside.iter().enumerate() {
-        let start = d1.descendants().find(|n| is(n, W, "commentRangeStart") && attr_id(n) == Some(*parent));
-        let refrun =
-            d1.descendants().find(|n| is(n, W, "commentReference") && attr_id(n) == Some(*parent)).and_then(|n| n.parent()).filter(|r| is(r, W, "r"));
-        if let (Some(s), Some(r)) = (start, refrun) {
+        if let (Some(s), Some(r)) = (starts.get(parent), refruns.get(parent)) {
             let seq = 1000 + seq as u32;
             edits.push(Edit { at: s.range().end..s.range().end, seq, text: format!("<{w}:commentRangeStart {w}:id=\"{id}\"/>") });
             edits.push(Edit { at: r.range().end..r.range().end, seq, text: end_marks(&w, *id) });
@@ -257,24 +301,24 @@ pub fn merge(server: &[u8], sent: &[u8], me: &Me) -> Result<Option<Merged>, Stri
     }
     let mut fresh = || fresh_id(&mut taken);
     let mut pid_of: HashMap<u32, String> = s_pid.clone();
-    let mut need_pid: Vec<u32> = Vec::new();
+    let mut need_pid: HashSet<u32> = HashSet::new();
     for id in &keep {
         pid_of.insert(*id, fresh());
     }
     for id in edited.keys() {
         pid_of.entry(*id).or_insert_with(&mut fresh);
     }
-    let parent_of_new: HashMap<u32, u32> = keep.iter().filter_map(|id| Some((*id, u_parent(*id)?))).collect();
+    let parent_of_new: HashMap<u32, u32> = keep.iter().filter_map(|id| Some((*id, parent_ok(*id)?))).collect();
     for p in parent_of_new.values() {
         if !s_pid.contains_key(p) && s_comments.contains_key(p) && !edited.contains_key(p) {
             pid_of.entry(*p).or_insert_with(&mut fresh);
-            need_pid.push(*p);
+            need_pid.insert(*p);
         }
     }
     for id in done_changed.keys() {
         if !s_pid.contains_key(id) && !edited.contains_key(id) {
             pid_of.entry(*id).or_insert_with(&mut fresh);
-            need_pid.push(*id);
+            need_pid.insert(*id);
         }
     }
     let new_comment = |w: &str, w14: &str, id: u32, paras: &[String], pid: &str| -> String {
@@ -499,7 +543,13 @@ pub fn merge(server: &[u8], sent: &[u8], me: &Me) -> Result<Option<Merged>, Stri
     }
     drop(uzip);
     let bytes = write_zip(&mut szip, &replace, &add)?;
-    Ok(Some(Merged { bytes, added: keep, deleted: deleted.into_iter().collect() }))
+    if bytes.len() > server.len().saturating_add(MAX_GROWTH) {
+        return Err("too much added at once".into());
+    }
+    // Whose comments these are now: the recorded ones still there, and the new ones.
+    let mut own: HashMap<u32, String> = me.own.iter().filter(|(id, _)| mine(id) && !deleted.contains(id)).map(|(i, d)| (*i, d.clone())).collect();
+    own.extend(keep.iter().map(|id| (*id, me.date.clone())));
+    Ok(Some(Merged { bytes, own }))
 }
 
 // ---------------------------------------------------------------- the package
@@ -707,7 +757,8 @@ fn apply(src: &str, mut edits: Vec<Edit>) -> Result<String, String> {
 // ---------------------------------------------------------------- comments
 
 struct Comment {
-    author: String,
+    /// The w:date the comment carries (the server's, for comments added by commenters).
+    date: String,
     /// The text, paragraph by paragraph (tabs as '\t', breaks as '\n').
     paras: Vec<String>,
     /// The last paragraph's id (w14:paraId), which commentsExtended refers to.
@@ -718,7 +769,8 @@ fn comments(d: &Document) -> BTreeMap<u32, Comment> {
     let mut out = BTreeMap::new();
     for c in d.root_element().children().filter(|n| is(n, W, "comment")) {
         let Some(id) = attr_id(&c) else { continue };
-        let paras: Vec<Node> = c.descendants().filter(|n| is(n, W, "p")).collect();
+        // The comment's own paragraphs (not ones nested inside them, which would be read twice).
+        let paras: Vec<Node> = c.children().filter(|n| is(n, W, "p")).collect();
         let mut texts = Vec::new();
         for p in &paras {
             let mut s = String::new();
@@ -734,7 +786,7 @@ fn comments(d: &Document) -> BTreeMap<u32, Comment> {
             texts.push(s);
         }
         let para_id = paras.last().and_then(|p| p.attribute((W14, "paraId"))).map(str::to_uppercase);
-        out.insert(id, Comment { author: c.attribute((W, "author")).unwrap_or("").to_string(), paras: texts, para_id });
+        out.insert(id, Comment { date: c.attribute((W, "date")).unwrap_or("").to_string(), paras: texts, para_id });
     }
     out
 }
@@ -833,7 +885,7 @@ fn visit<'a, 'i>(n: Node<'a, 'i>, depth: usize, cur: Option<usize>, paras: &mut 
     if w {
         match name {
             "t" | "delText" => {
-                push(paras, n, n.text().unwrap_or(""));
+                push(paras, n, shown_text(&n));
                 return Ok(());
             }
             "tab" if n.parent().is_some_and(|r| is(&r, W, "r")) => {
@@ -869,6 +921,13 @@ type Order = (u32, usize);
 /// A cut inside a run: (the run's child it is in, characters into that child, order, marks).
 type RunCut<'x> = (usize, usize, Order, &'x str);
 
+/// A w:t's text as Word shows it: without xml:space="preserve", the spaces at its two ends are
+/// dropped.
+fn shown_text<'a>(n: &Node<'a, '_>) -> &'a str {
+    let raw = n.text().unwrap_or("");
+    if n.attribute(("http://www.w3.org/XML/1998/namespace", "space")) == Some("preserve") { raw } else { raw.trim_matches(char::is_whitespace) }
+}
+
 /// A place to put comment marks: paragraph, characters before, order, the marks.
 struct Cut {
     para: usize,
@@ -879,7 +938,7 @@ struct Cut {
 
 /// The edits putting `cuts` into the document `src` (whose paragraphs are `paras`): between runs,
 /// inside a run (split in two, each half keeping its formatting), or at a paragraph's end.
-fn place(src: &str, paras: &[Para], cuts: &[Cut], w: &str) -> Result<Vec<Edit>, String> {
+fn place(src: &str, paras: &[Para], cuts: &[Cut]) -> Result<Vec<Edit>, String> {
     // Cuts by run (the run, the child it is before, characters into that child) or by place.
     let mut in_runs: BTreeMap<usize, (Node, Vec<RunCut>)> = BTreeMap::new();
     let mut edits = Vec::new();
@@ -920,7 +979,9 @@ fn place(src: &str, paras: &[Para], cuts: &[Cut], w: &str) -> Result<Vec<Edit>, 
                 if into != 0 {
                     return Err("internal error: a place inside an object".into());
                 }
-                let at = item.range().start;
+                // Not in a run (an object, or math): before the paragraph's child that holds it,
+                // never inside something that can't hold a run.
+                let at = child.range().start;
                 edits.push(Edit { at: at..at, seq, text: cut.xml.clone() });
             }
         }
@@ -939,7 +1000,9 @@ fn place(src: &str, paras: &[Para], cuts: &[Cut], w: &str) -> Result<Vec<Edit>, 
                 // An empty paragraph written as <w:p/>.
                 let r = node.range();
                 let open = src[r.start..r.end - 2].trim_end().to_string();
-                edits.push(Edit { at: r, seq: 0, text: format!("{open}>{marks}</{w}:p>") });
+                let s = r.start;
+                let qname = &src[s + 1..s + 1 + src[s + 1..].find(|ch: char| ch.is_whitespace() || ch == '>' || ch == '/').unwrap_or(0)];
+                edits.push(Edit { at: r, seq: 0, text: format!("{open}>{marks}</{qname}>") });
             }
         }
     }
@@ -985,15 +1048,27 @@ fn split_run(src: &str, r: &Node, cuts: &[RunCut]) -> Result<String, String> {
         let qname_end = s + 1 + src[s + 1..].find(|ch: char| ch.is_whitespace() || ch == '>' || ch == '/').unwrap_or(0);
         let qname = &src[s + 1..qname_end];
         let chars: Vec<char> = c.text().unwrap_or("").chars().collect();
+        // Without xml:space="preserve" Word drops spaces at the text's two ends: the pieces keep
+        // that (the outer ends trimmed) and keep the spaces at the cuts.
+        let preserve = c.attribute(("http://www.w3.org/XML/1998/namespace", "space")) == Some("preserve");
+        let (lo, hi) = if preserve {
+            (0, chars.len())
+        } else {
+            let lo = chars.iter().position(|ch| !ch.is_whitespace()).unwrap_or(chars.len());
+            let hi = chars.iter().rposition(|ch| !ch.is_whitespace()).map_or(lo, |i| i + 1);
+            (lo, hi.max(lo))
+        };
         let mut from = 0;
         let piece = |cur: &mut String, a: usize, b: usize| {
+            let (a, b) = (a.max(lo), b.min(hi));
             if b > a {
                 let t: String = chars[a..b].iter().collect();
                 cur.push_str(&format!("<{qname} xml:space=\"preserve\">{}</{qname}>", esc(&t)));
             }
         };
         for (_, off, _, x) in &here {
-            let off = (*off).min(chars.len());
+            // Places count the text as shown (see [`shown_text`]): from its first kept character.
+            let off = (lo + *off).min(hi);
             piece(&mut cur, from, off);
             from = off;
             flush(&mut out, &mut cur);

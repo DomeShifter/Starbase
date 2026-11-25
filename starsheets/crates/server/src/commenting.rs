@@ -14,14 +14,19 @@
 //! - What is sent may be at most 4 times the server's file plus 1 MB.
 //! - The file is read and rebuilt outside the server's store lock (a big document doesn't hold
 //!   up everyone else's files); the version is checked again under the lock before writing.
-//! - Whose comment is whose: the ids a commenter adds this way are recorded per document in
-//!   `STORE/.starsheets/commenting.json` ("owned"); only those (still under their name) may they
-//!   change or delete. A display name alone could be copied by changing one's own name.
-//! - Versions: a commenter's saves within 10 minutes of their last one, with nobody else's save
+//! - Whose comment is whose: the comments a commenter adds this way are recorded per document in
+//!   `STORE/.starsheets/commenting.json` ("owned": id and the date the server gave it); only
+//!   those, still carrying that date, may they change or delete. A display name could be copied,
+//!   and an id can be used again for someone else's comment after an editor deletes one.
+//! - A comment's author is the commenter's name with their username, so nobody can comment as
+//!   someone else by taking their display name.
+//! - Versions: commenters' saves within 10 minutes of the first of them, with no editor's save
 //!   in between, replace each other instead of each keeping a version, so many small comment
 //!   saves can't push real versions out of the history (KEEP).
+//! - At most [`AT_ONCE`] saves are rebuilt at the same time (more get 503: try again).
 
-use std::collections::HashSet;
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use axum::body::{Body, Bytes};
 use axum::http::Response;
@@ -32,6 +37,27 @@ use crate::{Shared, auth, error, send_json, sharing, spaces, store};
 
 /// How long a commenter's saves share one version (seconds).
 const COALESCE_SECS: u64 = 600;
+
+/// Commenter saves rebuilt at the same time, at most.
+const AT_ONCE: usize = 2;
+static BUILDING: AtomicUsize = AtomicUsize::new(0);
+
+/// One rebuild under way (see [`AT_ONCE`]); done when dropped.
+struct Turn;
+impl Turn {
+    fn take() -> Option<Turn> {
+        if BUILDING.fetch_add(1, Ordering::AcqRel) >= AT_ONCE {
+            BUILDING.fetch_sub(1, Ordering::AcqRel);
+            return None;
+        }
+        Some(Turn)
+    }
+}
+impl Drop for Turn {
+    fn drop(&mut self) {
+        BUILDING.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 
 fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
@@ -45,7 +71,7 @@ fn initials(name: &str) -> String {
 enum First {
     NotMine,
     Answer(Response<Body>),
-    Go { path: String, version: String, old: Vec<u8>, own: HashSet<u32> },
+    Go { path: String, version: String, old: Vec<u8>, own: HashMap<u32, String> },
 }
 
 fn log_path(a: &crate::App) -> std::path::PathBuf {
@@ -75,12 +101,12 @@ pub(crate) async fn put(app: &Shared, me: Option<auth::User>, file: String, if_m
             return First::Answer(send_json(&json!({"error": "changed elsewhere", "name": store::base_of(&path)}), 409));
         }
         let log = a.store.load_json(&log_path(a));
-        let own: HashSet<u32> = log
+        let own: HashMap<u32, String> = log
             .get("owned")
             .and_then(|o| o.get(&file2))
             .and_then(|f| f.get(&me2.username))
-            .and_then(Value::as_array)
-            .map(|ids| ids.iter().filter_map(Value::as_u64).filter_map(|i| u32::try_from(i).ok()).collect())
+            .and_then(Value::as_object)
+            .map(|ids| ids.iter().filter_map(|(id, date)| Some((id.parse().ok()?, date.as_str()?.to_string()))).collect())
             .unwrap_or_default();
         match std::fs::read(&fpath) {
             Ok(old) => First::Go { path, version, old, own },
@@ -97,16 +123,26 @@ pub(crate) async fn put(app: &Shared, me: Option<auth::User>, file: String, if_m
     if body.len() > old.len().saturating_mul(4).saturating_add(1024 * 1024) {
         return Some(error(413, "That is much bigger than the document: only comments can be saved."));
     }
-    // Read and rebuilt outside the store lock.
-    let name = if me.name.trim().is_empty() { me.username.clone() } else { me.name.clone() };
+    // Read and rebuilt outside the store lock, a few at a time.
+    let Some(turn) = Turn::take() else { return Some(error(503, "The server is busy saving comments: trying again shortly.")) };
+    let name = if me.name.trim().is_empty() || me.name.trim() == me.username {
+        me.username.clone()
+    } else {
+        format!("{} ({})", me.name.trim(), me.username)
+    };
     let who = crate::docx_comments::Me { initials: initials(&name), name, date: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(), own };
     let merged = tokio::task::spawn_blocking(move || crate::docx_comments::merge(&old, &body, &who)).await;
+    drop(turn);
     let merged = match merged {
         Ok(Ok(m)) => m,
         Ok(Err(why)) => return Some(error(403, &format!("Only your comments can be saved ({why})."))),
         Err(_) => return Some(error(500, "server error")),
     };
     let r = crate::blocking(app, move |a| {
+        // Still a commenter (the share may have changed meanwhile), and still the same version.
+        if sharing::file_role(&a.store, a.auth, Some(&me), &file) != Role::Comment {
+            return error(403, "You can't comment on that any more.");
+        }
         let fpath = a.store.full(&path);
         let now_version = a.store.version_of(&fpath).unwrap_or_default();
         let folder = store::parent_of(&path);
@@ -121,9 +157,8 @@ pub(crate) async fn put(app: &Shared, me: Option<auth::User>, file: String, if_m
         let log = log_path(a);
         let mut all = a.store.load_json(&log);
         let last = all.get("runs").and_then(|r| r.get(&file)).cloned().unwrap_or(Value::Null);
-        let same_run = last["by"].as_str() == Some(me.username.as_str())
-            && last["version"].as_str() == Some(now_version.as_str())
-            && now().saturating_sub(last["at"].as_u64().unwrap_or(0)) < COALESCE_SECS;
+        let same_run =
+            last["version"].as_str() == Some(now_version.as_str()) && now().saturating_sub(last["at"].as_u64().unwrap_or(0)) < COALESCE_SECS;
         if !same_run && a.store.keep_version(&file, &fpath).is_err() {
             return error(500, "couldn't keep the earlier version");
         }
@@ -138,11 +173,8 @@ pub(crate) async fn put(app: &Shared, me: Option<auth::User>, file: String, if_m
         // Whose comments these are, for their next save.
         let mut owned = all.get("owned").and_then(Value::as_object).cloned().unwrap_or_default();
         let mut by_file = owned.get(&file).and_then(Value::as_object).cloned().unwrap_or_default();
-        let mut ids: Vec<u64> =
-            by_file.get(&me.username).and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default();
-        ids.retain(|i| !merged.deleted.iter().any(|d| u64::from(*d) == *i));
-        ids.extend(merged.added.iter().map(|i| u64::from(*i)));
-        by_file.insert(me.username.clone(), json!(ids));
+        let ids: serde_json::Map<String, Value> = merged.own.iter().map(|(id, date)| (id.to_string(), json!(date))).collect();
+        by_file.insert(me.username.clone(), Value::Object(ids));
         owned.insert(file.clone(), Value::Object(by_file));
         all.insert("owned".into(), Value::Object(owned));
         let _ = a.store.save_json(&log, &Value::Object(all));
