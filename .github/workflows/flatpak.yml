@@ -60,6 +60,8 @@ jobs:
           echo "$GENERATOR_SHA256  $RUNNER_TEMP/gen/flatpak-cargo-generator.py" | sha256sum -c -
           for ws in starsheets stardocs; do
             python3 "$RUNNER_TEMP/gen/flatpak-cargo-generator.py" "$ws/Cargo.lock" -o "out/cargo-sources-$ws.json"
+            # One replacement per git revision (the generator keeps one per repository).
+            python3 packaging/linux/flatpak/vendor-config.py "$ws/Cargo.lock" "out/cargo-sources-$ws.json"
             echo "$ws: $(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "out/cargo-sources-$ws.json") sources"
           done
           ls -la out

@@ -24,6 +24,8 @@
 #
 #   python3 flatpak-cargo-generator.py starsheets/Cargo.lock -o packaging/linux/flatpak/cargo-sources-starsheets.json
 #   python3 flatpak-cargo-generator.py stardocs/Cargo.lock   -o packaging/linux/flatpak/cargo-sources-stardocs.json
+#   for ws in starsheets stardocs; do   # one cargo source entry per git revision (see the script)
+#     python3 packaging/linux/flatpak/vendor-config.py $ws/Cargo.lock packaging/linux/flatpak/cargo-sources-$ws.json; done
 #   flatpak run org.flatpak.Builder --user --install --install-deps-from=flathub --force-clean \
 #     build-flatpak packaging/linux/flatpak/io.github.DomeShifter.Starbase.yml
 #   flatpak run --command=starsheets io.github.DomeShifter.Starbase --home   # Starbase Drive
