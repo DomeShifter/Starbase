@@ -1552,6 +1552,8 @@ async fn thumb(app: &Shared, me: Option<auth::User>, file: String, headers: &Hea
     enum Got {
         Have(Vec<u8>, String),
         Draw(String, Vec<u8>, String),
+        Photo(String, String),
+        Pdf(Vec<u8>, String),
     }
     let f2 = file.clone();
     let got = blocking(app, move |app| -> Result<Got, Response<Body>> {
@@ -1564,7 +1566,18 @@ async fn thumb(app: &Shared, me: Option<auth::User>, file: String, headers: &Hea
         if let Some(png) = thumbs::cached(&app.store, &f2, &version) {
             return Ok(Got::Have(png, version));
         }
-        // Other files (photos, PDFs…) have no picture here: the Drive shows their type's icon.
+        // Photos: their Photos thumbnail as a tile; PDFs: the top of page 1. Other files (videos:
+        // no ffmpeg in the server) have no picture here: the Drive shows their type's icon.
+        if photos::media_of(&path).is_some_and(|(_, thumbs)| thumbs) {
+            return Ok(Got::Photo(path, version));
+        }
+        if path.to_ascii_lowercase().ends_with(".pdf") {
+            if std::fs::metadata(&full).map(|m| m.len()).unwrap_or(u64::MAX) > thumbs::MAX_PDF {
+                return Err(error(404, "too big for a picture"));
+            }
+            let bytes = std::fs::read(&full).map_err(|_| error(404, "no such file"))?;
+            return Ok(Got::Pdf(bytes, version));
+        }
         if !store::is_editable(&path) {
             return Err(error(404, "no picture for this kind of file"));
         }
@@ -1583,10 +1596,17 @@ async fn thumb(app: &Shared, me: Option<auth::User>, file: String, headers: &Hea
     let (png, version) = match got {
         Err(resp) => return resp,
         Ok(Got::Have(png, v)) => (png, v),
-        Ok(Got::Draw(name, bytes, v)) => {
-            let (store_root, f3, v2) = (app.clone(), file.clone(), v.clone());
+        Ok(got) => {
+            let (store_root, f3) = (app.clone(), file.clone());
+            let (job, v): (Box<dyn FnOnce(&App) -> Result<Vec<u8>, String> + Send>, String) = match got {
+                Got::Draw(name, bytes, v) => (Box::new(move |_| thumbs::from_bytes(&name, &bytes)), v),
+                Got::Photo(path, v) => (Box::new(move |a| thumbs::tile(&photos::drive_thumb(&a.store, &path)?)), v),
+                Got::Pdf(bytes, v) => (Box::new(move |_| thumbs::from_pdf(bytes)), v),
+                Got::Have(..) => unreachable!(),
+            };
+            let v2 = v.clone();
             let drawn = tokio::task::spawn_blocking(move || {
-                let png = thumbs::from_bytes(&name, &bytes)?;
+                let png = job(&store_root)?;
                 let _ = thumbs::keep(&store_root.store, &f3, &v2, &png);
                 Ok::<_, String>(png)
             })
