@@ -140,16 +140,19 @@ impl Rooms {
 // ---------------------------------------------------------------- connections
 
 pub async fn ws(State(app): State<Shared>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
+    // Listening for removed devices before the sign-in is checked: a device removed in between
+    // is caught either way (refused here, or seen as a change at once).
+    let revoked = crate::devices::REVOKED.subscribe();
     if !crate::signed_in(&app, &headers) {
         return crate::please_sign_in(&app, &headers).into_response();
     }
     let user = crate::current_user(&app, &headers);
     // A desktop app signed in with a device token (devices.rs): its connection ends as soon as
     // that device is removed.
-    let device = crate::guard::bearer(&headers).filter(|_| app.auth).map(|t| crate::devices::hash(&t));
+    let device = crate::guard::device_token(&headers).filter(|_| app.auth).map(|t| crate::devices::hash(&t));
     // A tab's biggest message is a change sent whole; packed it stays well under MAX_FRAME (and
     // a frame may unpack to at most sync::MAX_UNPACKED).
-    upgrade.max_message_size(sync::MAX_FRAME).max_frame_size(sync::MAX_FRAME).on_upgrade(move |socket| connection(app, socket, user, device))
+    upgrade.max_message_size(sync::MAX_FRAME).max_frame_size(sync::MAX_FRAME).on_upgrade(move |socket| connection(app, socket, user, device, revoked))
 }
 
 fn text(m: &ToClient) -> String {
@@ -161,8 +164,13 @@ fn who(user: &Option<crate::auth::User>) -> String {
     user.as_ref().map_or_else(|| "a guest".to_string(), |u| u.username.clone())
 }
 
-async fn connection(app: Shared, mut socket: WebSocket, user: Option<crate::auth::User>, device: Option<String>) {
-    let mut revoked = crate::devices::REVOKED.subscribe();
+async fn connection(
+    app: Shared,
+    mut socket: WebSocket,
+    user: Option<crate::auth::User>,
+    device: Option<String>,
+    mut revoked: tokio::sync::watch::Receiver<u64>,
+) {
     // The first message says which file.
     let (file, tab, have) = loop {
         match socket.recv().await {

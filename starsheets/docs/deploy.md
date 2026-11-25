@@ -76,12 +76,19 @@ the whole files folder (accounts and versions too). Point a new server's `/data`
 
 Starbase Sheets, Drive and Docs on a computer can use the server's files: Drive's account menu
 (Docs: File menu) › Connect to a server…, then the server's address. The browser opens the
-server's connect page (`/api/connect`) showing a short code; the person signs in there as usual
-(password or single sign-on) and allows the app. The app gets a device token of its own and keeps
+server's connect page (`/api/connect`); the person signs in there as usual (password or single
+sign-on), types the code the app shows, sees where the request came from, and allows the app. The app gets a device token of its own and keeps
 it in the system keyring (or a file only that user can read, where there is no keyring).
 
 - Each person sees and removes their connected apps in Your devices (avatar menu); the owner sees
   anyone's from People. A removed device stops working at once, open live connections too. A new
   password, or removing the account, removes all of them.
-- Nothing to set up on the server. Behind a proxy, `/api/` must reach the server (it already does
-  for the web app). Set `STARBASE_PUBLIC_URL` if the server can't tell its own address.
+- A device unused for 90 days is removed (`STARBASE_DEVICE_IDLE_DAYS`, 0 = never). One allowed
+  from a single sign-on session goes when that sign-in is unlinked or the person leaves the
+  allowed group.
+- Nothing else to set up on the server. Behind a proxy, `/api/` must reach the server (it already
+  does for the web app), and set `STARBASE_TRUSTED_PROXY` to the proxy's address: otherwise
+  everyone shares the proxy's address and its limit of 10 sign-ins waiting at once. Set
+  `STARBASE_PUBLIC_URL` if the server can't tell its own address.
+- The apps accept a plain `http://` address only for a server on the same computer or a private
+  network (192.168.x.x, 10.x.x.x, a `.local` name); anywhere else it must be `https://`.

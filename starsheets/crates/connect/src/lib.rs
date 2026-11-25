@@ -159,7 +159,34 @@ pub fn clean_url(typed: &str) -> Result<String, String> {
     if host.is_empty() || host.contains(char::is_whitespace) || host.contains('@') {
         return Err("That isn't a server address.".into());
     }
+    if scheme == "http" && !on_home_network(host) {
+        return Err("Use https:// for this server: over http:// your sign-in would cross the internet unprotected. http:// works only for a server on your own network (an address like 192.168.x.x or 10.x.x.x, or a name ending in .local).".into());
+    }
     Ok(format!("{scheme}://{rest}"))
+}
+
+/// Whether `host` (with its port, if any) is this computer or on a private network: the only
+/// places a plain http:// address is accepted (the token would otherwise travel in the clear).
+fn on_home_network(host: &str) -> bool {
+    let h = host.to_lowercase();
+    let name = match h.strip_prefix('[') {
+        Some(rest) => rest.split(']').next().unwrap_or(""),
+        None => h.rsplit_once(':').filter(|(_, port)| port.chars().all(|c| c.is_ascii_digit())).map_or(h.as_str(), |(n, _)| n),
+    };
+    if name == "localhost" || name.ends_with(".localhost") || name.ends_with(".local") {
+        return true;
+    }
+    match name.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(a)) => a.is_loopback() || a.is_private() || a.is_link_local(),
+        Ok(std::net::IpAddr::V6(a)) => {
+            let first = a.segments()[0];
+            a.is_loopback()
+                || (first & 0xfe00) == 0xfc00
+                || (first & 0xffc0) == 0xfe80
+                || a.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback() || v4.is_private())
+        }
+        Err(_) => false,
+    }
 }
 
 /// What this computer is called on the server's "Your devices" list: "Starbase Sheets on
@@ -259,7 +286,9 @@ fn sign_in(typed: &str, name: &str, tell: &dyn Fn(Step) -> bool) -> Result<Serve
     let field = |k: &str| s.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     let (device_code, user_code) = (field("device_code"), field("user_code"));
     // The connect page at the address the person typed (not one the server names).
-    let verify_url = format!("{url}/api/connect?code={user_code}");
+    // Without the code: the person types it there (a link with the code in it is what someone
+    // phishing would send).
+    let verify_url = format!("{url}/api/connect");
     let mut every = Duration::from_secs(s.get("interval").and_then(Value::as_u64).unwrap_or(5).clamp(1, 60));
     let until = Instant::now() + Duration::from_secs_f64(s.get("expires_in").and_then(Value::as_f64).unwrap_or(600.0).clamp(10.0, 3600.0));
     let opened = open_browser(&verify_url);
@@ -391,6 +420,22 @@ mod tests {
     fn addresses_are_made_whole() {
         assert_eq!(clean_url("files.example.org").unwrap(), "https://files.example.org");
         assert_eq!(clean_url(" HTTP://nas.local:8080/ ").unwrap(), "http://nas.local:8080");
+        // Plain http:// only on this computer or a private network.
+        for ok in [
+            "http://192.168.1.5:8080",
+            "http://10.0.0.2",
+            "http://172.20.1.1",
+            "http://127.0.0.1:3000",
+            "http://localhost",
+            "http://[::1]:8080",
+            "http://[fd12::5]",
+        ] {
+            assert!(clean_url(ok).is_ok(), "{ok}");
+        }
+        for bad in ["http://files.example.org", "http://8.8.8.8", "http://172.32.0.1", "http://[2001:db8::1]", "http://example.local.evil.com"] {
+            assert!(clean_url(bad).unwrap_err().contains("https://"), "{bad}");
+        }
+        assert!(clean_url("https://8.8.8.8").is_ok());
         assert_eq!(clean_url("https://example.org/sheets/?x=1").unwrap(), "https://example.org/sheets");
         assert!(clean_url("").is_err());
         assert!(clean_url("ftp://x").is_err());

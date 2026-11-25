@@ -48,7 +48,8 @@
   </form>
 
   <form id="enter" hidden>
-    <label for="code">The code shown in the app</label>
+    <p class="muted">Only do this if you just started it yourself, on your own computer (Connect to a server… in Starbase). If someone sent you here, stop.</p>
+    <label for="code">Type the code your app shows</label>
     <input id="code" class="code" maxlength="9" autocomplete="off" spellcheck="false" required>
     <div class="buttons"><button class="primary" type="submit">Next</button></div>
   </form>
@@ -56,7 +57,8 @@
   <form id="ask" hidden>
     <p>Allow <span id="device" class="name"></span> to use your Starbase account<span id="who"></span>?</p>
     <p class="muted">It will be able to open, change and share your files, as you can. You can remove it any time: your avatar › Your devices.</p>
-    <p class="muted">Only allow it if you started this in the app just now, and the code <span id="shown" class="name"></span> is the one it shows.</p>
+    <p id="where" class="muted"></p>
+    <p class="bad">Only allow this if you just started it on your own computer and it shows the code <span id="shown" class="name"></span>. Never allow a request someone else asked you to, or sent you a code for.</p>
     <div class="buttons">
       <button id="deny" type="button">Don't allow</button>
       <button class="primary" type="submit">Allow</button>
@@ -70,7 +72,9 @@
   const show = (id) => { for (const f of ["signin", "enter", "ask"]) $(f).hidden = f !== id; };
   const post = (url, body) => fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const why = async (r) => { try { return (await r.json()).error || "Something went wrong."; } catch (_) { return "Something went wrong."; } };
-  let code = new URLSearchParams(location.search).get("code") || "";
+  // Never taken from the address: the person types the code their own app shows, so a link
+  // someone else sends can't lead straight to "Allow" (device-code phishing).
+  let code = "";
 
   async function start() {
     let info;
@@ -88,7 +92,6 @@
       $("signin-button").hidden = !!(sso && sso.only);
       return show("signin");
     }
-    if (code) return check();
     say("Signed in as " + (info.user ? info.user.name : "you") + ".");
     show("enter");
   }
@@ -102,6 +105,11 @@
     $("device").textContent = "“" + d.name + "”";
     $("who").textContent = d.user ? " (" + d.user.name + ")" : "";
     $("shown").textContent = d.code;
+    const ago = d.secs_ago < 90 ? "just now" : Math.round(d.secs_ago / 60) + " minutes ago";
+    $("where").textContent = d.same_place
+      ? "Started " + ago + " from this network (" + d.from + ")."
+      : "Started " + ago + " from " + d.from + ", which isn't the network this browser is on. If that isn't your computer, don't allow it.";
+    $("where").className = d.same_place ? "muted" : "bad";
     show("ask");
   }
 

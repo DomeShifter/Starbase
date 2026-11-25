@@ -30,9 +30,13 @@ pub const INTERVAL: u64 = 5;
 /// The letters of a user code: no vowels (no words), nothing easily mistaken (0/O, 1/I/L, 5/S,
 /// 2/Z, 8/B, U/V).
 const ALPHABET: &[u8] = b"CDFGHJKMNPQRTWXY34679";
-/// Most requests waiting at once (all addresses), and from one address.
-const MAX_WAITING: usize = 1000;
+/// Most requests waiting at once (all addresses; past it the oldest goes, so a flood from many
+/// addresses can't stop everyone else signing in), and from one address (behind a reverse
+/// proxy, set STARBASE_TRUSTED_PROXY so each person's own address counts, not the proxy's).
+const MAX_WAITING: usize = 10_000;
 const MAX_WAITING_PER_IP: usize = 10;
+/// Devices unused this long are removed (days; STARBASE_DEVICE_IDLE_DAYS, 0 = never).
+const IDLE_DAYS: f64 = 90.0;
 /// The prefix of every device token (lets secret scanners spot one that leaked).
 pub const PREFIX: &str = "sbd_";
 /// "Last used" is written at most this often per device (seconds).
@@ -41,6 +45,8 @@ const TOUCH_EVERY: f64 = 60.0;
 #[derive(Clone, Debug, PartialEq)]
 enum State {
     Waiting,
+    /// Allowed: the device token, made when it was allowed (so anything that removes the
+    /// account's devices afterwards, a new password say, removes this one too).
     Allowed(String),
     Denied,
 }
@@ -61,6 +67,9 @@ pub struct Waiting {
     list: Mutex<Vec<Request>>,
 }
 
+/// Makes a device token from the device's name (when a request is allowed).
+pub type Mint<'a> = &'a dyn Fn(&str) -> Option<String>;
+
 /// The server's waiting requests.
 pub static WAITING: LazyLock<Waiting> = LazyLock::new(Waiting::default);
 
@@ -69,7 +78,7 @@ pub static WAITING: LazyLock<Waiting> = LazyLock::new(Waiting::default);
 pub enum Poll {
     /// Not allowed (or denied) yet.
     Waiting,
-    /// Allowed: the account's username (the token is made by the caller, once).
+    /// Allowed: the device token (handed out once; the caller checks it still works).
     Allowed(String),
     Denied,
     Expired,
@@ -119,8 +128,12 @@ impl Waiting {
     pub fn start(&self, name: &str, from: &str, t: f64) -> Result<(String, String), &'static str> {
         let mut list = self.list.lock().unwrap_or_else(|e| e.into_inner());
         Self::tidy(&mut list, t);
-        if list.len() >= MAX_WAITING || list.iter().filter(|r| r.from == from && r.state == State::Waiting).count() >= MAX_WAITING_PER_IP {
+        if list.iter().filter(|r| r.from == from && r.state == State::Waiting).count() >= MAX_WAITING_PER_IP {
             return Err("Too many sign-ins are waiting. Try again in a few minutes.");
+        }
+        if list.len() >= MAX_WAITING {
+            // The list is kept oldest first.
+            list.remove(0);
         }
         let device_code = random_hex(32);
         let user_code = loop {
@@ -140,18 +153,20 @@ impl Waiting {
         Ok((device_code, user_code))
     }
 
-    /// The device's name for a user code still waiting (for the connect page).
-    pub fn name_of(&self, user_code: &str, t: f64) -> Option<String> {
+    /// A request still waiting, for the connect page: the device's name, the address it came
+    /// from (the same form as `start`'s `from`) and when it was made.
+    pub fn about(&self, user_code: &str, t: f64) -> Option<(String, String, f64)> {
         let code = clean_code(user_code);
         let list = self.list.lock().unwrap_or_else(|e| e.into_inner());
         list.iter()
             .find(|r| crate::same(r.user_code.as_bytes(), code.as_bytes()) && r.state == State::Waiting && t - r.made < CODE_SECS)
-            .map(|r| r.name.clone())
+            .map(|r| (r.name.clone(), r.from.clone(), r.made))
     }
 
-    /// Allows (or denies) the request with this user code for `username`. Only once, and only
-    /// while it is waiting.
-    pub fn answer(&self, user_code: &str, username: &str, allow: bool, t: f64) -> Result<String, &'static str> {
+    /// Allows the request with this user code (`mint` makes its device token from the device's
+    /// name), or denies it (`mint` None). Only once, and only while it is waiting. The device's
+    /// name.
+    pub fn answer(&self, user_code: &str, t: f64, mint: Option<Mint>) -> Result<String, &'static str> {
         let code = clean_code(user_code);
         let mut list = self.list.lock().unwrap_or_else(|e| e.into_inner());
         let r = list
@@ -159,30 +174,33 @@ impl Waiting {
             .find(|r| crate::same(r.user_code.as_bytes(), code.as_bytes()))
             .filter(|r| r.state == State::Waiting && t - r.made < CODE_SECS)
             .ok_or("That code isn't right, or it has run out. Start again in the app.")?;
-        r.state = if allow { State::Allowed(username.to_string()) } else { State::Denied };
+        r.state = match mint {
+            Some(mint) => State::Allowed(mint(&r.name).ok_or("The sign-in couldn't be saved. Try again.")?),
+            None => State::Denied,
+        };
         Ok(r.name.clone())
     }
 
     /// The app asking. An allowed or denied request is answered once, then forgotten.
-    pub fn poll(&self, device_code: &str, t: f64) -> (Poll, String) {
+    pub fn poll(&self, device_code: &str, t: f64) -> Poll {
         let mut list = self.list.lock().unwrap_or_else(|e| e.into_inner());
         let Some(i) = list.iter().position(|r| crate::same(r.device_code.as_bytes(), device_code.as_bytes())) else {
-            return (Poll::Unknown, String::new());
+            return Poll::Unknown;
         };
         let r = &list[i];
         if t - r.made >= CODE_SECS && !matches!(r.state, State::Allowed(_)) {
             list.remove(i);
-            return (Poll::Expired, String::new());
+            return Poll::Expired;
         }
         match r.state.clone() {
-            State::Waiting => (Poll::Waiting, String::new()),
-            State::Allowed(u) => {
-                let r = list.remove(i);
-                (Poll::Allowed(u), r.name)
+            State::Waiting => Poll::Waiting,
+            State::Allowed(token) => {
+                list.remove(i);
+                Poll::Allowed(token)
             }
             State::Denied => {
                 list.remove(i);
-                (Poll::Denied, String::new())
+                Poll::Denied
             }
         }
     }
@@ -215,13 +233,28 @@ fn save(store: &Store, devices: Map<String, Value>) -> std::io::Result<()> {
     store.save_json(&path(store), &json!({ "devices": devices }))
 }
 
-/// A new device token for `username`: the token (shown to the app once).
-pub fn new_token(store: &Store, username: &str, name: &str) -> std::io::Result<String> {
+/// How long a device may go unused before it is removed (seconds; None: never).
+fn idle_limit() -> Option<f64> {
+    let days = crate::setting("STARBASE_DEVICE_IDLE_DAYS").and_then(|v| v.trim().parse::<f64>().ok()).unwrap_or(IDLE_DAYS);
+    (days > 0.0).then_some(days * 86_400.0)
+}
+
+/// Whether a stored device has gone unused too long.
+fn idle(d: &Value, t: f64) -> bool {
+    idle_limit().is_some_and(|limit| t - d.get("used").and_then(Value::as_f64).unwrap_or(0.0) > limit)
+}
+
+/// A new device token for `username`: the token (shown to the app once). `sso`: allowed from a
+/// session made through single sign-on, so it goes when those do (auth::end_sso_sessions: the
+/// sign-in was unlinked, or the person left the allowed group).
+pub fn new_token(store: &Store, username: &str, name: &str, sso: bool) -> std::io::Result<String> {
     let _g = FILE.lock().unwrap_or_else(|e| e.into_inner());
     let token = format!("{PREFIX}{}", random_hex(32));
     let mut devices = load(store);
     let t = now();
-    devices.insert(hash(&token), json!({ "id": random_hex(8), "user": username, "name": clean_name(name), "made": t, "used": t }));
+    // Devices unused too long go now too.
+    devices.retain(|_, d| !idle(d, t));
+    devices.insert(hash(&token), json!({ "id": random_hex(8), "user": username, "name": clean_name(name), "made": t, "used": t, "sso": sso }));
     save(store, devices)?;
     Ok(token)
 }
@@ -236,6 +269,10 @@ pub fn user_of(store: &Store, token: &str) -> Option<String> {
     let d = devices.get(&h)?;
     let user = d.get("user").and_then(Value::as_str)?.to_string();
     let t = now();
+    if idle(d, t) {
+        let _ = remove_where(store, |k, _| k != h);
+        return None;
+    }
     if t - d.get("used").and_then(Value::as_f64).unwrap_or(0.0) > TOUCH_EVERY {
         let _g = FILE.lock().unwrap_or_else(|e| e.into_inner());
         let mut devices = load(store);
@@ -257,7 +294,7 @@ pub fn is_live(store: &Store, token_hash: &str) -> bool {
 pub fn list(store: &Store, username: &str, current: Option<&str>) -> Vec<Value> {
     let mut out: Vec<Value> = load(store)
         .iter()
-        .filter(|(_, d)| d.get("user").and_then(Value::as_str) == Some(username))
+        .filter(|(_, d)| d.get("user").and_then(Value::as_str) == Some(username) && !idle(d, now()))
         .map(|(h, d)| json!({ "id": d["id"], "name": d["name"], "made": d["made"], "used": d["used"], "current": current == Some(h.as_str()) }))
         .collect();
     out.sort_by(|a, b| b["used"].as_f64().unwrap_or(0.0).total_cmp(&a["used"].as_f64().unwrap_or(0.0)));
@@ -287,6 +324,12 @@ pub fn remove(store: &Store, username: &str, id: &str) -> std::io::Result<bool> 
 pub fn remove_token(store: &Store, token: &str) -> std::io::Result<bool> {
     let h = hash(token);
     remove_where(store, |k, _| k != h).map(|n| n > 0)
+}
+
+/// Removes `username`'s devices allowed from a single sign-on session.
+pub fn remove_sso(store: &Store, username: &str) {
+    let _ =
+        remove_where(store, |_, d| d.get("user").and_then(Value::as_str) != Some(username) || d.get("sso").and_then(Value::as_bool) != Some(true));
 }
 
 /// Removes every device of `username` (a new password, the account removed).
@@ -323,35 +366,44 @@ mod tests {
     #[test]
     fn a_code_is_used_once_and_runs_out() {
         let w = Waiting::default();
+        let mint = |name: &str| Some(format!("token for {name}"));
         let (dc, uc) = w.start("Laptop", "1.2.3.4", 1000.0).unwrap();
-        assert_eq!(w.poll(&dc, 1001.0).0, Poll::Waiting);
-        assert_eq!(w.name_of(&show_code(&uc).to_lowercase(), 1001.0).as_deref(), Some("Laptop"));
-        assert_eq!(w.answer(&uc, "ann", true, 1002.0).unwrap(), "Laptop");
-        assert!(w.answer(&uc, "bob", true, 1003.0).is_err(), "only once");
-        assert_eq!(w.poll(&dc, 1004.0), (Poll::Allowed("ann".into()), "Laptop".into()));
-        assert_eq!(w.poll(&dc, 1005.0).0, Poll::Unknown, "the token is handed out once");
+        assert_eq!(w.poll(&dc, 1001.0), Poll::Waiting);
+        assert_eq!(w.about(&show_code(&uc).to_lowercase(), 1001.0), Some(("Laptop".into(), "1.2.3.4".into(), 1000.0)));
+        assert_eq!(w.answer(&uc, 1002.0, Some(&mint)).unwrap(), "Laptop");
+        assert!(w.answer(&uc, 1003.0, Some(&mint)).is_err(), "only once");
+        assert_eq!(w.poll(&dc, 1004.0), Poll::Allowed("token for Laptop".into()));
+        assert_eq!(w.poll(&dc, 1005.0), Poll::Unknown, "the token is handed out once");
         // Running out: no approving after ten minutes, and the app hears so.
         let (dc, uc) = w.start("Old", "1.2.3.4", 1000.0).unwrap();
-        assert!(w.name_of(&uc, 1000.0 + CODE_SECS).is_none());
-        assert!(w.answer(&uc, "ann", true, 1000.0 + CODE_SECS).is_err());
-        assert_eq!(w.poll(&dc, 1000.0 + CODE_SECS).0, Poll::Expired);
+        assert!(w.about(&uc, 1000.0 + CODE_SECS).is_none());
+        assert!(w.answer(&uc, 1000.0 + CODE_SECS, Some(&mint)).is_err());
+        assert_eq!(w.poll(&dc, 1000.0 + CODE_SECS), Poll::Expired);
         // Denied.
         let (dc, uc) = w.start("No", "1.2.3.4", 1000.0).unwrap();
-        w.answer(&uc, "ann", false, 1001.0).unwrap();
-        assert_eq!(w.poll(&dc, 1002.0).0, Poll::Denied);
-        assert_eq!(w.poll("nonsense", 1002.0).0, Poll::Unknown);
+        w.answer(&uc, 1001.0, None).unwrap();
+        assert_eq!(w.poll(&dc, 1002.0), Poll::Denied);
+        assert_eq!(w.poll("nonsense", 1002.0), Poll::Unknown);
         // At most a few waiting from one address.
         for _ in 0..MAX_WAITING_PER_IP {
             w.start("x", "5.5.5.5", 2000.0).unwrap();
         }
         assert!(w.start("x", "5.5.5.5", 2000.0).is_err());
         assert!(w.start("x", "6.6.6.6", 2000.0).is_ok());
+        // Full: the oldest goes, new sign-ins still start.
+        let w = Waiting::default();
+        let (first, _) = w.start("first", "1.0.0.0", 3000.0).unwrap();
+        for i in 1..MAX_WAITING {
+            w.start("x", &format!("addr{}", i / MAX_WAITING_PER_IP), 3000.0).unwrap();
+        }
+        assert!(w.start("late", "9.9.9.9", 3000.0).is_ok());
+        assert_eq!(w.poll(&first, 3001.0), Poll::Unknown, "the oldest made room");
     }
 
     #[test]
     fn tokens_are_kept_hashed_and_can_be_removed() {
         let s = store();
-        let t = new_token(&s, "ann", "Laptop\u{7}").unwrap();
+        let t = new_token(&s, "ann", "Laptop\u{7}", false).unwrap();
         assert!(t.starts_with(PREFIX) && t.len() > 60);
         let text = std::fs::read_to_string(path(&s)).unwrap();
         assert!(!text.contains(&t) && !text.contains(&t[PREFIX.len()..]), "only the hash is kept");
@@ -366,9 +418,23 @@ mod tests {
         assert!(!remove(&s, "bob", &id).unwrap(), "only the account's own");
         assert!(remove(&s, "ann", &id).unwrap());
         assert!(user_of(&s, &t).is_none());
-        let t2 = new_token(&s, "ann", "Desk").unwrap();
+        let t2 = new_token(&s, "ann", "Desk", false).unwrap();
         remove_all(&s, "ann");
         assert!(user_of(&s, &t2).is_none());
+        // Single sign-on: only the devices allowed from such a session go with it.
+        let (plain, sso) = (new_token(&s, "ann", "A", false).unwrap(), new_token(&s, "ann", "B", true).unwrap());
+        remove_sso(&s, "ann");
+        assert!(user_of(&s, &plain).is_some() && user_of(&s, &sso).is_none());
+        // Unused too long (90 days by default): removed.
+        let old = new_token(&s, "ann", "Old", false).unwrap();
+        {
+            let mut d = load(&s);
+            d.get_mut(&hash(&old)).unwrap()["used"] = json!(now() - 91.0 * 86_400.0);
+            save(&s, d).unwrap();
+        }
+        assert!(list(&s, "ann", None).iter().all(|d| d["name"] != "Old"), "not listed");
+        assert!(user_of(&s, &old).is_none(), "and no longer works");
+        assert!(!is_live(&s, &hash(&old)), "removed");
         let _ = std::fs::remove_dir_all(&s.root);
     }
 }

@@ -148,8 +148,8 @@ impl ConnectDialog {
                 }
                 Some(Stage::Code { code, url, opened }) => {
                     let text = match opened {
-                        None => "We opened your browser. Sign in there if it asks, check that it shows this code, and allow Starbase Docs.",
-                        Some(_) => "Open this address in your browser, sign in if it asks, check that it shows this code, and allow Starbase Docs.",
+                        None => "We opened your browser. Sign in there if it asks, type this code, and allow Starbase Docs.",
+                        Some(_) => "Open this address in your browser, sign in if it asks, type this code, and allow Starbase Docs.",
                     };
                     ui.label(RichText::new(text).size(14.0).color(TEXT_DIM));
                     ui.add_space(10.0);

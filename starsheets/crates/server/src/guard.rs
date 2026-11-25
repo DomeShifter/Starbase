@@ -35,6 +35,8 @@ pub struct Config {
     pub hosts: Vec<String>,
     /// STARBASE_SECURE_COOKIE: always mark the sign-in cookie Secure (HTTPS only).
     pub secure_cookie: bool,
+    /// STARBASE_AUTH=off: no sign-in, so no device tokens either.
+    pub no_auth: bool,
 }
 
 fn yes(v: &str) -> bool {
@@ -67,7 +69,8 @@ impl Config {
         });
         let hosts = get("STARBASE_ALLOWED_HOSTS").map(|v| list(&v).map(|h| host_name(h).to_string()).collect()).unwrap_or_default();
         let secure_cookie = get("STARBASE_SECURE_COOKIE").is_some_and(|v| yes(&v));
-        Config { trusted, public: public.filter(|p| !p.is_empty()), hosts, secure_cookie }
+        let no_auth = get("STARBASE_AUTH").is_some_and(|v| matches!(v.trim().to_lowercase().as_str(), "off" | "false" | "0" | "no"));
+        Config { trusted, public: public.filter(|p| !p.is_empty()), hosts, secure_cookie, no_auth }
     }
 
     fn trusts(&self, ip: IpAddr) -> bool {
@@ -169,9 +172,11 @@ pub fn check(method: &Method, uri: &axum::http::Uri, headers: &HeaderMap, peer: 
     let changes = !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS);
     // A desktop app's request: signed in only by the device token it sends itself, with no
     // cookies, so another site can't have made it in someone's name (there is nothing ambient
-    // to borrow). With cookies too, the usual check applies (and the cookies aren't read:
+    // to borrow). Only a Starbase device token counts, and only with sign-in on: a browser
+    // resends other Authorization headers by itself (a proxy's Basic password), so those are
+    // ambient. With cookies too, the usual check applies (and the cookies aren't read:
     // main.rs current_user).
-    let token_only = headers.contains_key(header::AUTHORIZATION) && !headers.contains_key(header::COOKIE);
+    let token_only = !cfg.no_auth && device_token(headers).is_some() && !headers.contains_key(header::COOKIE);
     if (changes || uri.path() == "/api/live") && !token_only {
         let Some(origin) = header_str(headers, "origin") else { return Ok(()) };
         let from = origin.split_once("://").map(|(_, rest)| rest.trim_end_matches('/').to_lowercase());
@@ -189,7 +194,12 @@ pub fn check(method: &Method, uri: &axum::http::Uri, headers: &HeaderMap, peer: 
     Ok(())
 }
 
-/// A device token sent as `Authorization: Bearer …` (the desktop apps, devices.rs).
+/// A Starbase device token sent as `Authorization: Bearer sbd_…` (the desktop apps, devices.rs).
+pub fn device_token(headers: &HeaderMap) -> Option<String> {
+    bearer(headers).filter(|t| t.starts_with(crate::devices::PREFIX))
+}
+
+/// Whatever is sent as `Authorization: Bearer …`.
 pub fn bearer(headers: &HeaderMap) -> Option<String> {
     let (scheme, token) = header_str(headers, "authorization")?.trim().split_once(' ')?;
     let token = token.trim();
@@ -445,6 +455,16 @@ mod tests {
         let token = headers(&[("host", "a:1"), ("origin", "https://evil.example"), ("authorization", "Bearer sbd_x")]);
         assert!(check(&Method::POST, &uri, &token, None, &open).is_ok(), "nothing ambient: sign-in decides");
         assert!(check(&Method::GET, &live, &token, None, &open).is_ok());
+        // Anything a browser could send by itself is refused cross-site as before: a proxy's
+        // Basic password, another Bearer token, or any token with sign-in off.
+        for a in ["Basic dXNlcjpwYXNz", "Bearer something-else", "Bearer"] {
+            let h = headers(&[("host", "a:1"), ("origin", "https://evil.example"), ("authorization", a)]);
+            assert_eq!(check(&Method::POST, &uri, &h, None, &open).unwrap_err().0, 403, "{a}");
+            assert_eq!(check(&Method::GET, &live, &h, None, &open).unwrap_err().0, 403, "{a}");
+        }
+        let off = cfg(&[("STARBASE_AUTH", "off")]);
+        assert!(off.no_auth);
+        assert_eq!(check(&Method::POST, &uri, &token, None, &off).unwrap_err().0, 403, "sign-in off");
         let with_cookie =
             headers(&[("host", "a:1"), ("origin", "https://evil.example"), ("authorization", "Bearer sbd_x"), ("cookie", "starsheets_session=s")]);
         assert_eq!(check(&Method::POST, &uri, &with_cookie, None, &open).unwrap_err().0, 403);

@@ -153,11 +153,12 @@ fn reply(r: Result<Reply, Bad>) -> Response<Body> {
 
 // ---------------------------------------------------------------- sign-in
 
-/// The browser session's token. A request that carries an Authorization header (a desktop app's
-/// device token) is signed in by that alone: its cookies aren't read, so a token can never be
-/// mixed with someone's browser session.
+/// The browser session's token. A request that carries a desktop app's device token
+/// (`Authorization: Bearer sbd_…`) is signed in by that alone: its cookies aren't read, so a token
+/// can never be mixed with someone's browser session. Other Authorization headers (a proxy's own
+/// Basic password, which browsers resend by themselves) don't change anything.
 fn cookie_token(headers: &HeaderMap) -> Option<String> {
-    if headers.contains_key(header::AUTHORIZATION) {
+    if guard::device_token(headers).is_some() {
         return None;
     }
     named_cookie(headers, HOST_COOKIE).or_else(|| named_cookie(headers, COOKIE))
@@ -169,8 +170,8 @@ fn current_user(app: &App, headers: &HeaderMap) -> Option<auth::User> {
     if !app.auth {
         return None;
     }
-    if headers.contains_key(header::AUTHORIZATION) {
-        let username = devices::user_of(&app.store, &guard::bearer(headers)?)?;
+    if let Some(token) = guard::device_token(headers) {
+        let username = devices::user_of(&app.store, &token)?;
         return auth::users(&app.store).into_iter().find(|u| u.username == username);
     }
     cookie_token(headers).and_then(|t| auth::session_user(&app.store, &t))
@@ -179,7 +180,7 @@ fn current_user(app: &App, headers: &HeaderMap) -> Option<auth::User> {
 /// Who is asking through a browser session only (never a device token): approving a new device
 /// needs the person themselves, in their browser.
 fn session_user(app: &App, headers: &HeaderMap) -> Option<auth::User> {
-    if headers.contains_key(header::AUTHORIZATION) { None } else { current_user(app, headers) }
+    if guard::device_token(headers).is_some() { None } else { current_user(app, headers) }
 }
 
 fn signed_in(app: &App, headers: &HeaderMap) -> bool {
@@ -870,13 +871,14 @@ async fn sso(app: &Shared, path: &[&str], m: &str, q: &HashMap<String, String>, 
 const CONNECT_PAGE: &str = include_str!("connect.html");
 
 /// The connect page's address as the person's browser reaches this server: STARBASE_PUBLIC_URL
-/// when set, else the address the app used.
-fn connect_url(headers: &HeaderMap, ask: Ask, user_code: &str) -> String {
+/// when set, else the address the app used. Never with the code in it: the person types the code
+/// the app shows, so a link someone else sends can't take them straight to "Allow".
+fn connect_url(headers: &HeaderMap, ask: Ask) -> String {
     let base = setting("STARBASE_PUBLIC_URL").map(|u| u.trim().trim_end_matches('/').to_string()).filter(|u| !u.is_empty()).unwrap_or_else(|| {
         let host = headers.get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("localhost");
         format!("{}://{host}", if ask.secure { "https" } else { "http" })
     });
-    format!("{base}/api/connect?code={}", devices::show_code(user_code))
+    format!("{base}/api/connect")
 }
 
 /// /api/devices…: desktop sign-in (start, poll; the connect page's code and approve) and the
@@ -905,7 +907,7 @@ async fn device_api(
                     &json!({
                         "device_code": device_code,
                         "user_code": devices::show_code(&user_code),
-                        "verify_url": connect_url(headers, ask, &user_code),
+                        "verify_url": connect_url(headers, ask),
                         "expires_in": devices::CODE_SECS,
                         "interval": devices::INTERVAL,
                     }),
@@ -918,22 +920,20 @@ async fn device_api(
             if !LIMITS.take(&ip_key("device-poll", ask.ip), guard::DEVICE_POLL_IP) {
                 return send_json(&json!({ "error": "slow down", "status": "slow_down" }), 429);
             }
-            let (answer, name) = devices::WAITING.poll(&field(json, "device_code"), store::now());
-            match answer {
+            match devices::WAITING.poll(&field(json, "device_code"), store::now()) {
                 devices::Poll::Waiting => send_json(&json!({ "status": "pending", "interval": devices::INTERVAL }), 200),
-                devices::Poll::Allowed(username) => {
-                    let made = blocking(app, move |app| {
-                        let user = auth::users(&app.store).into_iter().find(|u| u.username == username)?;
-                        let token = devices::new_token(&app.store, &user.username, &name).ok()?;
-                        // Never the token itself.
-                        log::note(&app.store, &format!("{} connected a desktop app ({name:?})", user.username));
-                        Some((user, token))
+                devices::Poll::Allowed(token) => {
+                    // Made when it was allowed: if the account's devices were removed since (a new
+                    // password, the account removed), it no longer works and isn't handed out.
+                    let user = blocking(app, move |app| {
+                        let username = devices::user_of(&app.store, &token)?;
+                        auth::users(&app.store).into_iter().find(|u| u.username == username).map(|u| (u, token))
                     })
                     .await
                     .flatten();
-                    match made {
+                    match user {
                         Some((user, token)) => send_json(&json!({ "status": "ok", "token": token, "user": user.json() }), 200),
-                        None => error(500, "server error"),
+                        None => send_json(&json!({ "status": "denied", "error": "The sign-in was cancelled on the server. Start again." }), 403),
                     }
                 }
                 devices::Poll::Denied => send_json(&json!({ "status": "denied", "error": "The sign-in wasn't allowed." }), 403),
@@ -949,8 +949,23 @@ async fn device_api(
                 return too_many();
             }
             let code = q.get("code").cloned().unwrap_or_default();
-            match devices::WAITING.name_of(&code, store::now()) {
-                Some(name) => send_json(&json!({ "name": name, "code": devices::show_code(&devices::clean_code(&code)), "user": me.json() }), 200),
+            match devices::WAITING.about(&code, store::now()) {
+                // Where the request came from and when, so a request someone else started (and
+                // sent the code for) stands out: another address than this browser's.
+                Some((name, from, made)) => {
+                    let here = ask.ip.map_or_else(|| "?".to_string(), guard::ip_prefix);
+                    send_json(
+                        &json!({
+                            "name": name,
+                            "code": devices::show_code(&devices::clean_code(&code)),
+                            "user": me.json(),
+                            "from": from,
+                            "same_place": from == here && from != "?",
+                            "secs_ago": (store::now() - made).max(0.0).floor(),
+                        }),
+                        200,
+                    )
+                }
                 None => {
                     LIMITS.take(&key, guard::DEVICE_CODE_USER);
                     wrong(404, "That code isn't right, or it has run out. Start again in the app.").await
@@ -969,8 +984,13 @@ async fn device_api(
                 return too_many();
             }
             let allow = json.get("allow").and_then(Value::as_bool).unwrap_or(false);
-            match devices::WAITING.answer(&field(json, "code"), &me.username, allow, store::now()) {
+            // Allowed from a single sign-on session: the device goes when those do.
+            let via_sso = cookie_token(headers).is_some_and(|t| auth::sso_session_made(&app.store, &t).is_some());
+            let (app2, who) = (app.clone(), me.username.clone());
+            let mint = move |name: &str| devices::new_token(&app2.store, &who, name, via_sso).ok();
+            match devices::WAITING.answer(&field(json, "code"), store::now(), allow.then_some(&mint as devices::Mint)) {
                 Ok(name) => {
+                    // Never the token itself.
                     let (who, what) = (me.username.clone(), if allow { "allowed" } else { "refused" });
                     blocking(app, move |a| log::note(&a.store, &format!("{who} {what} a desktop app ({name:?})"))).await;
                     send_json(&json!({ "ok": true }), 200)
@@ -988,8 +1008,8 @@ async fn device_api(
             if who != me.username && !me.owner {
                 return error(403, "Only the owner can do that.");
             }
-            let current = guard::bearer(headers).map(|t| devices::hash(&t));
-            let token = guard::bearer(headers);
+            let current = guard::device_token(headers).map(|t| devices::hash(&t));
+            let token = guard::device_token(headers);
             let (id, deleting) = (q.get("id").cloned().unwrap_or_default(), m == "DELETE");
             let r = blocking(app, move |app| {
                 if !deleting {
@@ -2335,7 +2355,7 @@ mod tests {
         let g = post(app, ip, "/api/devices/start", "", json!({ "name": name })).await;
         assert_eq!(g.status, 200, "{:?}", g.json);
         let uc = g.json["user_code"].as_str().unwrap().to_string();
-        assert_eq!(g.json["verify_url"].as_str().unwrap(), format!("http://192.168.1.5:8080/api/connect?code={uc}"));
+        assert_eq!(g.json["verify_url"], "http://192.168.1.5:8080/api/connect", "never with the code in it");
         (g.json["device_code"].as_str().unwrap().to_string(), uc)
     }
 
@@ -2375,6 +2395,10 @@ mod tests {
         assert_eq!(send(&app, &ip, "GET", &ask, "", &[], vec![]).await.status, 401);
         let g = send(&app, &ip, "GET", &ask, &boss, &[], vec![]).await;
         assert_eq!((g.status, g.json["name"].as_str()), (200, Some("Work laptop")));
+        // Where it came from, so a request someone else started stands out.
+        assert_eq!((g.json["from"].as_str(), g.json["same_place"].as_bool()), (Some(ip.as_str()), Some(true)));
+        let elsewhere = send(&app, &address(), "GET", &ask, &boss, &[], vec![]).await;
+        assert_eq!(elsewhere.json["same_place"], false);
         // Approving: signed in, from this site's own page (CSRF: another site, or no Origin, is refused).
         assert_eq!(approve(&app, &ip, "", &[SAME], &uc, true).await.status, 401, "signed in");
         assert_eq!(approve(&app, &ip, &boss, &[EVIL], &uc, true).await.status, 403, "another site");
@@ -2399,11 +2423,26 @@ mod tests {
         assert_eq!(g.status, 201, "{:?}", g.json);
         // Never in the log, nor in the server's own files.
         let log = std::fs::read_to_string(app.store.meta().join("log.txt")).unwrap_or_default();
-        assert!(log.contains("connected a desktop app") && !log.contains(&token));
+        assert!(log.contains("allowed a desktop app") && !log.contains(&token));
         for f in std::fs::read_dir(app.store.meta()).unwrap() {
             let text = std::fs::read_to_string(f.unwrap().path()).unwrap_or_default();
             assert!(!text.contains(&token[devices::PREFIX.len()..]));
         }
+        // A new password between "Allow" and the app collecting the token: it never works.
+        let (dc, uc) = start_device(&app, &ip, "Slow app").await;
+        assert_eq!(approve(&app, &ip, &boss, &[SAME], &uc, true).await.status, 200);
+        let g =
+            send(&app, &ip, "POST", "/api/me", &boss, &[SAME], body_of(json!({"current_password": "bosspassword", "password": "bossnewpassword"})))
+                .await;
+        assert_eq!(g.status, 200, "{:?}", g.json);
+        let boss = cookie_of(&g);
+        let g = poll_device(&app, &ip, &dc).await;
+        assert_eq!((g.status, g.json["status"].as_str(), g.json.get("token")), (403, Some("denied"), None));
+        // A proxy's own Basic password (browsers resend it by themselves) changes nothing: the
+        // cookie still signs in, and another site is still refused.
+        let basic = ("authorization", "Basic dXNlcjpwYXNz");
+        assert_eq!(send(&app, &ip, "GET", "/api/files", &boss, &[basic], vec![]).await.status, 200);
+        assert_eq!(send(&app, &ip, "POST", "/api/folders?name=Z", "", &[EVIL, basic], vec![]).await.status, 403);
         // Not allowed.
         let (dc, uc) = start_device(&app, &ip, "Stranger").await;
         assert_eq!(approve(&app, &ip, &boss, &[SAME], &uc, false).await.status, 200);

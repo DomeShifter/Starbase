@@ -416,9 +416,9 @@ impl Connect {
                     house::note(
                         ui,
                         if opened.is_ok() {
-                            "Your browser opened the server's connect page. Sign in there if it asks, check the code is this one, and allow Starbase Sheets."
+                            "Your browser opened the server's connect page. Sign in there if it asks, type this code, and allow Starbase Sheets."
                         } else {
-                            "Open this address in your browser, sign in if it asks, check the code is this one, and allow Starbase Sheets:"
+                            "Open this address in your browser, sign in if it asks, type this code, and allow Starbase Sheets:"
                         },
                     );
                     if opened.is_err() {

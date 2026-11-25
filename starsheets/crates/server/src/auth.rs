@@ -584,6 +584,8 @@ pub fn end_sso_sessions(store: &Store, username: &str) {
     let mut sessions = store.load_json(&sessions_path(store));
     sessions.retain(|_, v| v.get("user").and_then(Value::as_str) != Some(username) || v.get("sso").and_then(Value::as_bool) != Some(true));
     let _ = store.save_json(&sessions_path(store), &Value::Object(sessions));
+    // Desktop apps allowed from such a session go with them (devices.rs).
+    crate::devices::remove_sso(store, username);
 }
 
 /// Who a session cookie belongs to.
@@ -685,6 +687,12 @@ mod tests {
         sign_up(&s, "second", "Two", "long enough", "").unwrap();
         assert_eq!(users(&s).len(), 3, "saving people keeps the sign-up setting and vice versa");
         assert!(signup(&s).on);
+        // Desktop apps allowed from a single sign-on session go when those sessions do (unlink,
+        // left the allowed group); the others stay.
+        let (sso, plain) =
+            (crate::devices::new_token(&s, "second", "A", true).unwrap(), crate::devices::new_token(&s, "second", "B", false).unwrap());
+        end_sso_sessions(&s, "second");
+        assert!(crate::devices::user_of(&s, &sso).is_none() && crate::devices::user_of(&s, &plain).is_some());
         // Passwords: at most MAX_PASSWORD bytes; an unknown username is simply wrong.
         let long = "x".repeat(MAX_PASSWORD + 1);
         assert!(add(&s, "longpw", "Long", &long).is_err());
