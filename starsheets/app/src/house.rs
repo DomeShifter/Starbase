@@ -204,6 +204,11 @@ pub fn keep(ctx: &egui::Context) {
 /// Tooltips: dark grey with white text (Google's look). egui draws them in the menu frame, so the
 /// tooltip layer is restyled after the frame is painted: call once per frame, after all UI.
 pub const TIP_BG: Color32 = Color32::from_rgb(0x3C, 0x40, 0x43);
+/// The bar above the grid while a filter view is open (Google's dark grey), its text and its
+/// text boxes.
+pub const VIEW_BAR: Color32 = TIP_BG;
+pub const VIEW_BAR_TEXT: Color32 = Color32::WHITE;
+pub const VIEW_BAR_FIELD: Color32 = TIP_HOVER;
 /// The picked row in a dark popup (white text stays readable on it).
 pub const TIP_PICKED: Color32 = Color32::from_rgb(0x0B, 0x57, 0xD0);
 /// A hovered row in a dark popup.

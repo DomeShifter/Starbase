@@ -9,6 +9,8 @@ use serde_json::json;
 
 use crate::{icons, theme};
 
+pub mod filterviews;
+
 /// One menu entry.
 pub enum Item {
     /// Label, command id, shortcut hint shown on the right.
@@ -282,6 +284,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
             ),
             Sep,
             Cmd("Create a filter", "data.filter", ""),
+            Sub("Filter views", &[Cmd("Create new filter view", "panel:filterViewNew", ""), Cmd("Save as filter view", "panel:filterViewSave", "")]),
             Cmd("Add a slicer", "insert.slicer", ""),
             Sep,
             Cmd("Protect sheets and ranges", "panel:protect", ""),
@@ -517,6 +520,8 @@ pub struct Shell {
     currency: crate::currency::CustomCurrency,
     /// Help › Keyboard shortcuts and Help › Search the menus.
     help: crate::shortcuts::Help,
+    /// The bar of the filter view open in this tab (Data › Filter views).
+    views: filterviews::Bar,
     /// Borders menu: the colour and line style the next border is drawn with (to-do row 66).
     border_colour: Option<u32>,
     border_style: usize,
@@ -624,6 +629,7 @@ impl Shell {
             .exact_size(48.0)
             .frame(Frame::NONE.fill(theme::PAGE).inner_margin(Margin { left: 12, right: 12, top: 4, bottom: 6 }))
             .show(ui, |ui| self.toolbar(app, ui));
+        self.views.ui(app, ui);
     }
 
     fn toolbar(&mut self, app: &mut SheetApp, ui: &mut Ui) {
@@ -1303,6 +1309,9 @@ pub fn run_entry_with(app: &mut SheetApp, ctx: &egui::Context, id: &str, params:
     if crate::menuactions::handles(id) {
         return run_steps(app, id, &params);
     }
+    if filterviews::handles(id) {
+        return filterviews::run(app, id, &params);
+    }
     if !id.starts_with("panel:") && !id.starts_with("ui:") && !matches!(id, "edit.copy" | "edit.cut" | "edit.paste") {
         return app.run_or_alert(id, params);
     }
@@ -1508,7 +1517,8 @@ pub fn entry_ids() -> Vec<&'static str> {
     out
 }
 
-fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[Item]) {
+/// Draws a menu's entries; returns its width.
+fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[Item]) -> f32 {
     let with_icons = items.iter().any(|i| match i {
         Cmd(l, ..) | CmdWith(l, ..) | Sub(l, _) => menu_icon(l).is_some(),
         Sep => false,
@@ -1543,11 +1553,18 @@ fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[Item]) {
                     Some(arrow) => b.right_text(arrow),
                     None => b.right_text(egui::containers::menu::SubMenuButton::arrow_atom(Some(MENU_GREY))),
                 };
-                egui::containers::menu::SubMenuButton::from_button(b).ui(ui, |ui| menu_items(app, ui, sub));
+                egui::containers::menu::SubMenuButton::from_button(b).ui(ui, |ui| {
+                    let width = menu_items(app, ui, sub);
+                    // Data › Filter views also lists the sheet's views.
+                    if *label == "Filter views" {
+                        filterviews::menu_list(app, ui, width);
+                    }
+                });
             }
             Sep => menu_sep_width(ui, width),
         }
     }
+    width
 }
 
 #[cfg(test)]
@@ -1680,7 +1697,7 @@ mod tests {
             "panel:searchMenus",
         ];
         for id in ids.iter().filter(|id| id.starts_with("panel:")) {
-            assert!(crate::menuactions::handles(id) || known.contains(id), "{id}: nothing opens it");
+            assert!(crate::menuactions::handles(id) || filterviews::handles(id) || known.contains(id), "{id}: nothing opens it");
         }
     }
 
