@@ -151,7 +151,7 @@ jobs:
         run: cargo clippy -p starsheets -- -D warnings
       - name: Desktop app builds and starts (debug build)
         run: |
-          cargo build -p starsheets
+          cargo build -p starsheets -p starsheets-server -p starsheets-sync -p starbase-connect -p starbase-open
           target/debug/starsheets --version
           target/debug/starsheets --help
 
