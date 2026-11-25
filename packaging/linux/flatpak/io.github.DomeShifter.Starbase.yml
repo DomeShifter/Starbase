@@ -13,7 +13,8 @@
 #     cannot run the generator, so for a Flathub submission they are generated once per release
 #     and committed in the Flathub manifest repository next to this manifest.
 #   - Engines: GridCraft and WordCraft come from our forks as `git` sources pinned to the commits
-#     in starsheets/upstream.pin and stardocs/upstream.pin. CI fails if these drift apart.
+#     in starsheets/upstream.pin and stardocs/upstream.pin. pin-engines.sh (next to this file)
+#     copies them in; CI runs it before building and warns if the committed lines were behind.
 #   - Fonts: the desktop programs only embed fonts that are committed (starsheets/app/fonts,
 #     stardocs/app/fonts). The web fonts and the word list that starsheets/scripts/fetch-*.py
 #     download are used by the web build only, so they are not sources here. If a native build
@@ -85,10 +86,10 @@ modules:
           - starsheets/target
           - starsheets/upstream
       # GridCraft: our fork's `starsheets` branch at the commit in starsheets/upstream.pin (what
-      # starsheets/scripts/fetch-upstream.sh fetches). Keep the two equal (CI checks).
+      # starsheets/scripts/fetch-upstream.sh fetches). pin-engines.sh keeps the two equal.
       - type: git
         url: https://github.com/DomeShifter/gridcraft.git
-        commit: 7b74c02cc5586585236b4b7f16f9e93572c3203e
+        commit: 40a57de8da5244e98165c1be67185445dc91f363
         dest: starsheets/upstream/gridcraft
       - cargo-sources-starsheets.json
 
@@ -117,7 +118,7 @@ modules:
           - stardocs/target
           - stardocs/upstream
       # WordCraft: our fork's `stardocs` branch at the commit in stardocs/upstream.pin. Keep the
-      # two equal (CI checks). stardocs/Cargo.toml is committed, so gen-cargo.py need not run.
+      # two equal (pin-engines.sh). stardocs/Cargo.toml is committed, so gen-cargo.py need not run.
       - type: git
         url: https://github.com/DomeShifter/wordcraft.git
         commit: f0726a5c2faeabdd29e7ca30b647891910117088

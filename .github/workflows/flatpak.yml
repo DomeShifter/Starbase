@@ -47,13 +47,11 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - name: Engine commits in the manifest equal upstream.pin
+      # upstream.pin is where an engine bump is made; the manifest follows it. A committed
+      # manifest that is behind only warns, since the build uses the pinned commits either way.
+      - name: Engine commits from upstream.pin
         run: |
-          for ws in starsheets stardocs; do
-            pin=$(sed -n 's/^commit = "\(.*\)"/\1/p' "$ws/upstream.pin")
-            grep -q "commit: $pin\$" "$MANIFEST" || { echo "::error::$MANIFEST does not pin $ws's engine at $pin ($ws/upstream.pin)"; exit 1; }
-            echo "$ws engine: $pin"
-          done
+          packaging/linux/flatpak/pin-engines.sh --check || echo "::warning::$MANIFEST is behind upstream.pin; CI builds the pinned commits. Run packaging/linux/flatpak/pin-engines.sh to update it."
       - name: Generate cargo-sources-*.json
         run: |
           pip install -q 'aiohttp>=3.9.5,<4' 'tomlkit>=0.13.3,<1' 'PyYAML>=6.0.2,<7'
@@ -93,10 +91,11 @@ jobs:
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
           flatpak install --user -y --noninteractive flathub org.flatpak.Builder
           flatpak info --user org.flatpak.Builder | grep -E 'Version|Commit'
-      - name: Version
+      - name: Engine commits (from upstream.pin) and version
         env:
           SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
+          packaging/linux/flatpak/pin-engines.sh
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0-dev+${SHA::7}"; fi
           echo "STARBASE_VERSION=$v" >> "$GITHUB_ENV"
           sed -i "s/version=0.0.0-dev;/version=$v;/" "$MANIFEST"
