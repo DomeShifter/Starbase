@@ -25,7 +25,7 @@ use axum::http::Response;
 use serde_json::{Map, Value, json};
 
 use super::index::Row;
-use super::routes::photo_json;
+use super::routes::{mark_stars, photo_json, stars_of};
 use super::{media_of, service};
 use crate::{App, Shared, auth, blocking, error, send_json, sharing};
 
@@ -212,6 +212,7 @@ async fn create(app: &Shared, me: Option<auth::User>, b: Value) -> Response<Body
 }
 
 async fn open_album(app: &Shared, me: Option<auth::User>, id: String) -> Response<Body> {
+    let stars = stars_of(app, me.as_ref()).await;
     let got = blocking(app, move |a| -> Result<(Value, Vec<Seen>), Response<Body>> {
         let acc = sharing::Access::new(&a.store, a.auth, me.as_ref());
         let al = load(a, &me).into_iter().find(|al| al["id"] == id.as_str()).ok_or_else(|| error(404, "no such album"))?;
@@ -226,7 +227,8 @@ async fn open_album(app: &Shared, me: Option<auth::User>, id: String) -> Respons
     };
     let app = app.clone();
     let (rows, waiting) = tokio::task::spawn_blocking(move || rows_of(&app, vis)).await.unwrap_or_default();
-    let photos: Vec<Value> = rows.iter().map(|(id, r, g)| photo_json(r, id, *g)).collect();
+    let mut photos: Vec<Value> = rows.iter().map(|(id, r, g)| photo_json(r, id, *g)).collect();
+    mark_stars(&mut photos, &stars);
     send_json(&json!({"id": al["id"], "name": al["name"], "photos": photos, "waiting": waiting}), 200)
 }
 
@@ -278,6 +280,7 @@ async fn change(app: &Shared, me: Option<auth::User>, id: String, act: String, b
 }
 
 async fn places(app: &Shared, me: Option<auth::User>, place: Option<String>) -> Response<Body> {
+    let stars = stars_of(app, me.as_ref()).await;
     // Pictures whose position I may know: ids by path, under the store lock.
     let mine = blocking(app, move |a| {
         let acc = sharing::Access::new(&a.store, a.auth, me.as_ref());
@@ -305,7 +308,8 @@ async fn places(app: &Shared, me: Option<auth::User>, place: Option<String>) -> 
     .unwrap_or_default();
     if let Some(name) = place {
         let Some(g) = groups.iter().find(|g| g.0 == name) else { return error(404, "no such place") };
-        let photos: Vec<Value> = g.1.iter().map(|(id, r, gps)| photo_json(r, id, *gps)).collect();
+        let mut photos: Vec<Value> = g.1.iter().map(|(id, r, gps)| photo_json(r, id, *gps)).collect();
+        mark_stars(&mut photos, &stars);
         return send_json(&json!({"place": name, "photos": photos, "waiting": waiting}), 200);
     }
     let out: Vec<Value> = groups.iter().map(|(n, rows)| json!({"name": n, "count": rows.len(), "cover": cover(rows)})).collect();

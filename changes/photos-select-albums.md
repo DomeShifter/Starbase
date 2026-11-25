@@ -6,3 +6,6 @@
 
 ### Changed
 - Photos: the old "Select" / "Done selecting" pills and the row of album pills are gone (replaced by the above).
+
+### Fixed
+- Photos: Favourite now knows when a picture in a folder inside (or in an album) is already a favourite, so it takes the star off instead of adding it again. Photos listings now say which pictures you starred.

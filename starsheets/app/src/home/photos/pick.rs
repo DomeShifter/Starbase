@@ -32,7 +32,15 @@ pub(super) enum Click {
 /// The selection logic, without any UI: `ids` in grid order, square `i` clicked, `on_box` when
 /// on its round checkbox. Like Google Photos: Shift adds the range from the last picked square;
 /// Ctrl (⌘), the checkbox, or any click while something is selected toggles; else it opens.
-pub(super) fn click(sel: &mut HashSet<String>, anchor: &mut Option<String>, ids: &[String], i: usize, on_box: bool, shift: bool, ctrl: bool) -> Click {
+pub(super) fn click(
+    sel: &mut HashSet<String>,
+    anchor: &mut Option<String>,
+    ids: &[String],
+    i: usize,
+    on_box: bool,
+    shift: bool,
+    ctrl: bool,
+) -> Click {
     let Some(id) = ids.get(i) else { return Click::Picked };
     if shift && let Some(a) = anchor.as_ref().and_then(|a| ids.iter().position(|x| x == a)) {
         let (lo, hi) = if a <= i { (a, i) } else { (i, a) };
@@ -127,7 +135,8 @@ pub(super) fn picker_rows(albums: &[Card], recent: &[String], search: &str) -> V
     if !q.is_empty() {
         return rest.into_iter().map(|c| (c, false)).collect();
     }
-    let mut out: Vec<(Card, bool)> = recent.iter().filter_map(|id| albums.iter().find(|c| &c.id == id)).take(RECENT).map(|c| (c.clone(), true)).collect();
+    let mut out: Vec<(Card, bool)> =
+        recent.iter().filter_map(|id| albums.iter().find(|c| &c.id == id)).take(RECENT).map(|c| (c.clone(), true)).collect();
     rest.retain(|c| !out.iter().any(|(r, _)| r.id == c.id));
     out.extend(rest.into_iter().map(|c| (c, false)));
     out
@@ -290,7 +299,9 @@ impl PhotoMode {
     }
 
     fn recent(&mut self, store: &Backend) -> &mut Vec<String> {
-        self.pick.recent.get_or_insert_with(|| store.setting(RECENT_KEY).unwrap_or_default().split(',').filter(|x| !x.is_empty()).map(str::to_string).collect())
+        self.pick
+            .recent
+            .get_or_insert_with(|| store.setting(RECENT_KEY).unwrap_or_default().split(',').filter(|x| !x.is_empty()).map(str::to_string).collect())
     }
 
     /// Album `id` was just used: first under Recent.
@@ -315,12 +326,16 @@ impl PhotoMode {
             let n = self.alb.selected.len();
             ui.label(RichText::new(format!("{n} selected")).size(house::TITLE - 4.0).color(theme::TEXT));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let mut rows = vec![(Act::Delete, "delete", "Move to bin"), (Act::Download, "download", "Download"), (Act::Favourite, "star", "Favourite")];
+                let mut rows =
+                    vec![(Act::Delete, "delete", "Move to bin"), (Act::Download, "download", "Download"), (Act::Favourite, "star", "Favourite")];
                 if self.open_album().is_some() {
                     rows.push((Act::Remove, "remove", "Remove from album"));
                 }
                 rows.push((Act::AddTo, "photo_library", "Add to album"));
-                if ui.add(egui::Button::new(RichText::new("Select all").size(house::BODY).color(theme::TEXT)).frame(false).min_size(vec2(0.0, 36.0))).clicked() {
+                if ui
+                    .add(egui::Button::new(RichText::new("Select all").size(house::BODY).color(theme::TEXT)).frame(false).min_size(vec2(0.0, 36.0)))
+                    .clicked()
+                {
                     chosen = Some(Some(Act::SelectAll));
                 }
                 for (act, icon, label) in rows {
@@ -369,7 +384,8 @@ impl PhotoMode {
         let rows = picker_rows(&albums, &recent, &d.search);
         // ↑/↓ move over "New album" (row 0) and the albums; Enter picks.
         let last = rows.len();
-        let (up, down, enter) = ctx.input(|i| (i.key_pressed(egui::Key::ArrowUp), i.key_pressed(egui::Key::ArrowDown), i.key_pressed(egui::Key::Enter)));
+        let (up, down, enter) =
+            ctx.input(|i| (i.key_pressed(egui::Key::ArrowUp), i.key_pressed(egui::Key::ArrowDown), i.key_pressed(egui::Key::Enter)));
         if !d.naming {
             if down {
                 d.cursor = (d.cursor + 1).min(last);
@@ -434,7 +450,16 @@ impl PhotoMode {
                         if heading != Some(*rec) {
                             heading = Some(*rec);
                             ui.add_space(house::XS);
-                            house::caps(ui, if *rec { "Recent" } else if d.search.trim().is_empty() { "All albums" } else { "Albums" });
+                            house::caps(
+                                ui,
+                                if *rec {
+                                    "Recent"
+                                } else if d.search.trim().is_empty() {
+                                    "All albums"
+                                } else {
+                                    "Albums"
+                                },
+                            );
                         }
                         hl(ui, d.cursor == k + 1);
                         let n = format!("{}", c.count);
@@ -550,9 +575,10 @@ impl PhotoMode {
         ctx.request_repaint_after(std::time::Duration::from_secs_f64((note.until - now).max(0.05)));
         let screen = ctx.content_rect();
         let (mut open, mut closed) = (false, false);
-        egui::Area::new(egui::Id::unique("photos_note")).order(egui::Order::Tooltip).fixed_pos(egui::pos2(screen.left() + house::XL, screen.bottom() - house::XL - 48.0)).show(
-            ctx,
-            |ui| {
+        egui::Area::new(egui::Id::unique("photos_note"))
+            .order(egui::Order::Tooltip)
+            .fixed_pos(egui::pos2(screen.left() + house::XL, screen.bottom() - house::XL - 48.0))
+            .show(ctx, |ui| {
                 egui::Frame::NONE
                     .fill(house::TIP_BG)
                     .corner_radius(house::PANEL_RADIUS)
@@ -563,7 +589,9 @@ impl PhotoMode {
                             ui.label(RichText::new(&note.text).size(house::BODY).color(Color32::WHITE));
                             ui.add_space(house::L);
                             if note.album.is_some()
-                                && ui.add(egui::Button::new(RichText::new("Open album").size(house::BODY).strong().color(theme::SHARE)).frame(false)).clicked()
+                                && ui
+                                    .add(egui::Button::new(RichText::new("Open album").size(house::BODY).strong().color(theme::SHARE)).frame(false))
+                                    .clicked()
                             {
                                 open = true;
                             }
@@ -573,8 +601,7 @@ impl PhotoMode {
                             }
                         });
                     });
-            },
-        );
+            });
         if open && let Some(c) = note.album {
             self.pick.note = None;
             self.open_album_card(ctx, store, c);

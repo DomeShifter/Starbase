@@ -389,9 +389,19 @@ impl Home {
             match o {
                 photos::Out::Star(ids) => {
                     // Like Google Photos: any not yet a favourite → all become one; else all stop.
-                    let on = !ids.iter().all(|id| self.file(id).is_some_and(|f| f.starred));
+                    // Photos' own listing first: pictures in subfolders/albums aren't in `self.files`.
+                    let on = photos::stars_on(&ids, &self.photos.pics, |id| self.file(id).map(|f| f.starred));
+                    self.photos.set_starred(&ids, on);
                     for id in &ids {
-                        call(&self.store, &self.inbox, ctx, Method::Post, format!("api/files/{id}/star"), Some(format!("{{\"on\":{on}}}").into_bytes()), refresh_after);
+                        call(
+                            &self.store,
+                            &self.inbox,
+                            ctx,
+                            Method::Post,
+                            format!("api/files/{id}/star"),
+                            Some(format!("{{\"on\":{on}}}").into_bytes()),
+                            refresh_after,
+                        );
                     }
                     let n = ids.len();
                     let what = if n == 1 { "1 picture".to_string() } else { format!("{n} pictures") };

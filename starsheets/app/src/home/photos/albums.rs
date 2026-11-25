@@ -268,40 +268,40 @@ impl PhotoMode {
             if !self.alb.selected.is_empty() {
                 self.sel_bar_ui(ui, store);
             } else {
-            ui.horizontal(|ui| {
-                if ui
-                    .add(link(match t {
-                        Tab::Albums => "‹ Albums",
-                        Tab::Events => "‹ Events",
-                        _ => "‹ Places",
-                    }))
-                    .clicked()
-                {
-                    self.alb.open = None;
-                    self.clear_selection();
-                    self.alb.ask = Ask::None;
-                    self.pics.clear();
-                    self.viewer = None;
-                }
-                ui.label(RichText::new(&c.name).size(house::TITLE).color(theme::TEXT));
-                let n = self.pics.len();
-                ui.label(RichText::new(format!("{n} {}", if n == 1 { "picture" } else { "pictures" })).size(house::BODY).color(theme::TEXT_DIM));
-                if t == Tab::Events && !self.pics.is_empty() && self.pill(ui, "Save as album", false) {
-                    self.create(ui.ctx(), store, &c.name, true);
-                }
-                if t == Tab::Albums {
-                    if self.pill(ui, "Add photos", false) {
-                        self.open_picker(ui.ctx(), store);
+                ui.horizontal(|ui| {
+                    if ui
+                        .add(link(match t {
+                            Tab::Albums => "‹ Albums",
+                            Tab::Events => "‹ Events",
+                            _ => "‹ Places",
+                        }))
+                        .clicked()
+                    {
+                        self.alb.open = None;
+                        self.clear_selection();
+                        self.alb.ask = Ask::None;
+                        self.pics.clear();
+                        self.viewer = None;
                     }
-                    if self.pill(ui, "Rename", false) {
-                        self.alb.text = c.name.clone();
-                        self.alb.ask = Ask::Rename;
+                    ui.label(RichText::new(&c.name).size(house::TITLE).color(theme::TEXT));
+                    let n = self.pics.len();
+                    ui.label(RichText::new(format!("{n} {}", if n == 1 { "picture" } else { "pictures" })).size(house::BODY).color(theme::TEXT_DIM));
+                    if t == Tab::Events && !self.pics.is_empty() && self.pill(ui, "Save as album", false) {
+                        self.create(ui.ctx(), store, &c.name, true);
                     }
-                    if self.pill(ui, "Delete album", false) {
-                        self.alb.ask = Ask::Delete;
+                    if t == Tab::Albums {
+                        if self.pill(ui, "Add photos", false) {
+                            self.open_picker(ui.ctx(), store);
+                        }
+                        if self.pill(ui, "Rename", false) {
+                            self.alb.text = c.name.clone();
+                            self.alb.ask = Ask::Rename;
+                        }
+                        if self.pill(ui, "Delete album", false) {
+                            self.alb.ask = Ask::Delete;
+                        }
                     }
-                }
-            });
+                });
             }
             self.pick_ui(ui, store);
             ui.add_space(house::S);

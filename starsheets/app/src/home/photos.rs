@@ -60,6 +60,15 @@ pub(super) struct Pic {
     pub modified: i64,
     pub width: u32,
     pub height: u32,
+    /// Starred by me (the server marks every listed picture, wherever it lives).
+    pub starred: bool,
+}
+
+/// Whether a Favourite click turns stars on: like Google Photos, any not yet a favourite → all
+/// become one, else all stop. `photos` is Photos' own listing, which holds pictures in subfolders
+/// and albums; `drive` (the open folder's files) is only a fallback for a picture not listed there.
+pub(super) fn stars_on(ids: &[String], photos: &[Pic], drive: impl Fn(&str) -> Option<bool>) -> bool {
+    !ids.iter().all(|id| photos.iter().find(|p| &p.id == id).map(|p| p.starred).or_else(|| drive(id)).unwrap_or(false))
 }
 
 /// Answers, from the network or a decoder (possibly another thread on the desktop).
@@ -328,8 +337,16 @@ impl PhotoMode {
                 modified: p["modified"].as_i64().unwrap_or(0),
                 width: p["width"].as_u64().unwrap_or(0) as u32,
                 height: p["height"].as_u64().unwrap_or(0) as u32,
+                starred: p["starred"].as_bool().unwrap_or(false),
             })
             .collect()
+    }
+
+    /// Shows the new star state at once (the listing isn't fetched again for it).
+    pub(super) fn set_starred(&mut self, ids: &[String], on: bool) {
+        for p in self.pics.iter_mut().filter(|p| ids.contains(&p.id)) {
+            p.starred = on;
+        }
     }
 
     fn set_pics(&mut self, pics: Vec<Pic>) {
@@ -854,6 +871,25 @@ pub(super) async fn decode_web(bytes: Vec<u8>, max: u32) -> Option<egui::ColorIm
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn favourite_reads_the_star_of_pictures_in_subfolders() {
+        let pic = |id: &str, starred| Pic { id: id.into(), starred, ..Pic::default() };
+        // Photos lists a starred picture of a subfolder; the Drive's listing (open folder) lacks it.
+        let pics = [pic("top", false), pic("sub", true), pic("top2", true)];
+        let drive = |id: &str| (id == "top2" || id == "top").then_some(id == "top2");
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        for (sel, on, why) in [
+            (ids(&["sub"]), false, "a starred picture in a subfolder is un-starred, not starred again"),
+            (ids(&["sub", "top2"]), false, "all starred: all stop"),
+            (ids(&["sub", "top"]), true, "one not yet a favourite: all become one"),
+            (ids(&["top"]), true, "not starred"),
+            (ids(&["gone"]), true, "unknown counts as not starred"),
+        ] {
+            assert_eq!(stars_on(&sel, &pics, drive), on, "{why}");
+        }
+        assert!(!stars_on(&ids(&["d"]), &[], |_| Some(true)), "the Drive answers for pictures Photos hasn't listed");
+    }
 
     #[test]
     fn the_grid_fills_the_width() {
