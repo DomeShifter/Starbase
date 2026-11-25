@@ -1561,6 +1561,7 @@ mod tests {
             auth: false,
             site: None,
             rooms: Rooms::default(),
+            oidc: None,
         });
         let opened = |dir: &std::path::Path| {
             let bytes = std::fs::read(dir.join("t.xlsx")).unwrap();

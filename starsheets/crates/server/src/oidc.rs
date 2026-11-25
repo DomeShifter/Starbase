@@ -458,7 +458,14 @@ impl Oidc {
         }
         let (url, state, nonce) = req.url();
         let binding = random_hex(32);
-        let p = Pending { binding: binding.clone(), nonce: nonce.secret().clone(), verifier: verifier.secret().clone(), made: Instant::now(), made_at: chrono::Utc::now().timestamp(), start };
+        let p = Pending {
+            binding: binding.clone(),
+            nonce: nonce.secret().clone(),
+            verifier: verifier.secret().clone(),
+            made: Instant::now(),
+            made_at: chrono::Utc::now().timestamp(),
+            start,
+        };
         self.keep(state.secret().clone(), p);
         Ok((url.to_string(), binding))
     }
@@ -560,9 +567,10 @@ impl Oidc {
         let std = info.as_ref().map(|i| i.standard_claims());
         let email = std.and_then(|s| s.email()).map(|e| e.to_string()).or_else(|| id_str("email"));
         // Shown in People only when the provider vouches for it: anyone can type any address.
-        let verified = std.and_then(|s| s.email_verified()).or_else(|| {
-            from_id.get("email_verified").and_then(|v| v.as_bool().or_else(|| v.as_str().map(|s| s.eq_ignore_ascii_case("true"))))
-        }) == Some(true);
+        let verified = std
+            .and_then(|s| s.email_verified())
+            .or_else(|| from_id.get("email_verified").and_then(|v| v.as_bool().or_else(|| v.as_str().map(|s| s.eq_ignore_ascii_case("true")))))
+            == Some(true);
         let username = std
             .and_then(|s| s.preferred_username())
             .map(|u| u.to_string())

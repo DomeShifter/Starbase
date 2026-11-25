@@ -37,7 +37,13 @@ struct Person {
 }
 
 fn person(sub: &str, username: &str, groups: &[&str]) -> Person {
-    Person { sub: sub.into(), username: username.into(), groups: groups.iter().map(|g| g.to_string()).collect(), groups_in_userinfo_only: false, email_unverified: false }
+    Person {
+        sub: sub.into(),
+        username: username.into(),
+        groups: groups.iter().map(|g| g.to_string()).collect(),
+        groups_in_userinfo_only: false,
+        email_unverified: false,
+    }
 }
 
 struct Fake {
@@ -637,6 +643,7 @@ fn waiting_sign_ins_push_out_the_oldest_never_refuse() {
         nonce: "n".into(),
         verifier: "v".into(),
         made: Instant::now(),
+        made_at: 0,
         start: Start { next: "/".into(), from: from.into(), net: net.into(), ..Default::default() },
     };
     let pending = |from: &str| pending_in(from, from);
