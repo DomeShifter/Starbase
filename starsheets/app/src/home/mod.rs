@@ -872,8 +872,9 @@ impl Home {
     }
 
     fn want_thumb(&mut self, ctx: &egui::Context, f: &FileRow) {
-        // Only spreadsheets and documents have a picture: other files show their type's icon.
-        if items::opens_as(&f.name) != items::Opens::Editor {
+        // Spreadsheets, documents, photos and PDFs have a picture: other files show their type's
+        // icon (so does any file the server has no picture of).
+        if items::opens_as(&f.name) != items::Opens::Editor && !matches!(items::file_kind(&f.name), "image" | "pdf") {
             return;
         }
         if self.thumbs.get(&f.id).is_some_and(|(v, _)| *v == f.version) || self.fetching >= THUMBS_AT_ONCE {

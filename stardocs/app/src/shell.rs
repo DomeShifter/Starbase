@@ -163,6 +163,34 @@ pub const MENUS: &[(&str, &[Item])] = &[
         "Insert",
         &[
             Cmd("Image", "insert.picture", NO, ""),
+            Sub(
+                "Drawing",
+                &[
+                    Cmd("New drawing canvas", "insert.canvas", NO, ""),
+                    Sep,
+                    Cmd("Rectangle", "insert.shape", r#"{"kind":"rectangle"}"#, ""),
+                    Cmd("Rounded rectangle", "insert.shape", r#"{"kind":"roundedRectangle"}"#, ""),
+                    Cmd("Ellipse", "insert.shape", r#"{"kind":"ellipse"}"#, ""),
+                    Cmd("Triangle", "insert.shape", r#"{"kind":"triangle"}"#, ""),
+                    Cmd("Diamond", "insert.shape", r#"{"kind":"diamond"}"#, ""),
+                    Cmd("Star", "insert.shape", r#"{"kind":"star"}"#, ""),
+                    Cmd("Heart", "insert.shape", r#"{"kind":"heart"}"#, ""),
+                    Cmd("Line", "insert.shape", r#"{"kind":"line"}"#, ""),
+                    Cmd("Arrow", "insert.shape", r#"{"kind":"arrow"}"#, ""),
+                ],
+            ),
+            Sub(
+                "Chart",
+                &[
+                    Cmd("Column", "insert.chart", r#"{"type":"column"}"#, ""),
+                    Cmd("Bar", "insert.chart", r#"{"type":"bar"}"#, ""),
+                    Cmd("Line", "insert.chart", r#"{"type":"line"}"#, ""),
+                    Cmd("Area", "insert.chart", r#"{"type":"area"}"#, ""),
+                    Cmd("Pie", "insert.chart", r#"{"type":"pie"}"#, ""),
+                    Cmd("Scatter", "insert.chart", r#"{"type":"scatter"}"#, ""),
+                ],
+            ),
+            Cmd("Emoji", "stardocs.emoji", NO, ""),
             Sub("Table", &[TableGrid, Sep, Cmd("Table options", "ui.dialog:insertTable", NO, "")]),
             Cmd("Date", "insert.dateTime", r#"{"format":"d MMMM yyyy"}"#, ""),
             Sep,
@@ -523,6 +551,8 @@ pub struct Shell {
     restart: Option<String>,
     /// The dialog has just opened: its box takes the keyboard.
     restart_focus: bool,
+    /// Insert › Emoji's picker.
+    emoji: crate::emoji::Emoji,
     /// Each toolbar group's width last frame, to decide which fit.
     widths: Widths,
     /// The same for the picture tools' groups, shown while a picture is selected.
@@ -580,6 +610,8 @@ struct Flags {
     shortcuts: bool,
     /// Asks for the Restart numbering dialog (Format › Bullets and numbering › List options).
     restart: bool,
+    /// Asks for Insert › Emoji.
+    emoji: bool,
     /// Asks for File › Version history: the panel, or the Name current version dialog.
     history: bool,
     name_version: bool,
@@ -745,6 +777,7 @@ fn is_own(id: &str) -> bool {
             | "stardocs.templates"
             | "stardocs.rename"
             | "stardocs.restartNumbering"
+            | "stardocs.emoji"
             | "stardocs.versionHistory"
             | "stardocs.nameVersion"
             | "stardocs.saveMyStyles"
@@ -760,6 +793,7 @@ fn run_menu(app: &mut WordApp, ctx: &egui::Context, flags: &mut Flags, link: Opt
         ("stardocs.compact", _) => flags.compact = !flags.compact,
         ("stardocs.shortcuts", _) => flags.shortcuts = true,
         ("stardocs.restartNumbering", _) => flags.restart = true,
+        ("stardocs.emoji", _) => flags.emoji = true,
         ("stardocs.versionHistory", _) => flags.history = true,
         ("stardocs.nameVersion", _) => flags.name_version = true,
         ("stardocs.saveMyStyles", _) => crate::mystyles::save(app),
@@ -842,8 +876,28 @@ fn params(text: &str) -> Value {
     serde_json::from_str(text).unwrap_or_else(|_| json!({}))
 }
 
+/// With exactly one object (picture, shape, chart, drawing) selected, puts the caret at the end
+/// of its paragraph, so a page break typed next goes after the object instead of replacing it.
+pub fn caret_off_object(app: &mut WordApp) {
+    let (a, b) = app.session.sel.ordered();
+    if a.story != b.story || a.path != b.path || b.off != a.off + wordcraft_doc::para::OBJ.len_utf8() {
+        return;
+    }
+    let Some(para) = app.session.doc.para_at(&a) else { return };
+    if para.object_at(a.off).is_none() {
+        return;
+    }
+    let end = wordcraft_doc::Pos { off: para.len(), ..a.clone() };
+    if let Err(e) = app.run("caret.set", json!({ "pos": end })) {
+        log::warn!("caret.set: {e}");
+    }
+}
+
 /// Runs a command; a refusal goes to the app's status line instead of vanishing.
 pub fn run(app: &mut WordApp, id: &str, p: Value) {
+    if matches!(id, "insert.pageBreak" | "text.pageBreak") {
+        caret_off_object(app);
+    }
     let r = match id.strip_prefix("ui.dialog:") {
         Some(name) => app.run("ui.dialog", json!({ "name": name })),
         None => app.run(id, p),
@@ -959,6 +1013,7 @@ impl Shell {
                 "shortcuts": self.shortcuts.open,
                 "customColour": self.custom.is_some(),
                 "restartNumbering": self.restart.is_some(),
+                "emoji": self.emoji.open,
                 "wordcraft": app.dialog.is_some(),
             },
             "toolbar": {
@@ -1026,6 +1081,10 @@ impl Shell {
             self.restart_focus = true;
         }
         self.restart_numbering(app, ui.ctx());
+        if std::mem::take(&mut self.flags.emoji) {
+            self.emoji.open = true;
+        }
+        self.emoji.ui(app, ui.ctx());
         self.shortcuts.ui(ui.ctx(), MENUS);
         if self.flags.words {
             self.word_count.ui(app, ui.ctx());
@@ -1132,6 +1191,17 @@ impl Shell {
         // would otherwise match it too (egui ignores an extra Shift).
         if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(ctrl_alt | Modifiers::SHIFT, Key::H))) {
             self.flags.history = true;
+        }
+        // Ctrl+Enter on a selected picture, shape or chart: Docs keeps the object and breaks the
+        // page after it. WordCraft would type the break over the selection (deleting the object),
+        // so move the caret off it first; WordCraft's own Ctrl+Enter then inserts the break.
+        let brk = ctx.input(|i| {
+            i.events
+                .iter()
+                .any(|e| matches!(e, egui::Event::Key { key: Key::Enter, pressed: true, modifiers: m, .. } if m.command && !m.shift && !m.alt))
+        });
+        if brk && app.dialog.is_none() {
+            caret_off_object(app);
         }
         let (menus, outline, help, count) = ctx.input_mut(|i| {
             (

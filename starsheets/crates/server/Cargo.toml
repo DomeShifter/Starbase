@@ -59,6 +59,8 @@ kamadak-exif = "0.6"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 jpeg-decoder = { version = "0.3.2", default-features = false }
 fast_image_resize = "6.2"
+# Drive tiles: a picture of the first page of a PDF (pure Rust, no system libraries; arm64 too).
+hayro = "0.9"
 notify = "9.0"
 
 [dev-dependencies]
