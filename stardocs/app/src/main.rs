@@ -46,6 +46,8 @@ mod save_fallback;
 #[cfg(target_arch = "wasm32")]
 mod api;
 #[cfg(target_arch = "wasm32")]
+mod filedlg;
+#[cfg(target_arch = "wasm32")]
 mod host;
 #[cfg(target_arch = "wasm32")]
 mod server;
@@ -73,7 +75,7 @@ mod updates;
 #[cfg(not(target_arch = "wasm32"))]
 use localfile as server;
 #[cfg(not(target_arch = "wasm32"))]
-use native_stubs::share;
+use native_stubs::{filedlg, share};
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod local_tests;

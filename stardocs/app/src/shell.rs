@@ -90,6 +90,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Cmd("Open", "file.open", NO, "Ctrl+O"),
             Cmd("Make a copy", "stardocs.makeCopy", NO, ""),
             Sep,
+            Cmd("Share", "stardocs.share", NO, ""),
             Sub(
                 "Download",
                 &[
@@ -102,7 +103,11 @@ pub const MENUS: &[(&str, &[Item])] = &[
                     Cmd("Markdown (.md)", "stardocs.downloadAs", r#"{"ext":"md"}"#, ""),
                 ],
             ),
+            Sep,
             Cmd("Rename", "stardocs.rename", NO, ""),
+            Cmd("Move", "stardocs.move", NO, ""),
+            Cmd("Move to bin", "stardocs.bin", NO, ""),
+            Sep,
             Sub(
                 "Version history",
                 &[
@@ -110,6 +115,8 @@ pub const MENUS: &[(&str, &[Item])] = &[
                     Cmd("See version history", "stardocs.versionHistory", NO, "Ctrl+Alt+Shift+H"),
                 ],
             ),
+            Sep,
+            Cmd("Details", "stardocs.details", NO, ""),
             Sep,
             Cmd("Page setup", "ui.dialog:pageSetup", NO, ""),
             Cmd("Print", "file.print", NO, "Ctrl+P"),
@@ -508,6 +515,8 @@ pub struct Shell {
     /// The title being typed over (server documents: the file's name).
     renaming: Option<String>,
     share: crate::share::Share,
+    /// File › Move, Move to bin and Details (`filedlg.rs`).
+    filedlg: crate::filedlg::FileDlg,
     flags: Flags,
     shortcuts: crate::shortcuts::Shortcuts,
     word_count: crate::wordcount::WordCount,
@@ -582,6 +591,9 @@ struct Flags {
     /// Asks for File › Version history: the panel, or the Name current version dialog.
     history: bool,
     name_version: bool,
+    /// File › Share, Move, Move to bin, Details (`filedlg.rs`): the one asked for, once.
+    ask_share: bool,
+    ask_file: Option<&'static str>,
     /// Read from storage yet.
     loaded: bool,
 }
@@ -742,6 +754,10 @@ fn is_own(id: &str) -> bool {
             | "stardocs.downloadAs"
             | "stardocs.makeCopy"
             | "stardocs.rename"
+            | "stardocs.share"
+            | "stardocs.move"
+            | "stardocs.bin"
+            | "stardocs.details"
             | "stardocs.restartNumbering"
             | "stardocs.versionHistory"
             | "stardocs.nameVersion"
@@ -759,6 +775,10 @@ fn run_menu(app: &mut WordApp, ctx: &egui::Context, flags: &mut Flags, link: Opt
         ("stardocs.shortcuts", _) => flags.shortcuts = true,
         ("stardocs.restartNumbering", _) => flags.restart = true,
         ("stardocs.versionHistory", _) => flags.history = true,
+        ("stardocs.share", _) => flags.ask_share = true,
+        ("stardocs.move", _) => flags.ask_file = Some("move"),
+        ("stardocs.bin", _) => flags.ask_file = Some("bin"),
+        ("stardocs.details", _) => flags.ask_file = Some("details"),
         ("stardocs.nameVersion", _) => flags.name_version = true,
         ("stardocs.saveMyStyles", _) => crate::mystyles::save(app),
         ("stardocs.useMyStyles", _) => crate::mystyles::use_saved(app),
@@ -992,6 +1012,16 @@ impl Shell {
             .frame(egui::Frame::NONE.fill(PAGE).inner_margin(egui::Margin { left: 12, right: 16, top: 8, bottom: 6 }))
             .show(ui, |ui| {
                 self.share.logic(link, ui.ctx());
+                self.filedlg.logic(link, ui.ctx());
+                if std::mem::take(&mut self.flags.ask_share) {
+                    match link {
+                        Some(link) if link.can_share() => self.share.ask(app, link, ui.ctx()),
+                        _ => app.status("Sharing needs a Starbase server"),
+                    }
+                }
+                if let Some(kind) = self.flags.ask_file.take() {
+                    self.filedlg.ask(kind, app, link, ui.ctx());
+                }
                 // Version history is a mode of its own, as in Google Docs: its bar replaces the
                 // title, menus and toolbar until ← goes back to the document.
                 if self.history.open {
@@ -1010,6 +1040,7 @@ impl Shell {
         self.version_history(app, ui, link);
         self.zoom_on_open(app, ui.available_width());
         self.share.ui(ui.ctx());
+        self.filedlg.ui(ui.ctx());
         self.custom_colour(app, ui.ctx());
         if std::mem::take(&mut self.flags.shortcuts) {
             self.shortcuts.open = true;
@@ -1631,6 +1662,7 @@ impl Shell {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // Your avatar at the far right, as in Starbase Sheets and Slides: a small menu
                 // with who you are and the way back to the home screen.
+                #[cfg(target_arch = "wasm32")]
                 if let Some((name, username, colour)) = link.and_then(Link::me) {
                     ui.add_space(8.0);
                     let r = crate::share::avatar(ui, &name, &colour, 32.0).on_hover_text(format!("{name} ({username})"));
@@ -1670,6 +1702,22 @@ impl Shell {
                     None => {
                         ui.add_enabled(false, share)
                             .on_disabled_hover_text("Sharing needs a Starbase server: open the document from the home screen");
+                    }
+                }
+                // Files: the home screen (Drive) in a new tab, as in Sheets.
+                #[cfg(target_arch = "wasm32")]
+                if let Some(link) = link {
+                    ui.add_space(8.0);
+                    let files = Button::image_and_text(
+                        icons::icon_px("folder", 20.0).unwrap_or_else(|| icons::logo(20.0)),
+                        RichText::new("Files").size(14.0).color(TEXT),
+                    )
+                    .fill(Color32::WHITE)
+                    .stroke(Stroke::new(1.0, DIVIDER))
+                    .corner_radius(18.0)
+                    .min_size(vec2(92.0, 36.0));
+                    if ui.add(files).on_hover_text("Your files and folders, in a new tab").clicked() {
+                        link.files_tab();
                     }
                 }
                 // Docs' comment history button: opens WordCraft's comments panel.
