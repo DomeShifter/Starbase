@@ -45,9 +45,16 @@ fn window(width: f32) -> Harness<'static, Win> {
         win,
     );
     steps(&mut h, 6);
+    remember_toolbar(&mut h);
+    h
+}
+
+/// Notes where the buttons are with no menu open (the toolbar's), for [`entry`]; again after
+/// the toolbar changes (a selected picture's tools).
+fn remember_toolbar(h: &mut Harness<'static, Win>) {
+    steps(h, 2);
     let toolbar = h.query_all(By::new().role(Role::Button)).map(|n| n.rect()).collect();
     h.state_mut().toolbar = toolbar;
-    h
 }
 
 /// Runs frames, passing input through WordCraft's raw input hook as the web runner does.
@@ -484,6 +491,8 @@ fn format_image_is_greyed_without_a_picture_and_wraps_a_selected_one() {
         run(&mut h, "select.all", json!({}));
     }
     assert_eq!(selected_picture(&h), Some(false), "an inline picture, selected");
+    // The toolbar now shows the picture tools, worded as some of the menu's entries.
+    remember_toolbar(&mut h);
     menu(&mut h, &["Format", "Image"]);
     for label in items {
         assert!(!is_greyed(&h, label), "{label} works on a selected picture");
@@ -745,4 +754,28 @@ fn version_history_opens_from_the_menu_and_its_keys() {
     assert_eq!(h.state_mut().state()["mode"], "editing", "back to editing once the history closes");
     menu(&mut h, &["File", "Version history", "Name current version"]);
     assert_eq!(h.state_mut().state()["dialogs"]["nameVersion"], true);
+}
+
+/// Docs' picture tools: with a picture selected the toolbar swaps its text tools for crop, image
+/// options, replace, reset and the five ways of wrapping text, the current one lit.
+#[test]
+fn a_selected_picture_gets_the_picture_tools_in_the_toolbar() {
+    let mut h = window(1400.0);
+    assert_eq!(h.state_mut().state()["toolbar"]["pictureTools"], false);
+    run(&mut h, "insert.picture", json!({"data": PNG, "width": 100}));
+    if selected_picture(&h).is_none() {
+        run(&mut h, "select.all", json!({}));
+    }
+    steps(&mut h, 2);
+    assert_eq!(h.state_mut().state()["toolbar"]["pictureTools"], true);
+    for label in ["Crop image", "Image options", "Replace image", "Reset image", "Behind text", "In front of text"] {
+        h.get(By::new().label(label));
+    }
+    assert!(h.query_by_label("Bold (Ctrl+B)").is_none(), "the text tools give way");
+    click(&mut h, "Wrap text");
+    assert_eq!(selected_picture(&h), Some(true), "Wrap text floats it");
+    click(&mut h, "In line with text");
+    assert_eq!(selected_picture(&h), Some(false), "back in line");
+    click(&mut h, "Image options");
+    assert_eq!(h.state_mut().state()["dialogs"]["wordcraft"], true, "Image options opens WordCraft's size dialog");
 }

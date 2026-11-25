@@ -513,8 +513,12 @@ pub struct Shell {
     restart_focus: bool,
     /// Each toolbar group's width last frame, to decide which fit.
     widths: Widths,
+    /// The same for the picture tools' groups, shown while a picture is selected.
+    picture_widths: [f32; 5],
     /// How many toolbar groups didn't fit and are in the ⋮ menu.
     in_more: usize,
+    /// Whether the toolbar showed the picture tools last frame.
+    picture_shown: bool,
     /// The mode box and arrow's width last frame, and the room the groups had.
     right_end: f32,
     room: f32,
@@ -934,6 +938,7 @@ impl Shell {
                 "bold": cur.bold, "italic": cur.italic, "underline": cur.underline, "zoom": cur.zoom,
                 "painting": app.session.painter.is_some(),
                 "groupWidths": self.widths.to_vec(),
+                "pictureTools": self.picture_shown,
                 "groupsInMoreMenu": self.in_more,
                 "groupRoom": self.room,
                 "rightEndWidth": self.right_end,
@@ -1144,7 +1149,14 @@ impl Shell {
         let cur = current(app);
         let fonts = self.fonts.get_or_insert_with(|| font_names(app)).clone();
         let flags = &mut self.flags;
-        let widths = &mut self.widths;
+        // A selected picture: Docs swaps the text tools for the picture's (crop, replace, wrapping).
+        let picture = editable && picture_wrap(app).is_some();
+        self.picture_shown = picture;
+        if self.picture_widths == [0.0; 5] {
+            self.picture_widths = GUESSED_PICTURE_WIDTHS;
+        }
+        let (groups, widths): (&[Group], &mut [f32]) =
+            if picture { (&PICTURE_GROUPS, &mut self.picture_widths[..]) } else { (&GROUPS, &mut self.widths[..]) };
         let in_more = &mut self.in_more;
         let right_end = &mut self.right_end;
         let room_seen = &mut self.room;
@@ -1159,7 +1171,7 @@ impl Shell {
                 // The right end's width as drawn last frame (a guess before the first).
                 let mut room = ui.available_width() - if *right_end > 0.0 { *right_end + 8.0 } else { RIGHT_END };
                 *room_seen = room;
-                let mut shown = GROUPS.len();
+                let mut shown = groups.len();
                 let mut used = 0.0;
                 for (i, w) in widths.iter().enumerate() {
                     if used + w > room {
@@ -1168,7 +1180,7 @@ impl Shell {
                     }
                     used += w;
                 }
-                if shown < GROUPS.len() {
+                if shown < groups.len() {
                     room -= MORE;
                     used = 0.0;
                     shown = widths
@@ -1179,19 +1191,19 @@ impl Shell {
                         })
                         .count();
                 }
-                *in_more = GROUPS.len() - shown;
+                *in_more = groups.len() - shown;
                 ui.add_enabled_ui(editable, |ui| {
-                    for (i, g) in GROUPS.iter().take(shown).enumerate() {
+                    for (i, g) in groups.iter().take(shown).enumerate() {
                         let x = ui.cursor().left();
                         tools.draw(ui, *g);
-                        if i + 1 < GROUPS.len() {
+                        if i + 1 < groups.len() {
                             bar(ui);
                         }
                         widths[i] = ui.cursor().left() - x;
                     }
-                    if shown < GROUPS.len() {
+                    if shown < groups.len() {
                         icon_menu(ui, "more_vert", "More", |ui| {
-                            for g in &GROUPS[shown..] {
+                            for g in &groups[shown..] {
                                 ui.horizontal(|ui| {
                                     flat(ui);
                                     tight(ui);
@@ -1314,10 +1326,42 @@ enum Group {
     Insert,
     Align,
     Lists,
+    /// A selected picture's tools: crop, image options, replace, reset.
+    Picture,
+    /// Its text wrapping, one button a way as Docs shows them.
+    Wrap,
 }
 const GROUPS: [Group; 9] =
     [Group::History, Group::Zoom, Group::Style, Group::Font, Group::Size, Group::Text, Group::Insert, Group::Align, Group::Lists];
 pub const GUESSED_WIDTHS: [f32; 9] = [151.0, 79.0, 129.0, 109.0, 99.0, 151.0, 95.0, 151.0, 140.0];
+/// The toolbar while a picture is selected, as Docs': the text tools give way to the picture's.
+const PICTURE_GROUPS: [Group; 5] = [Group::History, Group::Zoom, Group::Insert, Group::Picture, Group::Wrap];
+const GUESSED_PICTURE_WIDTHS: [f32; 5] = [151.0, 79.0, 95.0, 125.0, 155.0];
+/// The picture tools' wrapping buttons: Format › Image › Text wrapping's ways, with their icons.
+const WRAPS: [(&str, &str, &str); 5] = [
+    ("art_track", "In line with text", "inline"),
+    ("format_image_left", "Wrap text", "square"),
+    ("horizontal_split", "Break text", "topAndBottom"),
+    ("flip_to_back", "Behind text", "behindText"),
+    ("flip_to_front", "In front of text", "inFrontOfText"),
+];
+
+/// The selected picture's text wrapping, as `arrange.wrap` names it, or none when no picture is
+/// selected.
+fn picture_wrap(app: &WordApp) -> Option<&'static str> {
+    use wordcraft_doc::para::{InlineObject, Wrap};
+    match wordcraft_engine::cmd::objects::selected(&app.session) {
+        Some((_, InlineObject::Image { float, .. })) => Some(match float.wrap {
+            Wrap::Inline => "inline",
+            // Tight and Through (from Word files) look like Docs' Wrap text.
+            Wrap::Square | Wrap::Tight | Wrap::Through => "square",
+            Wrap::TopAndBottom => "topAndBottom",
+            Wrap::BehindText => "behindText",
+            Wrap::InFrontOfText => "inFrontOfText",
+        }),
+        _ => None,
+    }
+}
 /// Room kept for the mode box and the compact-mode arrow, and for the ⋮ button.
 const RIGHT_END: f32 = 170.0;
 const MORE: f32 = 34.0;
@@ -1451,6 +1495,18 @@ impl Tools<'_> {
                 tool(app, ui, "format_indent_decrease", "Decrease indent (Ctrl+[)", "para.outdent", json!({}), false);
                 tool(app, ui, "format_indent_increase", "Increase indent (Ctrl+])", "para.indent", json!({}), false);
                 tool(app, ui, "format_clear", "Clear formatting (Ctrl+\\)", "format.clear", json!({}), false);
+            }
+            Group::Picture => {
+                tool(app, ui, "crop", "Crop image", "ui.crop", json!({}), false);
+                tool(app, ui, "tune", "Image options", "picture.size", json!({}), false);
+                tool(app, ui, "swap_horiz", "Replace image", "ui.changePicture", json!({}), false);
+                tool(app, ui, "restart_alt", "Reset image", "picture.reset", json!({}), false);
+            }
+            Group::Wrap => {
+                let now = picture_wrap(app);
+                for (icon, tip, wrap) in WRAPS {
+                    tool(app, ui, icon, tip, "arrange.wrap", json!({ "wrap": wrap }), now == Some(wrap));
+                }
             }
         }
     }

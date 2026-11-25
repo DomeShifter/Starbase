@@ -87,6 +87,15 @@ static ICONS: &[(&str, &[u8])] = icons!(
     "view_column",
     "zoom_in",
     "zoom_out",
+    // The toolbar's picture tools, while a picture is selected.
+    "tune",
+    "swap_horiz",
+    "restart_alt",
+    "art_track",
+    "format_image_left",
+    "horizontal_split",
+    "flip_to_back",
+    "flip_to_front",
 );
 
 /// Each menu entry's icon, as Docs shows them (Material Symbols names), by its wording.
