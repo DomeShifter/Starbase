@@ -101,6 +101,18 @@ pub fn is_slides(name: &str) -> bool {
     name.to_lowercase().ends_with(".pptx")
 }
 
+/// The desktop program that opens a file: Starbase Slides, Docs or Sheets.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code, reason = "the desktop's; the web opens pages"))]
+pub fn program_for(name: &str) -> &'static str {
+    if is_slides(name) {
+        "starslides"
+    } else if is_doc(name) {
+        "stardocs"
+    } else {
+        "starsheets"
+    }
+}
+
 /// The app logo the home screen shows for a file: Slides, Docs or Sheets.
 pub fn app_icon(name: &str) -> &'static str {
     if is_slides(name) {
@@ -249,7 +261,7 @@ impl Store for ServerStore {
 
 #[cfg(test)]
 mod tests {
-    use super::{dec, enc, is_doc, is_slides};
+    use super::{dec, enc, is_doc, is_slides, program_for};
 
     #[test]
     fn encodes_like_encode_uri_component() {
@@ -267,5 +279,6 @@ mod tests {
         assert!(is_doc("Letter.DOCX") && is_doc("notes.odt"));
         assert!(!is_doc("Budget.xlsx"));
         assert!(is_doc("Talk.PPTX") && is_slides("Talk.PPTX") && !is_slides("Letter.docx"));
+        assert_eq!([program_for("Talk.pptx"), program_for("Letter.docx"), program_for("Budget.xlsx")], ["starslides", "stardocs", "starsheets"]);
     }
 }

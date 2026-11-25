@@ -27,7 +27,7 @@ use serde_json::{Value as Json, json};
 use crate::store::{Answer, Done, Method, Store, dec, enc, is_doc};
 
 /// Files the home screen lists (others in the folder are left alone and not shown).
-const LISTED: &[&str] = &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "docx", "odt"];
+const LISTED: &[&str] = &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv", "docx", "odt", "pptx"];
 /// Files bigger than this get no preview picture (the home screen shows a plain icon).
 const THUMB_MAX: u64 = 8 * 1024 * 1024;
 
@@ -321,7 +321,11 @@ pub(crate) fn program(name: &str) -> Option<PathBuf> {
 /// Starts `name` with `args` in its own window (and process); says why when it can't.
 pub(crate) fn launch(name: &str, args: &[&std::ffi::OsStr]) -> Result<(), String> {
     let Some(mut cmd) = program_command(name, std::env::var_os("APPIMAGE").map(PathBuf::from)) else {
-        let app = if name == "stardocs" { "Starbase Docs" } else { "Starbase Sheets" };
+        let app = match name {
+            "stardocs" => "Starbase Docs",
+            "starslides" => "Starbase Slides",
+            _ => "Starbase Sheets",
+        };
         return Err(format!("{app} isn't installed next to Starbase Drive, so this can't be opened here."));
     };
     let exe = PathBuf::from(cmd.get_program());
@@ -393,10 +397,11 @@ fn passwd_name(passwd: &str, uid: u32) -> Option<String> {
     })
 }
 
-/// Opens a file in the right program: documents in Starbase Docs, spreadsheets in Starbase Sheets.
+/// Opens a file in the right program: presentations in Starbase Slides, documents in Starbase
+/// Docs, spreadsheets in Starbase Sheets.
 pub(crate) fn open_in_program(path: &Path) -> Result<(), String> {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    launch(if is_doc(&name) { "stardocs" } else { "starsheets" }, &[path.as_os_str()])
+    launch(crate::store::program_for(&name), &[path.as_os_str()])
 }
 
 /// A new, empty Word document (the smallest .docx Word and Starbase Docs open).

@@ -21,7 +21,7 @@ use egui::{RichText, Ui, vec2};
 use starbase_connect::{Renewing, Server, Step};
 
 use crate::localstore::{LocalStore, launch};
-use crate::store::{Answer, Backend, Done, Method, Store, enc, is_doc};
+use crate::store::{Answer, Backend, Done, Method, Store, enc};
 use crate::{house, theme};
 
 /// The app's name on the server's "Your devices" list.
@@ -108,7 +108,7 @@ impl Store for RemoteStore {
         if self.server.call("GET", "api/devices", None, None)?.status == 401 {
             return Err(DISCONNECTED.into());
         }
-        let program = if is_doc(name) { "stardocs" } else { "starsheets" };
+        let program = crate::store::program_for(name);
         launch(program, &["--server-file".as_ref(), id.as_ref(), "--name".as_ref(), name.as_ref()])
     }
 
