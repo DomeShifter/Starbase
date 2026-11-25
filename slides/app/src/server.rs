@@ -254,8 +254,10 @@ impl Link {
         for (name, bytes) in opened {
             app.open_from_host(Some(&name), &bytes);
         }
-        if let Some(author) = self.state.borrow_mut().author.take() {
-            app.session.prefs.author = author;
+        // The signed-in person's name signs new comments, as `?author=` does in host mode.
+        let author = self.state.borrow_mut().author.take();
+        if let Some(author) = author {
+            crate::host::Bridge::set_author(app, &author);
         }
         let news = std::mem::take(&mut self.state.borrow_mut().news);
         for msg in news {
@@ -512,7 +514,7 @@ fn header(h: &web_sys::Headers, name: &str) -> Option<String> {
 }
 
 /// One request to the server, with the page's sign-in cookie: (status, headers, body).
-async fn fetch(method: &str, url: &str, if_match: Option<&str>, body: Option<&[u8]>) -> Result<(u16, web_sys::Headers, Vec<u8>), String> {
+pub(crate) async fn fetch(method: &str, url: &str, if_match: Option<&str>, body: Option<&[u8]>) -> Result<(u16, web_sys::Headers, Vec<u8>), String> {
     let init = web_sys::RequestInit::new();
     init.set_method(method);
     init.set_credentials(web_sys::RequestCredentials::SameOrigin);

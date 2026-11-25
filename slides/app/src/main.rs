@@ -9,11 +9,12 @@
 //!   page keeps the files instead (`host`, DeckCraft's bridge), `&author=` names the user.
 //! - Otherwise a new presentation (`?sample`: DeckCraft's sample deck); saves download.
 //! - `?test` puts the test hook `window.starslides` on the page (`testhook`); DeckCraft's own
-//!   `window.deckcraft` page API is always there (`api`). `?webgl` forces WebGL2.
+//!   `window.deckcraft` page API is always there (`api`).
 //! - The presenter view opens as a same-origin popup window (`presenter`).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+mod fonts;
 mod icons;
 mod prefs;
 mod shell;
@@ -21,6 +22,8 @@ mod theme;
 
 #[cfg(any(target_arch = "wasm32", test))]
 mod api;
+#[cfg(target_arch = "wasm32")]
+mod fullscreen;
 #[cfg(target_arch = "wasm32")]
 mod host;
 #[cfg(target_arch = "wasm32")]

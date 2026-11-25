@@ -73,10 +73,21 @@ pub trait Store {
     fn keep_copy(&mut self, name: &str, bytes: &[u8]) -> Result<(), String>;
     /// Gives the file a new name (`stem` plus its own extension).
     fn rename(&mut self, stem: &str) -> Result<(), String>;
+    /// File › Make a copy: copies the file as it is saved ("Copy of <name>", beside it).
+    fn copy(&mut self) -> Result<Copied, String>;
     /// What the title row says once saved.
     fn saved_text(&self) -> &'static str {
         Link::SAVED
     }
+}
+
+/// Where File › Make a copy put the copy.
+#[derive(Debug, PartialEq)]
+pub enum Copied {
+    /// A file on this computer.
+    Local(PathBuf),
+    /// A document on the Starbase server (its id and name).
+    Server { id: String, name: String },
 }
 
 /// A file's version on disk: its modification time and size.
@@ -172,6 +183,13 @@ impl Store for LocalFile {
         self.path = Some(new);
         Ok(())
     }
+
+    fn copy(&mut self) -> Result<Copied, String> {
+        let src = self.path.clone().ok_or("the document isn't saved yet")?;
+        let dest = unique(&self.dir, &format!("Copy of {}", self.name()));
+        std::fs::copy(&src, &dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+        Ok(Copied::Local(dest))
+    }
 }
 
 /// `dir/name`, or `dir/name (2)`, `(3)`… when a file of that name is already there.
@@ -222,18 +240,26 @@ fn is_document(name: &str) -> bool {
 pub struct Folders {
     /// Where new documents go: `~/Documents/Starbase`.
     pub documents: PathBuf,
-    /// Our own data (the recent list): `$XDG_DATA_HOME/starbase`.
+    /// Our own data (the recent list): `$XDG_DATA_HOME/starbase`; Starbase's settings folder on
+    /// Windows and macOS (`%APPDATA%\Starbase`, `~/Library/Application Support/Starbase`).
     pub data: PathBuf,
 }
 
 impl Folders {
-    /// The user's folders (XDG on Linux), or `None` without a home folder.
+    /// The user's folders (XDG on Linux, the system's on Windows and macOS), or `None` without a
+    /// home folder.
     pub fn of_user() -> Option<Self> {
-        let home = std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from)?;
-        let data = std::env::var_os("XDG_DATA_HOME").filter(|d| !d.is_empty()).map_or_else(|| home.join(".local/share"), PathBuf::from);
+        // USERPROFILE: Windows has no HOME (as Starbase Sheets' localstore.rs does).
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).filter(|h| !h.is_empty()).map(PathBuf::from)?;
+        let data = match std::env::var_os("XDG_DATA_HOME").filter(|d| !d.is_empty()) {
+            Some(d) => PathBuf::from(d).join("starbase"),
+            None if cfg!(any(windows, target_os = "macos")) => starbase_connect::config_dir().unwrap_or_else(|| home.join(".starbase")),
+            None => home.join(".local/share/starbase"),
+        };
         let config = std::env::var_os("XDG_CONFIG_HOME").filter(|d| !d.is_empty()).map_or_else(|| home.join(".config"), PathBuf::from);
-        let docs = documents_dir(&home, &config).unwrap_or_else(|| home.join("Documents"));
-        Some(Self { documents: docs.join("Starbase"), data: data.join("starbase") })
+        // Windows: the Documents Known Folder, which OneDrive can move; macOS: ~/Documents.
+        let docs = starbase_connect::system_documents_dir().or_else(|| documents_dir(&home, &config)).unwrap_or_else(|| home.join("Documents"));
+        Some(Self { documents: docs.join("Starbase"), data })
     }
 }
 
@@ -274,6 +300,8 @@ fn remember(folders: &Folders, path: &Path) {
 #[derive(Debug, PartialEq)]
 pub enum Request {
     Open(PathBuf),
+    /// A document on the connected Starbase server (its id and name), in a window of its own.
+    OpenServer(String, String),
     New,
     /// File › Connect to a server… / Disconnect from <server>.
     Connect,
@@ -399,6 +427,33 @@ impl Link {
     /// Never view-only in local mode (a read-only file fails to save, and says so).
     pub fn view_only(&self) -> bool {
         false
+    }
+
+    /// File › Make a copy: saves what isn't saved yet, then copies the file ("Copy of <name>",
+    /// beside it; on the server, beside it or in your own folder) and opens the copy in a window
+    /// of its own.
+    pub fn make_copy(&self, app: &mut WordApp) {
+        let new = || self.state.borrow().store.name().is_empty();
+        if self.unsaved(app) || new() {
+            self.save_now(app);
+        }
+        if self.unsaved(app) || new() {
+            self.news("Couldn't make a copy: the document isn't saved yet".into());
+            return;
+        }
+        let r = self.state.borrow_mut().store.copy();
+        match r {
+            Ok(Copied::Local(path)) => {
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                self.news(format!("Made \"{name}\""));
+                self.open_path(path);
+            }
+            Ok(Copied::Server { id, name }) => {
+                self.news(format!("Made \"{name}\""));
+                self.state.borrow_mut().requests.push(Request::OpenServer(id, name));
+            }
+            Err(e) => self.news(format!("Couldn't make a copy: {e}")),
+        }
     }
 
     /// Local documents have no one to share with yet: that comes with a server.

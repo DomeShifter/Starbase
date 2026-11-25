@@ -18,6 +18,15 @@
 //!   starbase-open --ask-again              forget the answer; asked at the next open
 
 mod map;
+#[cfg(target_os = "linux")]
+mod portal;
+/// The document portal is Linux's (Flatpak): elsewhere a path is what it says.
+#[cfg(not(target_os = "linux"))]
+mod portal {
+    pub fn host_path(p: &std::path::Path) -> std::path::PathBuf {
+        p.to_path_buf()
+    }
+}
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -55,10 +64,15 @@ fn main() {
             let mut asked = Asked::Never;
             for f in &args[1..] {
                 let path = absolute(Path::new(f));
-                let v = match plan(&path, &mut asked) {
+                let mut v = match plan(&path, &mut asked) {
                     Plan::Web(url) => json!({ "file": path.display().to_string(), "opens": "web", "url": url }),
                     Plan::Desktop(prog, why) => json!({ "file": path.display().to_string(), "opens": prog, "why": why }),
                 };
+                // A document-portal path: where it really is (what was matched).
+                let host = portal::host_path(&path);
+                if host != path {
+                    v["host"] = json!(host.display().to_string());
+                }
                 println!("{v}");
             }
             0
@@ -143,9 +157,12 @@ fn plan(file: &Path, asked: &mut Asked) -> Plan {
         None => return desktop("the server's storage folder hasn't been set"),
     };
     let Some(folder) = storage.folder else { return desktop("the server's storage isn't on this computer") };
+    // Inside the Flatpak a file (and a folder picked there) can arrive as a document-portal path:
+    // compared by where it really is on the computer (portal.rs).
+    let (folder, file) = (portal::host_path(&folder), portal::host_path(file));
     // By name first; then with links worked out (a share reached through a link, or a link to it).
-    let rel = map::inside(&folder, file).or_else(|| {
-        let (f, p) = (std::fs::canonicalize(&folder).ok()?, std::fs::canonicalize(file).ok()?);
+    let rel = map::inside(&folder, &file).or_else(|| {
+        let (f, p) = (std::fs::canonicalize(&folder).ok()?, std::fs::canonicalize(&file).ok()?);
         map::inside(&f, &p)
     });
     let Some(rel) = rel else { return desktop("not in the server's storage folder") };
@@ -201,7 +218,8 @@ fn ask_folder(server: &str) -> Option<map::Storage> {
             return None;
         }
     }
-    answer(Some(folder))
+    // The folder picker inside the Flatpak answers with a document-portal path: keep the real one.
+    answer(Some(portal::host_path(&folder)))
 }
 
 /// `--storage-folder DIR|none`, for the connected server.
@@ -225,7 +243,7 @@ fn set_folder(arg: Option<&OsString>) -> i32 {
         if !map::looks_like_storage(&f) {
             eprintln!("starbase-open: note: {} has no .starsheets folder, so it may not be the server's storage", f.display());
         }
-        Some(f)
+        Some(portal::host_path(&f))
     };
     match map::save(&dir, &map::Storage { server: server.url, folder }) {
         Ok(()) => 0,

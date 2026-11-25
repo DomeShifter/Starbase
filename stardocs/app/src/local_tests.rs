@@ -189,6 +189,35 @@ fn a_new_document_is_made_in_documents_starbase_on_its_first_save() {
     assert_eq!(crate::localfile::recent(&folders(&dir)), [docs.join("Shopping list.docx")]);
 }
 
+/// File › Make a copy on this computer: what isn't saved yet is saved first, then "Copy of
+/// <name>" is made beside the file and opened in a window of its own.
+#[test]
+fn make_a_copy_copies_the_file_beside_it_and_opens_the_copy() {
+    use crate::localfile::Request;
+    let dir = temp_dir("makecopy");
+    let path = dir.join("Letter.docx");
+    fixture(&path, "Dear Sam");
+    let clock = Clock::default();
+    let mut h = window(&dir, Some(path.clone()), &clock);
+    type_text(&mut h, "Unsaved ");
+    {
+        let Win { app, shell, link, .. } = h.state_mut();
+        assert_eq!(shell.test_command(app, Some(link), "stardocs.makeCopy", json!({})), Ok(json!(true)));
+    }
+    steps(&mut h, 2);
+    let copy = dir.join("Copy of Letter.docx");
+    assert_eq!(h.state().link.take_requests(), [Request::Open(copy.clone())]);
+    assert!(!h.state().app.session.dirty, "saved first");
+    assert_eq!(std::fs::read(&copy).unwrap(), std::fs::read(&path).unwrap(), "the copy is the saved file");
+    let again = window(&dir, Some(copy), &clock);
+    assert!(body_text(&again).contains("Unsaved"), "with what was typed");
+    assert_eq!(h.state().link.name(), "Letter.docx", "this window keeps the document itself");
+    // A second copy doesn't overwrite the first.
+    let Win { app, shell, link, .. } = h.state_mut();
+    shell.test_command(app, Some(link), "stardocs.makeCopy", json!({})).unwrap();
+    assert_eq!(link.take_requests(), [Request::Open(dir.join("Copy of Letter (2).docx"))]);
+}
+
 #[test]
 fn there_is_no_share_button_for_a_local_document() {
     use egui_kittest::kittest::Queryable;
@@ -285,8 +314,10 @@ fn the_command_line_opens_local_files_or_a_server_document() {
     assert!(a.files.is_empty());
     let a = parse_args(os(&["--name", "N.docx", "--server-file", "x"])).unwrap();
     assert_eq!(a.server_file, Some(("x".to_string(), "N.docx".to_string())), "in either order");
-    let a = parse_args(os(&["/tmp/a.docx", "/tmp/b.odt"])).unwrap();
-    assert_eq!(a.files, vec![PathBuf::from("/tmp/a.docx"), PathBuf::from("/tmp/b.odt")]);
+    // Absolute on every system (`/tmp/a.docx` isn't on Windows, where it gains a drive letter).
+    let (f1, f2) = (std::env::temp_dir().join("a.docx"), std::env::temp_dir().join("b.odt"));
+    let a = parse_args(vec![f1.clone().into_os_string(), f2.clone().into_os_string()]).unwrap();
+    assert_eq!(a.files, vec![f1, f2]);
     assert_eq!(parse_args(os(&["--version"])).unwrap(), Args { version: true, ..Default::default() });
     assert!(parse_args(os(&["--server-file"])).is_err(), "needs an id");
     assert!(parse_args(os(&["--server-file", ""])).is_err());

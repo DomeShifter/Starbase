@@ -88,6 +88,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
         &[
             Cmd("New document", "file.new", NO, ""),
             Cmd("Open", "file.open", NO, "Ctrl+O"),
+            Cmd("Make a copy", "stardocs.makeCopy", NO, ""),
             Sep,
             Sub(
                 "Download",
@@ -739,6 +740,7 @@ fn is_own(id: &str) -> bool {
             | "stardocs.viewing"
             | "stardocs.download"
             | "stardocs.downloadAs"
+            | "stardocs.makeCopy"
             | "stardocs.rename"
             | "stardocs.restartNumbering"
             | "stardocs.versionHistory"
@@ -773,7 +775,7 @@ fn run_menu(app: &mut WordApp, ctx: &egui::Context, flags: &mut Flags, link: Opt
         ("stardocs.download", None) => run(app, "file.save", json!({})),
         ("stardocs.downloadAs", _) => {
             let ext = p.get("ext").and_then(Value::as_str).unwrap_or("odt");
-            if let Err(e) = download_as(app, link, ext) {
+            if let Err(e) = crate::download::download_as(app, link, ext, "") {
                 log::warn!("download .{ext}: {e}");
                 app.status(e);
             }
@@ -790,24 +792,14 @@ fn run_menu(app: &mut WordApp, ctx: &egui::Context, flags: &mut Flags, link: Opt
             app.session.set_document(doc);
         }
         ("file.open", Some(link)) => link.home(),
+        // File › Make a copy: the server's copy (or, on this computer, the file's) in a new tab or
+        // window; without either, a download of the copy.
+        ("stardocs.makeCopy", Some(link)) => link.make_copy(app),
+        ("stardocs.makeCopy", None) => match crate::download::download_as(app, None, "docx", "Copy of ") {
+            Ok(name) => app.status(format!("Downloaded \"{name}\"")),
+            Err(e) => app.status(format!("Couldn't make a copy: {e}")),
+        },
         _ => run(app, id, p),
-    }
-}
-
-/// File › Download in a format other than Word's: a copy written by WordCraft's `formats` crate,
-/// handed straight to the browser's download. It is never the document's own save (`file.saveAs`
-/// would make an .odt the server's copy, or mark unsaved changes as saved).
-fn download_as(app: &mut WordApp, link: Option<&Link>, ext: &str) -> Result<(), String> {
-    let stem = match link.map(Link::name).filter(|n| !n.is_empty()) {
-        Some(n) => n.rsplit_once('.').map_or(n.as_str(), |(s, _)| s).to_string(),
-        None => app.title_stem(),
-    };
-    let name = format!("{stem}.{ext}");
-    let opts = wordcraft_engine::cmd::file::export_options(&app.session, &json!({}));
-    let bytes = wordcraft_engine::io::save_bytes_with(&name, &app.session.doc, None, &opts)?;
-    match &app.services.download {
-        Some(download) => download(&name, &bytes),
-        None => Err("downloads are unavailable here".into()),
     }
 }
 
@@ -1714,15 +1706,15 @@ impl Shell {
                 Saved::Done => (link.saved_text(), TEXT_DIM),
                 Saved::Failed(why) => (why, Color32::from_rgb(0xb3, 0x26, 0x1e)),
             };
-            // Both stay on the title row, cut short to fit the window (the whole text on hover).
+            // Both stay on the title row, cut short to fit the window. A cut-short label shows
+            // its whole text on hover by itself: a tooltip of our own showed it twice.
             if !text.is_empty() {
                 ui.add_space(10.0);
-                ui.add(egui::Label::new(RichText::new(&text).size(13.0).color(colour)).truncate()).on_hover_text(&text);
+                ui.add(egui::Label::new(RichText::new(&text).size(13.0).color(colour)).truncate());
             }
             if let Some(notice) = link.notice() {
                 ui.add_space(10.0);
-                ui.add(egui::Label::new(RichText::new(&notice).size(13.0).color(Color32::from_rgb(0x8a, 0x5a, 0x00))).truncate())
-                    .on_hover_text(&notice);
+                ui.add(egui::Label::new(RichText::new(&notice).size(13.0).color(Color32::from_rgb(0x8a, 0x5a, 0x00))).truncate());
                 ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
             }
         }
