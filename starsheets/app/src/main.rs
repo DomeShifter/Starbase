@@ -32,6 +32,7 @@ mod errortip;
 mod filebrowser;
 #[cfg(target_arch = "wasm32")]
 mod files;
+mod emacs_keys;
 mod findreplace;
 mod fonts;
 mod formulaimages;

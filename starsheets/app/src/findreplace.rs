@@ -78,12 +78,14 @@ impl FindReplace {
             self.bar = true;
             self.bar_focus = true;
         }
-        if take(ctx, Key::H) {
+        // While a cell is edited the shared filter (emacs_keys) has already taken Ctrl+H out of the input.
+        if take(ctx, Key::H) | crate::emacs_keys::take(ctx, Key::H) {
             self.open = true;
             self.focus = true;
             self.status.clear();
         }
         take(ctx, Key::W);
+        // Ctrl+K (link) and Ctrl+U (underline) while typing in a cell have no app feature there: they do nothing.
     }
 
     /// This sheet's cells that show `bar_text` (any case), row by row.
