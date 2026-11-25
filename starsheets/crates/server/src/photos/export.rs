@@ -2,7 +2,9 @@
 //! photo-editor contract §3).
 //!
 //! `POST /api/photos/export/ID`, body `{"format": "jpeg"|"png", "quality": 1..=100,
-//! "max_side": null|16..=30000, "strip_location": true}` (every field optional; at most 16 KB).
+//! "max_side": null|16..=30000, "strip_location": true, "edits": {..}}` (every field optional; at most 16 KB).
+//! `edits` (same shape as PUT edits, validated) renders the copy from those instead of the saved
+//! ones; the picture's sidecar is left exactly as it was.
 //! Whoever may add files to the picture's folder (and see the picture). Answers 201 with
 //! `{"id", "name", "folder", "path"}`: a new file "photo (edited).jpg", numbered when that name is
 //! taken ("photo (edited) (2).jpg"), never over an existing file: it is saved through the same
@@ -302,11 +304,27 @@ pub async fn route(app: &Shared, m: &str, id: String, me: Option<auth::User>, bo
     if body.len() > super::edits::MAX_BODY {
         return error(413, "request too large");
     }
-    let opts: Options = if body.iter().all(u8::is_ascii_whitespace) {
-        Options::default()
+    // The body may carry `edits` (the editor's unsaved ones): the copy is rendered from them and the
+    // picture's own sidecar is never touched. Without it the saved edits are used.
+    let (opts, given): (Options, Option<Edits>) = if body.iter().all(u8::is_ascii_whitespace) {
+        (Options::default(), None)
     } else {
-        match serde_json::from_slice(body) {
-            Ok(o) => o,
+        let mut v: serde_json::Value = match serde_json::from_slice(body) {
+            Ok(v) => v,
+            Err(e) => return error(400, &format!("These aren't export settings: {e}")),
+        };
+        let given = match v.as_object_mut().and_then(|o| o.remove("edits")) {
+            None | Some(serde_json::Value::Null) => None,
+            Some(e) => match serde_json::from_value::<Edits>(e) {
+                Ok(e) => match e.validate() {
+                    Ok(()) => Some(e),
+                    Err(why) => return error(400, &format!("These aren't valid edits: {why}")),
+                },
+                Err(e) => return error(400, &format!("These aren't valid edits: {e}")),
+            },
+        };
+        match serde_json::from_value(v) {
+            Ok(o) => (o, given),
             Err(e) => return error(400, &format!("These aren't export settings: {e}")),
         }
     };
@@ -351,7 +369,10 @@ pub async fn route(app: &Shared, m: &str, id: String, me: Option<auth::User>, bo
     let made = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
         let _one = permit;
         use std::io::{Seek, SeekFrom};
-        let edits = saved_edits(&app2.store, &path2, &file);
+        let edits = match given {
+            Some(e) => e,
+            None => saved_edits(&app2.store, &path2, &file),
+        };
         // Its first bytes were read for its size: from the start again.
         let mut file = file;
         file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;

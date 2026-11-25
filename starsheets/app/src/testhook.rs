@@ -388,6 +388,8 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
         "active": active.a1(),
         "selection": ranges.join(","),
         "freeze": wb.active().and_then(|s| s.freeze).map(|(r, c)| json!({ "rows": r, "cols": c })),
+        // The sheet's grid size (rows × columns); `sized` false = Excel's full grid.
+        "grid": wb.active().map(|s| json!({ "rows": s.row_count(), "cols": s.col_count(), "sized": s.grid_rows.is_some() })),
         "filterView": crate::shell::filterviews::state(&*p.app),
         "smartFill": crate::smartfill::suggestion(p.app).map(|s| json!({
             "at": s.at.a1(),

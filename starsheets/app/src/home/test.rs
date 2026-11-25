@@ -3,7 +3,7 @@
 
 use serde_json::json;
 
-use super::{Home, Json, View, name_of};
+use super::{Home, Item, Json, View, name_of};
 
 impl Home {
     /// Where the home screen is and what it lists, in the order shown.
@@ -24,15 +24,25 @@ impl Home {
             "loading": self.loading,
             "search": self.search,
             "error": self.error,
+            "undo": self.undo.done.iter().map(|a| a.label.clone()).collect::<Vec<_>>(),
+            "note": self.note_text(),
             "folders": folders.iter().map(|f| json!({ "path": f.path, "name": name_of(&f.path) })).collect::<Vec<_>>(),
             "files": files
                 .iter()
-                .map(|f| json!({ "id": f.id, "name": f.name, "folder": f.folder, "starred": f.starred, "kind": super::items::file_kind(&f.name) }))
+                .map(|f| {
+                    // The tile picture: "ready" (texture loaded), "loading", "none" (plain icon) or null.
+                    let thumb = self.thumbs.get(&f.id).map(|(_, t)| match t {
+                        super::Thumb::Ready(_) => "ready",
+                        super::Thumb::Loading => "loading",
+                        super::Thumb::None => "none",
+                    });
+                    json!({ "id": f.id, "name": f.name, "folder": f.folder, "starred": f.starred, "kind": super::items::file_kind(&f.name), "thumb": thumb })
+                })
                 .collect::<Vec<_>>(),
         })
     }
 
-    /// `home:folder` {path}, `home:search` {text}, `home:refresh`, `home:recent`, `home:starred`,
+    /// `home:folder` {path}, `home:search` {text}, `home:refresh`, `home:move`, `home:delete`, `home:undo`, `home:recent`, `home:starred`,
     /// `home:shared`, `home:bin`; `home:opens` {id} says what opening that file does (without
     /// opening it): `{"opens": "editor" | "preview" | "download", "url"}`.
     pub(crate) fn test_run(&mut self, ctx: &egui::Context, id: &str, params: &Json) -> Result<Json, String> {
@@ -44,6 +54,22 @@ impl Home {
             }
             "home:search" => self.search = text("text").unwrap_or_default(),
             "home:refresh" => self.refresh(ctx),
+            // Undo (undo.rs): `home:move` {files: [id], folders: [path], to} moves as a drag
+            // does, `home:delete` {files, folders} bins, `home:undo` is Ctrl+Z.
+            "home:move" | "home:delete" => {
+                let list = |k: &str| params.get(k).and_then(Json::as_array).into_iter().flatten().filter_map(Json::as_str).map(str::to_string);
+                let items: Vec<Item> = list("files").map(Item::File).chain(list("folders").map(Item::Folder)).collect();
+                if items.is_empty() {
+                    return Err(format!("{id} needs {{files}} or {{folders}}"));
+                }
+                if id == "home:delete" {
+                    self.delete(ctx, items);
+                } else {
+                    let to = text("to").ok_or("home:move needs {to}")?;
+                    self.send_to(ctx, items, to, true);
+                }
+            }
+            "home:undo" => self.undo(ctx),
             "home:opens" => {
                 let id = text("id").ok_or("home:opens needs {id}")?;
                 let f = self.file(&id).ok_or("no such file listed")?;
@@ -108,6 +134,8 @@ impl Home {
                 let ed = pm.editor.as_mut().ok_or("the editor isn't open")?;
                 ed.test_run(ctx, &self.store, &id["home:photos:edit:".len()..], params)?;
             }
+            "home:photos:tab" | "home:photos:select" | "home:photos:place:open" => pm.alb_test(ctx, &self.store, id, params)?,
+            id if id.starts_with("home:photos:album:") => pm.alb_test(ctx, &self.store, id, params)?,
             "home:photos:open" => {
                 let i = params.get("index").and_then(Json::as_u64).unwrap_or(0) as usize;
                 if i >= pm.pics.len() {

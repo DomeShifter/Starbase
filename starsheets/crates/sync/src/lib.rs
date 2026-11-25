@@ -29,7 +29,9 @@ use serde_json::Value as Json;
 /// 8: the server names each connection (Welcome `you`; Applied, People and Presence use that
 /// name), so one tab can't pass itself off as another; `NoAccess` when the file stops being
 /// shared with you while it's open.
-pub const PROTOCOL: u32 = 8;
+/// 9: sheets have a grid size (`grid_rows`/`grid_cols`), in fingerprints and in sheet JSON; an
+/// older tab would drop it and turn a sized sheet back into a full grid.
+pub const PROTOCOL: u32 = 9;
 
 pub const BUILD: &str = match option_env!("STARSHEETS_BUILD") {
     Some(b) => b,
@@ -305,6 +307,8 @@ pub fn apply_cmd(s: &mut Session, sheet: usize, sel: &Selection, id: &str, param
         return Err("no workbook".into());
     };
     let (view_sheet, view_sel, undo, redo) = (d.wb.active_sheet(), d.selection.clone(), d.undo.clone(), d.redo.clone());
+    // This tab's sheet by identity: someone else's new sheet before it moves it along.
+    let view_uid = d.wb.sheets.get(view_sheet).map(|sh| sh.uid.get());
     d.wb.set_active_sheet(sheet.min(d.wb.sheets.len().saturating_sub(1)));
     d.selection = sel.clone();
     let own = InputLocale::current();
@@ -323,7 +327,8 @@ pub fn apply_cmd(s: &mut Session, sheet: usize, sel: &Selection, id: &str, param
     if let Some(d) = s.active_mut() {
         d.undo = undo;
         d.redo = redo;
-        d.wb.set_active_sheet(view_sheet.min(d.wb.sheets.len().saturating_sub(1)));
+        let back = view_uid.and_then(|u| d.wb.sheets.iter().position(|sh| sh.uid.get() == u)).unwrap_or(view_sheet);
+        d.wb.set_active_sheet(back.min(d.wb.sheets.len().saturating_sub(1)));
         d.selection = view_sel;
     }
     s.sync_log = log;
@@ -486,6 +491,23 @@ fn keep_sheet_unserialized(wb: &mut Workbook, i: usize, from: &Workbook) {
     }
 }
 
+/// Grows every sized grid to hold everything its sheet has (`Sheet::fit_grid_to_content`), and
+/// brings a broken size into range. Run on every workbook or sheet that arrives from somewhere
+/// else (another tab's change, the server's copy), so a size can never hide data.
+pub fn fit_grids(wb: &mut Workbook) {
+    for sh in wb.sheets.iter_mut() {
+        if sh.grid_rows.is_none() && sh.grid_cols.is_none() {
+            continue;
+        }
+        let broken = sh.grid_rows.is_some_and(|n| n == 0 || n > gridcraft_engine::core::MAX_ROWS)
+            || sh.grid_cols.is_some_and(|n| n == 0 || n > gridcraft_engine::core::MAX_COLS);
+        let hidden = sh.content_end().is_some_and(|e| e.row >= sh.row_count() || e.col >= sh.col_count());
+        if broken || hidden {
+            Arc::make_mut(sh).fit_grid_to_content();
+        }
+    }
+}
+
 pub fn workbook_json(wb: &Workbook) -> Whole {
     whole(wb)
 }
@@ -495,6 +517,7 @@ pub fn workbook_from_json(v: &Whole, current: Option<&Workbook>) -> Result<Workb
     if let Some(c) = current {
         keep_unserialized(&mut wb, c);
     }
+    fit_grids(&mut wb);
     Ok(wb)
 }
 
@@ -503,6 +526,7 @@ pub fn workbook_from_json(v: &Whole, current: Option<&Workbook>) -> Result<Workb
 pub fn workbook_from_parts(v: &Whole, spills: &[SheetSpill], current: Option<&Workbook>) -> Result<Workbook, String> {
     let mut wb = workbook_from_json(v, current)?;
     put_spills(&mut wb, spills);
+    fit_grids(&mut wb);
     Ok(wb)
 }
 
@@ -559,6 +583,7 @@ pub fn apply_patch(current: &Workbook, patch: &Patch) -> Result<Workbook, String
     }
     keep_workbook_unserialized(&mut wb, current);
     put_spills(&mut wb, &patch.spills);
+    fit_grids(&mut wb);
     Ok(wb)
 }
 
@@ -697,6 +722,7 @@ fn hash_sheet_shape(h: &mut Fnv, i: usize, sh: &Sheet) {
     h.json(&sh.merges);
     h.json(&sh.cols);
     h.json(&sh.rows);
+    h.json(&(sh.grid_rows, sh.grid_cols));
 }
 
 fn hash_sheet(h: &mut Fnv, i: usize, sh: &Sheet) {
@@ -722,6 +748,8 @@ fn hash_sheet_change(h: &mut Fnv, i: usize, before: &Sheet, after: &Sheet) {
     if after.rows != before.rows {
         h.json(&after.rows);
     }
+    // Always: a change that only resizes the grid (Add rows) must still be checked.
+    h.json(&(after.grid_rows, after.grid_cols));
     for at in after.cells.diff(&before.cells) {
         let (b, a) = (before.cells.get(at), after.cells.get(at));
         // A formula whose result alone moved (NOW(), RAND(), or recalculated after the edit)
