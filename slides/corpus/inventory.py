@@ -5,6 +5,7 @@ between two of them. Used by run.py; also runs on its own:
   python inventory.py A.pptx B.pptx     print what changed from A to B
 """
 
+import difflib
 import json
 import re
 import sys
@@ -155,8 +156,22 @@ def diff(a, b):
         out.append(f"slides: {len(sa)} -> {len(sb)}")
     for i, (x, y) in enumerate(zip(sa, sb)):
         for k in x:
-            if x[k] != y.get(k):
-                out.append(f"slide {i + 1} {k}: {short(x[k])} -> {short(y.get(k))}")
+            xv, yv = x[k], y.get(k)
+            if xv == yv:
+                continue
+            if isinstance(xv, list) and isinstance(yv, list) and len(xv) == len(yv) and len(short(xv)) > 60:
+                # long lists of the same length: name only the items that changed
+                for j, (p, q) in enumerate(zip(xv, yv)):
+                    if p != q:
+                        out.append(f"slide {i + 1} {k}[{j}]: {short(p)} -> {short(q)}")
+            elif isinstance(xv, list) and isinstance(yv, list) and len(short(xv)) > 60:
+                # long lists that grew or shrank: name the stretches that changed
+                sm = difflib.SequenceMatcher(None, [short(v) for v in xv], [short(v) for v in yv], autojunk=False)
+                for op, a1, a2, b1, b2 in sm.get_opcodes():
+                    if op != "equal":
+                        out.append(f"slide {i + 1} {k}[{a1}:{a2}]: {short(xv[a1:a2])} -> {short(yv[b1:b2])}")
+            else:
+                out.append(f"slide {i + 1} {k}: {short(xv)} -> {short(yv)}")
     return out
 
 
