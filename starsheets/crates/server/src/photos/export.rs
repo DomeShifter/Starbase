@@ -31,10 +31,19 @@ use super::{MAX_FILE, WORKER_EXE, media_of, service, sidecar};
 use crate::{Shared, auth, blocking, error, send_json, sharing, store};
 
 /// The most an export child may answer (a big PNG).
-pub const MAX_OUTPUT: u64 = 400 * 1024 * 1024;
+pub const MAX_OUTPUT: u64 = MAX_FILE;
 
 /// One export at a time: each child may use the whole child memory budget.
-static ONE_AT_A_TIME: std::sync::Mutex<()> = std::sync::Mutex::new(());
+static ONE_AT_A_TIME: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+
+/// How long a second export waits for the first before it is told to try again.
+const SLOT_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Takes the export slot within `wait`, or None (the caller answers 429): a request must never sit
+/// on one of the server's request slots for the length of someone else's export.
+pub(super) async fn take_slot(sem: &'static tokio::sync::Semaphore, wait: std::time::Duration) -> Option<tokio::sync::SemaphorePermit<'static>> {
+    tokio::time::timeout(wait, sem.acquire()).await.ok()?.ok()
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -335,14 +344,17 @@ pub async fn route(app: &Shared, m: &str, id: String, me: Option<auth::User>, bo
     // 2. Without the lock: the saved edits (parsed here: untrusted XML), then the export.
     let svc = service(&app.store);
     let memory = svc.as_ref().map_or(decode::CHILD_MEMORY, |s| s.cfg.child_memory);
+    let Some(permit) = take_slot(&ONE_AT_A_TIME, SLOT_WAIT).await else {
+        return error(429, "Another export is running; try again in a moment.");
+    };
     let (app2, path2, opts2) = (app.clone(), path.clone(), opts.clone());
     let made = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+        let _one = permit;
         use std::io::{Seek, SeekFrom};
         let edits = saved_edits(&app2.store, &path2, &file);
         // Its first bytes were read for its size: from the start again.
         let mut file = file;
         file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-        let _one = ONE_AT_A_TIME.lock().unwrap_or_else(|e| e.into_inner());
         match WORKER_EXE.get() {
             Some(exe) => decode::run_export(exe, file, memory, &Job { edits: Some(edits), export: Some(opts2) }),
             None => {
@@ -361,6 +373,7 @@ pub async fn route(app: &Shared, m: &str, id: String, me: Option<auth::User>, bo
     // 3. Under the lock again: still allowed, then saved as a new file, as an upload is.
     let folder = store::parent_of(&path);
     let name = exported_name(&store::base_of(&path), opts.format);
+    let who = me.as_ref().map(|u| u.username.clone());
     let saved = blocking(app, move |a| {
         let acc = sharing::Access::new(&a.store, a.auth, me.as_ref());
         if acc.folder_role(&folder) < sharing::Role::Edit {
@@ -382,6 +395,10 @@ pub async fn route(app: &Shared, m: &str, id: String, me: Option<auth::User>, bo
     };
     let (folder, name) = (v["folder"].as_str().unwrap_or_default().to_string(), v["name"].as_str().unwrap_or_default().to_string());
     let new_path = store::join(&folder, &name);
+    // Who made the new file and when (Details), as an upload records it.
+    if let (Some(who), Some(id)) = (who, v["id"].as_str().map(str::to_string)) {
+        blocking(app, move |a| crate::spaces::note_changed(&a.store, &id, &who)).await;
+    }
     if let Some(svc) = svc
         && svc.covers(&new_path)
     {

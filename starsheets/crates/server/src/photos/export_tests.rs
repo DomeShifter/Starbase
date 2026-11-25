@@ -91,12 +91,13 @@ fn exports_are_upright_edited_and_keep_no_location() {
     assert!(export::export(&pic, &tight, &e, &Options::default()).unwrap_err().contains("too big"));
 }
 
-/// exiftool (the reference reader) finds no location in an export. Skipped where it isn't
-/// installed (CI): `apt install libimage-exiftool-perl` to run it.
+/// exiftool (the reference reader) finds no location in an export. CI installs it; it FAILS where
+/// it is missing unless STARBASE_SKIP_EXIFTOOL=1 (a laptop without it: `apt install libimage-exiftool-perl`).
 #[test]
 fn exiftool_finds_no_location() {
     if std::process::Command::new("exiftool").arg("-ver").output().map(|o| !o.status.success()).unwrap_or(true) {
-        eprintln!("exiftool not installed: skipped");
+        assert!(std::env::var("STARBASE_SKIP_EXIFTOOL").is_ok_and(|v| v == "1"), "exiftool is not installed (set STARBASE_SKIP_EXIFTOOL=1 to skip)");
+        eprintln!("exiftool not installed: skipped (STARBASE_SKIP_EXIFTOOL=1)");
         return;
     }
     let dir = tmp("exiftool");
@@ -185,4 +186,17 @@ async fn exports_are_new_files_for_people_who_may_add_them() {
     assert_eq!(send(&app, "POST", &url(&ids["ann/Trip/notes.txt"]), Some("ann"), &[], "").await.status, 404);
     assert_eq!(send(&app, "POST", &url(&ids["ann/Trip/raw.cr2"]), Some("ann"), &[], "").await.status, 409);
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A second export while one runs is turned away quickly (429), not left holding a request slot.
+#[tokio::test]
+async fn second_export_gets_429_quickly() {
+    static SEM: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+    let first = export::take_slot(&SEM, std::time::Duration::from_millis(50)).await;
+    assert!(first.is_some());
+    let t = std::time::Instant::now();
+    assert!(export::take_slot(&SEM, std::time::Duration::from_millis(100)).await.is_none());
+    assert!(t.elapsed() < std::time::Duration::from_secs(2));
+    drop(first);
+    assert!(export::take_slot(&SEM, std::time::Duration::from_millis(50)).await.is_some());
 }
