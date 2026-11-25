@@ -15,3 +15,5 @@ both Apache License 2.0; see the README in each folder.
 
 The ArtCraft and WordCraft names and logos are trademarks of the ArtCraft Team and are not used by
 Starbase. "Google Docs" is a trademark of Google LLC; Starbase is not affiliated with Google.
+
+Place names for Photos (starsheets/crates/server/src/photos/cities.tsv): GeoNames cities of 25,000 people or more, https://www.geonames.org/, licensed CC BY 4.0.

@@ -30,3 +30,9 @@ WordCraft already treats them as twins, so documents written in Calibri or Cambr
 breaks. The desktop program carries them inside it. The web app fetches them from beside the page
 (`office/`, copied there by Trunk) after it starts, so the program download stays the same size
 (together they are 3.0 MB, 0.83 MB brotli).
+
+## NotoEmoji-Regular.ttf
+
+Noto Emoji (monochrome), Copyright The Noto Project Authors, SIL Open Font License 1.1
+(https://github.com/google/fonts, `ofl/notoemoji`), unmodified (the copy egui bundles). Added by
+`bundled_fonts.rs` as the page's emoji fallback.

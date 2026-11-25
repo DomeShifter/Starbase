@@ -17,6 +17,8 @@ use std::sync::{Arc, Mutex};
 use egui::{Color32, Rect, RichText, Sense, Ui, pos2, vec2};
 use serde_json::Value as Json;
 
+mod albums;
+
 use super::viewer::Viewer;
 use crate::house;
 use crate::store::{Backend, Method, enc};
@@ -69,6 +71,11 @@ pub(super) enum Got {
     /// The server is still making it: ask again later.
     NotYet(Key),
     Error(String),
+    /// The album or place list (albums.rs), and one opened.
+    Cards(albums::Tab, Json),
+    Opened(albums::Tab, String, Json),
+    /// An album changed: ask again.
+    Changed,
 }
 
 /// Textures within a budget of bytes, least recently drawn going first.
@@ -181,6 +188,8 @@ pub(super) struct PhotoMode {
     pub viewer: Option<Viewer>,
     /// The photo editor, over the viewer (photo_edit.rs).
     pub editor: Option<super::photo_edit::Editor>,
+    /// Albums and Places beside the grid (albums.rs).
+    pub alb: albums::Albums,
 }
 
 impl Default for PhotoMode {
@@ -207,6 +216,7 @@ impl Default for PhotoMode {
             frame: 0,
             viewer: None,
             editor: None,
+            alb: albums::Albums::default(),
         }
     }
 }
@@ -290,8 +300,13 @@ impl PhotoMode {
         self.can_enable = v["can_enable"].as_bool().unwrap_or(false);
         self.can_disable = v["can_disable"].as_bool().unwrap_or(false);
         self.waiting = v["waiting"].as_u64().unwrap_or(0);
+        let pics = Self::parse_pics(v);
+        self.set_pics(pics);
+    }
+
+    fn parse_pics(v: &Json) -> Vec<Pic> {
         let s = |x: &Json, k: &str| x[k].as_str().unwrap_or("").to_string();
-        let pics: Vec<Pic> = v["photos"]
+        v["photos"]
             .as_array()
             .into_iter()
             .flatten()
@@ -308,7 +323,10 @@ impl PhotoMode {
                 camera: p["camera"].as_str().map(str::to_string),
                 gps: p["gps"]["lat"].as_f64().zip(p["gps"]["lon"].as_f64()),
             })
-            .collect();
+            .collect()
+    }
+
+    fn set_pics(&mut self, pics: Vec<Pic>) {
         // A picture read since: its thumbnail may be asked for again (it was "not yet").
         for p in &pics {
             if p.v.is_some() {
@@ -328,8 +346,11 @@ impl PhotoMode {
         let got: Vec<Got> = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(|e| e.into_inner()));
         for g in got {
             match g {
+                Got::Cards(t, v) => self.alb.take_cards(t, &v),
+                Got::Opened(t, key, v) => self.take_opened(t, &key, &v),
+                Got::Changed => self.alb.changed(ctx, store, &self.inbox),
                 Got::Listed(f, sub, v) => {
-                    if Some(&f) == self.folder.as_ref() && sub == self.sub {
+                    if Some(&f) == self.folder.as_ref() && sub == self.sub && self.alb.tab == albums::Tab::Photos {
                         self.take_list(&v);
                     }
                 }
@@ -381,6 +402,7 @@ impl PhotoMode {
         if let Some(f) = &folder
             && !self.loading
             && self.enabled == Some(true)
+            && self.alb.tab == albums::Tab::Photos
             && (self.waiting > 0 || self.pics.iter().any(|p| p.state == "pending"))
             && now - self.listed_at > RELIST
         {
@@ -399,7 +421,13 @@ impl PhotoMode {
         if matches!(p.state.as_str(), "failed" | "unsupported") && size != ORIGINAL {
             return;
         }
-        let k: Key = (p.id.clone(), size);
+        let (id, v) = (p.id.clone(), p.v.clone());
+        self.want_id(ctx, store, &id, v.as_deref(), size);
+    }
+
+    /// The same for a picture by its id and content tag (an album's cover).
+    pub fn want_id(&mut self, ctx: &egui::Context, store: &Backend, id: &str, v: Option<&str>, size: u32) {
+        let k: Key = (id.to_string(), size);
         let now = ctx.input(|inp| inp.time);
         if self.tex.has(&k) || self.asking.contains(&k) || self.failed.contains(&k) || self.retry_at.get(&k).is_some_and(|t| *t > now) {
             return;
@@ -408,11 +436,11 @@ impl PhotoMode {
             return;
         }
         let url = if size == ORIGINAL {
-            format!("api/files/{}/raw", p.id)
+            format!("api/files/{id}/raw")
         } else {
-            match &p.v {
-                Some(v) => format!("api/photos/thumb/{}/{size}?v={v}", p.id),
-                None => format!("api/photos/thumb/{}/{size}", p.id),
+            match v {
+                Some(v) => format!("api/photos/thumb/{id}/{size}?v={v}"),
+                None => format!("api/photos/thumb/{id}/{size}"),
             }
         };
         self.asking.insert(k.clone());
@@ -458,9 +486,25 @@ impl PhotoMode {
 
     // ------------------------------------------------------------ drawing
 
-    /// The grid (or the question whether to turn Photos on) for `folder`.
+    /// Left nav (Photos, Albums, Places) and what it shows.
     pub fn ui(&mut self, ui: &mut Ui, store: &Backend, folder: &str) {
         let ctx = ui.ctx().clone();
+        self.alb.boot_cards(&ctx, store, &self.inbox);
+        ui.horizontal_top(|ui| {
+            ui.vertical(|ui| {
+                ui.set_width(130.0);
+                self.nav_ui(ui, store);
+            });
+            ui.separator();
+            ui.vertical(|ui| match self.alb.tab {
+                albums::Tab::Photos => self.folder_ui(ui, store, folder),
+                _ => self.cards_ui(ui, store),
+            });
+        });
+    }
+
+    /// The grid (or the question whether to turn Photos on) for `folder`.
+    fn folder_ui(&mut self, ui: &mut Ui, store: &Backend, folder: &str) {
         if let Some(e) = self.error.clone() {
             ui.horizontal(|ui| {
                 ui.label(RichText::new(e).size(house::NOTE).color(house::ERROR));
@@ -482,6 +526,7 @@ impl PhotoMode {
             Some(true) => {}
         }
         self.bar_ui(ui, store, folder);
+        self.pick_ui(ui, store);
         ui.add_space(house::S);
         if self.pics.is_empty() {
             ui.add_space(house::XL);
@@ -489,6 +534,12 @@ impl PhotoMode {
             ui.label(RichText::new(text).size(house::BODY).color(theme::TEXT_DIM));
             return;
         }
+        self.grid(ui, store);
+    }
+
+    /// The scrolling grid of `pics`.
+    pub(super) fn grid(&mut self, ui: &mut Ui, store: &Backend) {
+        let ctx = ui.ctx().clone();
         let (cols, tile) = layout(ui.available_width() - house::SCROLL_ROOM);
         let rows = self.pics.len().div_ceil(cols);
         ui.spacing_mut().item_spacing = vec2(GAP, GAP);
@@ -517,7 +568,11 @@ impl PhotoMode {
             self.want(&ctx, store, i, SMALL);
         }
         if let Some(i) = open {
-            self.viewer = Some(Viewer::new(i, self.pics.len()));
+            if self.alb.selecting {
+                self.alb.toggle(&self.pics[i].id);
+            } else {
+                self.viewer = Some(Viewer::new(i, self.pics.len()));
+            }
         }
     }
 
@@ -547,6 +602,17 @@ impl PhotoMode {
         }
         if resp.hovered() {
             painter.rect_filled(rect, 0, Color32::from_black_alpha(40));
+        }
+        if self.alb.selecting {
+            let on = self.alb.selected.contains(&self.pics[i].id);
+            let c = rect.left_top() + vec2(16.0, 16.0);
+            if on {
+                painter.rect_filled(rect, 0, Color32::from_rgba_unmultiplied(0x1A, 0x73, 0xE8, 60));
+            }
+            painter.circle(c, 10.0, if on { super::ACCENT } else { Color32::from_white_alpha(180) }, egui::Stroke::new(1.5, Color32::WHITE));
+            if on {
+                painter.text(c, egui::Align2::CENTER_CENTER, "✓", egui::FontId::proportional(14.0), Color32::WHITE);
+            }
         }
         resp.on_hover_text(format!("{name}\n{date}")).clicked()
     }
@@ -586,6 +652,10 @@ impl PhotoMode {
                 let mut v = Viewer::new(0, self.pics.len());
                 v.play(ui.ctx().input(|i| i.time));
                 self.viewer = Some(v);
+            }
+            if !self.pics.is_empty() && pill(ui, if self.alb.selecting { "Done selecting" } else { "Select" }, self.alb.selecting) {
+                self.alb.selecting = !self.alb.selecting;
+                self.alb.selected.clear();
             }
             if self.can_disable {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -648,6 +718,7 @@ impl PhotoMode {
             "waiting": self.waiting,
             "error": self.error,
             "count": self.pics.len(),
+            "albums": self.alb.test_state(),
             "textures": { "count": self.tex.len(), "bytes": self.tex.total, "budget": self.tex.budget, "asking": self.asking.len() },
             "items": self.pics.iter().take(60).map(|p| json!({
                 "id": p.id, "name": p.name, "taken": p.taken, "state": p.state, "v": p.v,

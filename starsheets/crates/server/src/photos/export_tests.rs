@@ -166,6 +166,14 @@ async fn exports_are_new_files_for_people_who_may_add_them() {
     let g = send(&app, "POST", &url(a), Some("ann"), &[], "{}").await;
     assert_eq!(g.json["name"].as_str(), Some("a (edited) (2).jpg"), "{}", g.json);
     assert_eq!(std::fs::read(app.store.full("ann/Trip/a (edited).jpg")).unwrap(), made, "the first one untouched");
+    // Edits in the body are rendered, and the original's saved edits (sidecar) stay as they were.
+    let side = std::fs::read(app.store.full("ann/Trip/a.jpg.xmp")).unwrap();
+    let g = send(&app, "POST", &url(a), Some("ann"), &[], r#"{"edits": {"rot90": 0}}"#).await;
+    assert_eq!(g.status, 201, "{}", g.json);
+    let img = image::open(app.store.full(g.json["path"].as_str().unwrap())).unwrap();
+    assert_eq!((img.width(), img.height()), (60, 40), "the body's edits (no turn), not the saved quarter turn");
+    assert_eq!(std::fs::read(app.store.full("ann/Trip/a.jpg.xmp")).unwrap(), side, "sidecar untouched");
+    assert_eq!(send(&app, "POST", &url(a), Some("ann"), &[], r#"{"edits": {"rot90": 9}}"#).await.status, 400);
     // Settings checked.
     assert_eq!(send(&app, "POST", &url(a), Some("ann"), &[], r#"{"quality": 0}"#).await.status, 400);
     assert_eq!(send(&app, "POST", &url(a), Some("ann"), &[], r#"{"nonsense": 1}"#).await.status, 400);

@@ -29,6 +29,7 @@ mod bundled_fonts;
 #[cfg(any(target_arch = "wasm32", test))]
 mod comment_ids;
 mod download;
+mod emoji;
 mod icons;
 mod looks;
 mod mystyles;

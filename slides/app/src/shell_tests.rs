@@ -1,6 +1,7 @@
 //! Native tests of the window (egui_kittest's accessibility tree, no GPU): our menus and toolbar
 //! around DeckCraft's slides, with DeckCraft's own title bar, ribbon and status bar off.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, reason = "tests")]
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -243,4 +244,38 @@ fn presenter_view_asks_for_the_presenter_window_for_one_show() {
     h.run_steps(3);
     assert!(h.state().app.show.is_none());
     assert!(!h.state().shell.presenter_flag().get(), "only for that show: Slideshow shows the slides alone again");
+}
+
+#[test]
+fn the_text_toolbar_sets_size_and_colour_and_they_survive_a_pptx() {
+    let mut h = harness();
+    {
+        let app = &mut h.state_mut().app;
+        let id = app.run("insert.textBox", json!({"rect": [100, 50, 400, 40]})).unwrap()["id"].as_u64().unwrap();
+        app.run("text.edit", json!({"id": id})).unwrap();
+        app.run("text.insert", json!({"text": "Hello"})).unwrap();
+        app.run("text.move", json!({"to": "start", "extend": true})).unwrap();
+    }
+    h.run_steps(3);
+    let size = |h: &mut Harness<'static, State>| h.state_mut().app.session.execute("format.state", &json!({})).unwrap()["size"].as_f64().unwrap();
+    let before = size(&mut h);
+    h.get_by_label("Increase font size").click();
+    h.run_steps(3);
+    assert!(size(&mut h) > before, "the + button made the text bigger");
+    // Fill colour, typed into the colour grid's hex field.
+    h.get_by_label("Fill colour").click();
+    h.run_steps(3);
+    h.get_by_role(egui::accesskit::Role::TextInput).click();
+    h.run_steps(2);
+    h.get_by_role(egui::accesskit::Role::TextInput).type_text("FF0000");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    let s = h.state_mut();
+    let doc = s.app.session.active().unwrap().doc.clone();
+    let bytes = deckcraft_engine::cmd::file::save_bytes(&doc, "pptx").unwrap();
+    let mut back = Session::new();
+    let p = deckcraft_engine::cmd::file::open_presentation("t.pptx", &bytes).unwrap();
+    deckcraft_engine::cmd::file::add_opened(&mut back, "t.pptx", None, p);
+    let shapes = format!("{:?}", back.active().unwrap().doc.slides[0].shapes);
+    assert!(shapes.contains("255, g: 0") || shapes.to_uppercase().contains("FF0000"), "the red fill reopened");
 }

@@ -436,6 +436,8 @@ fn inotify_sees_a_new_picture() {
 
 // ---------------------------------------------------------------- through the router
 
+#[path = "albums_tests.rs"]
+mod albums_tests;
 #[path = "edits_tests.rs"]
 mod edits_tests;
 #[path = "export_tests.rs"]
@@ -615,4 +617,39 @@ mod http {
         }
         let _ = std::fs::remove_dir_all(&root);
     }
+}
+
+#[test]
+fn cache_dir_choice() {
+    use std::path::{Path, PathBuf};
+    let root = Path::new("/data");
+    let meta = Path::new("/data/.starsheets");
+    let pick = |set: Option<&str>, mounted: bool, net: bool, xdg: Option<&str>, home: Option<&str>| {
+        super::pick_cache(set.map(PathBuf::from), mounted, root, meta, |_| net, xdg.map(PathBuf::from), home.map(PathBuf::from)).0
+    };
+    assert_eq!(pick(Some("/x"), true, true, None, None), PathBuf::from("/x"));
+    assert_eq!(pick(None, true, true, None, None), PathBuf::from("/cache/photos"));
+    let n = pick(None, false, true, Some("/xdg"), Some("/home/u"));
+    assert!(n.starts_with("/xdg/starbase/photos"), "{n:?}");
+    assert!(pick(None, false, true, None, Some("/home/u")).starts_with("/home/u/.cache/starbase/photos"));
+    assert!(pick(None, false, true, None, None).starts_with("/var/cache/starbase/photos"));
+    assert_eq!(pick(None, false, false, Some("/xdg"), None), PathBuf::from("/data/.starsheets/photos-cache"));
+}
+
+#[test]
+fn drive_tiles_get_an_upright_thumbnail_without_photos_turned_on() {
+    // Stored 40 × 20 (red left, blue right) with EXIF 6: shown 20 × 40, red at the top.
+    let dir = tmp("drive");
+    std::fs::write(dir.join("p.jpg"), with_exif(&jpeg(&halves(40, 20)), &exif_block(6, "2024:07:14 18:30:05", None))).unwrap();
+    std::fs::write(dir.join("notes.bmp"), b"BM").unwrap();
+    let store = Store { root: dir.clone(), keep: 3, spaces: false };
+    let t = image::load_from_memory(&drive_thumb(&store, "p.jpg").unwrap()).unwrap().to_rgb8();
+    assert_eq!(t.dimensions(), (20, 40));
+    assert!(t.get_pixel(10, 3)[0] > 200 && t.get_pixel(10, 36)[2] > 200, "upright");
+    // As a tile: the card's shape, cut around the middle.
+    let tile = image::load_from_memory(&crate::thumbs::tile(&drive_thumb(&store, "p.jpg").unwrap()).unwrap()).unwrap();
+    assert_eq!((tile.width(), tile.height()), (crate::thumbs::TILE_W, crate::thumbs::TILE_H));
+    assert!(drive_thumb(&store, "notes.bmp").is_err());
+    assert!(drive_thumb(&store, "missing.jpg").is_err());
+    let _ = std::fs::remove_dir_all(dir);
 }

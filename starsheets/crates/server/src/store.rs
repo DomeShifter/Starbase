@@ -310,6 +310,20 @@ fn renamed(old: &str, typed: &str) -> (String, String) {
     (stem, old_ext)
 }
 
+/// An Undo's check (?from=<path>): the file is still where the action being undone left it.
+fn still_at(path: &str, q: &HashMap<String, String>) -> R<()> {
+    match qs(q, "from") {
+        Some(from) if rel(Some(from))? != path => {
+            Err(Bad::new(409, format!("\u{201c}{}\u{201d} has been moved or renamed since, so it was left where it is.", base_of(path))))
+        }
+        _ => Ok(()),
+    }
+}
+
+fn taken(name: &str) -> Bad {
+    Bad::new(409, format!("Something called \u{201c}{name}\u{201d} is there now, so it wasn't put back."))
+}
+
 fn numbered(stem: &str, n: u32, ext: &str) -> String {
     if n == 1 { format!("{stem}{ext}") } else { format!("{stem} ({n}){ext}") }
 }
@@ -796,7 +810,7 @@ impl Store {
 
     /// Moves a file or folder into the bin (its owner's, with spaces), remembering where it was
     /// and the ids of everything in it.
-    fn to_bin(&self, relpath: &str, index: &mut Index) -> io::Result<()> {
+    fn to_bin(&self, relpath: &str, index: &mut Index) -> io::Result<String> {
         let space = if self.spaces { space_of(relpath) } else { "" };
         let bin = self.bin(space);
         fs::create_dir_all(&bin)?;
@@ -828,7 +842,14 @@ impl Store {
         self.save_folders(&folders)?;
         let mut bins = self.load_json(&self.bin_index_path());
         bins.insert(self.bin_key(space, &target), json!({"original": relpath, "deleted": now() as i64, "files": file_ids, "folders": folder_ids}));
-        self.save_json(&self.bin_index_path(), &Value::Object(bins))
+        self.save_json(&self.bin_index_path(), &Value::Object(bins))?;
+        Ok(target)
+    }
+
+    /// The bin's name for what was just binned, and whose bin it is: an Undo puts it back with
+    /// `POST /api/bin/restore?name=…&expect=<original>&exact=1`.
+    fn binned(&self, relpath: &str, name: String) -> Value {
+        json!({"ok": true, "bin": name, "space": if self.spaces { space_of(relpath) } else { "" }})
     }
 
     /// Reserves a free file name in `folder` (stem.ext, stem (2).ext, …) by creating it exclusively.
@@ -869,6 +890,25 @@ impl Store {
 
     fn free_folder_name(&self, parent: &str, name: &str) -> R<String> {
         (1..10000).map(|n| numbered(name, n, "")).find(|c| !self.full(parent).join(c).exists()).ok_or_else(|| Bad::new(409, "no free name"))
+    }
+
+    /// Exactly stem.ext in `folder` (reserved by creating it), or 409 when that name is taken.
+    fn claim_exact(&self, folder: &str, stem: &str, ext: &str, own: Option<&str>) -> R<String> {
+        use std::os::unix::fs::OpenOptionsExt;
+        let name = numbered(stem, 1, ext);
+        if own == Some(join(folder, &name).as_str()) {
+            return Ok(name);
+        }
+        match fs::OpenOptions::new().write(true).create_new(true).mode(0o664).open(self.full(folder).join(&name)) {
+            Ok(_) => Ok(name),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Err(taken(&name)),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// `name` in `parent` if nothing there has it, else 409.
+    fn exact_folder_name(&self, parent: &str, name: &str) -> R<String> {
+        if fs::symlink_metadata(self.full(parent).join(name)).is_ok() { Err(taken(name)) } else { Ok(name.to_string()) }
     }
 
     fn need_folder(&self, folder: &str) -> R<()> {
@@ -966,33 +1006,52 @@ impl Store {
                 ok(json!({"version": self.version_of(&fpath)?, "name": base_of(&path), "folder": parent_of(&path)}))
             }
             ([], "DELETE") => {
-                self.to_bin(&path, index)?;
-                ok(json!({"ok": true}))
+                let name = self.to_bin(&path, index)?;
+                ok(self.binned(&path, name))
             }
+            // ?from=<path it should be at> (an Undo: refused when it was moved or renamed since);
+            // ?exact=1: that name or nothing, never "name (2)".
             (["rename"], "POST") => {
+                still_at(&path, q)?;
                 let folder = parent_of(&path);
                 let (stem, ext) = renamed(&base_of(&path), &clean_name(qs(q, "name")));
-                let name = self.claim_name(&folder, &stem, &ext, Some(&path))?;
+                let name = if qs(q, "exact") == Some("1") {
+                    self.claim_exact(&folder, &stem, &ext, Some(&path))?
+                } else {
+                    self.claim_name(&folder, &stem, &ext, Some(&path))?
+                };
                 let new = join(&folder, &name);
                 if new != path {
                     with_sidecar(&fpath, &sidecar_of(&fpath), &self.full(&new), false)?;
                     index.insert(fid.to_string(), new);
                     self.save_index(index)?;
                 }
-                ok(json!({"name": name}))
+                ok(json!({"name": name, "id": fid}))
             }
+            // ?from= and ?as=<name> (exactly that name there, or refused): an Undo moving it back.
             (["move"], "POST") => {
+                still_at(&path, q)?;
                 let folder = rel(qs(q, "folder"))?;
                 self.need_folder(&folder)?;
                 if folder == parent_of(&path) {
-                    return ok(json!({"name": base_of(&path)}));
+                    return ok(json!({"name": base_of(&path), "id": fid}));
                 }
-                let (stem, ext) = split_existing(&base_of(&path));
-                let name = self.claim_name(&folder, &stem, &ext, None)?;
+                let name = match qs(q, "as") {
+                    // Named as a rename would be: the file keeps its own extension, so a move
+                    // can't turn report.xlsx into report.html.
+                    Some(want) => {
+                        let (stem, ext) = renamed(&base_of(&path), &clean_name(Some(want)));
+                        self.claim_exact(&folder, &stem, &ext, None)?
+                    }
+                    None => {
+                        let (stem, ext) = split_existing(&base_of(&path));
+                        self.claim_name(&folder, &stem, &ext, None)?
+                    }
+                };
                 with_sidecar(&fpath, &sidecar_of(&fpath), &self.full(&folder).join(&name), false)?;
                 index.insert(fid.to_string(), join(&folder, &name));
                 self.save_index(index)?;
-                ok(json!({"name": name}))
+                ok(json!({"name": name, "id": fid}))
             }
             (["copy"], "POST") => {
                 let parent = parent_of(&path);
@@ -1075,22 +1134,36 @@ impl Store {
         if self.spaces && !path.contains('/') {
             return Err(Bad::new(400, "A person's own folder can't be changed."));
         }
-        self.synced_folders()?;
+        let folder_ids = self.synced_folders()?;
+        let fid = folder_ids.iter().find(|(_, p)| **p == path).map(|(k, _)| k.clone()).unwrap_or_default();
+        // ?id=<the folder's id> (an Undo): the folder at `path` must still be the one the action
+        // being undone moved or renamed, not another that has taken its name since.
+        if qs(q, "id").is_some_and(|want| want != fid) {
+            return Err(Bad::new(409, format!("\u{201c}{}\u{201d} has been moved or renamed since, so it was left where it is.", base_of(&path))));
+        }
         match (action, method) {
+            // ?if_empty=1 (an Undo of New folder): refused once something has been put in it.
             ("", "DELETE") => {
-                self.to_bin(&path, index)?;
-                ok(json!({"ok": true}))
+                if qs(q, "if_empty") == Some("1")
+                    && fs::read_dir(self.full(&path))?.flatten().any(|e| !e.file_name().to_string_lossy().starts_with('.'))
+                {
+                    return Err(Bad::new(409, format!("\u{201c}{}\u{201d} has things in it now, so it was left as it is.", base_of(&path))));
+                }
+                let name = self.to_bin(&path, index)?;
+                ok(self.binned(&path, name))
             }
+            // ?exact=1 (an Undo): that name or nothing.
             ("rename", "POST") => {
                 let want = clean_name(qs(q, "name"));
                 if want == base_of(&path) {
                     return ok(json!({"path": path}));
                 }
                 let parent = parent_of(&path);
-                let new = join(&parent, &self.free_folder_name(&parent, &want)?);
+                let free = if qs(q, "exact") == Some("1") { self.exact_folder_name(&parent, &want)? } else { self.free_folder_name(&parent, &want)? };
+                let new = join(&parent, &free);
                 fs::rename(self.full(&path), self.full(&new))?;
                 self.moved_prefix(index, &path, &new)?;
-                ok(json!({"path": new}))
+                ok(json!({"path": new, "id": fid}))
             }
             ("move" | "copy", "POST") => {
                 let to = rel(qs(q, "to"))?;
@@ -1101,13 +1174,18 @@ impl Store {
                 if action == "move" && to == parent_of(&path) {
                     return ok(json!({"path": path}));
                 }
-                let new = join(&to, &self.free_folder_name(&to, &base_of(&path))?);
+                // ?as=<name> (an Undo moving it back): exactly that name there, or refused.
+                let free = match qs(q, "as") {
+                    Some(want) => self.exact_folder_name(&to, &clean_name(Some(want)))?,
+                    None => self.free_folder_name(&to, &base_of(&path))?,
+                };
+                let new = join(&to, &free);
                 if action == "move" {
                     move_any(&self.full(&path), &self.full(&new))?;
                     self.moved_prefix(index, &path, &new)?;
-                } else {
-                    copy_tree(&self.full(&path), &self.full(&new))?;
+                    return ok(json!({"path": new, "id": fid}));
                 }
+                copy_tree(&self.full(&path), &self.full(&new))?;
                 ok(json!({"path": new}))
             }
             _ => Err(Bad::new(404, "not found")),
@@ -1168,18 +1246,33 @@ impl Store {
                 let key = self.bin_key(&space, name);
                 let info = bins.get(&key).cloned().unwrap_or(json!({}));
                 let original = info.get("original").and_then(Value::as_str).unwrap_or(name).to_string();
+                // An Undo (?expect=<where it was>&exact=1) puts back exactly what it binned, exactly
+                // where it was, or says why not: never somewhere else or under another name.
+                let exact = qs(q, "exact") == Some("1");
+                if qs(q, "expect").is_some_and(|e| e != original) {
+                    return Err(Bad::new(409, "That isn't in the bin any more."));
+                }
                 let mut folder = parent_of(&original);
                 if !self.full(&folder).is_dir() || !self.no_links(&folder) || (self.spaces && space_of(&folder) != space) {
+                    if exact {
+                        return Err(Bad::new(409, format!("The folder \u{201c}{}\u{201d} was in isn't there any more.", base_of(&original))));
+                    }
                     folder = space.clone();
                 }
                 let src = bin.join(name);
                 let target = if src.is_dir() {
-                    let t = join(&folder, &self.free_folder_name(&folder, &base_of(&original))?);
+                    let free = if exact {
+                        self.exact_folder_name(&folder, &base_of(&original))?
+                    } else {
+                        self.free_folder_name(&folder, &base_of(&original))?
+                    };
+                    let t = join(&folder, &free);
                     move_any(&src, &self.full(&t))?;
                     t
                 } else {
                     let (stem, ext) = split_existing(&base_of(&original));
-                    let t = join(&folder, &self.claim_name(&folder, &stem, &ext, None)?);
+                    let claimed = if exact { self.claim_exact(&folder, &stem, &ext, None)? } else { self.claim_name(&folder, &stem, &ext, None)? };
+                    let t = join(&folder, &claimed);
                     with_sidecar(&src, &binned_sidecar(&bin, name), &self.full(&t), false)?;
                     t
                 };
@@ -1431,6 +1524,152 @@ mod tests {
         // Deleted: gone.
         let _ = fs::remove_file(dir.join("new/a.xlsx"));
         assert_eq!(store.path_of(&id).unwrap(), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Calls the API the way the Drive does: "GET files/x?a=1".
+    fn call(store: &Store, method: &str, url: &str) -> (u16, Value) {
+        let (path, query) = url.split_once('?').unwrap_or((url, ""));
+        let p: Vec<String> = path.split('/').map(str::to_string).collect();
+        let q: HashMap<String, String> = query.split('&').filter_map(|kv| kv.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        match store.route(method, &p, &q, None, b"") {
+            Ok(Reply::Json(v, code)) => (code, v),
+            Ok(Reply::File { .. }) => (200, Value::Null),
+            Err(b) => (b.code, json!({"error": b.msg})),
+        }
+    }
+
+    fn undo_store() -> (PathBuf, Store, String) {
+        let dir = std::env::temp_dir().join(format!("starsheets-undo-{}", random_hex(6)));
+        fs::create_dir_all(dir.join("A")).unwrap();
+        fs::create_dir_all(dir.join("B")).unwrap();
+        fs::write(dir.join("A/a.xlsx"), b"x").unwrap();
+        let store = Store { root: dir.clone(), keep: 3, spaces: false };
+        let id = store.synced_index().unwrap().keys().next().unwrap().clone();
+        (dir, store, id)
+    }
+
+    #[test]
+    fn undo_of_a_move_puts_the_file_back_where_it_was() {
+        let (dir, store, id) = undo_store();
+        let (code, v) = call(&store, "POST", &format!("files/{id}/move?folder=B"));
+        assert_eq!((code, v["name"].as_str(), v["id"].as_str()), (200, Some("a.xlsx"), Some(id.as_str())));
+        // The Drive's Undo: back to A under its old name, checked to be still in B.
+        let (code, _) = call(&store, "POST", &format!("files/{id}/move?folder=A&from=B/a.xlsx&as=a.xlsx"));
+        assert_eq!(code, 200);
+        assert!(dir.join("A/a.xlsx").is_file() && !dir.join("B/a.xlsx").exists());
+        assert_eq!(store.path_of(&id).unwrap().as_deref(), Some("A/a.xlsx"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn undo_of_a_moved_photo_brings_its_sidecar_back_too() {
+        let (dir, store, _) = undo_store();
+        fs::write(dir.join("A/p.jpg"), b"pic").unwrap();
+        fs::write(dir.join("A/p.jpg.xmp"), b"edits").unwrap();
+        let id = store.synced_index().unwrap().iter().find(|(_, v)| v.as_str() == "A/p.jpg").unwrap().0.clone();
+        let (code, _) = call(&store, "POST", &format!("files/{id}/move?folder=B"));
+        assert_eq!(code, 200);
+        assert!(dir.join("B/p.jpg.xmp").is_file() && !dir.join("A/p.jpg.xmp").exists());
+        let (code, _) = call(&store, "POST", &format!("files/{id}/move?folder=A&from=B/p.jpg&as=p.jpg"));
+        assert_eq!(code, 200);
+        assert!(dir.join("A/p.jpg").is_file() && !dir.join("B/p.jpg").exists());
+        assert_eq!(fs::read(dir.join("A/p.jpg.xmp")).unwrap(), b"edits");
+        assert!(!dir.join("B/p.jpg.xmp").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn undo_of_a_move_is_refused_after_it_moved_again_or_the_name_was_taken() {
+        let (dir, store, id) = undo_store();
+        fs::create_dir_all(dir.join("C")).unwrap();
+        assert_eq!(call(&store, "POST", &format!("files/{id}/move?folder=B")).0, 200);
+        // Someone else moves it on to C: the Undo of our move must not drag it back from there.
+        assert_eq!(call(&store, "POST", &format!("files/{id}/move?folder=C")).0, 200);
+        let (code, v) = call(&store, "POST", &format!("files/{id}/move?folder=A&from=B/a.xlsx&as=a.xlsx"));
+        assert_eq!(code, 409, "{v}");
+        assert!(v["error"].as_str().unwrap().contains("moved or renamed since"));
+        assert!(dir.join("C/a.xlsx").is_file(), "left where it is");
+        // Back in B, but a new a.xlsx now sits in A: refused rather than putting back "a (2).xlsx".
+        assert_eq!(call(&store, "POST", &format!("files/{id}/move?folder=B")).0, 200);
+        fs::write(dir.join("A/a.xlsx"), b"new").unwrap();
+        let (code, v) = call(&store, "POST", &format!("files/{id}/move?folder=A&from=B/a.xlsx&as=a.xlsx"));
+        assert_eq!(code, 409, "{v}");
+        assert!(dir.join("B/a.xlsx").is_file() && !dir.join("A/a (2).xlsx").exists());
+        assert_eq!(fs::read(dir.join("A/a.xlsx")).unwrap(), b"new", "the other file is untouched");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn undo_of_renames_folder_moves_new_folders_and_the_bin() {
+        let (dir, store, id) = undo_store();
+        // A file's rename, undone exactly; refused when the old name was taken meanwhile.
+        assert_eq!(call(&store, "POST", &format!("files/{id}/rename?name=Plan")).0, 200);
+        assert!(dir.join("A/Plan.xlsx").is_file());
+        assert_eq!(call(&store, "POST", &format!("files/{id}/rename?name=a.xlsx&from=A/Plan.xlsx&exact=1")).0, 200);
+        assert!(dir.join("A/a.xlsx").is_file());
+        assert_eq!(call(&store, "POST", &format!("files/{id}/rename?name=Plan")).0, 200);
+        fs::write(dir.join("A/a.xlsx"), b"other").unwrap();
+        assert_eq!(call(&store, "POST", &format!("files/{id}/rename?name=a.xlsx&from=A/Plan.xlsx&exact=1")).0, 409);
+        fs::remove_file(dir.join("A/a.xlsx")).unwrap();
+        // A folder moved into B and back under its own name; refused once one of that name is there.
+        assert_eq!(call(&store, "POST", "folders/move?path=A&to=B").1["path"], "B/A");
+        assert_eq!(call(&store, "POST", "folders/move?path=B/A&to=&as=A").1["path"], "A");
+        assert_eq!(call(&store, "POST", "folders/move?path=A&to=B").1["path"], "B/A");
+        fs::create_dir(dir.join("A")).unwrap();
+        assert_eq!(call(&store, "POST", "folders/move?path=B/A&to=&as=A").0, 409);
+        assert!(dir.join("B/A/Plan.xlsx").is_file());
+        // A new folder's Undo only bins it while it is empty.
+        let (_, v) = call(&store, "POST", "folders?path=B&name=New");
+        assert_eq!(v["path"], "B/New");
+        fs::write(dir.join("B/New/x.txt"), b"x").unwrap();
+        assert_eq!(call(&store, "DELETE", "folders?path=B/New&if_empty=1").0, 409);
+        fs::remove_file(dir.join("B/New/x.txt")).unwrap();
+        assert_eq!(call(&store, "DELETE", "folders?path=B/New&if_empty=1").0, 200);
+        // Binned, then put back by its Undo: same place, same id.
+        let (code, v) = call(&store, "DELETE", &format!("files/{id}"));
+        assert_eq!((code, v["bin"].as_str()), (200, Some("Plan.xlsx")));
+        assert_eq!(call(&store, "POST", "bin/restore?name=Plan.xlsx&expect=B/A/Wrong.xlsx&exact=1").0, 409);
+        let (code, v) = call(&store, "POST", "bin/restore?name=Plan.xlsx&expect=B/A/Plan.xlsx&exact=1");
+        assert_eq!((code, v["path"].as_str()), (200, Some("B/A/Plan.xlsx")));
+        assert_eq!(store.path_of(&id).unwrap().as_deref(), Some("B/A/Plan.xlsx"));
+        // Its folder gone meanwhile: refused (a plain Restore would put it at the top).
+        call(&store, "DELETE", &format!("files/{id}"));
+        fs::remove_dir_all(dir.join("B/A")).unwrap();
+        assert_eq!(call(&store, "POST", "bin/restore?name=Plan.xlsx&expect=B/A/Plan.xlsx&exact=1").0, 409);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_move_back_keeps_the_files_own_extension() {
+        let (dir, store, id) = undo_store();
+        assert_eq!(call(&store, "POST", &format!("files/{id}/move?folder=B")).0, 200);
+        // `as=` names it as a rename would: never a new extension (report.xlsx -> report.html).
+        let (code, v) = call(&store, "POST", &format!("files/{id}/move?folder=A&from=B/a.xlsx&as=evil.html"));
+        assert_eq!(code, 200, "{v}");
+        assert_eq!(v["name"], "evil.html.xlsx");
+        assert!(!dir.join("A/evil.html").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_folder_undo_refuses_another_folder_that_took_its_place() {
+        let (dir, store, _) = undo_store();
+        let (code, v) = call(&store, "POST", "folders/move?path=A&to=B");
+        assert_eq!(code, 200);
+        let fid = v["id"].as_str().unwrap().to_string();
+        assert!(!fid.is_empty());
+        // Someone renames ours away and makes a different "A" in B.
+        assert_eq!(call(&store, "POST", "folders/rename?path=B/A&name=Mine").1["path"], "B/Mine");
+        fs::create_dir(dir.join("B/A")).unwrap();
+        let (code, v) = call(&store, "POST", &format!("folders/move?path=B/A&to=&as=A&id={fid}"));
+        assert_eq!(code, 409, "{v}");
+        assert!(dir.join("B/A").is_dir() && !dir.join("A").exists(), "the other folder is left alone");
+        // Ours, with its id: moved back. A rename answers with the id too.
+        let (code, v) = call(&store, "POST", &format!("folders/move?path=B/Mine&to=&as=A&id={fid}"));
+        assert_eq!((code, v["path"].as_str()), (200, Some("A")), "{v}");
+        let (_, v) = call(&store, "POST", "folders/rename?path=A&name=Z");
+        assert_eq!(v["id"].as_str(), Some(fid.as_str()));
         let _ = fs::remove_dir_all(&dir);
     }
 
