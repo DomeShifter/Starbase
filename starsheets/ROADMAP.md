@@ -83,5 +83,7 @@
 - [x] Sort menu; copy a sheet to another spreadsheet; choose where files are kept
 - [x] Backups (prototype): daily, encrypted, in restic's format to any folder the server can reach; keep 7 days / 4 weeks / 12 months; restore anyone's files (owner) or your own into a new folder
 - [ ] Backups next: S3 / Backblaze B2 targets, restore everything onto a new server from the app, choose the keep rules
+- [x] Desktop apps connect to a server: device code allowed in the browser, revocable device tokens (Your devices, People), Drive and Docs on the server's files (plain saves with conflicted copies)
+- [ ] Desktop next: live editing from the desktop (WebSocket with the device token), version history and sharing in the desktop apps
 
 The full Sheets feature list with a phase per item is in [docs/sheets-reference.md](docs/sheets-reference.md).

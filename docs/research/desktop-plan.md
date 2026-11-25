@@ -230,6 +230,8 @@ The source is `starsheets/crates/server/src/main.rs` and its modules. Everything
 
 ### What to add
 
+> **Done 2026-11-25 (S1, D6 in part):** device tokens and the device-code sign-in (`/api/devices/*`, the connect page at `/api/connect`), Your devices, Bearer on the API and the live WebSocket; Drive and Docs connect and use the server's files with plain saves. Still open: the loopback/PKCE variant (not needed so far), `api_version`, certificate pinning, native live editing (D5). See starsheets/docs/deploy.md, "Desktop apps".
+
 1. **Device tokens.**
    - `POST /api/tokens {name}` returns `{token}`, shown once and stored hashed like sessions.
    - `GET/DELETE /api/tokens` lets people see and revoke them ("This laptop, last used …").

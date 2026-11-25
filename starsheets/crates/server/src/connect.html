@@ -1,0 +1,138 @@
+<!doctype html>
+<!-- Starbase: the page where a desktop app is allowed to use someone's account (devices.rs). -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="same-origin">
+<title>Connect an app · Starbase</title>
+<style>
+  :root { --bg: #f8f9fa; --card: #fff; --text: #202124; --muted: #5f6368; --line: #dadce0; --accent: #1a73e8; --accent-text: #fff; --bad: #d93025; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #202124; --card: #2d2e31; --text: #e8eaed; --muted: #9aa0a6; --line: #5f6368; --accent: #8ab4f8; --accent-text: #202124; --bad: #f28b82; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, sans-serif; padding: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 28px; width: 100%; max-width: 420px; }
+  h1 { font-size: 22px; font-weight: 500; margin: 0 0 8px; }
+  p { margin: 8px 0; }
+  .muted { color: var(--muted); }
+  .bad { color: var(--bad); }
+  label { display: block; margin: 12px 0 4px; font-size: 13px; color: var(--muted); }
+  input { width: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 4px; background: transparent; color: var(--text); font: inherit; }
+  input.code { font: 20px/1.4 ui-monospace, monospace; letter-spacing: 2px; text-transform: uppercase; text-align: center; }
+  .buttons { display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px; flex-wrap: wrap; }
+  button, a.button { padding: 8px 18px; border-radius: 4px; border: 1px solid var(--line); background: transparent; color: var(--accent); font: inherit; font-weight: 500; cursor: pointer; text-decoration: none; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  .name { font-weight: 600; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main class="card">
+  <h1>Connect an app</h1>
+  <p id="message" class="muted">Loading…</p>
+
+  <form id="signin" hidden>
+    <p>Sign in to Starbase first.</p>
+    <div id="password">
+      <label for="username">Username</label>
+      <input id="username" autocomplete="username" required>
+      <label for="pw">Password</label>
+      <input id="pw" type="password" autocomplete="current-password" required>
+    </div>
+    <div class="buttons">
+      <a id="sso" class="button" hidden></a>
+      <button id="signin-button" class="primary" type="submit">Sign in</button>
+    </div>
+  </form>
+
+  <form id="enter" hidden>
+    <p class="muted">Only do this if you just started it yourself, on your own computer (Connect to a server… in Starbase). If someone sent you here, stop.</p>
+    <label for="code">Type the code your app shows</label>
+    <input id="code" class="code" maxlength="9" autocomplete="off" spellcheck="false" required>
+    <div class="buttons"><button class="primary" type="submit">Next</button></div>
+  </form>
+
+  <form id="ask" hidden>
+    <p>Allow <span id="device" class="name"></span> to use your Starbase account<span id="who"></span>?</p>
+    <p class="muted">It will be able to open, change and share your files, as you can. You can remove it any time: your avatar › Your devices.</p>
+    <p id="where" class="muted"></p>
+    <p class="bad">Only allow this if you just started it on your own computer and it shows the code <span id="shown" class="name"></span>. Never allow a request someone else asked you to, or sent you a code for.</p>
+    <div class="buttons">
+      <button id="deny" type="button">Don't allow</button>
+      <button class="primary" type="submit">Allow</button>
+    </div>
+  </form>
+</main>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const say = (text, bad) => { $("message").textContent = text; $("message").className = bad ? "bad" : "muted"; };
+  const show = (id) => { for (const f of ["signin", "enter", "ask"]) $(f).hidden = f !== id; };
+  const post = (url, body) => fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const why = async (r) => { try { return (await r.json()).error || "Something went wrong."; } catch (_) { return "Something went wrong."; } };
+  // Never taken from the address: the person types the code their own app shows, so a link
+  // someone else sends can't lead straight to "Allow" (device-code phishing).
+  let code = "";
+
+  async function start() {
+    let info;
+    try { info = await (await fetch("info", { cache: "no-store" })).json(); } catch (_) { return say("This server can't be reached.", true); }
+    if (!info.auth) return say("Sign-in is off on this server, so the app doesn't need to connect.");
+    if (!info.signed_in) {
+      say("");
+      const sso = info.sso;
+      if (sso) {
+        $("sso").hidden = false;
+        $("sso").textContent = "Sign in with " + (sso.label || "single sign-on");
+        $("sso").href = "oidc/login?next=" + encodeURIComponent(location.pathname + location.search);
+      }
+      $("password").hidden = !!(sso && sso.only);
+      $("signin-button").hidden = !!(sso && sso.only);
+      return show("signin");
+    }
+    say("Signed in as " + (info.user ? info.user.name : "you") + ".");
+    show("enter");
+  }
+
+  async function check() {
+    const r = await fetch("devices/code?code=" + encodeURIComponent(code), { cache: "no-store" });
+    if (r.status === 401) return start();
+    if (!r.ok) { say(await why(r), true); $("code").value = code; return show("enter"); }
+    const d = await r.json();
+    say("");
+    $("device").textContent = "“" + d.name + "”";
+    $("who").textContent = d.user ? " (" + d.user.name + ")" : "";
+    $("shown").textContent = d.code;
+    const ago = d.secs_ago < 90 ? "just now" : Math.round(d.secs_ago / 60) + " minutes ago";
+    $("where").textContent = d.same_place
+      ? "Started " + ago + " from this network (" + d.from + ")."
+      : "Started " + ago + " from " + d.from + ", which isn't the network this browser is on. If that isn't your computer, don't allow it.";
+    $("where").className = d.same_place ? "muted" : "bad";
+    show("ask");
+  }
+
+  async function answer(allow) {
+    const r = await post("devices/approve", { code, allow });
+    show("");
+    if (!r.ok) return say(await why(r), true);
+    say(allow ? "Done. Go back to the app: it carries on by itself." : "The app wasn't allowed in. You can close this page.", false);
+    history.replaceState(null, "", location.pathname);
+  }
+
+  $("signin").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const r = await post("login", { username: $("username").value, password: $("pw").value });
+    if (!r.ok) return say(await why(r), true);
+    $("pw").value = "";
+    start();
+  });
+  $("enter").addEventListener("submit", (e) => { e.preventDefault(); code = $("code").value.trim(); check(); });
+  $("ask").addEventListener("submit", (e) => { e.preventDefault(); answer(true); });
+  $("deny").addEventListener("click", () => answer(false));
+  start();
+})();
+</script>
+</body>
+</html>

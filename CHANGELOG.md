@@ -14,6 +14,18 @@ number goes up for new features and the last one for fixes.
 - Starbase Sheets: **Format › Alternating colours** (banded rows with header and footer colours,
   preset or your own, saved so Excel shows them too), **Smart Fill** suggestions (Ctrl+Shift+Y)
   and **Edit › Move › Row up / down**.
+- Starbase Docs: selecting a picture swaps the toolbar's text tools for the picture's, as in
+  Google Docs: crop, image options, replace, reset, and the five ways of wrapping text.
+- Starbase Docs: **my default styles**, as in Google Docs (Format › Paragraph styles › Options,
+  and Options in the style box): save this document's paragraph styles as your defaults, use
+  them in another document, or reset to Docs' own. New documents start with them. They are
+  kept in your browser (in the desktop program, until it closes).
+
+### Fixed
+- Starbase Sheets on the desktop: a save to the server that failed is tried again by itself, even
+  while the window is in the background (2 s later, then waiting longer each time, at most 30 s),
+  and the save status shows the result straight away. It used to wait until the window was
+  raised again.
 
 ## [0.1.0] - 2026-11-25
 

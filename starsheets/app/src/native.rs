@@ -28,6 +28,10 @@ use crate::store::{has_data, is_doc, xlsx};
 
 /// Quiet time after the last change before saving (ms), as on the web.
 const SAVE_AFTER: f64 = 1500.0;
+/// A save to the server that failed is tried again 2 s later, then after twice as long each
+/// time it fails again, at most every 30 s (ms).
+const RETRY_FIRST: f64 = 2_000.0;
+const RETRY_MAX: f64 = 30_000.0;
 pub const SHEETS_ID: &str = "io.github.DomeShifter.Starbase.Sheets";
 pub const DRIVE_ID: &str = "io.github.DomeShifter.Starbase";
 
@@ -41,6 +45,12 @@ pub enum Start {
     New(PathBuf),
     /// Open these files: the first here, the others each in a window of their own.
     Open(Vec<PathBuf>),
+    /// A spreadsheet on the connected Starbase server (`--server-file ID [--name NAME]`, from the
+    /// Drive; remote.rs).
+    Server {
+        id: String,
+        name: String,
+    },
 }
 
 pub fn parse_args(args: &[String]) -> Start {
@@ -51,6 +61,11 @@ pub fn parse_args(args: &[String]) -> Start {
             "--version" | "-V" => return Start::Version,
             "--help" | "-h" => return Start::Help,
             "--home" => return Start::Home,
+            "--server-file" => {
+                let id = args.get(i + 1).cloned().unwrap_or_default();
+                let name = args.iter().position(|a| a == "--name").and_then(|n| args.get(n + 1)).cloned().unwrap_or_default();
+                return Start::Server { id, name };
+            }
             "--new" => {
                 let dir = args.get(i + 1).filter(|a| !a.starts_with("--")).map_or_else(crate::localstore::default_root, PathBuf::from);
                 return Start::New(dir);
@@ -75,7 +90,7 @@ pub fn main() -> eframe::Result<()> {
         }
         Start::Help => {
             println!(
-                "Starbase Sheets {}\n\nUsage:\n  starsheets [FILE…]      open spreadsheets\n  starsheets --new [DIR]  a new spreadsheet, saved in DIR\n  starsheets --home       Starbase Drive (the home screen)",
+                "Starbase Sheets {}\n\nUsage:\n  starsheets [FILE…]      open spreadsheets\n  starsheets --new [DIR]  a new spreadsheet, saved in DIR\n  starsheets --home       Starbase Drive (the home screen)\n  starsheets --server-file ID  a spreadsheet on the connected server",
                 env!("CARGO_PKG_VERSION")
             );
             return Ok(());
@@ -149,7 +164,19 @@ fn creator(start: Start) -> eframe::AppCreator<'static> {
         egui_extras::install_image_loaders(&cc.egui_ctx);
         let mut files = LocalFiles::default();
         let home = match start {
-            Start::Home => Some(crate::home::Home::with_store(crate::store::Backend::default())),
+            Start::Home => Some(crate::home::Home::with_store(crate::remote::backend())),
+            Start::Server { id, name } => {
+                match crate::remote::RemoteDoc::fetch(&id) {
+                    Ok((doc, path)) => {
+                        app.open_path(&path.to_string_lossy());
+                        // GridCraft has read it: the copy on disk isn't needed (saves go to the server).
+                        let _ = std::fs::remove_file(&path);
+                        files.pending_remote = Some((path.to_string_lossy().into_owned(), doc));
+                    }
+                    Err(e) => app.message = Some((if name.is_empty() { "Starbase Sheets".into() } else { name }, e)),
+                }
+                None
+            }
             Start::New(dir) => {
                 files.new_folder = dir;
                 None
@@ -351,6 +378,48 @@ pub struct LocalFiles {
     error: Option<String>,
     /// The workbooks already looked at (linked, or found not to be .xlsx).
     looked: HashMap<u64, ()>,
+    /// Workbooks opened from the connected server (remote.rs): saved there, not on disk.
+    remote: HashMap<u64, crate::remote::RemoteDoc>,
+    /// The one being opened from the server (`--server-file`): the path GridCraft opened it from.
+    pub pending_remote: Option<(String, crate::remote::RemoteDoc)>,
+    /// Failed saves to the server in a row, for the wait before the next try.
+    backoff: Backoff,
+    /// A save to the server just failed: wake the window this long after (ms) to try again.
+    wake_in: Option<f64>,
+}
+
+/// How long to wait before trying a failed save to the server again: [`RETRY_FIRST`] after the
+/// first failure, twice as long after each further one, at most [`RETRY_MAX`].
+#[derive(Default)]
+struct Backoff {
+    failures: u32,
+}
+
+impl Backoff {
+    /// One more failure in a row: the wait before the next try (ms).
+    fn failed(&mut self) -> f64 {
+        self.failures = self.failures.saturating_add(1);
+        (RETRY_FIRST * 2f64.powi(self.failures.min(16) as i32 - 1)).min(RETRY_MAX)
+    }
+
+    fn succeeded(&mut self) {
+        self.failures = 0;
+    }
+}
+
+/// Runs the window's logic again after `ms`, even while it is in the background or covered:
+/// eframe runs `App::logic` for a hidden window when a repaint is asked for from another
+/// thread, whereas a delayed repaint asked for by the window itself waits until it is shown.
+fn wake_after(ctx: &egui::Context, ms: f64) {
+    let ctx = ctx.clone();
+    let wait = std::time::Duration::from_millis(ms.max(0.0) as u64 + 50);
+    let spawned = std::thread::Builder::new().name("save-retry".into()).spawn(move || {
+        std::thread::sleep(wait);
+        ctx.request_repaint();
+    });
+    if let Err(e) = spawned {
+        log::warn!("couldn't start the save retry timer: {e}");
+    }
 }
 
 impl LocalFiles {
@@ -368,6 +437,14 @@ impl LocalFiles {
     fn look(&mut self, app: &mut SheetApp) {
         let Some(d) = app.session.active_mut() else { return };
         if self.looked.insert(d.uid, ()).is_some() {
+            return;
+        }
+        if self.pending_remote.as_ref().is_some_and(|(p, _)| d.path.as_deref() == Some(p.as_str()))
+            && let Some((_, doc)) = self.pending_remote.take()
+        {
+            d.title = crate::remote::stem(&doc.name);
+            d.path = None;
+            self.remote.insert(d.uid, doc);
             return;
         }
         if let Some(p) = d.path.clone() {
@@ -402,13 +479,31 @@ impl LocalFiles {
         }
         let wanted = app.session.active().is_some_and(|d| self.needs_save(d));
         if wanted && app.editor.is_none() {
-            if now - self.changed_at < SAVE_AFTER {
-                ctx.request_repaint_after(std::time::Duration::from_millis(400));
+            let left = SAVE_AFTER - (now - self.changed_at);
+            if left > 0.0 {
+                ctx.request_repaint_after(std::time::Duration::from_millis(left.min(RETRY_MAX) as u64 + 1));
             } else {
                 self.save_active(app);
+                // The save status changes ("Saved to …", "Not saved: …"): show it.
+                ctx.request_repaint();
             }
         }
+        if let Some(ms) = self.wake_in.take() {
+            wake_after(ctx, ms);
+        }
         use crate::shell::{SaveState, SaveStatus};
+        let remote = app.session.active().and_then(|d| self.remote.get(&d.uid));
+        if let Some(r) = remote {
+            let status = match (&self.error, wanted) {
+                (Some(e), _) => SaveStatus::new(SaveState::Problem, format!("Not saved: {e}")),
+                (None, true) => SaveStatus::new(SaveState::Saving, "Saving…"),
+                (None, false) => SaveStatus::new(SaveState::Saved, format!("Saved to {}", r.host())),
+            };
+            let tip = format!("All changes are saved on {}", r.url());
+            crate::shell::set_save_status(ctx, Some(status));
+            ctx.data_mut(|m| m.insert_temp(egui::Id::unique("starsheets_save_status_tip"), tip));
+            return;
+        }
         let status = match (&self.error, wanted, self.path(app)) {
             (Some(e), _, _) => Some(SaveStatus::new(SaveState::Problem, format!("Not saved: {e}"))),
             (None, true, _) => Some(SaveStatus::new(SaveState::Saving, "Saving…")),
@@ -424,6 +519,9 @@ impl LocalFiles {
     }
 
     fn needs_save(&self, d: &gridcraft_engine::DocState) -> bool {
+        if self.remote.contains_key(&d.uid) {
+            return d.is_dirty();
+        }
         has_data(&d.wb) && (d.is_dirty() || !self.links.contains_key(&d.uid))
     }
 
@@ -444,6 +542,19 @@ impl LocalFiles {
     /// The title was changed in the title bar: the file follows (a free name in its folder).
     fn rename_if_needed(&mut self, app: &mut SheetApp) {
         let Some(d) = app.session.active_mut() else { return };
+        if let Some(r) = self.remote.get_mut(&d.uid) {
+            let title = d.title.trim().to_string();
+            if !title.is_empty() && title != crate::remote::stem(&r.name) {
+                match r.rename(&title) {
+                    Ok(()) => d.title = crate::remote::stem(&r.name),
+                    Err(e) => {
+                        self.error = Some(e);
+                        d.title = crate::remote::stem(&r.name);
+                    }
+                }
+            }
+            return;
+        }
         let Some(l) = self.links.get_mut(&d.uid) else { return };
         let title = d.title.trim().to_string();
         if title.is_empty() || title == stem_of(&l.disk.path) {
@@ -462,13 +573,43 @@ impl LocalFiles {
     pub fn save_active(&mut self, app: &mut SheetApp) {
         let Some(d) = app.session.active() else { return };
         let (doc, sent) = (d.uid, d.wb.clone());
-        let bytes = match xlsx(&sent, "book.xlsx") {
+        // A file from the server is saved in its own format (a .csv stays a .csv).
+        let bytes = match self.remote.get(&doc).map_or_else(|| xlsx(&sent, "book.xlsx"), |r| r.bytes(&sent)) {
             Ok(b) => b,
             Err(e) => {
                 self.error = Some(e);
                 return;
             }
         };
+        if let Some(r) = self.remote.get_mut(&doc) {
+            match r.save(&bytes) {
+                Ok(copy) => {
+                    self.error = None;
+                    self.backoff.succeeded();
+                    if let Some(name) = copy {
+                        app.message = Some((
+                            "Saved as a copy".into(),
+                            format!(
+                                "Someone changed this spreadsheet on the server since you opened it, so your changes were saved as \"{name}\" next to it. Nothing is lost."
+                            ),
+                        ));
+                    }
+                    if let Some(d) = app.session.active_mut().filter(|d| d.uid == doc) {
+                        d.saved = sent;
+                        d.title = crate::remote::stem(&r.name);
+                    }
+                }
+                Err(e) => {
+                    self.error = Some(e);
+                    // Tried again in a while (connected again meanwhile, say), not every frame,
+                    // and also while the window is in the background ([`wake_after`]).
+                    let wait = self.backoff.failed();
+                    self.changed_at = gridcraft_ui_egui::monotonic_ms() + wait - SAVE_AFTER;
+                    self.wake_in = Some(wait);
+                }
+            }
+            return;
+        }
         if !self.links.contains_key(&doc) {
             // The first save: next to the file it came from (csv, ods…), else in the folder.
             let (dir, stem) = match d.path.as_deref().map(PathBuf::from) {
@@ -530,6 +671,29 @@ impl LocalFiles {
                 app.message = Some(("Starbase".into(), e));
             }
         };
+        // A spreadsheet from the server: its own copy, details and bin.
+        if let Some(r) = app.session.active().and_then(|d| self.remote.get(&d.uid)) {
+            match req {
+                "copy" => return shown(r.copy(), app),
+                "details" => {
+                    let text = format!("Saved on {}, in {}", r.url(), if r.folder.is_empty() { "the top folder" } else { r.folder.as_str() });
+                    app.message = Some(("Details".into(), format!("{text}\n\nStarbase Sheets {}", env!("CARGO_PKG_VERSION"))));
+                    return;
+                }
+                "versions" => {
+                    app.message = Some(("Version history".into(), format!("See this spreadsheet's versions in the browser, at {}.", r.url())));
+                    return;
+                }
+                "bin" => {
+                    match r.bin() {
+                        Ok(()) => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                        Err(e) => app.message = Some(("Move to bin".into(), e)),
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
         match req {
             "open" => {
                 let picked = rfd::FileDialog::new()
@@ -820,6 +984,10 @@ mod tests {
         assert_eq!(parse_args(&s(&["--version"])), Start::Version);
         assert_eq!(parse_args(&s(&["--new", "/tmp/x"])), Start::New("/tmp/x".into()));
         assert_eq!(parse_args(&s(&["a.xlsx", "file:///b.csv", "%F"])), Start::Open(vec!["a.xlsx".into(), "/b.csv".into()]));
+        assert_eq!(
+            parse_args(&s(&["--server-file", "ab12", "--name", "Budget.xlsx"])),
+            Start::Server { id: "ab12".into(), name: "Budget.xlsx".into() }
+        );
     }
 
     fn temp(tag: &str) -> PathBuf {
@@ -871,6 +1039,35 @@ mod tests {
         again.open_path(&path.to_string_lossy());
         assert_eq!(a1(&again), "Food", "the change is in the file");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_failed_save_to_the_server_waits_longer_each_time_up_to_30_s() {
+        let mut b = Backoff::default();
+        let waits: Vec<f64> = (0..7).map(|_| b.failed()).collect();
+        assert_eq!(waits, [2_000.0, 4_000.0, 8_000.0, 16_000.0, 30_000.0, 30_000.0, 30_000.0]);
+        for _ in 0..100 {
+            b.failed();
+        }
+        assert_eq!(b.failed(), RETRY_MAX, "no overflow after many failures");
+        b.succeeded();
+        assert_eq!(b.failed(), RETRY_FIRST, "a save that worked starts again from 2 s");
+    }
+
+    #[test]
+    fn the_retry_timer_wakes_a_window_in_the_background() {
+        // The timer asks for a repaint from its own thread once the wait is over.
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let ctx = egui::Context::default();
+        let asked = Arc::new(AtomicBool::new(false));
+        let seen = asked.clone();
+        ctx.set_request_repaint_callback(move |_| seen.store(true, Ordering::SeqCst));
+        wake_after(&ctx, 10.0);
+        let start = std::time::Instant::now();
+        while !asked.load(Ordering::SeqCst) {
+            assert!(start.elapsed() < std::time::Duration::from_secs(5), "the timer never asked for a repaint");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
     }
 
     #[test]

@@ -186,7 +186,18 @@ pub struct Home {
     error: Option<String>,
     /// A folder to open once the list arrives (?dir= in the address).
     open_dir: Option<String>,
+    /// The desktop app's "Connect to a server…" (remote.rs).
+    #[cfg(not(target_arch = "wasm32"))]
+    connect: crate::remote::Connect,
+    /// When the list was last asked for (the desktop asks again now and then: files are saved by
+    /// the spreadsheet windows, other programs and other people).
+    #[cfg(not(target_arch = "wasm32"))]
+    listed_at: f64,
 }
+
+/// How often the desktop's Drive lists the files again (ms).
+#[cfg(not(target_arch = "wasm32"))]
+const RELIST_MS: f64 = 10_000.0;
 
 fn name_of(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
@@ -294,6 +305,10 @@ impl Home {
     }
 
     fn refresh(&mut self, ctx: &egui::Context) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.listed_at = gridcraft_ui_egui::monotonic_ms();
+        }
         self.loading = true;
         call(&self.store, &self.inbox, ctx, Method::Get, "api/files".into(), None, |b| Reply::Listed(serde_json::from_slice(&b).unwrap_or_default()));
         if self.view == Some(View::Bin) {
@@ -676,6 +691,14 @@ impl Home {
             self.refresh(ctx);
         }
         self.store.poll();
+        // The desktop: the list again every little while (a save in a spreadsheet window, a
+        // conflicted copy, someone else's change on the server).
+        #[cfg(not(target_arch = "wasm32"))]
+        if !self.loading && gridcraft_ui_egui::monotonic_ms() - self.listed_at > RELIST_MS {
+            self.refresh(ctx);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        ctx.request_repaint_after(std::time::Duration::from_millis(RELIST_MS as u64));
         let replies: Vec<Reply> = std::mem::take(&mut *self.inbox.borrow_mut());
         for r in replies {
             match r {
@@ -717,6 +740,9 @@ impl Home {
                     // asking again would only get 401 again, over and over.
                     if !e.is_empty() {
                         self.error = Some(e);
+                        // The desktop lists again by itself a little later (a server that can't
+                        // be reached isn't asked again and again).
+                        #[cfg(target_arch = "wasm32")]
                         self.refresh(ctx);
                     }
                 }
@@ -797,6 +823,12 @@ impl Home {
         self.details_ui(&ctx);
         self.pending_move_ui(&ctx);
         self.keys(&ctx);
+        // Connected to a server, or disconnected: the Drive starts again over the new files.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(store) = self.connect.ui(&ctx) {
+            *self = Home { store, connect: std::mem::take(&mut self.connect), ..Default::default() };
+            ctx.request_repaint();
+        }
     }
 
     fn top_ui(&mut self, ui: &mut Ui) {
@@ -831,6 +863,11 @@ impl Home {
             #[cfg(target_arch = "wasm32")]
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 crate::account::me_ui(ui);
+            });
+            // The desktop app: "Connect to a server…", or who is signed in on the server.
+            #[cfg(not(target_arch = "wasm32"))]
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                self.connect.menu_ui(ui, &self.store);
             });
         });
     }
