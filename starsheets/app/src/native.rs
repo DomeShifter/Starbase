@@ -408,20 +408,19 @@ impl LocalFiles {
                 self.save_active(app);
             }
         }
+        use crate::shell::{SaveState, SaveStatus};
         let status = match (&self.error, wanted, self.path(app)) {
-            (Some(e), _, _) => format!("Not saved: {e}"),
-            (None, true, _) => "Saving…".to_string(),
-            (None, false, Some(_)) => "Saved to this computer".to_string(),
-            (None, false, None) => String::new(),
+            (Some(e), _, _) => Some(SaveStatus::new(SaveState::Problem, format!("Not saved: {e}"))),
+            (None, true, _) => Some(SaveStatus::new(SaveState::Saving, "Saving…")),
+            (None, false, Some(_)) => Some(SaveStatus::new(SaveState::Saved, "Saved to this computer")),
+            (None, false, None) => None,
         };
         let tip = match self.path(app) {
             Some(p) => format!("All changes are saved to {}", p.display()),
             None => format!("A new spreadsheet saves itself in {} as soon as you type in it.", self.folder().display()),
         };
-        ctx.data_mut(|m| {
-            m.insert_temp(egui::Id::unique("starsheets_save_status"), status);
-            m.insert_temp(egui::Id::unique("starsheets_save_status_tip"), tip);
-        });
+        crate::shell::set_save_status(ctx, status);
+        ctx.data_mut(|m| m.insert_temp(egui::Id::unique("starsheets_save_status_tip"), tip));
     }
 
     fn needs_save(&self, d: &gridcraft_engine::DocState) -> bool {

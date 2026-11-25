@@ -307,6 +307,15 @@ impl eframe::App for WebShell {
             crate::house::style_tooltips(&ctx);
             return;
         }
+        // Version history takes the whole window (versions.rs); the open file stays underneath.
+        if self.files.history_open() {
+            let ctx = ui.ctx().clone();
+            self.files.history_ui(&mut self.app, ui);
+            self.messages.ui(&mut self.app, &ctx);
+            self.account.ui(&ctx);
+            crate::house::style_tooltips(&ctx);
+            return;
+        }
         // Which box had the keyboard as this frame began (see the check before the grid).
         let focus_at_start = ui.ctx().memory(|m| m.focused());
         // Our panels first, so they sit above GridCraft's formula bar and grid.

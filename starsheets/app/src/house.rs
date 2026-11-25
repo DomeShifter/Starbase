@@ -204,11 +204,15 @@ pub fn keep(ctx: &egui::Context) {
 /// Tooltips: dark grey with white text (Google's look). egui draws them in the menu frame, so the
 /// tooltip layer is restyled after the frame is painted: call once per frame, after all UI.
 pub const TIP_BG: Color32 = Color32::from_rgb(0x3C, 0x40, 0x43);
-/// The bar above the grid while a filter view is open (Google's dark grey), its text and its
-/// text boxes.
-pub const VIEW_BAR: Color32 = TIP_BG;
+/// The bar above the grid while a filter view is open (Google's near-black grey), its text, its
+/// text boxes and a hovered icon (white at about 12%). The bar is darker than [`TIP_BG`] so its
+/// tooltips stand out from it.
+pub const VIEW_BAR: Color32 = Color32::from_rgb(0x20, 0x21, 0x24);
 pub const VIEW_BAR_TEXT: Color32 = Color32::WHITE;
-pub const VIEW_BAR_FIELD: Color32 = TIP_HOVER;
+pub const VIEW_BAR_FIELD: Color32 = TIP_BG;
+pub const VIEW_BAR_HOVER: Color32 = Color32::from_rgba_premultiplied(31, 31, 31, 31);
+/// A tooltip's faint light edge: unseen on white, it parts a tooltip from a dark bar under it.
+const TIP_EDGE: Color32 = Color32::from_rgba_premultiplied(70, 70, 70, 70);
 /// The picked row in a dark popup (white text stays readable on it).
 pub const TIP_PICKED: Color32 = Color32::from_rgb(0x0B, 0x57, 0xD0);
 /// A hovered row in a dark popup.
@@ -239,7 +243,7 @@ fn restyle_tip(shape: &mut egui::Shape, fill: Color32) -> bool {
     match shape {
         egui::Shape::Rect(r) if r.fill == fill => {
             r.fill = TIP_BG;
-            r.stroke = Stroke::NONE;
+            r.stroke = Stroke::new(1.0, TIP_EDGE);
             r.corner_radius = CornerRadius::same(FIELD_RADIUS);
             r.rect = r.rect.expand2(vec2(S, 0.0));
             true
@@ -407,6 +411,16 @@ pub fn primary(text: &str) -> egui::Button<'static> {
 pub fn primary_in(text: &str, accent: Color32) -> egui::Button<'static> {
     egui::Button::new(RichText::new(text.to_string()).size(BODY).color(Color32::WHITE))
         .fill(accent)
+        .stroke(Stroke::NONE)
+        .corner_radius(CornerRadius::same(BUTTON_RADIUS))
+        .min_size(vec2(88.0, BUTTON_HEIGHT))
+}
+
+/// A main button that can't be used yet, as Google greys it: near-black at 12% behind, the text
+/// at 38% (not a faded accent colour). Add it with `add_enabled(false, …)`.
+pub fn primary_off(text: &str) -> egui::Button<'static> {
+    egui::Button::new(RichText::new(text.to_string()).size(BODY).color(Color32::from_rgba_unmultiplied(0x1F, 0x1F, 0x1F, 97)))
+        .fill(Color32::from_rgba_unmultiplied(0x1F, 0x1F, 0x1F, 31))
         .stroke(Stroke::NONE)
         .corner_radius(CornerRadius::same(BUTTON_RADIUS))
         .min_size(vec2(88.0, BUTTON_HEIGHT))

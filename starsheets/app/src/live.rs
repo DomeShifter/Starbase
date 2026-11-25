@@ -16,11 +16,13 @@ use starsheets_sync::{self as sync, Change, ToClient, ToServer};
 use wasm_bindgen::JsCast as _;
 use wasm_bindgen::prelude::Closure;
 
+use crate::shell::{SaveState, SaveStatus};
+
 /// What the title bar shows for a live file, and whether closing the tab would lose changes.
 #[derive(Clone)]
 pub struct LiveStatus {
     pub doc: u64,
-    pub text: String,
+    pub status: SaveStatus,
     pub unsaved: bool,
     pub saved_at: Option<i64>,
     /// Who changed the file last and when (to-do 3 row 8: the save symbol's hover text).
@@ -211,7 +213,13 @@ impl Live {
             // No access (any more): nothing is sent or saved; the file stays on screen to read.
             app.session.sync_log = None;
             app.session.read_only = true;
-            let status = LiveStatus { doc, text: "No access".into(), unsaved: false, saved_at: self.saved_at, last_edit: self.last_edit.clone() };
+            let status = LiveStatus {
+                doc,
+                status: SaveStatus::new(SaveState::Problem, "No access"),
+                unsaved: false,
+                saved_at: self.saved_at,
+                last_edit: self.last_edit.clone(),
+            };
             STATUS.with(|s| *s.borrow_mut() = Some(status));
             return;
         }
@@ -286,17 +294,22 @@ impl Live {
             .cloned()
             .collect();
         OTHERS.with(|o| *o.borrow_mut() = others);
-        let text = if self.joined && !self.can_edit {
-            "View only"
+        let (state, text) = if self.joined && !self.can_edit {
+            (SaveState::ViewOnly, "View only")
         } else if !self.open || !self.joined {
-            if self.pending.is_empty() { "Connecting…" } else { "Offline: changes will sync" }
+            if self.pending.is_empty() { (SaveState::Connecting, "Connecting…") } else { (SaveState::Offline, "Offline: changes will sync") }
         } else if !self.pending.is_empty() || self.server_dirty {
-            "Saving…"
+            (SaveState::Saving, "Saving…")
         } else {
-            "Saved"
+            (SaveState::Saved, "Saved")
         };
-        let status =
-            LiveStatus { doc, text: text.to_string(), unsaved: !self.pending.is_empty(), saved_at: self.saved_at, last_edit: self.last_edit.clone() };
+        let status = LiveStatus {
+            doc,
+            status: SaveStatus::new(state, text),
+            unsaved: !self.pending.is_empty(),
+            saved_at: self.saved_at,
+            last_edit: self.last_edit.clone(),
+        };
         STATUS.with(|s| *s.borrow_mut() = Some(status));
         if !self.open {
             ctx.request_repaint_after(std::time::Duration::from_millis(500));

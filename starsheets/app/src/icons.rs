@@ -146,6 +146,20 @@ pub fn icon(name: &str) -> Option<Image<'static>> {
     )
 }
 
+/// The icon called `name` filled with `colour` (white on the dark filter view bar, blue for a
+/// ticked box). The SVGs are filled `#444746`, and a tint only multiplies colours, so it can
+/// darken an icon but never lighten it or turn it blue: the fill itself is swapped instead.
+pub fn icon_in(name: &str, colour: egui::Color32) -> Option<Image<'static>> {
+    let (n, bytes) = ICONS.iter().find(|(n, _)| *n == name)?;
+    let hex = format!("#{:02X}{:02X}{:02X}", colour.r(), colour.g(), colour.b());
+    let svg = String::from_utf8_lossy(bytes).replace("#444746", &hex);
+    let bytes: std::sync::Arc<[u8]> = svg.into_bytes().into();
+    Some(
+        Image::new(ImageSource::Bytes { uri: format!("bytes://starsheets/{n}-{}.svg", &hex[1..]).into(), bytes: egui::load::Bytes::Shared(bytes) })
+            .fit_to_exact_size(vec2(18.0, 18.0)),
+    )
+}
+
 #[cfg(test)]
 pub fn has(name: &str) -> bool {
     ICONS.iter().any(|(n, _)| *n == name)

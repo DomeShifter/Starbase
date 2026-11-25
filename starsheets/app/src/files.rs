@@ -19,8 +19,6 @@ pub(crate) use crate::store::{has_data, xlsx};
 
 /// Asks for the Open dialog, the version list, or another file action (menus set it in egui memory).
 pub const REQUEST: &str = "starsheets_files_request";
-/// The title-bar status line ("Saving…", "Saved to the server", …), in egui memory.
-pub const STATUS: &str = "starsheets_save_status";
 /// The hover text for the status line: where and when the file was saved.
 pub const STATUS_TIP: &str = "starsheets_save_status_tip";
 /// "Last edit was 5 minutes ago (14:05) by Ada", for the save symbol's hover text (to-do 3 row 8).
@@ -61,7 +59,14 @@ enum Reply {
     /// A file was renamed from the file window.
     RenamedId(String, String),
     Download(String, Vec<u8>),
-    Versions(Vec<(String, i64)>),
+    /// Version history's list, or why it couldn't be had.
+    History(Result<Vec<crate::versions::Version>, String>),
+    /// A version's content (its id, the .xlsx bytes), to show read-only.
+    VersionBytes(String, Result<Vec<u8>, String>),
+    /// A version was named: list again.
+    HistoryReload,
+    /// Restoring, naming or copying a version went wrong: said in the history panel.
+    HistoryError(String),
     Opened {
         id: String,
         name: String,
@@ -98,7 +103,8 @@ pub struct Files {
     location: String,
     /// The folder a new spreadsheet is saved in (`?folder=` from "New spreadsheet" in a folder).
     new_folder: String,
-    versions: Option<Vec<(String, i64)>>,
+    /// File › Version history: the full-window history view (versions.rs).
+    pub history: crate::versions::History,
     /// A rename sent to the server and not answered yet.
     renaming: bool,
     /// File › Details is showing.
@@ -224,20 +230,24 @@ impl Files {
         }
         let last_edit =
             live.as_ref().and_then(|l| l.last_edit.clone()).map(|e| format!("Last edit was {} by {}", ago(e.at), e.by)).unwrap_or_default();
+        use crate::shell::{SaveState, SaveStatus};
         let status = if let Some(l) = live {
-            l.text
+            Some(l.status)
         } else if let Some(e) = &self.error {
-            format!("Not saved: {e}")
+            Some(SaveStatus::new(SaveState::Problem, format!("Not saved: {e}")))
         } else if unsaved {
-            "Saving…".to_string()
+            Some(SaveStatus::new(SaveState::Saving, "Saving…"))
         } else if self.link.as_ref().is_some_and(|l| app.session.active().is_some_and(|d| d.uid == l.doc)) {
-            "Saved".to_string()
+            Some(SaveStatus::new(SaveState::Saved, "Saved"))
+        } else if !self.status.is_empty() {
+            // "Opening…": nothing is wrong yet.
+            Some(SaveStatus::new(SaveState::Saving, self.status.clone()))
         } else {
-            self.status.clone()
+            None
         };
         let tip = self.status_tip(app, unsaved);
+        crate::shell::set_save_status(ctx, status);
         ctx.data_mut(|m| {
-            m.insert_temp(egui::Id::unique(STATUS), status);
             m.insert_temp(egui::Id::unique(STATUS_TIP), tip);
             m.insert_temp(egui::Id::unique(LAST_EDIT), last_edit);
         });
@@ -302,18 +312,8 @@ impl Files {
                 None => go_to(""),
             },
             "versions" => {
-                if let Some(l) = &self.link {
-                    self.versions = Some(vec![]);
-                    send(Method::Get, format!("{API}/{}/versions", l.id), None, None, self.inbox.clone(), ctx.clone(), |_, _, body| {
-                        let v: Json = serde_json::from_slice(&body).unwrap_or_default();
-                        Reply::Versions(
-                            v.as_array()
-                                .into_iter()
-                                .flatten()
-                                .map(|x| (x["v"].as_str().unwrap_or("").to_string(), x["modified"].as_i64().unwrap_or(0)))
-                                .collect(),
-                        )
-                    });
+                if self.link.is_some() {
+                    self.history.show();
                 } else {
                     app.message = Some(("Version history".into(), "This spreadsheet has no saved versions yet.".into()));
                 }
@@ -428,7 +428,18 @@ impl Files {
                     self.browser.error = Some(e);
                 }
             }
-            Reply::Versions(v) => self.versions = Some(v),
+            Reply::History(list) => self.history.loaded(list),
+            Reply::HistoryReload => self.history_ask(app, ctx, crate::versions::Ask::Load),
+            Reply::HistoryError(e) => self.history.error = Some(e),
+            Reply::VersionBytes(id, bytes) => {
+                if self.history.open && self.history.selected == id {
+                    let name = self.link.as_ref().map(|l| l.name.clone()).unwrap_or_else(|| "version.xlsx".into());
+                    match bytes.and_then(|b| version_preview(app, &name, &b)) {
+                        Ok(p) => self.history.preview = Some(p),
+                        Err(e) => self.history.error = Some(format!("This version can't be shown: {e}")),
+                    }
+                }
+            }
             Reply::Opened { id, name, version, bytes, folder, modified } => {
                 self.busy = false;
                 let old = app.session.active().filter(|d| !d.is_dirty()).map(|d| d.uid);
@@ -610,48 +621,120 @@ impl Files {
         if self.details {
             self.details_ui(app, ui.ctx());
         }
-        if let Some(vs) = self.versions.clone() {
-            let mut open = true;
-            let mut restore = None;
-            egui::Window::new("Version history")
-                .title_bar(false)
-                .collapsible(false)
-                .resizable(false)
-                .frame(crate::house::dialog_frame())
-                .anchor(egui::Align2::RIGHT_TOP, vec2(-20.0, 90.0))
-                .show(ui.ctx(), |ui| {
-                    ui.set_width(320.0);
-                    if crate::house::title_row(ui, "Version history") {
-                        open = false;
-                    }
-                    crate::house::form_style(ui);
-                    crate::house::note(ui, "Earlier copies are kept each time the file saves: all from the last day, then fewer the older they get.");
-                    if vs.is_empty() {
-                        ui.label("No earlier versions yet.");
-                    }
-                    for (v, when) in &vs {
-                        ui.horizontal(|ui| {
-                            ui.label(date_text(*when));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.add(crate::house::link("Restore")).clicked() {
-                                    restore = Some(v.clone());
-                                }
-                            });
-                        });
-                    }
-                });
-            if let (Some(v), Some(l)) = (restore, self.link.clone()) {
-                open = false;
-                restore_version(l, v, self.inbox.clone(), ui.ctx().clone());
-            }
-            if !open {
-                self.versions = None;
-            }
-        }
     }
 }
 
 impl Files {
+    /// Whether version history is showing (it takes the place of the spreadsheet, web.rs).
+    pub fn history_open(&self) -> bool {
+        self.history.open
+    }
+
+    /// Version history as the test hook reports it: `{selected, versions, shown}`, or null.
+    pub fn history_state(&self) -> Json {
+        if !self.history.open {
+            return Json::Null;
+        }
+        let ids: Vec<&str> = self.history.list.iter().flatten().map(|v| v.id.as_str()).collect();
+        json!({ "selected": self.history.selected, "versions": ids, "shown": self.history.preview.is_some(), "error": self.history.error })
+    }
+
+    /// Version history in place of the spreadsheet: the view, then what it asked for. The shown
+    /// version is a spreadsheet of its own (read-only), so live editing and saving go on with
+    /// the open file underneath, untouched.
+    pub fn history_ui(&mut self, app: &mut SheetApp, ui: &mut Ui) {
+        if let Some(p) = self.history.preview.as_mut() {
+            p.logic(ui.ctx());
+        }
+        self.history.ui(ui);
+        for ask in self.history.take_asks() {
+            self.history_ask(app, ui.ctx(), ask);
+        }
+    }
+
+    fn history_ask(&mut self, app: &mut SheetApp, ctx: &egui::Context, ask: crate::versions::Ask) {
+        use crate::versions::{Ask, CURRENT};
+        let Some(l) = self.link.clone() else { return };
+        let (inbox, ctx2) = (self.inbox.clone(), ctx.clone());
+        match ask {
+            Ask::Load => get_then(format!("{API}/{}/history", l.id), inbox, ctx2, |r| {
+                Reply::History(r.map(|b| crate::versions::parse(&serde_json::from_slice(&b).unwrap_or_default())))
+            }),
+            // The file as it is now is the open workbook: no need to fetch it.
+            Ask::Show(id) if id == CURRENT => {
+                let doc = app
+                    .session
+                    .active()
+                    .map(|d| gridcraft_engine::DocState::from_saved((*d.wb).clone(), None, d.title.clone(), gridcraft_engine::Trust::FromFile));
+                if let Some(doc) = doc {
+                    self.history.preview = Some(version_app(app, doc));
+                }
+            }
+            Ask::Show(id) => {
+                let v = id.clone();
+                get_then(format!("{API}/{}/versions/{}", l.id, enc(&v)), inbox, ctx2, move |r| Reply::VersionBytes(id, r));
+            }
+            // The server keeps the current content as a version first, so a restore loses nothing;
+            // the page then opens the file again.
+            Ask::Restore(v) => {
+                let url = format!("{API}/{}/versions/{}/restore", l.id, enc(&v));
+                wasm_bindgen_futures::spawn_local(async move {
+                    let reply = match fetch(Method::Post, &url, None, None).await {
+                        Ok((s, ..)) if s < 400 => Reply::Navigate(l.id),
+                        Ok((s, _, b)) => Reply::HistoryError(server_error(s, &b, "restore failed")),
+                        Err(e) => Reply::HistoryError(e),
+                    };
+                    inbox.borrow_mut().push(reply);
+                    ctx2.request_repaint();
+                });
+            }
+            Ask::Name(v, name) => {
+                let url = format!("{API}/{}/versions/{}/name?name={}", l.id, enc(&v), enc(&name));
+                wasm_bindgen_futures::spawn_local(async move {
+                    let reply = match fetch(Method::Post, &url, None, None).await {
+                        Ok((s, ..)) if s < 400 => Reply::HistoryReload,
+                        Ok((s, _, b)) => Reply::HistoryError(server_error(s, &b, "naming failed")),
+                        Err(e) => Reply::HistoryError(e),
+                    };
+                    inbox.borrow_mut().push(reply);
+                    ctx2.request_repaint();
+                });
+            }
+            // A copy of that version as a new file beside this one, opened in a new tab.
+            Ask::Copy(v) => {
+                let when = self.history.list.iter().flatten().find(|x| x.id == v).map(|x| crate::versions::when(x.saved)).unwrap_or_default();
+                let name = format!("Copy of {} ({when})", stem(&l.name));
+                let current = if v == CURRENT { app.session.active().and_then(|d| xlsx(&d.wb, "copy.xlsx").ok()) } else { None };
+                let get = format!("{API}/{}/versions/{}", l.id, enc(&v));
+                let post = format!("{API}?name={}&folder={}", enc(&format!("{name}.xlsx")), enc(&l.folder));
+                wasm_bindgen_futures::spawn_local(async move {
+                    let bytes = match current {
+                        Some(b) => Ok(b),
+                        None => match fetch(Method::Get, &get, None, None).await {
+                            Ok((s, _, b)) if s < 400 => Ok(b),
+                            Ok((s, _, b)) => Err(server_error(s, &b, "copy failed")),
+                            Err(e) => Err(e),
+                        },
+                    };
+                    let reply = match bytes {
+                        Ok(b) => match fetch(Method::Post, &post, Some(b), None).await {
+                            Ok((s, _, body)) if s < 400 => {
+                                let v: Json = serde_json::from_slice(&body).unwrap_or_default();
+                                Reply::OpenTab(v["id"].as_str().unwrap_or("").to_string())
+                            }
+                            Ok((s, _, b)) => Reply::HistoryError(server_error(s, &b, "copy failed")),
+                            Err(e) => Reply::HistoryError(e),
+                        },
+                        Err(e) => Reply::HistoryError(e),
+                    };
+                    inbox.borrow_mut().push(reply);
+                    ctx2.request_repaint();
+                });
+            }
+            Ask::Close => {}
+        }
+    }
+
     /// Whether the workbook should be (re)saved: it has data and either changed or isn't on the
     /// server yet (an imported file opens unchanged but still needs its first upload).
     fn needs_save(&self, d: &gridcraft_engine::DocState) -> bool {
@@ -1139,20 +1222,47 @@ fn list_bin(inbox: Rc<RefCell<Vec<Reply>>>, ctx: egui::Context) {
     });
 }
 
-/// Puts an older copy back as the current file (the current one becomes a version), then reloads.
-fn restore_version(l: Link, v: String, inbox: Rc<RefCell<Vec<Reply>>>, ctx: egui::Context) {
-    let id = l.id.clone();
+/// A GET whose answer (the body, or why there is none) becomes a Reply. Unlike [`send`], a
+/// failure doesn't become the file's save error: version history shows its own.
+fn get_then(url: String, inbox: Rc<RefCell<Vec<Reply>>>, ctx: egui::Context, then: impl FnOnce(Result<Vec<u8>, String>) -> Reply + 'static) {
     wasm_bindgen_futures::spawn_local(async move {
-        let reply = match fetch(Method::Get, &format!("{API}/{id}/versions/{v}"), None, None).await {
-            Ok((200, _, bytes)) => match fetch(Method::Put, &format!("{API}/{id}"), Some(bytes), None).await {
-                Ok((s, ..)) if s < 400 => Reply::Navigate(id),
-                Ok((s, ..)) => Reply::Failed(format!("restore failed ({s})")),
-                Err(e) => Reply::Failed(e),
-            },
-            Ok((s, ..)) => Reply::Failed(format!("restore failed ({s})")),
-            Err(e) => Reply::Failed(e),
+        let got = match fetch(Method::Get, &url, None, None).await {
+            Ok((s, _, b)) if s < 400 => Ok(b),
+            Ok((s, _, b)) => Err(server_error(s, &b, "the server couldn't send it")),
+            Err(e) => Err(e),
         };
-        inbox.borrow_mut().push(reply);
+        inbox.borrow_mut().push(then(got));
         ctx.request_repaint();
     });
+}
+
+/// The server's `error` text, or `what` and the status.
+fn server_error(status: u16, body: &[u8], what: &str) -> String {
+    let v: Json = serde_json::from_slice(body).unwrap_or_default();
+    v["error"].as_str().map_or_else(|| format!("{what} ({status})"), str::to_string)
+}
+
+/// A spreadsheet of its own for a version from the server (.xlsx bytes), read-only.
+fn version_preview(app: &SheetApp, name: &str, bytes: &[u8]) -> Result<SheetApp, String> {
+    let (mut wb, _) = gridcraft_engine::io::open_bytes(name, bytes).map_err(|e| gridcraft_ui_egui::clean_error(&e.to_string()))?;
+    // As a file opened for editing gets (Google's Clip, from StarSheets' part of the file).
+    starsheets_sync::clip_from_host(&mut wb);
+    let doc = gridcraft_engine::DocState::from_saved(wb, None, stem(name), gridcraft_engine::Trust::FromFile);
+    Ok(version_app(app, doc))
+}
+
+/// A read-only spreadsheet showing `doc`, set up like the open one (its language, menus and
+/// Sheets keys) but with no formula bar, as Sheets' history view has none.
+fn version_app(app: &SheetApp, doc: gridcraft_engine::DocState) -> SheetApp {
+    let mut session = gridcraft_engine::Session::new();
+    session.add_document(doc);
+    session.read_only = true;
+    session.prefs.formula_bar = false;
+    let mut p = SheetApp::new(session, gridcraft_ui_egui::Services::default());
+    p.chrome = app.chrome;
+    p.ui = app.ui.clone();
+    // The fonts are already set up (by the open spreadsheet): draw from the first frame.
+    p.fonts_ready = true;
+    p.after_engine();
+    p
 }
