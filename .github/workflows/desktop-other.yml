@@ -95,7 +95,7 @@ jobs:
           target/release/${{ matrix.app }} > "$RUNNER_TEMP/start.log" 2>&1 &
           pid=$!
           sleep 15
-          if kill -0 "$pid" 2>/dev/null; then echo "still running after 15 s"; kill "$pid" || true; ok=1; else wait "$pid"; echo "exited with $?"; ok=0; fi
+          if kill -0 "$pid" 2>/dev/null; then echo "still running after 15 s"; kill "$pid" || true; ok=1; else code=0; wait "$pid" || code=$?; echo "exited with $code"; ok=0; fi
           tail -n 40 "$RUNNER_TEMP/start.log"
           test "$ok" = 1
       - uses: actions/upload-artifact@v7
