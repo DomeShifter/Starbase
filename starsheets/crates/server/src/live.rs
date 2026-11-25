@@ -1409,9 +1409,7 @@ mod tests {
         assert!(matches!(next(&mut a), ToClient::Reset { .. }));
         assert!(message(&mut a).contains("Starbase Sheets copy"));
         app.rooms.send(&app, &file, RoomMsg::Leave { client: "a".into() });
-        wait_until(|| {
-            std::fs::read_dir(&dir).unwrap().flatten().any(|e| e.file_name().to_string_lossy().contains("Starbase Sheets copy"))
-        });
+        wait_until(|| std::fs::read_dir(&dir).unwrap().flatten().any(|e| e.file_name().to_string_lossy().contains("Starbase Sheets copy")));
         assert!(std::fs::read_to_string(dir.join("t.csv")).unwrap().contains("theirs"), "their version is untouched");
         let copies: Vec<_> = std::fs::read_dir(&dir)
             .unwrap()
