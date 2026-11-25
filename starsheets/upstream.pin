@@ -2,6 +2,6 @@
 # one commit per StarSheets change (docs/upstream.md). Bump `commit` after pushing to the fork.
 repo = "https://github.com/DomeShifter/gridcraft.git"
 branch = "starsheets"
-commit = "b51979c8ab24aba7b39f3c22bac323289d3e6545"
+commit = "8da3f7792764bdef410c367ccb9c07eda19cc285"
 base = "v0.19.1"
 upstream = "https://github.com/storytold/gridcraft.git"
