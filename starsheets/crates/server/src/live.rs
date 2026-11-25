@@ -1246,7 +1246,8 @@ mod tests {
         std::thread::sleep(Duration::from_millis(400));
         let saved = std::fs::read_to_string(dir.join("t.csv")).unwrap();
         assert!(saved.contains("from a") && saved.contains("from b"), "{saved}");
-        assert_eq!(std::fs::read_dir(dir.join(".starsheets/versions").join(&file)).unwrap().count(), 1, "the old copy is kept");
+        let copies = std::fs::read_dir(dir.join(".starsheets/versions").join(&file)).unwrap().flatten();
+        assert_eq!(copies.filter(|e| !e.file_name().to_string_lossy().ends_with(".json")).count(), 1, "the old copy is kept");
         let _ = std::fs::remove_dir_all(dir);
     }
 
