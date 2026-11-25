@@ -4845,6 +4845,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "stardocs-coedit"
+version = "0.18.1"
+dependencies = [
+ "proptest",
+ "serde_json",
+ "wordcraft-doc",
+ "wordcraft-engine",
+]
+
+[[package]]
 name = "static_assertions"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
