@@ -207,6 +207,13 @@ impl Suggest {
         }
     }
 
+    /// Closes the suggestions (another menu opened).
+    #[cfg(target_arch = "wasm32")]
+    pub fn close(&mut self) {
+        self.open = None;
+        self.rect = None;
+    }
+
     /// Call after the grid (it has moved the caret to where you clicked).
     pub fn ui(&mut self, app: &mut gridcraft_ui_egui::SheetApp, ctx: &egui::Context) {
         let Some(e) = app.editor.as_ref() else {

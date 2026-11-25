@@ -70,6 +70,8 @@ mod spelling;
 mod store;
 #[cfg(target_arch = "wasm32")]
 mod testhook;
+#[cfg(target_arch = "wasm32")]
+mod textmenu;
 mod theme;
 #[cfg(not(target_arch = "wasm32"))]
 mod updates;
