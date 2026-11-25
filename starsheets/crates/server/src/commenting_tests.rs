@@ -293,3 +293,46 @@ fn format_characters_leave_display_names() {
     assert_eq!(clean_name(" \u{2066}\u{FEFF} "), "");
     assert_eq!(clean_name("Zoë  Ng"), "Zoë Ng");
 }
+
+/// Re-review of PR #56: the `X-Comment-Ids` header can't reach someone else's comment. Ann's
+/// comment V keeps its text, date and owner whatever Vic (another commenter) names in it; a
+/// header past the limit, or naming two comments as one, is refused; an editor's save ignores it.
+#[tokio::test]
+async fn the_comment_ids_header_cant_touch_anyone_elses_comment() {
+    let (app, boss, ann, _vic, id, _sheet) = setup().await;
+    let g = send(&app, "POST", &format!("/api/files/{id}/sharing"), &boss, None, js(json!({"people": {"ann": "comment", "vic": "comment"}}))).await;
+    assert_eq!(g.status, 200, "{:?}", g.json);
+    let vic = send(&app, "POST", "/api/login", "", None, js(json!({"username": "vic", "password": "vicpassword"}))).await.cookie;
+    let v = send(&app, "GET", &format!("/api/files/{id}"), &ann, None, vec![]).await.etag;
+    let g = send(&app, "PUT", &format!("/api/files/{id}"), &ann, Some(&v), commented(0, "Ann's V")).await;
+    assert_eq!(g.status, 200, "{:?}", g.json);
+    let before = send(&app, "GET", &format!("/api/files/{id}"), &boss, None, vec![]).await;
+    let comments_before = part(&before.bytes, "word/comments.xml");
+    assert!(comments_before.contains(">Ann's V<"), "{comments_before}");
+    let log = || app.store.load_json(&app.store.meta().join("commenting.json"));
+    let owned_before = log()["owned"][&id].clone();
+    let url = format!("/api/files/{id}");
+    // Vic names his comment 5 as V (0), with new text, and leaves V out of the file.
+    for body in [commented(5, "HACK"), docx(PLAIN, "")] {
+        let g = send_ids(&app, "PUT", &url, &vic, Some(&before.etag), "5=0", body).await;
+        assert_eq!(g.status, 200, "{:?}", g.json);
+        assert_eq!(g.json["version"].as_str(), Some(before.etag.as_str()), "nothing written: {:?}", g.json);
+    }
+    // Two of his ids named as one server id: refused.
+    let g = send_ids(&app, "PUT", &url, &vic, Some(&before.etag), "5=9,6=9", commented(5, "HACK")).await;
+    assert_eq!(g.status, 403, "{:?}", g.json);
+    // More pairs than anyone can own: refused before anything is read.
+    let many: Vec<String> = (0..=crate::docx_comments::MAX_OWNED as u32).map(|i| format!("{i}={}", i + 100_000)).collect();
+    let g = send_ids(&app, "PUT", &url, &vic, Some(&before.etag), &many.join(","), commented(5, "HACK")).await;
+    assert_eq!(g.status, 400, "{:?}", g.json);
+    let now = send(&app, "GET", &url, &boss, None, vec![]).await;
+    assert_eq!(now.bytes, before.bytes, "V's text and date as they were");
+    assert_eq!(log()["owned"][&id], owned_before, "and still Ann's");
+    assert!(log()["owned"][&id].get("vic").is_none(), "{:?}", log());
+    // An editor's save carrying the header is kept exactly as sent.
+    let mine = commented(7, "Boss");
+    let g = send_ids(&app, "PUT", &url, &boss, Some(&now.etag), "7=0", mine.clone()).await;
+    assert_eq!(g.status, 200, "{:?}", g.json);
+    assert_eq!(send(&app, "GET", &url, &boss, None, vec![]).await.bytes, mine);
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
