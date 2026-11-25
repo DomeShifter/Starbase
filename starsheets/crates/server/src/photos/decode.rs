@@ -144,6 +144,7 @@ const MAX_EDITED_DECODE: u32 = 4096;
 
 /// Reads the picture and makes its thumbnails (on this thread: see [`make_guarded`] and
 /// [`run_isolated`] for the ways it is called).
+#[cfg(test)]
 pub fn make(bytes: &[u8], limits: &Limits) -> Result<Made, String> {
     make_with(bytes, limits, None)
 }
@@ -216,7 +217,8 @@ pub fn make_with(bytes: &[u8], limits: &Limits, edits: Option<&Edits>) -> Result
 
 /// [`make_with`] on this thread, with a panic in a decoder turned into an error.
 pub fn make_guarded(bytes: &[u8], limits: &Limits, edits: Option<&Edits>) -> Result<Made, String> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| make_with(bytes, limits, edits))).unwrap_or_else(|_| Err("the decoder failed (panic)".into()))
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| make_with(bytes, limits, edits)))
+        .unwrap_or_else(|_| Err("the decoder failed (panic)".into()))
 }
 
 /// The picture as it is shown (EXIF orientation `o` applied), four bytes a pixel.
@@ -434,7 +436,10 @@ pub fn child_main() -> ! {
         let r = export::export(&bytes, &limits, &job.edits.unwrap_or_default(), opts);
         drop(bytes);
         let (answer, data) = match r {
-            Ok(file) => (Answer { ok: true, error: String::new(), meta: Meta::default(), thumbs: vec![(0, opts.format.ext().into(), file.len() as u64)] }, file),
+            Ok(file) => (
+                Answer { ok: true, error: String::new(), meta: Meta::default(), thumbs: vec![(0, opts.format.ext().into(), file.len() as u64)] },
+                file,
+            ),
             Err(e) => (Answer { ok: false, error: e, meta: Meta::default(), thumbs: vec![] }, vec![]),
         };
         let mut line = serde_json::to_vec(&answer).unwrap_or_default();

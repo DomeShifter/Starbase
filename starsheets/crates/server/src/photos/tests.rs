@@ -144,7 +144,7 @@ fn every_format_and_transparency() {
     assert!(made.thumbs.iter().all(|t| t.ext == "png"), "transparency kept: PNG thumbnails");
     // The format comes from the bytes: a PNG named .jpg is still read; text is refused.
     assert!(decode::make(b"<svg xmlns='http://www.w3.org/2000/svg'/>", &LIMITS).unwrap_err().contains("not a JPEG"));
-    assert!(decode::make_guarded(b"\xFF\xD8\xFF\xE0 garbage that is not a jpeg at all", &LIMITS).is_err());
+    assert!(decode::make_guarded(b"\xFF\xD8\xFF\xE0 garbage that is not a jpeg at all", &LIMITS, None).is_err());
 }
 
 #[test]
@@ -203,7 +203,7 @@ fn decompression_bombs_are_refused_before_decoding() {
     }
     assert!(png.len() < 2_000_000, "{} bytes", png.len());
     let t = Instant::now();
-    let e = decode::make_guarded(&png, &LIMITS).err().unwrap();
+    let e = decode::make_guarded(&png, &LIMITS, None).err().unwrap();
     assert!(e.contains("too big"), "{e}");
     assert!(t.elapsed() < Duration::from_millis(500), "refused from the header, not decoded: {:?}", t.elapsed());
     // A long thin one (under the pixel limit, over the side limit) and a JPEG claiming 60000².
@@ -212,7 +212,7 @@ fn decompression_bombs_are_refused_before_decoding() {
     let mut big = jpeg(&halves(16, 16));
     let sof = big.windows(2).position(|w| w == [0xFF, 0xC0]).unwrap();
     big[sof + 5..sof + 9].copy_from_slice(&[0xEA, 0x60, 0xEA, 0x60]);
-    assert!(decode::make_guarded(&big, &LIMITS).unwrap_err().contains("too big"));
+    assert!(decode::make_guarded(&big, &LIMITS, None).unwrap_err().contains("too big"));
     // Tighter limits are honoured.
     let tight = decode::Limits { max_pixels: 100, max_pixels_jpeg: 100, ..LIMITS };
     assert!(decode::make(&jpeg(&halves(11, 10)), &tight).unwrap_err().contains("too big"));
@@ -438,6 +438,8 @@ fn inotify_sees_a_new_picture() {
 
 #[path = "edits_tests.rs"]
 mod edits_tests;
+#[path = "export_tests.rs"]
+mod export_tests;
 
 mod http {
     use super::*;
