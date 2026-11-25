@@ -11,7 +11,15 @@ impl Home {
         let role = self.role_of(item).to_string();
         let can_edit = may_edit(&role);
         let is_space = matches!(item, Item::Folder(f) if !f.contains('/') && self.accounts);
-        let row = |ui: &mut Ui, icon: &str, label: &str, keys: &str, enabled: bool| house::menu_row(ui, Some(icon), label, keys, enabled);
+        // Each row's rect, for the test hook: tests click the row the app drew, never a guess.
+        let rects = std::cell::RefCell::new(Vec::new());
+        let row = |ui: &mut Ui, icon: &str, label: &str, keys: &str, enabled: bool| {
+            let top = ui.cursor().top();
+            let clicked = house::menu_row(ui, Some(icon), label, keys, enabled);
+            let r = egui::Rect::from_x_y_ranges(ui.min_rect().x_range(), top..=top + 32.0);
+            rects.borrow_mut().push((label.to_string(), r));
+            clicked
+        };
         if row(ui, "", "Open", "Enter", single) {
             self.activate(ui.ctx(), item);
             ui.close();
@@ -111,6 +119,7 @@ impl Home {
             self.delete(ui.ctx(), targets);
             ui.close();
         }
+        self.menu_rects = rects.into_inner();
     }
 
     /// Folder colour ▸ : the house's folder colours as swatches (name on hover), and No colour.

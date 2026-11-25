@@ -91,7 +91,7 @@ def run(kind):
             p = wait_content(f"text {want} ")
             rec(kind, f"{n} -> text {want}", bool(p) and p["id"] == ids[n] and p["content"] == f"text {want} {len(FILES[n])}", str(p and p["content"]))
         run_("home:preview:close"); time.sleep(0.5)
-        # Real mouse: double click a tile, then right-click > Preview (2nd menu row, rows 32 px).
+        # Real mouse: double click a tile, then right-click > Preview (the row rect from the hook).
         def tile(n):
             r = next(f for f in state()["files"] if f["name"] == n).get("rect")
             return ((r[0] + r[2]) / 2, (r[1] + r[3]) / 2) if r else None
@@ -102,7 +102,10 @@ def run(kind):
             pg.mouse.move(640, 400); pg.keyboard.press("Escape"); time.sleep(0.5)
             xy = tile("pv_g.csv")
             pg.mouse.click(*xy, button="right"); time.sleep(0.6)
-            pg.mouse.click(xy[0] + 40, xy[1] + 52); p = wait_content("text")
+            row = next((m["rect"] for m in state().get("menu", []) if m["label"] == "Preview"), None)
+            if row:
+                pg.mouse.click((row[0] + row[2]) / 2, (row[1] + row[3]) / 2)
+            p = wait_content("text")
             rec(kind, "right-click > Preview opens", bool(p) and p["id"] == ids["pv_g.csv"], str(p and p["content"]))
             pg.mouse.move(640, 400); pg.keyboard.press("Escape"); time.sleep(0.5)
             rec(kind, "Esc closes (after mouse open)", pv() is None)

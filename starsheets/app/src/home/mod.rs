@@ -199,6 +199,8 @@ pub struct Home {
     file_preview: Option<filepreview::FilePreview>,
     /// Where each file was last drawn (id → screen rect), for the test hook's real clicks.
     tile_rects: HashMap<String, egui::Rect>,
+    /// The rows of the last right-click menu drawn (label, screen rect), for the test hook's real clicks.
+    menu_rects: Vec<(String, egui::Rect)>,
     /// What Ctrl+Z undoes, and the "Moved to … Undo" note (undo.rs).
     undo: undo::Undo,
     error: Option<String>,

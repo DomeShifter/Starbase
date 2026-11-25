@@ -604,6 +604,25 @@ impl FilePreview {
                 if target.add_event_listener_with_callback_and_bool("load", on_load.as_ref().unchecked_ref(), true).is_ok() {
                     e.listeners.push((target, "load", on_load));
                 }
+                // A click into the PDF moves the keyboard into the frame, and a browser's own PDF
+                // viewer (Firefox's) never lets this page hear its keys, so Esc would do nothing.
+                // As Google Drive does, keep the keyboard on the page: when the page loses it to
+                // the frame, take it straight back (the wheel and clicks still reach the PDF).
+                if let Some(w) = web_sys::window() {
+                    let frame = e.el.clone();
+                    let on_blur = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::Event)>::new(move |_e: web_sys::Event| {
+                        let frame = frame.clone();
+                        // The frame gets the focus just after the page's blur: look a moment later.
+                        let later = wasm_bindgen::closure::Closure::once_into_js(move || refocus_canvas(&frame));
+                        if let Some(w) = web_sys::window() {
+                            let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(later.unchecked_ref(), 0);
+                        }
+                    });
+                    let target: web_sys::EventTarget = w.into();
+                    if target.add_event_listener_with_callback_and_bool("blur", on_blur.as_ref().unchecked_ref(), true).is_ok() {
+                        e.listeners.push((target, "blur", on_blur));
+                    }
+                }
             }
             self.element = Some(e);
         }
