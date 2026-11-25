@@ -247,7 +247,8 @@ pub struct Folders {
 impl Folders {
     /// The user's folders (XDG on Linux), or `None` without a home folder.
     pub fn of_user() -> Option<Self> {
-        let home = std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from)?;
+        // USERPROFILE: Windows has no HOME (as Starbase Sheets' localstore.rs does).
+        let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).filter(|h| !h.is_empty()).map(PathBuf::from)?;
         let data = std::env::var_os("XDG_DATA_HOME").filter(|d| !d.is_empty()).map_or_else(|| home.join(".local/share"), PathBuf::from);
         let config = std::env::var_os("XDG_CONFIG_HOME").filter(|d| !d.is_empty()).map_or_else(|| home.join(".config"), PathBuf::from);
         let docs = documents_dir(&home, &config).unwrap_or_else(|| home.join("Documents"));

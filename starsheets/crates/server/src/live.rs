@@ -224,12 +224,19 @@ async fn connection(
         let _ = socket.send(Message::Text(text(&ToClient::NoAccess { text: NO_ACCESS.into() }).into())).await;
         return;
     }
-    let is_doc = {
+    // Only spreadsheets have a live room: a document opens in Starbase Docs, and any other file
+    // (a photo, a PDF…) is never read or saved as a spreadsheet.
+    let path = {
         let (app, file) = (app.clone(), file.clone());
-        tokio::task::spawn_blocking(move || app.store.path_of(&file).ok().flatten().is_some_and(|p| crate::store::is_doc(&p))).await.unwrap_or(false)
+        tokio::task::spawn_blocking(move || app.store.path_of(&file).ok().flatten()).await.ok().flatten()
     };
-    if is_doc {
-        let _ = socket.send(Message::Text(text(&ToClient::Message { text: "That's a document: open it in Starbase Docs.".into() }).into())).await;
+    let refuse = match path.as_deref() {
+        Some(p) if crate::store::is_doc(p) => Some("That's a document: open it in Starbase Docs."),
+        Some(p) if !crate::store::is_editable(p) => Some("That file isn't a spreadsheet: open it from Starbase Drive."),
+        _ => None,
+    };
+    if let Some(why) = refuse {
+        let _ = socket.send(Message::Text(text(&ToClient::Message { text: why.into() }).into())).await;
         return;
     }
     let can_edit = role >= crate::sharing::Role::Edit;

@@ -24,6 +24,9 @@ use serde_json::{Map, Value, json};
 /// Days something stays in the bin before it's deleted for good.
 pub const BIN_DAYS: i64 = 30;
 
+/// Files the apps edit (Sheets, Docs and Slides). Every other file is stored, listed, shared, moved and
+/// binned the same way, but has no versions and is never opened in a live room: the Drive
+/// previews it (preview.rs) or downloads it.
 pub const EXTS: [&str; 8] = [".xlsx", ".xlsm", ".xls", ".csv", ".ods", ".docx", ".odt", ".pptx"];
 
 /// Documents (StarDocs) and presentations (Starbase Slides) rather than spreadsheets: stored,
@@ -35,6 +38,12 @@ pub const DOC_EXTS: [&str; 3] = [".docx", ".odt", ".pptx"];
 pub fn is_doc(name: &str) -> bool {
     let lower = name.to_lowercase();
     DOC_EXTS.iter().any(|x| lower.ends_with(x))
+}
+
+/// Whether a file is one the apps edit (a spreadsheet or a document): only these keep versions.
+pub fn is_editable(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    EXTS.iter().any(|x| lower.ends_with(x))
 }
 
 /// A request that can't be done: (http status, message).
@@ -219,6 +228,9 @@ pub fn clean_name(name: Option<&str>) -> String {
         .unwrap_or("")
         .trim()
         .chars()
+        // Direction marks (U+202A–202E, U+2066–2069, U+200E/F) go: they can make "gpj.exe" look
+        // like "exe.jpg".
+        .filter(|c| !matches!(*c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{200E}' | '\u{200F}'))
         .map(|c| if matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || (c as u32) < 0x20 { '-' } else { c })
         .collect();
     let s: String = swapped.trim_matches(|c| c == '.' || c == ' ').chars().take(150).collect();
@@ -242,6 +254,30 @@ fn is_sheet_ext(ext: &str) -> bool {
 pub fn split_name(name: &str) -> (String, String) {
     let (stem, ext) = splitext(name);
     if is_sheet_ext(&ext) { (stem, ext) } else { (name.to_string(), ".xlsx".to_string()) }
+}
+
+/// An existing file's (stem, extension), whatever its type: a moved, copied or restored file
+/// keeps its own extension. Same as [`split_name`] for spreadsheets and documents.
+pub fn split_existing(name: &str) -> (String, String) {
+    splitext(name)
+}
+
+/// The (stem, extension) of the new name `typed` for an existing file `old`: a spreadsheet or
+/// document as before ([`split_name`], keeping the old extension); any other file keeps its own
+/// extension (none, if it had none), and typing that extension again doesn't double it.
+fn renamed(old: &str, typed: &str) -> (String, String) {
+    let (_, old_ext) = split_existing(old);
+    if is_editable(old) {
+        let (stem, ext) = split_name(typed);
+        return (stem, if old_ext.is_empty() { ext } else { old_ext });
+    }
+    let lower = typed.to_lowercase();
+    let stem = if !old_ext.is_empty() && lower.ends_with(&old_ext.to_lowercase()) && typed.len() > old_ext.len() {
+        typed[..typed.len() - old_ext.len()].to_string()
+    } else {
+        typed.to_string()
+    };
+    (stem, old_ext)
 }
 
 fn numbered(stem: &str, n: u32, ext: &str) -> String {
@@ -409,9 +445,14 @@ impl Store {
             if name.starts_with('.') {
                 continue;
             }
-            if fs::metadata(e.path()).map(|m| m.is_dir()).unwrap_or(false) {
+            // Symbolic links are never followed, to files or folders: one made over a file share
+            // could lead to StarSheets' own data (.starsheets: sign-ins, passwords) or into
+            // someone else's folder, past the sharing checks of the folder it sits in.
+            let Ok(meta) = fs::symlink_metadata(e.path()) else { continue };
+            if meta.is_dir() {
                 dirs.push(name);
-            } else if EXTS.iter().any(|x| name.to_lowercase().ends_with(x)) {
+            } else if meta.is_file() {
+                // Every kind of file (not sockets or pipes, which can't be read like one).
                 files.push(join(here, &name));
             }
         }
@@ -422,17 +463,89 @@ impl Store {
         }
     }
 
+    /// Whether no part of `relpath` (below the store's own folder) is a symbolic link or hidden.
+    /// Missing parts are fine (checked by whoever needs them to exist).
+    pub fn no_links(&self, relpath: &str) -> bool {
+        let mut p = self.root.clone();
+        for part in relpath.split('/').filter(|x| !x.is_empty()) {
+            if part.starts_with('.') {
+                return false;
+            }
+            p.push(part);
+            if fs::symlink_metadata(&p).is_ok_and(|m| m.file_type().is_symlink()) {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// The file at `relpath` on disk, if it is a plain file reached without any symbolic link
+    /// (never a pipe, never a hidden one). Every file read or written by id is checked with this
+    /// ([`Self::path_of`]); reads open it with [`Self::open_safe`].
+    pub fn safe_file(&self, relpath: &str) -> Option<PathBuf> {
+        if relpath.split('/').any(|p| p.is_empty() || p.starts_with('.')) || !self.no_links(relpath) {
+            return None;
+        }
+        let full = self.full(relpath);
+        fs::symlink_metadata(&full).ok()?.is_file().then_some(full)
+    }
+
+    /// Opens the file at `relpath` for reading, as [`Self::safe_file`] allows, and makes sure the
+    /// file opened is that one: the last part is opened without following a link, and the opened
+    /// file's real path (or, without /proc, its device and inode) must be the path checked, so a
+    /// link swapped in between the check and the open is refused.
+    pub fn open_safe(&self, relpath: &str) -> Option<fs::File> {
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+        use std::os::unix::io::AsRawFd;
+        let full = self.safe_file(relpath)?;
+        let f = fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(&full).ok()?;
+        let m = f.metadata().ok()?;
+        if !m.is_file() {
+            return None;
+        }
+        match fs::read_link(format!("/proc/self/fd/{}", f.as_raw_fd())) {
+            Ok(real) => (real == fs::canonicalize(&self.root).ok()?.join(relpath)).then_some(f),
+            Err(_) => {
+                let again = fs::symlink_metadata(self.safe_file(relpath)?).ok()?;
+                ((again.dev(), again.ino()) == (m.dev(), m.ino())).then_some(f)
+            }
+        }
+    }
+
+    /// Keeps a copy of the file at `relpath` in its owner's bin (restorable, under its own name),
+    /// before it is replaced by an upload: files without versions don't lose what they held.
+    pub fn copy_to_bin(&self, relpath: &str) -> io::Result<()> {
+        use std::io::Read;
+        let space = if self.spaces { space_of(relpath) } else { "" };
+        let bin = self.bin(space);
+        fs::create_dir_all(&bin)?;
+        let name = base_of(relpath);
+        let (stem, ext) = splitext(&name);
+        let mut target = name;
+        let mut n = 1;
+        while bin.join(&target).exists() {
+            n += 1;
+            target = numbered(&stem, n, &ext);
+        }
+        let mut data = Vec::new();
+        self.open_safe(relpath).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no such file"))?.read_to_end(&mut data)?;
+        fs::write(bin.join(&target), data)?;
+        let mut bins = self.load_json(&self.bin_index_path());
+        bins.insert(self.bin_key(space, &target), json!({"original": relpath, "deleted": now() as i64, "files": {}, "folders": {}}));
+        self.save_json(&self.bin_index_path(), &Value::Object(bins))
+    }
+
     /// Where file `id` is now. The index is trusted while the file is still at the path it
     /// gives, which costs one file check; only when it isn't (moved or binned outside
     /// StarSheets) is the whole folder tree listed again ([`Self::synced_index`]). Listing a big
     /// tree over a network share every few seconds for each open file held up everyone else.
     pub fn path_of(&self, id: &str) -> io::Result<Option<String>> {
         if let Some(path) = self.load_index().get(id)
-            && self.full(path).is_file()
+            && self.safe_file(path).is_some()
         {
             return Ok(Some(path.clone()));
         }
-        Ok(self.synced_index()?.get(id).cloned())
+        Ok(self.synced_index()?.get(id).filter(|p| self.safe_file(p).is_some()).cloned())
     }
 
     /// The index ({id: path}), in line with the folder tree: new files get ids, gone ones drop.
@@ -618,7 +731,8 @@ impl Store {
     }
 
     fn need_folder(&self, folder: &str) -> R<()> {
-        if self.full(folder).is_dir() { Ok(()) } else { Err(Bad::new(404, "no such folder")) }
+        // Never through a symbolic link (walk() doesn't list them either).
+        if self.no_links(folder) && self.full(folder).is_dir() { Ok(()) } else { Err(Bad::new(404, "no such folder")) }
     }
 
     // ------------------------------------------------------------ the API
@@ -667,7 +781,11 @@ impl Store {
         if p.len() == 1 && method == "POST" {
             let folder = rel(qs(q, "folder"))?;
             self.need_folder(&folder)?;
-            let (stem, ext) = split_name(&clean_name(qs(q, "name")));
+            // ?as_is=1: a file uploaded to the Drive keeps its name and type, whatever it is
+            // (photo.jpg stays photo.jpg); otherwise a name that isn't a spreadsheet or document
+            // gets .xlsx, as before.
+            let cleaned = clean_name(qs(q, "name"));
+            let (stem, ext) = if qs(q, "as_is") == Some("1") { split_existing(&cleaned) } else { split_name(&cleaned) };
             let name = self.claim_name(&folder, &stem, &ext, None)?;
             let path = join(&folder, &name);
             self.write_file(&self.full(&path), body)?;
@@ -682,11 +800,12 @@ impl Store {
         }
         let fid = p[1].as_str();
         let path = index.get(fid).cloned().ok_or_else(|| Bad::new(404, "no such file"))?;
-        let fpath = self.full(&path);
+        let fpath = self.safe_file(&path).ok_or_else(|| Bad::new(404, "no such file"))?;
         let rest: Vec<&str> = p[2..].iter().map(String::as_str).collect();
         match (rest.as_slice(), method) {
             ([], "GET") => {
-                let data = fs::read(&fpath)?;
+                let mut data = Vec::new();
+                std::io::Read::read_to_end(&mut self.open_safe(&path).ok_or_else(|| Bad::new(404, "no such file"))?, &mut data)?;
                 let modified = mtime(&fs::metadata(&fpath)?).0;
                 Ok(Reply::File { data, name: base_of(&path), version: self.version_of(&fpath)?, folder: parent_of(&path), modified })
             }
@@ -696,7 +815,12 @@ impl Store {
                 {
                     return Ok(Reply::Json(json!({"error": "changed elsewhere", "name": base_of(&path)}), 409));
                 }
-                self.keep_version(fid, &fpath)?;
+                // Versions are for Sheets and Docs files; another file's old content goes to the bin.
+                if is_editable(&path) {
+                    self.keep_version(fid, &fpath)?;
+                } else {
+                    self.copy_to_bin(&path)?;
+                }
                 self.write_file(&fpath, body)?;
                 ok(json!({"version": self.version_of(&fpath)?, "name": base_of(&path), "folder": parent_of(&path)}))
             }
@@ -706,9 +830,7 @@ impl Store {
             }
             (["rename"], "POST") => {
                 let folder = parent_of(&path);
-                let (stem, ext) = split_name(&clean_name(qs(q, "name")));
-                let (_, old_ext) = split_name(&base_of(&path));
-                let ext = if old_ext.is_empty() { ext } else { old_ext };
+                let (stem, ext) = renamed(&base_of(&path), &clean_name(qs(q, "name")));
                 let name = self.claim_name(&folder, &stem, &ext, Some(&path))?;
                 let new = join(&folder, &name);
                 if new != path {
@@ -724,7 +846,7 @@ impl Store {
                 if folder == parent_of(&path) {
                     return ok(json!({"name": base_of(&path)}));
                 }
-                let (stem, ext) = split_name(&base_of(&path));
+                let (stem, ext) = split_existing(&base_of(&path));
                 let name = self.claim_name(&folder, &stem, &ext, None)?;
                 move_any(&fpath, &self.full(&folder).join(&name))?;
                 index.insert(fid.to_string(), join(&folder, &name));
@@ -735,7 +857,7 @@ impl Store {
                 let parent = parent_of(&path);
                 let folder = rel(Some(qs(q, "folder").unwrap_or(&parent)))?;
                 self.need_folder(&folder)?;
-                let (mut stem, ext) = split_name(&base_of(&path));
+                let (mut stem, ext) = split_existing(&base_of(&path));
                 if folder == parent {
                     stem = format!("Copy of {stem}");
                 }
@@ -906,7 +1028,7 @@ impl Store {
                 let info = bins.get(&key).cloned().unwrap_or(json!({}));
                 let original = info.get("original").and_then(Value::as_str).unwrap_or(name).to_string();
                 let mut folder = parent_of(&original);
-                if !self.full(&folder).is_dir() || (self.spaces && space_of(&folder) != space) {
+                if !self.full(&folder).is_dir() || !self.no_links(&folder) || (self.spaces && space_of(&folder) != space) {
                     folder = space.clone();
                 }
                 let src = bin.join(name);
@@ -915,7 +1037,7 @@ impl Store {
                     move_any(&src, &self.full(&t))?;
                     t
                 } else {
-                    let (stem, ext) = split_name(&base_of(&original));
+                    let (stem, ext) = split_existing(&base_of(&original));
                     let t = join(&folder, &self.claim_name(&folder, &stem, &ext, None)?);
                     fs::rename(&src, self.full(&t))?;
                     t
@@ -998,6 +1120,15 @@ mod tests {
         assert!(is_doc("a/Letter.DOCX") && is_doc("b.odt") && !is_doc("c.xlsx"));
         assert!(is_doc("Talk.pptx") && is_sheet_ext(".PPTX"), "presentations are kept, not as sheets");
         assert_eq!(split_name(".xlsx"), (".xlsx".into(), ".xlsx".into()));
+        assert_eq!(split_existing("photo.JPG"), ("photo".into(), ".JPG".into()));
+        assert_eq!(split_existing("README"), ("README".into(), String::new()));
+        assert_eq!(renamed("photo.jpg", "Trip"), ("Trip".into(), ".jpg".into()));
+        assert_eq!(renamed("photo.jpg", "Trip.JPG"), ("Trip".into(), ".jpg".into()));
+        assert_eq!(renamed("README", "NOTES"), ("NOTES".into(), String::new()));
+        assert_eq!(renamed("Budget.xlsx", "Plan.txt"), ("Plan.txt".into(), ".xlsx".into()));
+        assert!(is_editable("a.CSV") && is_editable("b.docx") && !is_editable("c.png"));
+        assert_eq!(clean_name(Some("photo\u{202E}gpj.exe")), "photogpj.exe", "no direction marks");
+        assert_eq!(clean_name(Some("\u{2066}a\u{2069}\u{200E}\u{200F}.png")), "a.png");
         assert_eq!(splitext("a.b.csv"), ("a.b".into(), ".csv".into()));
         assert!(rel(Some("a/../b")).is_err());
         assert_eq!(rel(Some("\\a//b/")).unwrap(), "a/b");

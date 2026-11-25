@@ -380,6 +380,7 @@ pub(crate) fn os_user_name() -> String {
 }
 
 /// The full name of user `uid` in an /etc/passwd text, else its login name.
+#[cfg(any(unix, test))]
 fn passwd_name(passwd: &str, uid: u32) -> Option<String> {
     passwd.lines().find_map(|l| {
         let f: Vec<&str> = l.split(':').collect();
@@ -769,6 +770,8 @@ pub(crate) fn answer(root: &Path, data: &Path, method: Method, url: &str, body: 
 mod tests {
     use super::*;
 
+    // Linux only: it checks /proc, and `true` is a Unix program.
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_started_program_is_reaped_when_it_ends() {
         let pid = start_detached(std::process::Command::new("true")).unwrap();

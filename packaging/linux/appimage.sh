@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Build the Starbase AppImage from two already-built native binaries.
 #
-#   packaging/linux/appimage.sh --starsheets <path> --stardocs <path> [--version <v>]
+#   packaging/linux/appimage.sh --starsheets <path> --stardocs <path> [--starbase-open <path>] [--version <v>]
+#
+# --starbase-open adds the file manager's open handler (starsheets/crates/open) and its hidden
+# "Open with" entry; without it the AppImage is built without the handler (a warning says so).
 #
 # Writes to $DIST (default dist/release):
 #   starbase-<version>-linux-<arch>.AppImage
@@ -22,18 +25,20 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 ID=io.github.DomeShifter.Starbase
 
-SHEETS_BIN="" DOCS_BIN="" VERSION="${STARBASE_VERSION:-}"
+SHEETS_BIN="" DOCS_BIN="" OPEN_BIN="" VERSION="${STARBASE_VERSION:-}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --starsheets) SHEETS_BIN="$2"; shift 2 ;;
     --stardocs) DOCS_BIN="$2"; shift 2 ;;
+    --starbase-open) OPEN_BIN="$2"; shift 2 ;;
     --version) VERSION="$2"; shift 2 ;;
-    -h | --help) sed -n '2,19p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,22p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
 [[ -x "$SHEETS_BIN" ]] || { echo "error: --starsheets <executable> is required" >&2; exit 2; }
 [[ -x "$DOCS_BIN" ]] || { echo "error: --stardocs <executable> is required" >&2; exit 2; }
+[[ -z "$OPEN_BIN" || -x "$OPEN_BIN" ]] || { echo "error: --starbase-open needs an executable" >&2; exit 2; }
 if [[ -z "$VERSION" ]]; then
   VERSION="$(git -C "$ROOT" describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || true)"
   VERSION="${VERSION:-0.0.0-dev}"
@@ -58,12 +63,17 @@ echo "==> Starbase $VERSION AppImage for $ARCH"
 # ---- stage the AppDir ---------------------------------------------------------------------------
 install -Dm755 "$SHEETS_BIN" "$APPDIR/usr/bin/starsheets"
 install -Dm755 "$DOCS_BIN" "$APPDIR/usr/bin/stardocs"
-# STARBASE-OPEN HANDLER (reserved, enable when the starbase-open program is on main): take a
-# --starbase-open <path> argument, then
-#   install -Dm755 "$OPEN_BIN" "$APPDIR/usr/bin/starbase-open"
-# and add "$ID.Open" to the desktop-file loop below.
-strip "$APPDIR/usr/bin/starsheets" "$APPDIR/usr/bin/stardocs" 2>/dev/null || true
-for entry in "$ID" "$ID.Sheets" "$ID.Docs"; do
+ENTRIES=("$ID" "$ID.Sheets" "$ID.Docs")
+# The open handler: a hidden "Open with" entry (NoDisplay=true), so the metainfo keeps its one
+# launchable. Inside the AppImage it starts Sheets or Docs through the AppImage itself ($APPIMAGE).
+if [[ -n "$OPEN_BIN" ]]; then
+  install -Dm755 "$OPEN_BIN" "$APPDIR/usr/bin/starbase-open"
+  ENTRIES+=("$ID.Open")
+else
+  echo "warning: no --starbase-open given: this AppImage has no file-manager open handler" >&2
+fi
+strip "$APPDIR"/usr/bin/* 2>/dev/null || true
+for entry in "${ENTRIES[@]}"; do
   install -Dm644 "$HERE/$entry.desktop" "$APPDIR/usr/share/applications/$entry.desktop"
 done
 install -Dm644 "$HERE/$ID.mime.xml" "$APPDIR/usr/share/mime/packages/$ID.xml"

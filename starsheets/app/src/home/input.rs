@@ -103,7 +103,7 @@ impl Home {
                 egui::Event::Key { key, pressed: true, modifiers, .. } => match key {
                     Key::Enter if self.selected.len() == 1 => {
                         let item = self.selected[0].clone();
-                        self.activate(&item);
+                        self.activate(ctx, &item);
                     }
                     Key::F2 if self.selected.len() == 1 => {
                         let item = self.selected[0].clone();
