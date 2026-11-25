@@ -1,13 +1,13 @@
-# Testing StarSheets with the test hook
+# Testing Starbase Sheets with the test hook
 
 Add `test` to the page address (`?test`, or `&test` after other parameters) and the page gets
 `window.starsheets`: a way for scripts and AI agents to run commands and read the app's state
 without clicking at screen positions. Without `test` it is not there. Code: `src/testhook.rs`
-(the home screen's part: `src/home/test.rs`). StarDocs has the same hook (`stardocs/app/TESTING.md`).
+(the home screen's part: `src/home/test.rs`). Starbase Docs has the same hook (`stardocs/app/TESTING.md`).
 
 | Call | What it does | Returns |
 |---|---|---|
-| `starsheets.run(id, params)` | Runs what a menu or toolbar entry runs: a GridCraft command (`home.bold`, `home.insertSheet`, `edit.undo` …), a `panel:` id (our panels and file actions) or a `ui:` dialog; the ids are the ones in `src/shell.rs`. On the home screen: `home:folder {path}`, `home:search {text}`, `home:refresh`, `home:recent`, `home:starred`, `home:shared`, `home:bin`. `params` is a JSON string or an object; leave it out for `{}`. | request number |
+| `starsheets.run(id, params)` | Runs what a menu or toolbar entry runs: a GridCraft command (`home.bold`, `home.insertSheet`, `edit.undo` …), a `panel:` id (our panels and file actions) or a `ui:` dialog; the ids are the ones in `src/shell.rs`. Entries worked out from the active cell (`panel:sortSheet {desc}`, `panel:freeze {rows|cols: n or "current"}`, `panel:moveColumnLeft/Right`, `panel:randomise {seed?}`, `panel:trimWhitespace`) run like commands and answer `{"done": id}` or an error. On the home screen: `home:folder {path}`, `home:search {text}`, `home:refresh`, `home:recent`, `home:starred`, `home:shared`, `home:bin`. `params` is a JSON string or an object; leave it out for `{}`. | request number |
 | `starsheets.state()` | Takes a snapshot (below). | request number |
 | `starsheets.type(text)` | Enters `text` into the active cell, as typing it and pressing Enter would, but stays on the cell. `=` starts a formula. | request number |
 | `starsheets.key(name)` | One key: Enter, shift+Enter, Tab, shift+Tab, Up/Down/Left/Right (with shift+ to extend, ctrl+ to jump), ctrl+Home, Delete, Backspace, ctrl+z, ctrl+y, ctrl+a, ctrl+b, ctrl+i, ctrl+u. | request number |
@@ -18,8 +18,8 @@ Requests are answered at the start of the next frame. Each answer is `{"ok": val
 A `panel:` or `ui:` id answers `{"opened": id}`: the panel shows on the frame after.
 
 **The snapshot.** On a spreadsheet: `screen: "sheet"`, `file` (its name), `fileId`, `folder`,
-`sheet`, `sheetIndex`, `sheets`, `active` (A1), `selection` (`A1:B3,D4`), `cell` (`value` as
-shown, `number`, `input`, `formula` or null), `format` (`bold`, `italic`, `underline`, `strike`,
+`sheet`, `sheetIndex`, `sheets`, `active` (A1), `selection` (`A1:B3,D4`), `freeze` (`{rows, cols}` or null), `cell` (`value` as
+shown, `number`, `input`, `formula` or null, `note` text or null, `comment` `{author, text, replies, resolved}` or null, `validation` `{kind, items, multiple, display, itemColors}` or null), `format` (`bold`, `italic`, `underline`, `strike`,
 `font`, `size`, `numberFormat`, `hAlign`, `wrap`), `saved` and `saveStatus` (the words the save
 symbol shows), `dirty`, `canUndo`, `canRedo`, `live`, `peers` (other people in the file) and
 `people`, `compact`. On the home screen: `screen: "home"` and `home` with `view`, `loading`,
@@ -41,3 +41,15 @@ js:starsheets.wait(starsheets.state()).then(s => (s = JSON.parse(s).ok, s.cell.v
 
 Expected output: two `js: "{\"ok\":…}"` lines, then `js: "PASS"`. An answer like
 `{"err":"unknown command: home.bould"}` names what went wrong.
+
+## Single sign-on sessions without waiting
+
+`STARBASE_OIDC_SESSION_HOURS` is at least 1, so to test renewal (docs/oidc.md, Sessions) edit
+the server's `.starsheets/sessions.json` instead (with `jq`, while it runs; each session is keyed
+by a hash of its cookie). Its `expires` (seconds since 1970) set to now − 1 ends a session: the
+open page's next request answers 401 with `"renew": true` and the page renews at a quiet moment.
+Set to now + 60 before loading the page, the page renews within a minute without any request
+failing. Moving `made` back 11 minutes makes a fresh sign-in too old to set a password or link.
+
+The avatar menu's dialogs open with `starsheets.run("account:profile")` (also `account:password`,
+`account:people`), on either screen.

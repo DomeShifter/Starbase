@@ -1,10 +1,34 @@
 # Changelog
 
-Changes that people using StarSheets would notice, newest first. Versions follow
+Changes that people using Starbase Sheets (called StarSheets until November 2026) would notice, newest first. Versions follow
 [semantic versioning](https://semver.org): while we're below 1.0, the middle number goes up for
 new features and the last one for fixes.
 
 ## [Unreleased]
+
+### Changed
+- Renamed to Starbase Sheets (the home screen is Starbase Drive), part of the Starbase suite.
+  Settings are now `STARBASE_*`; the old `STARSHEETS_*` names still work.
+
+### Added
+- Filter views as in Google Sheets (Data › Filter views): create one, or save the sheet's filter
+  as one; each has a name and a range and is listed in the menu to reopen. An open view filters
+  only for you, in a dark bar above the grid (rename, change the range, duplicate, delete, ✕ to
+  close). Views are saved in the .xlsx; Excel ignores them. Sorting inside a view isn't there yet.
+- Filter by colour and Sort by colour in a column's filter menu (fill colour or text colour).
+- Drop-downs as in Google Sheets: "Allow multiple selections" (tick boxes in the list, the cell
+  holds "a, b"), and the Chip / Arrow / Plain text display styles, with chips drawn as coloured
+  pills. Excel opens such files as ordinary drop-downs.
+- Charts: Customise › Vertical axis sets a fixed Min and Max (empty for automatic); kept in .xlsx.
+- Single sign-on through your own sign-in service (Authelia, Authentik, Keycloak and other
+  OpenID Connect services): a "Sign in with SSO" button, accounts made or linked on first
+  sign-in, owners from a group, passwords still available. Set up with `STARSHEETS_OIDC_*`
+  (docs/oidc.md).
+
+### Changed
+- Over HTTPS the sign-in cookie is now `__Host-starsheets_session`, which a site on a sibling
+  or parent domain can't set, and the old name is no longer read there: after updating,
+  everyone reached over HTTPS signs in once more.
 
 ### Fixed
 - Menu Paste (Edit › Paste, or right-click › Paste) pastes what you last copied in StarSheets,
@@ -54,6 +78,14 @@ new features and the last one for fixes.
   tall), and fonts in files without a theme keep their link to the theme when saved.
 
 ### Added
+- More of Google Sheets' menus: **Edit › Paste special** (values only with Ctrl+Shift+V, format,
+  formula, data validation, transposed, column widths, all except borders), **Edit › Move**
+  (column left / right), **View › Freeze** 2 rows / 2 columns / up to the active row or column,
+  **Data › Sort sheet** by the active column (rows below the frozen ones), **Data › Randomise
+  range**, **Data › Data clean-up › Trim whitespace**, **Format › Number › Custom currency**,
+  **Help › Keyboard shortcuts** (Ctrl+/, searchable) and **Help › Search the menus** (Alt+/).
+  Entries that can't run where you are (Paste special before copying, Move column left in
+  column A) are greyed out.
 - Google Sheets functions that showed #NAME? now work: `SPLIT`, `JOIN`, `REGEXMATCH`,
   `COUNTUNIQUE`, `FLATTEN`, `ISEMAIL`, `ISURL`, `TO_TEXT` and the operator functions (`ADD`,
   `MINUS`, `MULTIPLY`, `DIVIDE`, `POW`, `EQ`, `NE`, `GT`, `GTE`, `LT`, `LTE`, `UMINUS`, `UPLUS`,

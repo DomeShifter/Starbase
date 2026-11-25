@@ -9,6 +9,8 @@ use serde_json::json;
 
 use crate::{icons, theme};
 
+pub mod filterviews;
+
 /// One menu entry.
 pub enum Item {
     /// Label, command id, shortcut hint shown on the right.
@@ -60,8 +62,21 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Cmd("Cut", "edit.cut", "Ctrl+X"),
             Cmd("Copy", "edit.copy", "Ctrl+C"),
             Cmd("Paste", "edit.paste", "Ctrl+V"),
-            Cmd("Paste special", "edit.pasteSpecial", "Ctrl+Shift+V"),
+            Sub(
+                "Paste special",
+                &[
+                    CmdWith("Values only", "edit.pasteSpecial", "Ctrl+Shift+V", r#"{"what":"values"}"#),
+                    CmdWith("Format only", "edit.pasteSpecial", "", r#"{"what":"formats"}"#),
+                    CmdWith("Formula only", "edit.pasteSpecial", "", r#"{"what":"formulas"}"#),
+                    CmdWith("Data validation only", "edit.pasteSpecial", "", r#"{"what":"validation"}"#),
+                    Sep,
+                    CmdWith("Transposed", "edit.pasteSpecial", "", r#"{"what":"all","transpose":true}"#),
+                    CmdWith("Column widths only", "edit.pasteSpecial", "", r#"{"what":"columnWidths"}"#),
+                    CmdWith("All except borders", "edit.pasteSpecial", "", r#"{"what":"allExceptBorders"}"#),
+                ],
+            ),
             Sep,
+            Sub("Move", &[Cmd("Column left", "panel:moveColumnLeft", ""), Cmd("Column right", "panel:moveColumnRight", "")]),
             Sub(
                 "Delete",
                 &[
@@ -89,10 +104,15 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Sub(
                 "Freeze",
                 &[
-                    Cmd("No rows or columns", "view.unfreezePanes", ""),
-                    Cmd("1 row", "view.freezeTopRow", ""),
-                    Cmd("1 column", "view.freezeFirstColumn", ""),
-                    Cmd("Up to current cell", "view.freezePanes", ""),
+                    CmdWith("No rows", "panel:freeze", "", r#"{"rows":0}"#),
+                    CmdWith("1 row", "panel:freeze", "", r#"{"rows":1}"#),
+                    CmdWith("2 rows", "panel:freeze", "", r#"{"rows":2}"#),
+                    CmdWith("Up to row {row}", "panel:freeze", "", r#"{"rows":"current"}"#),
+                    Sep,
+                    CmdWith("No columns", "panel:freeze", "", r#"{"cols":0}"#),
+                    CmdWith("1 column", "panel:freeze", "", r#"{"cols":1}"#),
+                    CmdWith("2 columns", "panel:freeze", "", r#"{"cols":2}"#),
+                    CmdWith("Up to column {col}", "panel:freeze", "", r#"{"cols":"current"}"#),
                 ],
             ),
             Sub("Group", &[Cmd("Group", "data.group", "Alt+Shift+→"), Cmd("Ungroup", "data.ungroup", "Alt+Shift+←")]),
@@ -140,6 +160,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Cmd("Tick box", "insert.checkbox", ""),
             Cmd("Drop-down", "panel:dropdown", ""),
             Sep,
+            Cmd("Comment", "panel:comment", "Ctrl+Alt+M"),
             Cmd("Note", "panel:note", "Shift+F2"),
         ],
     ),
@@ -166,6 +187,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
                     CmdWith("Date time", "home.numberFormat", "26/09/2008 15:59:00", r#"{"code":"@datetime"}"#),
                     CmdWith("Duration", "home.numberFormat", "24:01:00", r#"{"code":"[h]:mm:ss"}"#),
                     Sep,
+                    Cmd("Custom currency", "panel:customcurrency", ""),
                     Cmd("Custom date and time", "panel:customdate", ""),
                     Cmd("Custom number format", "panel:customnumber", ""),
                 ],
@@ -245,23 +267,32 @@ pub const MENUS: &[(&str, &[Item])] = &[
         "Data",
         &[
             Sub(
+                "Sort sheet",
+                &[
+                    CmdWith("Sort sheet by column {col} (A to Z)", "panel:sortSheet", "", r#"{"desc":false}"#),
+                    CmdWith("Sort sheet by column {col} (Z to A)", "panel:sortSheet", "", r#"{"desc":true}"#),
+                ],
+            ),
+            Sub(
                 "Sort range",
                 &[
-                    Cmd("Sort range by column A to Z", "data.sortAscending", ""),
-                    Cmd("Sort range by column Z to A", "data.sortDescending", ""),
+                    Cmd("Sort range by column {col} (A to Z)", "data.sortAscending", ""),
+                    Cmd("Sort range by column {col} (Z to A)", "data.sortDescending", ""),
                     Sep,
                     Cmd("Advanced range sorting options", "data.sort", ""),
                 ],
             ),
             Sep,
             Cmd("Create a filter", "data.filter", ""),
+            Sub("Filter views", &[Cmd("Create new filter view", "panel:filterViewNew", ""), Cmd("Save as filter view", "panel:filterViewSave", "")]),
             Cmd("Add a slicer", "insert.slicer", ""),
             Sep,
             Cmd("Protect sheets and ranges", "panel:protect", ""),
             Cmd("Named ranges", "ui:nameManager", ""),
+            Cmd("Randomise range", "panel:randomise", ""),
             Sep,
             Cmd("Data validation", "ui:dataValidation", ""),
-            Sub("Data clean-up", &[Cmd("Remove duplicates", "data.removeDuplicates", "")]),
+            Sub("Data clean-up", &[Cmd("Remove duplicates", "data.removeDuplicates", ""), Cmd("Trim whitespace", "panel:trimWhitespace", "")]),
             Cmd("Split text to columns", "data.textToColumns", ""),
         ],
     ),
@@ -274,7 +305,15 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Cmd("Accessibility", "review.checkAccessibility", ""),
         ],
     ),
-    ("Help", &[Cmd("Function list", "formulas.insertFunction", "")]),
+    (
+        "Help",
+        &[
+            Cmd("Search the menus", "panel:searchMenus", "Alt+/"),
+            Sep,
+            Cmd("Function list", "formulas.insertFunction", ""),
+            Cmd("Keyboard shortcuts", "panel:shortcuts", "Ctrl+/"),
+        ],
+    ),
 ];
 
 /// One toolbar control.
@@ -352,6 +391,7 @@ const NUMBER_FORMATS: &[(&str, &str, &str)] = &[
     ("Date time|26/09/2008 15:59:00", "home.numberFormat", r#"{"code":"@datetime"}"#),
     ("Duration|24:01:00", "home.numberFormat", r#"{"code":"[h]:mm:ss"}"#),
     ("-", "", ""),
+    ("Custom currency", "panel:customcurrency", "{}"),
     ("Custom date and time", "panel:customdate", "{}"),
     ("Custom number format", "panel:customnumber", "{}"),
 ];
@@ -476,6 +516,12 @@ pub struct Shell {
     title_draft: Option<String>,
     /// The custom colour picker (⊕ in the colour menus).
     custom: crate::colourpicker::CustomPicker,
+    /// Format › Number › Custom currency.
+    currency: crate::currency::CustomCurrency,
+    /// Help › Keyboard shortcuts and Help › Search the menus.
+    help: crate::shortcuts::Help,
+    /// The bar of the filter view open in this tab (Data › Filter views).
+    views: filterviews::Bar,
     /// Borders menu: the colour and line style the next border is drawn with (to-do row 66).
     border_colour: Option<u32>,
     border_style: usize,
@@ -486,6 +532,21 @@ struct Current {
     font: String,
     size: f32,
     zoom: u16,
+    bold: bool,
+    italic: bool,
+    strike: bool,
+}
+
+impl Current {
+    /// Whether the toolbar button that runs `id` is on for the active cell.
+    fn on(&self, id: &str) -> bool {
+        match id {
+            "home.bold" => self.bold,
+            "home.italic" => self.italic,
+            "home.strikethrough" => self.strike,
+            _ => false,
+        }
+    }
 }
 
 fn current(app: &SheetApp) -> Current {
@@ -496,8 +557,10 @@ fn current(app: &SheetApp) -> Current {
     });
     let zoom = d.and_then(|d| d.wb.active().map(|sh| sh.zoom)).unwrap_or(100);
     match style {
-        Some(st) => Current { font: st.font.name.clone(), size: st.font.size, zoom },
-        None => Current { font: "Arial".into(), size: 10.0, zoom },
+        Some(st) => {
+            Current { font: st.font.name.clone(), size: st.font.size, zoom, bold: st.font.bold, italic: st.font.italic, strike: st.font.strike }
+        }
+        None => Current { font: "Arial".into(), size: 10.0, zoom, bold: false, italic: false, strike: false },
     }
 }
 
@@ -511,12 +574,12 @@ fn params(text: &str) -> serde_json::Value {
 }
 
 /// Sheets-style flat buttons for the menu bar and toolbar: no border or fill at rest, a soft
-/// rounded grey on hover and while a menu is open (egui's default draws a box round each one).
+/// rounded grey on hover (#DDE3EA), darker while pressed or while its menu is open (#C9D3DF),
+/// the same as Starbase Docs. (A button drawn with `.frame(false)` would get no fill at all.)
 fn flat(ui: &mut Ui) {
+    use theme::{HOVER, PRESSED};
     let w = &mut ui.style_mut().visuals.widgets;
-    for (state, fill) in
-        [(&mut w.inactive, egui::Color32::TRANSPARENT), (&mut w.hovered, theme::HOVER), (&mut w.active, theme::PRESSED), (&mut w.open, theme::HOVER)]
-    {
+    for (state, fill) in [(&mut w.inactive, egui::Color32::TRANSPARENT), (&mut w.hovered, HOVER), (&mut w.active, PRESSED), (&mut w.open, PRESSED)] {
         state.bg_stroke = Stroke::NONE;
         state.weak_bg_fill = fill;
         state.corner_radius = egui::CornerRadius::same(4);
@@ -525,16 +588,30 @@ fn flat(ui: &mut Ui) {
 }
 
 fn icon_or_text(ui: &mut Ui, name: &str, tip: &str) -> egui::Response {
-    match icons::icon(name) {
-        Some(img) => ui.add(Button::image(img).frame(false).min_size(vec2(28.0, 28.0))),
-        None => ui.add(Button::new(RichText::new(name).size(14.0).color(theme::TEXT_DIM)).frame(false).min_size(vec2(28.0, 28.0))),
-    }
-    .on_hover_text(tip)
+    tool_button(ui, name, tip, false)
+}
+
+/// A toolbar button (inside [`flat`]): grey on hover and press; light blue (#D3E3FD) when `on`
+/// (Bold on a bold cell), as in Google Sheets and Starbase Docs.
+fn tool_button(ui: &mut Ui, name: &str, tip: &str, on: bool) -> egui::Response {
+    let b = match icons::icon(name) {
+        Some(img) => Button::image(img),
+        None => Button::new(RichText::new(name).size(14.0).color(theme::TEXT_DIM)),
+    };
+    // A set fill replaces the hover and pressed fills too: only a button that is on has one.
+    let b = if on { b.fill(theme::ON) } else { b };
+    ui.add(b.min_size(vec2(28.0, 28.0))).on_hover_text(tip)
 }
 
 impl Shell {
     pub fn ui(&mut self, app: &mut SheetApp, ui: &mut Ui) {
-        self.custom.ui(app, &ui.ctx().clone());
+        let ctx = ui.ctx().clone();
+        self.custom.ui(app, &ctx);
+        self.currency.ui(app, &ctx);
+        if let Some(found) = self.help.ui(app, &ctx) {
+            run_found(app, &ctx, &found);
+        }
+        sheets_keys(app, &ctx);
         // Ctrl+Shift+F: hide/show the menus (taken before the grid sees it).
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::F)) {
             self.compact = !self.compact;
@@ -552,6 +629,7 @@ impl Shell {
             .exact_size(48.0)
             .frame(Frame::NONE.fill(theme::PAGE).inner_margin(Margin { left: 12, right: 12, top: 4, bottom: 6 }))
             .show(ui, |ui| self.toolbar(app, ui));
+        self.views.ui(app, ui);
     }
 
     fn toolbar(&mut self, app: &mut SheetApp, ui: &mut Ui) {
@@ -564,7 +642,7 @@ impl Shell {
                 for tool in TOOLBAR {
                     match tool {
                         Btn(icon, tip, id, p) => {
-                            if icon_or_text(ui, icon, tip).clicked() {
+                            if tool_button(ui, icon, tip, cur.on(id)).clicked() {
                                 if *id == "panel:chart" {
                                     ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(crate::chartpanel::REQUEST), true));
                                 } else {
@@ -573,8 +651,7 @@ impl Shell {
                             }
                         }
                         Txt(text, tip, id, p) => {
-                            let b =
-                                ui.add(Button::new(RichText::new(*text).size(15.0).color(theme::TEXT_DIM)).frame(false).min_size(vec2(28.0, 28.0)));
+                            let b = ui.add(Button::new(RichText::new(*text).size(15.0).color(theme::TEXT_DIM)).min_size(vec2(28.0, 28.0)));
                             if b.on_hover_text(*tip).clicked() {
                                 app.run_or_alert(id, params(p));
                             }
@@ -813,10 +890,8 @@ impl Shell {
 fn tool_menu(app: &mut SheetApp, ui: &mut Ui, items: &[(&str, &str, &str)]) {
     let icon_row = items.iter().all(|(l, _, _)| l.starts_with("icon:"));
     let run = |app: &mut SheetApp, ui: &mut Ui, id: &str, p: &str| {
-        if id == "panel:customdate" {
-            ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(crate::customdate::REQUEST), true));
-        } else if id == "panel:customnumber" {
-            ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(crate::customnumber::REQUEST), true));
+        if id.starts_with("panel:") {
+            run_entry_with(app, ui.ctx(), id, params(p));
         } else {
             app.run_or_alert(id, params(p));
         }
@@ -866,8 +941,19 @@ fn is_merge(id: &str) -> bool {
     matches!(id, "home.mergeCells" | "home.mergeDown" | "home.mergeAcross" | "home.unmergeCells")
 }
 
+/// The name in the title row: the file's name without its extension ("Budget", not
+/// "Budget.xlsx"), as Sheets shows it; Drive's details are where the extension shows.
+pub(crate) fn header_name(app: &SheetApp) -> String {
+    let Some(d) = app.session.active() else { return "Untitled spreadsheet".into() };
+    if !d.title.trim().is_empty() {
+        return d.title.clone();
+    }
+    let shown = d.display_title();
+    std::path::Path::new(&shown).file_stem().map_or(shown.clone(), |s| s.to_string_lossy().into_owned())
+}
+
 fn title_and_menus(app: &mut SheetApp, ui: &mut Ui, title_draft: &mut Option<String>) {
-    let name = app.session.active().map(|d| d.display_title().to_string()).unwrap_or_else(|| "Untitled spreadsheet".into());
+    let name = header_name(app);
     let dirty = app.session.active().is_some_and(|d| d.is_dirty());
     ui.horizontal(|ui| {
         // Our own mark (a sheet with a star on a green tile; the favicon is a simplified copy).
@@ -876,7 +962,7 @@ fn title_and_menus(app: &mut SheetApp, ui: &mut Ui, title_draft: &mut Option<Str
             Some(img) => ui.add(img.sense(egui::Sense::click())),
             None => ui.add(egui::Label::new(RichText::new("★").size(26.0).color(theme::BLUE)).sense(egui::Sense::click())),
         };
-        if logo.on_hover_text("StarSheets home").clicked() {
+        if logo.on_hover_text("Starbase Drive").clicked() {
             ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique("starsheets_files_request"), "home".to_string()));
         }
         ui.vertical(|ui| {
@@ -1206,19 +1292,19 @@ fn rename_box(app: &mut SheetApp, ui: &mut Ui, name: &str, draft: &mut Option<St
     }
 }
 
-/// Renames the active spreadsheet: a file keeps its extension (the download uses the new name).
+/// Renames the active spreadsheet: the title, and a file keeps its folder and extension (the
+/// download uses the new name; the desktop app renames the file on disk, native.rs).
 fn rename_doc(app: &mut SheetApp, new: &str) {
     let Some(d) = app.session.active_mut() else { return };
-    match d.path.as_deref() {
-        Some(p) => {
-            let ext = std::path::Path::new(p).extension().map(|e| e.to_string_lossy().to_string());
-            let has_ext = std::path::Path::new(new).extension().is_some();
-            d.path = Some(match ext {
-                Some(e) if !has_ext => format!("{new}.{e}"),
-                _ => new.to_string(),
-            });
-        }
-        None => d.title = new.to_string(),
+    d.title = new.to_string();
+    if let Some(p) = d.path.as_deref() {
+        let p = std::path::Path::new(p);
+        let has_ext = std::path::Path::new(new).extension().is_some();
+        let file = match p.extension() {
+            Some(e) if !has_ext => format!("{new}.{}", e.to_string_lossy()),
+            _ => new.to_string(),
+        };
+        d.path = Some(p.with_file_name(file).to_string_lossy().into_owned());
     }
 }
 
@@ -1226,6 +1312,30 @@ fn rename_doc(app: &mut SheetApp, new: &str) {
 /// GridCraft's dialogs, Copy/Cut/Paste go through the clipboard, anything else runs as a command.
 /// The test hook's `run` takes this path too (testhook.rs), so tests do what the menus do.
 pub fn run_entry(app: &mut SheetApp, ctx: &egui::Context, id: &str) {
+    run_entry_with(app, ctx, id, json!({}));
+}
+
+/// `run_entry` with the parameters a menu entry carries (Freeze 2 rows, Sort sheet Z to A…).
+pub fn run_entry_with(app: &mut SheetApp, ctx: &egui::Context, id: &str, params: serde_json::Value) {
+    if crate::menuactions::handles(id) {
+        return run_steps(app, id, &params);
+    }
+    if filterviews::handles(id) {
+        return filterviews::run(app, id, &params);
+    }
+    if !id.starts_with("panel:") && !id.starts_with("ui:") && !matches!(id, "edit.copy" | "edit.cut" | "edit.paste") {
+        return app.run_or_alert(id, params);
+    }
+    let request = match id {
+        "panel:customcurrency" => Some(crate::currency::REQUEST),
+        "panel:shortcuts" => Some(crate::shortcuts::SHORTCUTS_REQUEST),
+        "panel:searchMenus" => Some(crate::shortcuts::SEARCH_REQUEST),
+        _ => None,
+    };
+    if let Some(key) = request {
+        ctx.data_mut(|m| m.insert_temp(egui::Id::unique(key), true));
+        return;
+    }
     // "ui:<dialog>" opens one of GridCraft's dialogs (some, like conditional
     // formatting, are then shown as our own side panel).
     // "panel:dropdown" opens the data-validation panel on a new drop-down.
@@ -1233,6 +1343,8 @@ pub fn run_entry(app: &mut SheetApp, ctx: &egui::Context, id: &str) {
         ctx.data_mut(|m| m.insert_temp(egui::Id::unique(crate::customdate::REQUEST), true));
     } else if id == "panel:settings" {
         ctx.data_mut(|m| m.insert_temp(egui::Id::unique(crate::settings::REQUEST), true));
+    } else if id == "panel:comment" {
+        ctx.data_mut(|m| m.insert_temp(egui::Id::unique(crate::notes::COMMENT_REQUEST), true));
     } else if id == "panel:note" {
         ctx.data_mut(|m| m.insert_temp(egui::Id::unique(crate::notes::REQUEST), true));
     } else if id == "panel:protect" {
@@ -1261,6 +1373,130 @@ pub fn run_entry(app: &mut SheetApp, ctx: &egui::Context, id: &str) {
             None => app.run_or_alert(id, json!({})),
         }
     }
+}
+
+/// Sheets' keys that GridCraft doesn't have, taken before the grid sees them: Ctrl+/ (keyboard
+/// shortcuts), Alt+/ (search the menus), Ctrl+Alt+M (comment) and Ctrl+Shift+V (paste values
+/// only).
+fn sheets_keys(app: &mut SheetApp, ctx: &egui::Context) {
+    use egui::{Key, KeyboardShortcut, Modifiers};
+    let (help, search, comment) = ctx.input_mut(|i| {
+        (
+            i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::Slash)),
+            i.consume_shortcut(&KeyboardShortcut::new(Modifiers::ALT, Key::Slash)),
+            i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::ALT, Key::M)),
+        )
+    });
+    if comment {
+        run_entry(app, ctx, "panel:comment");
+    }
+    if help {
+        run_entry(app, ctx, "panel:shortcuts");
+    }
+    if search {
+        run_entry(app, ctx, "panel:searchMenus");
+    }
+    // The browser turns Ctrl+Shift+V into a paste event like Ctrl+V's; with Shift held it pastes
+    // values only. Not while a cell or a text box is being typed in (the text goes there).
+    if app.editor.is_some() || ctx.memory(|m| m.focused()).is_some_and(|id| egui::TextEdit::load_state(ctx, id).is_some()) {
+        return;
+    }
+    let text = ctx.input_mut(|i| {
+        if !(i.modifiers.command && i.modifiers.shift) {
+            return None;
+        }
+        let at = i.events.iter().position(|e| matches!(e, egui::Event::Paste(_)))?;
+        match i.events.remove(at) {
+            egui::Event::Paste(t) => Some(t),
+            _ => None,
+        }
+    });
+    if let Some(text) = text {
+        paste_values(app, &text);
+    }
+}
+
+/// Edit › Paste special › Values only for text from the system clipboard: our own last copy
+/// pastes its values; anything else pastes as plain text (no formatting comes with it).
+fn paste_values(app: &mut SheetApp, text: &str) {
+    let ours = app.session.clipboard.as_ref().is_some_and(|c| c.text.replace("\r\n", "\n").trim_end() == text.replace("\r\n", "\n").trim_end());
+    if ours {
+        app.run_or_alert("edit.pasteSpecial", json!({"what": "values"}));
+    } else {
+        app.run_or_alert("edit.paste", json!({"text": text}));
+    }
+}
+
+/// Runs one of menuactions' entries: its commands in order, stopping at the first that fails.
+fn run_steps(app: &mut SheetApp, id: &str, params: &serde_json::Value) {
+    let steps = match crate::menuactions::steps(&app.session, id, params) {
+        Ok(steps) => steps,
+        Err(e) => {
+            app.message = Some(("Starbase Sheets".into(), e));
+            return;
+        }
+    };
+    let n = steps.len();
+    for (cmd, p) in steps {
+        if let Err(e) = app.run(cmd, p) {
+            app.message = Some(("Starbase Sheets".into(), e));
+            return;
+        }
+    }
+    if id == "panel:trimWhitespace" {
+        let msg = match n {
+            0 => "No cells needed trimming.".to_string(),
+            1 => "1 cell trimmed of whitespace.".to_string(),
+            n => format!("{n} cells trimmed of whitespace."),
+        };
+        app.message = Some(("Trim whitespace".into(), msg));
+    }
+}
+
+/// One menu entry with where it sits: "Edit › Paste special › Values only".
+#[derive(Clone, Debug)]
+pub struct Entry {
+    pub path: String,
+    pub id: &'static str,
+    pub keys: &'static str,
+    pub params: &'static str,
+}
+
+/// Every runnable menu entry, in menu order (Help › Search the menus and the shortcuts list).
+pub fn entries() -> Vec<Entry> {
+    fn walk(items: &[Item], path: &str, out: &mut Vec<Entry>) {
+        for item in items {
+            match item {
+                Cmd(label, id, keys) => out.push(Entry { path: format!("{path} › {label}"), id, keys, params: "{}" }),
+                CmdWith(label, id, keys, params) => out.push(Entry { path: format!("{path} › {label}"), id, keys, params }),
+                Sub(label, sub) => walk(sub, &format!("{path} › {label}"), out),
+                Sep => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for (menu, items) in MENUS {
+        walk(items, menu, &mut out);
+    }
+    out
+}
+
+/// Runs an entry found by Help › Search the menus.
+pub fn run_found(app: &mut SheetApp, ctx: &egui::Context, e: &Entry) {
+    run_entry_with(app, ctx, e.id, params(e.params));
+}
+
+/// Whether a menu entry can run here (greyed out when not): Paste special needs something
+/// copied, Move column left can't move column A, and so on. Undo/redo and the clipboard trio are
+/// always on (the live server keeps undo; Paste reads the system clipboard).
+pub fn entry_enabled(app: &SheetApp, id: &str) -> bool {
+    if let Some(on) = crate::menuactions::enabled(&app.session, id) {
+        return on;
+    }
+    if id.starts_with("panel:") || id.starts_with("ui:") || matches!(id, "edit.copy" | "edit.cut" | "edit.paste" | "edit.undo" | "edit.redo") {
+        return true;
+    }
+    gridcraft_engine::find_command(id).is_none_or(|c| (c.enabled)(&app.session).is_ok())
 }
 
 /// Every id the menus and toolbar use (`panel:` and `ui:` ones too), for the test hook.
@@ -1292,7 +1528,8 @@ pub fn entry_ids() -> Vec<&'static str> {
     out
 }
 
-fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[Item]) {
+/// Draws a menu's entries; returns its width.
+fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[Item]) -> f32 {
     let with_icons = items.iter().any(|i| match i {
         Cmd(l, ..) | CmdWith(l, ..) | Sub(l, _) => menu_icon(l).is_some(),
         Sep => false,
@@ -1307,27 +1544,38 @@ fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[Item]) {
                     ui.close();
                 }
             }
-            Cmd(label, id, keys) => {
-                if ui.add_sized([width, 32.0], menu_row(label, keys, with_icons)).clicked() {
-                    run_entry(app, ui.ctx(), id);
-                    ui.close();
-                }
-            }
-            CmdWith(label, id, keys, params) => {
-                if ui.add_sized([width, 32.0], menu_row(label, keys, with_icons)).clicked() {
-                    app.run_or_alert(id, self::params(params));
+            Cmd(label, id, keys) | CmdWith(label, id, keys, _) => {
+                let on = entry_enabled(app, id);
+                let text = crate::menuactions::label(&app.session, label);
+                if ui.add_enabled_ui(on, |ui| ui.add_sized([width, 32.0], menu_row(&text, keys, with_icons))).inner.clicked() {
+                    let p = match item {
+                        CmdWith(.., p) => self::params(p),
+                        _ => json!({}),
+                    };
+                    run_entry_with(app, ui.ctx(), id, p);
                     ui.close();
                 }
             }
             Sub(label, sub) => {
-                let b = menu_row(label, "", with_icons)
-                    .min_size(vec2(width, 32.0))
-                    .right_text(egui::containers::menu::SubMenuButton::arrow_atom(Some(MENU_GREY)));
-                egui::containers::menu::SubMenuButton::from_button(b).ui(ui, |ui| menu_items(app, ui, sub));
+                // Google's submenu arrow: `arrow_right` the size of the icons (a picture, so the
+                // entry is still named just by its wording), as in Starbase Docs.
+                let b = menu_row(label, "", with_icons).min_size(vec2(width, 32.0));
+                let b = match icons::icon("arrow_right") {
+                    Some(arrow) => b.right_text(arrow),
+                    None => b.right_text(egui::containers::menu::SubMenuButton::arrow_atom(Some(MENU_GREY))),
+                };
+                egui::containers::menu::SubMenuButton::from_button(b).ui(ui, |ui| {
+                    let width = menu_items(app, ui, sub);
+                    // Data › Filter views also lists the sheet's views.
+                    if *label == "Filter views" {
+                        filterviews::menu_list(app, ui, width);
+                    }
+                });
             }
             Sep => menu_sep_width(ui, width),
         }
     }
+    width
 }
 
 #[cfg(test)]
@@ -1393,5 +1641,93 @@ mod tests {
         }
         let missing: Vec<_> = all.into_iter().filter(|id| !id.starts_with("panel:") && gridcraft_engine::find_command(id).is_none()).collect();
         assert!(missing.is_empty(), "unknown command ids: {missing:?}");
+    }
+
+    /// The Sheets menu batch 1 entries are where Sheets has them, and every entry's parameters
+    /// are valid JSON.
+    #[test]
+    fn sheets_menu_entries_are_in_place() {
+        let paths: Vec<String> = entries().iter().map(|e| e.path.clone()).collect();
+        for want in [
+            "Edit › Paste special › Values only",
+            "Edit › Paste special › Format only",
+            "Edit › Paste special › Formula only",
+            "Edit › Paste special › Data validation only",
+            "Edit › Paste special › Transposed",
+            "Edit › Paste special › Column widths only",
+            "Edit › Paste special › All except borders",
+            "Edit › Move › Column left",
+            "Edit › Move › Column right",
+            "View › Freeze › 2 rows",
+            "View › Freeze › Up to row {row}",
+            "View › Freeze › 2 columns",
+            "View › Freeze › Up to column {col}",
+            "View › Freeze › No columns",
+            "Format › Number › Custom currency",
+            "Data › Sort sheet › Sort sheet by column {col} (A to Z)",
+            "Data › Sort range › Sort range by column {col} (Z to A)",
+            "Data › Randomise range",
+            "Data › Data clean-up › Trim whitespace",
+            "Data › Data clean-up › Remove duplicates",
+            "Help › Search the menus",
+            "Help › Keyboard shortcuts",
+            "Insert › Comment",
+        ] {
+            assert!(paths.iter().any(|p| p == want), "missing {want}");
+        }
+        for e in entries() {
+            assert!(serde_json::from_str::<serde_json::Value>(e.params).is_ok(), "{}: bad params {}", e.path, e.params);
+        }
+        // Every id that menuactions runs is on a menu, and every panel: id a menu uses is one
+        // run_entry knows (menuactions, a dialog request, or a file action in files.rs).
+        let ids = entry_ids();
+        for id in crate::menuactions::IDS {
+            assert!(ids.contains(id), "{id} is not on any menu");
+        }
+        let known = [
+            "panel:new",
+            "panel:open",
+            "panel:copy",
+            "panel:bin",
+            "panel:versions",
+            "panel:details",
+            "panel:settings",
+            "panel:insertBelow",
+            "panel:insertRight",
+            "panel:chart",
+            "panel:imageInCell",
+            "panel:imageOverCells",
+            "panel:dropdown",
+            "panel:note",
+            "panel:comment",
+            "panel:customdate",
+            "panel:customnumber",
+            "panel:customcurrency",
+            "panel:protect",
+            "panel:shortcuts",
+            "panel:searchMenus",
+        ];
+        for id in ids.iter().filter(|id| id.starts_with("panel:")) {
+            assert!(crate::menuactions::handles(id) || filterviews::handles(id) || known.contains(id), "{id}: nothing opens it");
+        }
+    }
+
+    /// Greyed by context: Paste special needs a copy first; Move column left not from column A.
+    #[test]
+    fn entries_grey_out_by_context() {
+        let mut s = gridcraft_engine::Session::new();
+        s.execute("file.new", json!({})).unwrap();
+        let on = |s: &gridcraft_engine::Session, id: &str| {
+            crate::menuactions::enabled(s, id).unwrap_or_else(|| gridcraft_engine::find_command(id).is_none_or(|c| (c.enabled)(s).is_ok()))
+        };
+        assert!(!on(&s, "edit.pasteSpecial"), "nothing copied yet");
+        assert!(!on(&s, "panel:moveColumnLeft"));
+        assert!(!on(&s, "panel:sortSheet"), "an empty sheet");
+        s.execute("cell.set", json!({"cell": "B2", "input": "x"})).unwrap();
+        s.execute("edit.copy", json!({"range": "B2"})).unwrap();
+        s.execute("selection.set", json!({"range": "B2"})).unwrap();
+        assert!(on(&s, "edit.pasteSpecial") && on(&s, "panel:moveColumnLeft") && on(&s, "panel:sortSheet"));
+        s.execute("edit.pasteSpecial", json!({"what": "values", "at": "D4"})).unwrap();
+        assert_eq!(s.active().unwrap().wb.active().unwrap().input_text(gridcraft_engine::core::CellRef::new(3, 3)), "x");
     }
 }

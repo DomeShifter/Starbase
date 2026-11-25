@@ -18,7 +18,7 @@ pub fn explain(e: &CellError) -> &'static str {
         }
         CellError::Ref => "This formula points to a cell that isn't there any more: a row, column or sheet it used was deleted.",
         CellError::Name => {
-            "This formula uses a word StarSheets doesn't know: a function name may be misspelt, a named range may not exist, or text may be missing its quotation marks."
+            "This formula uses a word Starbase Sheets doesn't know: a function name may be misspelt, a named range may not exist, or text may be missing its quotation marks."
         }
         CellError::NA => "A value isn't available: a lookup (such as VLOOKUP, XLOOKUP or MATCH) didn't find what it was looking for.",
         CellError::Num => {

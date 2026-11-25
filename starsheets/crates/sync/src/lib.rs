@@ -773,6 +773,9 @@ pub fn fingerprint(wb: &Workbook) -> String {
 #[cfg(test)]
 mod tests;
 
+#[cfg(feature = "thumbs")]
+pub mod thumb;
+
 /// Copies sheet `index` of `src` to the end of `dst` (another workbook): cell, row and column
 /// formats are added to `dst`'s own style list, the copy gets a free name ("Name (2)" when taken),
 /// a new id, and table names that don't clash. Formulas that point at other sheets keep their
@@ -817,6 +820,20 @@ pub fn copy_sheet_into(src: &Workbook, index: usize, dst: &mut Workbook) -> Opti
     }
     dst.sheets.push(Arc::new(sheet));
     Some(name)
+}
+
+// ---------------------------------------------------------------- the sheet a file reopens on
+
+/// The sheet to open a file on for someone who was last on the sheet with file id `file_id`
+/// (0: none known) and name `name`: that sheet by its id, else by its name (a sheet added since
+/// the file was opened has no id yet), else the first sheet shown. Hidden sheets are skipped.
+pub fn pick_sheet(wb: &Workbook, file_id: u32, name: &str) -> usize {
+    let shown = |sh: &Sheet| sh.visibility == gridcraft_engine::model::Visibility::Visible;
+    let find = |f: &dyn Fn(&Sheet) -> bool| wb.sheets.iter().position(|sh| shown(sh) && f(sh));
+    (if file_id != 0 { find(&|sh| sh.file_id == file_id) } else { None })
+        .or_else(|| find(&|sh| sh.name == name))
+        .or_else(|| find(&|_| true))
+        .unwrap_or(0)
 }
 
 // ---------------------------------------------------------------- Clip in StarSheets' section

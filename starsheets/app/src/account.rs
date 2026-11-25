@@ -30,6 +30,17 @@ thread_local! {
     static ME: RefCell<Option<Me>> = const { RefCell::new(None) };
     /// Set when a request came back "please sign in".
     static SIGN_IN: RefCell<bool> = const { RefCell::new(false) };
+    /// Set when a request came back "please sign in" for a single sign-on session that can be
+    /// renewed at the provider without asking (files.rs `fetch`).
+    static RENEW: RefCell<bool> = const { RefCell::new(false) };
+    /// Set when the live connection keeps failing to reconnect: look whether the sign-in ended.
+    static CHECK: RefCell<bool> = const { RefCell::new(false) };
+    /// A cell is being typed in (web.rs): not a moment to leave the page.
+    static TYPING: RefCell<bool> = const { RefCell::new(false) };
+    /// The signed-in account has a password (accounts made through single sign-on have none).
+    static HAS_PASSWORD: RefCell<bool> = const { RefCell::new(true) };
+    /// The page is on its way to the provider to renew the session.
+    static LEAVING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// The person signed in in this tab (None with sign-in off).
@@ -40,6 +51,50 @@ pub fn me() -> Option<Me> {
 /// A request needed sign-in: show the sign-in box.
 pub fn ask_sign_in() {
     SIGN_IN.with(|s| *s.borrow_mut() = true);
+}
+
+/// Opens one of the avatar menu's dialogs, as the menu does (the test hook: `account:profile`,
+/// `account:password`, `account:people`).
+pub fn request(ctx: &egui::Context, what: &str) -> Result<(), String> {
+    if !matches!(what, "profile" | "password" | "people" | "storage" | "backups") {
+        return Err(format!("no account dialog `{what}`"));
+    }
+    ctx.data_mut(|m| m.insert_temp(egui::Id::unique(REQUEST), what.to_string()));
+    Ok(())
+}
+
+/// A request found the single sign-on session ended but renewable: renew it at a quiet moment.
+pub fn renewal_needed() {
+    RENEW.with(|r| *r.borrow_mut() = true);
+}
+
+/// The live connection can't get back in: check whether the sign-in has ended.
+pub fn check_session() {
+    CHECK.with(|c| *c.borrow_mut() = true);
+}
+
+/// Whether a cell is being typed in (set every frame by web.rs).
+pub fn set_typing(on: bool) {
+    TYPING.with(|t| *t.borrow_mut() = on);
+}
+
+/// Milliseconds since 1970 (the page's clock).
+fn now_ms() -> f64 {
+    js_sys::Date::now()
+}
+
+/// The session storage key that remembers a renewal was just started (so the page doesn't go
+/// round in circles, and a renewal that failed before the session ended isn't shown as an
+/// error).
+const RENEWING: &str = "starsheets_renewing";
+
+fn session_storage() -> Option<web_sys::Storage> {
+    web_sys::window().and_then(|w| w.session_storage().ok().flatten())
+}
+
+/// When a renewal was started from this tab (ms), if one was.
+fn renewing_since() -> Option<f64> {
+    session_storage().and_then(|s| s.get_item(RENEWING).ok().flatten()).and_then(|v| v.parse().ok())
 }
 
 pub fn parse_colour(hex: &str) -> Color32 {
@@ -77,8 +132,14 @@ pub fn me_ui(ui: &mut Ui) {
         if house::menu_row(ui, Some("edit"), "Your name and colour…", "", true) {
             ask(ui, "profile");
         }
-        if house::menu_row(ui, Some("lock"), "Change password…", "", true) {
-            ask(ui, "password");
+        // An account made through single sign-on has no password: setting one starts in "Your
+        // name and colour", which first confirms who you are at the sign-in service.
+        if HAS_PASSWORD.with(|p| *p.borrow()) {
+            if house::menu_row(ui, Some("lock"), "Change password…", "", true) {
+                ask(ui, "password");
+            }
+        } else if house::menu_row(ui, Some("lock"), "Set a password…", "", true) {
+            ask(ui, "profile");
         }
         if me.owner && house::menu_row(ui, Some("folder"), "Where files are kept…", "", true) {
             ask(ui, "storage");
@@ -117,6 +178,13 @@ enum Reply {
         signup_code: bool,
         signed_in: bool,
         user: Option<Me>,
+        /// Single sign-on (STARBASE_OIDC_*), when the server has it.
+        sso: Option<Sso>,
+    },
+    /// Looked again whether this tab is still signed in (the live connection kept failing).
+    Check {
+        signed_in: bool,
+        sso: Option<Sso>,
     },
     Signup {
         on: bool,
@@ -124,8 +192,13 @@ enum Reply {
     },
     /// Signed in or out, or the password changed: start the page again.
     Reload,
+    /// Signed out: go to the identity provider's sign-out page (single sign-on), or reload.
+    SignedOut(Option<String>),
     Saved(Me),
-    People(Vec<Me>),
+    /// Everyone, and (owner) whom each is linked to at the identity provider.
+    People(Vec<Person>),
+    /// Go to this address (the identity provider, to link an account).
+    Go(String),
     Error(String),
     Done(String),
     /// Where files are kept now, and the folders that could be chosen (GET /api/storage).
@@ -138,9 +211,162 @@ enum Reply {
     Backup(Json),
     /// The backups kept (GET /api/backup/list).
     BackupList(Vec<Json>),
+    /// Whose folders the backups hold (GET /api/backup/people).
+    BackupPeople(Vec<Json>),
     BackupKey(String),
     /// Settings saved, a backup started or a restore done: say so and look again.
     BackupDone(String),
+}
+
+/// What the server says about single sign-on (GET /api/info `sso`).
+#[derive(Clone, Debug, Default)]
+struct Sso {
+    label: String,
+    /// Only single sign-on (passwords only for owners).
+    only: bool,
+    /// Members of the provider's owner group can set up a new server with it.
+    owner_group: bool,
+    /// The signed-in account is linked to a sign-in at the provider.
+    linked: bool,
+    /// The signed-in account has a password (linking asks for it).
+    password: bool,
+    /// A session made through single sign-on has ended: renew it at the provider.
+    renew: bool,
+    /// Signed in through single sign-on in the last 10 minutes with the provider asking who it
+    /// was: an account with no password may now set one or link another sign-in.
+    fresh: bool,
+    /// Seconds until this session (made through single sign-on) ends.
+    expires_in: Option<f64>,
+}
+
+/// Someone in People (owner): their account, their single sign-on link as (what to show, the
+/// raw ids for the tooltip), and whether they have a password.
+#[derive(Clone, Debug)]
+struct Person {
+    me: Me,
+    link: Option<(String, String)>,
+    password: bool,
+}
+
+fn sso_from(v: &Json) -> Option<Sso> {
+    let o = v.as_object()?;
+    Some(Sso {
+        label: o.get("label").and_then(Json::as_str).unwrap_or("Sign in with SSO").to_string(),
+        only: o.get("only").and_then(Json::as_bool).unwrap_or(false),
+        owner_group: o.get("owner_group").and_then(Json::as_bool).unwrap_or(false),
+        linked: o.get("linked").and_then(Json::as_bool).unwrap_or(false),
+        password: o.get("password").and_then(Json::as_bool).unwrap_or(false),
+        renew: o.get("renew").and_then(Json::as_bool).unwrap_or(false),
+        fresh: o.get("fresh").and_then(Json::as_bool).unwrap_or(false),
+        expires_in: o.get("expires_in").and_then(Json::as_f64),
+    })
+}
+
+/// Goes back to the identity provider without asking (`prompt=none`) to renew a session made
+/// through single sign-on (STARBASE_OIDC_SESSION_HOURS), coming back to this page (the same
+/// file, which opens again from the server: callers make sure nothing is waiting to be saved).
+fn renew_sso() {
+    // Once: going again while the page is already on its way would restart the trip (and use up
+    // the server's try limit).
+    if LEAVING.with(|l| l.replace(true)) {
+        return;
+    }
+    let Some(w) = web_sys::window() else { return };
+    let here = format!("{}{}", w.location().pathname().unwrap_or_default(), w.location().search().unwrap_or_default());
+    if let Some(s) = session_storage() {
+        let _ = s.set_item(RENEWING, &now_ms().to_string());
+    }
+    crate::files::clear_unsaved_flag();
+    let _ = w.location().set_href(&format!("api/oidc/login?silent=1&next={}", crate::files::enc(&here)));
+}
+
+/// The query parameter that reopens "Your name and colour" after confirming who you are at the
+/// sign-in service.
+const AFTER_FRESH: &str = "ss_account";
+
+/// Goes to the sign-in service to confirm who you are (`prompt=login`), back to this page with
+/// "Your name and colour" open again: an account with no password may then set one or link a
+/// different sign-in for 10 minutes.
+fn go_fresh_login() {
+    let Some(w) = web_sys::window() else { return };
+    let mut here = here();
+    here.push_str(if here.contains('?') { "&" } else { "?" });
+    here.push_str(AFTER_FRESH);
+    here.push_str("=profile");
+    crate::files::clear_unsaved_flag();
+    let _ = w.location().set_href(&format!("api/oidc/login?fresh=1&next={}", crate::files::enc(&here)));
+}
+
+/// Takes `ss_account=profile` out of the address: whether it was there.
+fn take_after_fresh() -> bool {
+    let Some(w) = web_sys::window() else { return false };
+    let Ok(search) = w.location().search() else { return false };
+    let Ok(params) = web_sys::UrlSearchParams::new_with_str(&search) else { return false };
+    if params.get(AFTER_FRESH).is_none() {
+        return false;
+    }
+    params.delete(AFTER_FRESH);
+    let rest = String::from(params.to_string());
+    let path = w.location().pathname().unwrap_or_default();
+    if let Ok(h) = w.history() {
+        let url = if rest.is_empty() { path } else { format!("{path}?{rest}") };
+        let _ = h.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&url));
+    }
+    true
+}
+
+/// Whether the page came back from single sign-on with something to say (`?sso=`).
+fn sso_message_waiting() -> bool {
+    web_sys::window().and_then(|w| js_sys::Reflect::get(&w, &"__ssSsoMessage".into()).ok()).and_then(|v| v.as_string()).is_some_and(|m| !m.is_empty())
+}
+
+/// The people list (GET /api/users): each person, and for the owner whom they are linked to:
+/// "ann@example.com at Keycloak" (what the provider called them at their last sign-in, and the
+/// provider's name), with the raw ids (subject, issuer) for the tooltip.
+fn people_from(v: Json) -> Reply {
+    Reply::People(
+        v.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|p| {
+                let sso = &p["sso"];
+                let link = sso["subject"].as_str().map(|sub| {
+                    let iss = sso["issuer"].as_str().unwrap_or("");
+                    let provider = sso["provider"].as_str().filter(|s| !s.is_empty()).unwrap_or(iss);
+                    let shown = match sso["who"].as_str().filter(|s| !s.is_empty()) {
+                        Some(who) => format!("{who} at {provider}"),
+                        None => format!("an account at {provider}"),
+                    };
+                    (shown, format!("Subject: {sub}\nIssuer: {iss}"))
+                });
+                let password = p["password"].as_bool().unwrap_or(true);
+                me_from(p).map(|me| Person { me, link, password })
+            })
+            .collect(),
+    )
+}
+
+/// Sends the browser to the server's single sign-on, coming back to this page.
+fn go_sso_login() {
+    let Some(w) = web_sys::window() else { return };
+    let here = format!("{}{}", w.location().pathname().unwrap_or_default(), w.location().search().unwrap_or_default());
+    crate::files::clear_unsaved_flag();
+    let _ = w.location().set_href(&format!("api/oidc/login?next={}", crate::files::enc(&here)));
+}
+
+/// This page's address, to come back to after linking.
+fn here() -> String {
+    web_sys::window()
+        .map_or_else(String::new, |w| format!("{}{}", w.location().pathname().unwrap_or_default(), w.location().search().unwrap_or_default()))
+}
+
+/// What happened at the last single sign-on (index.html reads `?sso=` from the address and
+/// explains it), taken once.
+fn sso_message() -> Option<String> {
+    let w = web_sys::window()?;
+    let v = js_sys::Reflect::get(&w, &"__ssSsoMessage".into()).ok()?.as_string().filter(|m| !m.is_empty())?;
+    let _ = js_sys::Reflect::set(&w, &"__ssSsoMessage".into(), &"".into());
+    Some(v)
 }
 
 #[derive(Default, PartialEq)]
@@ -165,6 +391,7 @@ pub struct Account {
     /// The server lets people make their own account (and whether that needs a code).
     signup: bool,
     signup_code: bool,
+    sso: Option<Sso>,
     /// The owner's sign-up setting, as shown in People.
     signup_on: bool,
     signup_secret: String,
@@ -183,8 +410,21 @@ pub struct Account {
     password2: String,
     current: String,
     colour: String,
-    people: Vec<Me>,
+    people: Vec<Person>,
     remove_armed: Option<String>,
+    /// Renewing a single sign-on session while the page stays open: when to renew before it
+    /// ends (ms; None: not a single sign-on session, or a renewal before the end just failed),
+    /// since when a renewal is waiting for a quiet moment, when the last input came, and when
+    /// the sign-in was last checked for the live connection.
+    renew_at: Option<f64>,
+    renew_waiting: Option<f64>,
+    last_input: f64,
+    last_check: f64,
+    /// A renewal before the session ended didn't work (the provider wanted to ask something):
+    /// no new try before it ends.
+    renew_held: bool,
+    /// Came back from confirming who you are: open "Your name and colour" once signed in.
+    after_fresh: bool,
     /// Where files are kept (dialog and first-time setup): what the server said, the folder
     /// picked ("" = the top folder), whether to switch to StarSheets files already there, and
     /// when the restart began (waiting for the server to answer again).
@@ -209,6 +449,10 @@ pub struct Account {
     backup_has_old: bool,
     backup_armed: Option<String>,
     backup_polled: f64,
+    /// Whose files a restore brings back (owner, sign-in on): the people the backups hold
+    /// ({name, account}), and the choice (0 = your own, then each other person, then everyone).
+    backup_people: Vec<Json>,
+    backup_whose: usize,
 }
 
 fn me_from(v: &Json) -> Option<Me> {
@@ -256,6 +500,8 @@ impl Account {
     pub fn logic(&mut self, ctx: &egui::Context) {
         if !self.booted {
             self.booted = true;
+            self.after_fresh = take_after_fresh();
+            self.last_input = now_ms();
             call(&self.inbox, ctx, Method::Get, "api/info", None, |v| Reply::Info {
                 auth: v["auth"].as_bool().unwrap_or(false),
                 setup: v["setup"].as_bool().unwrap_or(false),
@@ -263,17 +509,52 @@ impl Account {
                 signup_code: v["signup_code"].as_bool().unwrap_or(false),
                 signed_in: v["signed_in"].as_bool().unwrap_or(true),
                 user: me_from(&v["user"]),
+                sso: sso_from(&v["sso"]),
             });
         }
         let replies: Vec<Reply> = std::mem::take(&mut *self.inbox.borrow_mut());
         for r in replies {
             self.busy = false;
             match r {
-                Reply::Info { auth, setup, signup, signup_code, signed_in, user } => {
+                Reply::Info { auth, setup, signup, signup_code, signed_in, user, sso } => {
                     self.auth = auth;
                     self.signup = signup;
                     self.signup_code = signup_code;
+                    self.sso = sso;
                     ME.with(|m| *m.borrow_mut() = user);
+                    HAS_PASSWORD.with(|p| *p.borrow_mut() = self.sso.as_ref().is_none_or(|s| s.password || !signed_in));
+                    // Back from a renewal started before the session ended: if the provider
+                    // couldn't do it without asking, the session simply carries on until it
+                    // ends (then the sign-in box says so); no error now, and no new try.
+                    let renewed = renewing_since().is_some_and(|t| now_ms() - t < 180_000.0);
+                    if let Some(s) = session_storage() {
+                        let _ = s.remove_item(RENEWING);
+                    }
+                    self.renew_at = None;
+                    if auth && signed_in && renewed && sso_message().is_some() {
+                        log::warn!("single sign-on: renewing before the session ended didn't work; it lasts until it ends");
+                        self.renew_held = true;
+                    } else {
+                        self.plan_renewal(signed_in);
+                    }
+                    // Back from linking an account at the provider: say how it went.
+                    if auth
+                        && signed_in
+                        && let Some(why) = sso_message()
+                    {
+                        self.open(Dialog::Profile);
+                        self.error = Some(why);
+                    }
+                    // Back from confirming who you are: "Your name and colour" again.
+                    if auth && signed_in && std::mem::take(&mut self.after_fresh) {
+                        self.open(Dialog::Profile);
+                    }
+                    // A session made through single sign-on has ended: renew it at the provider
+                    // (unless that just failed: then the sign-in box says so).
+                    if auth && !signed_in && !setup && self.sso.as_ref().is_some_and(|s| s.renew) && !sso_message_waiting() {
+                        renew_sso();
+                        return;
+                    }
                     if auth && !signed_in {
                         self.open(if setup { Dialog::Setup } else { Dialog::SignIn });
                         if setup {
@@ -281,12 +562,36 @@ impl Account {
                         }
                     }
                 }
+                Reply::Check { signed_in, sso } => {
+                    if signed_in {
+                        // Still signed in (the server or the network was away): carry on.
+                        self.sso = sso.or(self.sso.take());
+                        self.plan_renewal(true);
+                    } else if sso.as_ref().is_some_and(|s| s.renew) {
+                        renewal_needed();
+                    } else if self.auth {
+                        ask_sign_in();
+                    }
+                }
                 Reply::Reload => reload(),
+                Reply::SignedOut(to) => match (to, web_sys::window()) {
+                    (Some(url), Some(w)) => {
+                        crate::files::clear_unsaved_flag();
+                        let _ = w.location().set_href(&url);
+                    }
+                    _ => reload(),
+                },
                 Reply::Saved(me) => {
                     ME.with(|m| *m.borrow_mut() = Some(me));
                     self.dialog = Dialog::None;
                 }
                 Reply::People(p) => self.people = p,
+                Reply::Go(url) => {
+                    if let Some(w) = web_sys::window() {
+                        crate::files::clear_unsaved_flag();
+                        let _ = w.location().set_href(&url);
+                    }
+                }
                 Reply::Storage(v) => {
                     self.storage_pick.get_or_insert_with(|| v["current"].as_str().unwrap_or("").to_string());
                     self.storage = Some(v);
@@ -316,9 +621,15 @@ impl Account {
                         call(&self.inbox, ctx, Method::Get, "api/backup/list", None, |v| {
                             Reply::BackupList(v.as_array().cloned().unwrap_or_default())
                         });
+                        if self.auth {
+                            call(&self.inbox, ctx, Method::Get, "api/backup/people", None, |v| {
+                                Reply::BackupPeople(v.as_array().cloned().unwrap_or_default())
+                            });
+                        }
                     }
                 }
                 Reply::BackupList(l) => self.backup_list = Some(l),
+                Reply::BackupPeople(p) => self.backup_people = p,
                 Reply::BackupKey(k) => self.backup_key = Some(k),
                 Reply::BackupDone(msg) => {
                     self.done = Some(msg);
@@ -343,9 +654,7 @@ impl Account {
                     self.name.clear();
                     self.username.clear();
                     self.password.clear();
-                    call(&self.inbox, ctx, Method::Get, "api/users", None, |v| {
-                        Reply::People(v.as_array().into_iter().flatten().filter_map(me_from).collect())
-                    });
+                    call(&self.inbox, ctx, Method::Get, "api/users", None, people_from);
                 }
             }
         }
@@ -363,22 +672,101 @@ impl Account {
                     self.backup_list = None;
                     self.backup_key = None;
                     self.backup_armed = None;
+                    self.backup_people.clear();
+                    self.backup_whose = 0;
                     call(&self.inbox, ctx, Method::Get, "api/backup", None, Reply::Backup);
                 }
                 "people" => {
                     self.open(Dialog::People);
-                    call(&self.inbox, ctx, Method::Get, "api/users", None, |v| {
-                        Reply::People(v.as_array().into_iter().flatten().filter_map(me_from).collect())
-                    });
+                    call(&self.inbox, ctx, Method::Get, "api/users", None, people_from);
                     call(&self.inbox, ctx, Method::Get, "api/signup/settings", None, signup_reply);
                 }
-                "signout" => call(&self.inbox, ctx, Method::Post, "api/logout", None, |_| Reply::Reload),
+                "signout" => call(&self.inbox, ctx, Method::Post, "api/logout", None, |v| {
+                    Reply::SignedOut(v["logout_url"].as_str().filter(|u| u.starts_with("https://") || u.starts_with("http://")).map(str::to_string))
+                }),
+                "sso-unlink" => call(&self.inbox, ctx, Method::Post, "api/oidc/unlink", None, |_| Reply::Reload),
                 _ => {}
             }
         }
-        if SIGN_IN.with(|s| std::mem::take(&mut *s.borrow_mut())) && !matches!(self.dialog, Dialog::Setup | Dialog::SignUp) {
+        self.renew_in_background(ctx);
+        let leaving = LEAVING.with(|l| l.get());
+        if SIGN_IN.with(|s| std::mem::take(&mut *s.borrow_mut())) && !leaving && !matches!(self.dialog, Dialog::Setup | Dialog::SignUp) {
             self.open(Dialog::SignIn);
         }
+    }
+
+    /// When to renew a single sign-on session before it ends: RENEW_LEAD before (or now, if it
+    /// ends sooner than that). Not for a password session, nor after a renewal that didn't work.
+    fn plan_renewal(&mut self, signed_in: bool) {
+        /// How long before the end a renewal is tried (it then waits for a quiet moment).
+        const RENEW_LEAD: f64 = 600.0;
+        self.renew_at = match self.sso.as_ref().and_then(|s| s.expires_in) {
+            Some(left) if signed_in && !self.renew_held => Some(now_ms() + (left - RENEW_LEAD).max(0.0) * 1000.0),
+            _ => None,
+        };
+    }
+
+    /// Renews a single sign-on session while the page stays open: shortly before it ends, or
+    /// when a request found it ended (files.rs `fetch`, or the live connection can't get back
+    /// in). It goes to the provider without asking and comes back to the same page, so it waits
+    /// for a quiet moment: nothing waiting to be saved or on its way, no cell or text field being
+    /// typed in, no dialog open, and no input for a few seconds. If changes can't be saved for a minute
+    /// because the session has ended, the sign-in box is shown instead (as before).
+    fn renew_in_background(&mut self, ctx: &egui::Context) {
+        let now = now_ms();
+        if ctx.input(|i| !i.events.is_empty() || i.pointer.any_down()) {
+            self.last_input = now;
+        }
+        // The live connection can't get back in: is the sign-in still good?
+        if CHECK.with(|c| std::mem::take(&mut *c.borrow_mut())) && self.auth && now - self.last_check > 20_000.0 {
+            self.last_check = now;
+            call(&self.inbox, ctx, Method::Get, "api/info", None, |v| Reply::Check {
+                signed_in: v["signed_in"].as_bool().unwrap_or(true),
+                sso: sso_from(&v["sso"]),
+            });
+        }
+        let ended = RENEW.with(|r| *r.borrow());
+        let due = self.renew_at.is_some_and(|t| now >= t);
+        if !ended && !due {
+            self.renew_waiting = None;
+            if let Some(t) = self.renew_at {
+                ctx.request_repaint_after(std::time::Duration::from_millis((t - now).clamp(1000.0, 3_600_000.0) as u64));
+            }
+            return;
+        }
+        if ended {
+            // Ended: the sign-in box isn't needed (yet).
+            SIGN_IN.with(|s| *s.borrow_mut() = false);
+        }
+        let since = *self.renew_waiting.get_or_insert(now);
+        let unsaved = web_sys::window().and_then(|w| js_sys::Reflect::get(&w, &"__ssUnsaved".into()).ok()).is_some_and(|v| v.is_truthy());
+        let typing = TYPING.with(|t| *t.borrow());
+        // Any text field with focus (share, rename, new folder ...) or any dialog open: the
+        // renewal leaves the page, so what was typed there would be lost.
+        let busy = ctx.memory(|m| m.focused().is_some() || m.top_modal_layer().is_some());
+        let quiet = !unsaved
+            && !busy
+            && !crate::files::writes_in_flight()
+            && !typing
+            && self.dialog == Dialog::None
+            && !self.dom_sign_in
+            && now - self.last_input > 4000.0
+            && !ctx.input(|i| i.pointer.any_down());
+        if quiet {
+            RENEW.with(|r| *r.borrow_mut() = false);
+            self.renew_at = None;
+            renew_sso();
+            return;
+        }
+        if ended && unsaved && now - since > 60_000.0 {
+            // Changes can't be saved while the session has ended, and they would be lost by
+            // leaving the page now: say so with the sign-in box, as before.
+            RENEW.with(|r| *r.borrow_mut() = false);
+            self.renew_waiting = None;
+            self.open(Dialog::SignIn);
+            return;
+        }
+        ctx.request_repaint_after(std::time::Duration::from_millis(1000));
     }
 
     fn open(&mut self, d: Dialog) {
@@ -393,9 +781,17 @@ impl Account {
         self.password2.clear();
         self.current.clear();
         self.remove_armed = None;
-        if let Some(me) = me() {
-            self.name = me.name;
-            self.colour = me.colour;
+        // Your own name only in "Your name and colour": People's "Their name" shares the field.
+        match me().filter(|_| self.dialog == Dialog::Profile) {
+            Some(me) => {
+                self.name = me.name;
+                self.colour = me.colour;
+            }
+            None if self.dialog == Dialog::People => {
+                self.name.clear();
+                self.username.clear();
+            }
+            None => {}
         }
     }
 
@@ -493,7 +889,7 @@ impl Account {
                         if f == current {
                             label.push_str("  · in use");
                         } else if with_files.contains(&f) || (f.is_empty() && v["top_has_files"].as_bool().unwrap_or(false)) {
-                            label.push_str("  · has StarSheets files");
+                            label.push_str("  · has Starbase files");
                         }
                         p.text(egui::pos2(x + 28.0, r.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(14.0), theme::TEXT);
                         if resp.clicked() {
@@ -510,13 +906,13 @@ impl Account {
                     ui.radio_value(
                         &mut self.storage_use,
                         true,
-                        "Use the StarSheets files already in that folder (accounts there too: you may need to sign in again)",
+                        "Use the Starbase files already in that folder (accounts there too: you may need to sign in again)",
                     );
                     ui.radio_value(&mut self.storage_use, false, "Move my files there");
                 } else {
                     house::note(
                         ui,
-                        "Your spreadsheets, folders, versions, bin and accounts move there. Nobody can have a spreadsheet open while it happens; StarSheets restarts afterwards (a few seconds).",
+                        "Your spreadsheets, folders, versions, bin and accounts move there. Nobody can have a spreadsheet open while it happens; Starbase restarts afterwards (a few seconds).",
                     );
                 }
             }
@@ -571,6 +967,22 @@ impl Account {
             }
         }
         let (list, key) = (self.backup_list.clone(), self.backup_key.clone());
+        // "Whose files" (sign-in on): your own, each other person the backups hold, everyone's.
+        let mine = me().map(|m| m.username).unwrap_or_default();
+        let mut whose: Vec<(String, Option<String>)> = vec![("Your own files".into(), None)];
+        if self.auth && !self.backup_people.is_empty() {
+            for p in &self.backup_people {
+                let name = p["name"].as_str().unwrap_or("");
+                if name != mine && !name.is_empty() {
+                    let label = if p["account"].as_bool().unwrap_or(false) { name.to_string() } else { format!("{name} (no account now)") };
+                    whose.push((label, Some(name.to_string())));
+                }
+            }
+            whose.push(("Everyone's files".into(), Some(String::new())));
+        }
+        if self.backup_whose >= whose.len() {
+            self.backup_whose = 0;
+        }
         let when = |iso: &str| format!("{} UTC", iso.replace('T', " ").chars().take(16).collect::<String>());
         house::dialog(ctx, "starsheets_backups", 560.0, "Backups", Some(&mut close), |ui| {
             house::note(
@@ -650,8 +1062,16 @@ impl Account {
                 house::label(
                     ui,
                     "Backups kept",
-                    "The last 7 days, 4 weeks and 12 months. Restore copies your files from then into a new folder; nothing is overwritten.",
+                    "The last 7 days, 4 weeks and 12 months. Restore copies files from then into a new folder; nothing is overwritten.",
                 );
+                if whose.len() > 1 {
+                    ui.horizontal(|ui| {
+                        house::text(ui, "Whose files");
+                        let labels: Vec<&str> = whose.iter().map(|(l, _)| l.as_str()).collect();
+                        house::select(ui, "backup_whose", 260.0, &mut self.backup_whose, &labels, &[0, labels.len() - 2]);
+                    });
+                    house::note(ui, "Someone else's come back beside their own folder; if they have no account here, into yours, named after them.");
+                }
                 match &list {
                     None => house::note(ui, "Loading…"),
                     Some(l) if l.is_empty() => house::note(ui, "None yet."),
@@ -716,9 +1136,13 @@ impl Account {
             self.error = None;
             self.backup_armed = None;
             self.done = Some("Restoring…".into());
-            call(&self.inbox, ctx, Method::Post, "api/backup/restore", Some(json!({ "id": id })), |v| {
+            let mut body = json!({ "id": id });
+            if let Some((_, Some(w))) = whose.get(self.backup_whose) {
+                body["whose"] = json!(w);
+            }
+            call(&self.inbox, ctx, Method::Post, "api/backup/restore", Some(body), |v| {
                 Reply::BackupDone(format!(
-                    "Copied {} files into the folder \"{}\" in your files.",
+                    "Copied {} files into the folder \"{}\".",
                     v["files"].as_u64().unwrap_or(0),
                     v["folder"].as_str().unwrap_or("")
                 ))
@@ -728,7 +1152,7 @@ impl Account {
         }
     }
 
-    /// After a change of folder: "StarSheets is restarting…" until the server answers again
+    /// After a change of folder: "Starbase is restarting…" until the server answers again
     /// (checked once a second), then the page starts again.
     fn restarting_ui(&mut self, ctx: &egui::Context) {
         let Some(since) = self.restarting else { return };
@@ -743,7 +1167,7 @@ impl Account {
             });
         }
         house::dialog(ctx, "starsheets_restarting", 360.0, "Moving to the new folder", None, |ui| {
-            house::text(ui, "StarSheets is restarting in its new folder. This page starts again by itself in a few seconds.");
+            house::text(ui, "Starbase is restarting in its new folder. This page starts again by itself in a few seconds.");
         });
     }
 
@@ -756,7 +1180,8 @@ impl Account {
         if want != self.dom_sign_in {
             self.dom_sign_in = want;
             if let Some(f) = js_sys::Reflect::get(&w, &"__ssSignIn".into()).ok().and_then(|f| f.dyn_into::<js_sys::Function>().ok()) {
-                let _ = f.call2(&w, &want.into(), &self.signup.into());
+                let sso = self.sso.as_ref().map_or(wasm_bindgen::JsValue::NULL, |s| json!({ "label": s.label, "only": s.only }).to_string().into());
+                let _ = f.call3(&w, &want.into(), &self.signup.into(), &sso);
             }
         }
         if want && js_sys::Reflect::get(&w, &"__ssWantSignUp".into()).is_ok_and(|v| v.is_truthy()) {
@@ -810,12 +1235,18 @@ impl Account {
 
     fn setup(&mut self, ctx: &egui::Context) {
         let mut go = false;
-        house::dialog(ctx, "starsheets_setup", 400.0, "Welcome to StarSheets", None, |ui| {
+        house::dialog(ctx, "starsheets_setup", 400.0, "Welcome to Starbase", None, |ui| {
             house::note(ui, "This server has no accounts yet. Make yours: you'll be its owner and can add other people afterwards.");
             house::note(
                 ui,
-                "The setup code is printed in the server's log when it starts (with Docker: docker logs followed by the container's name). If the server was started with STARSHEETS_PASSWORD, that is the code.",
+                "The setup code is printed in the server's log when it starts (with Docker: docker logs followed by the container's name). If the server was started with STARBASE_PASSWORD (or the older STARSHEETS_PASSWORD), that is the code.",
             );
+            if let Some(sso) = self.sso.as_ref().filter(|s| s.owner_group) {
+                house::note(ui, "Or, if you are in the owner group at your sign-in service, sign in with it: you become the owner.");
+                if ui.add(house::secondary(&sso.label)).clicked() {
+                    go_sso_login();
+                }
+            }
             house::gap(ui);
             house::label(ui, "Setup code", "");
             let r = Self::field(ui, &mut self.code, "From the server's log", false);
@@ -898,6 +1329,68 @@ impl Account {
                     }
                 }
             });
+            if let Some(sso) = self.sso.clone() {
+                house::gap(ui);
+                if sso.linked && sso.password {
+                    house::label(ui, "Single sign-on", "Your account is linked to your sign-in at the sign-in service.");
+                    if ui.add(house::link("Unlink")).clicked() {
+                        ctx.data_mut(|m| m.insert_temp(egui::Id::unique(REQUEST), "sso-unlink".to_string()));
+                    }
+                } else if sso.linked {
+                    // Made through single sign-on: no password, so it can't simply be unlinked.
+                    // Setting a password or linking a different sign-in needs a fresh sign-in
+                    // there (the server checks: api/oidc/login?fresh=1, then 10 minutes).
+                    house::label(
+                        ui,
+                        "Single sign-on",
+                        "Your account was made through the sign-in service and has no password here, so you sign in only through it.",
+                    );
+                    if sso.fresh {
+                        house::note(
+                            ui,
+                            "You've just confirmed who you are. For the next 10 minutes you can set a password (then you can unlink), or link a different sign-in to this account.",
+                        );
+                        ui.add_space(house::S);
+                        let mut link_other = false;
+                        ui.horizontal(|ui| {
+                            if ui.add(house::secondary("Set a password…")).clicked() {
+                                ctx.data_mut(|m| m.insert_temp(egui::Id::unique(REQUEST), "password".to_string()));
+                            }
+                            link_other = ui.add(house::secondary("Link another sign-in")).clicked();
+                        });
+                        if link_other && !self.busy {
+                            self.busy = true;
+                            call(&self.inbox, ctx, Method::Post, "api/oidc/link", Some(json!({ "next": here() })), |v| match v["url"].as_str() {
+                                Some(u) => Reply::Go(u.to_string()),
+                                None => Reply::Error("The sign-in service couldn't be reached.".into()),
+                            });
+                        }
+                    } else {
+                        house::note(
+                            ui,
+                            "To set a password (then you can unlink) or link a different sign-in, first confirm who you are at the sign-in service.",
+                        );
+                        ui.add_space(house::S);
+                        if ui.add(house::secondary("Confirm who you are")).clicked() {
+                            go_fresh_login();
+                        }
+                    }
+                } else {
+                    house::label(ui, "Single sign-on", "Link this account to your sign-in at the sign-in service, then use it to sign in here.");
+                    if sso.password {
+                        Self::field(ui, &mut self.current, "Your password here (to link)", true);
+                        ui.add_space(house::S);
+                    }
+                    if ui.add(house::secondary(&sso.label)).clicked() && !self.busy {
+                        self.busy = true;
+                        let body = json!({ "current_password": self.current, "next": here() });
+                        call(&self.inbox, ctx, Method::Post, "api/oidc/link", Some(body), |v| match v["url"].as_str() {
+                            Some(u) => Reply::Go(u.to_string()),
+                            None => Reply::Error("The sign-in service couldn't be reached.".into()),
+                        });
+                    }
+                }
+            }
             self.messages(ui);
             match house::actions(ui, &["Cancel", "Save"]) {
                 Some(0) => cancel = true,
@@ -922,17 +1415,33 @@ impl Account {
         let mut close = false;
         let mut cancel = false;
         let mut go = false;
-        house::dialog(ctx, "starsheets_password", 380.0, "Change password", Some(&mut close), |ui| {
-            let r = Self::field(ui, &mut self.current, "Current password", true);
-            self.first(&r);
-            ui.add_space(house::S);
-            Self::field(ui, &mut self.password, "New password (8 characters or more)", true);
+        // An account made through single sign-on sets its first password: there is no current
+        // one to type (the server wants a fresh sign-in at the provider instead).
+        let first = !HAS_PASSWORD.with(|p| *p.borrow());
+        let title = if first { "Set a password" } else { "Change password" };
+        house::dialog(ctx, "starsheets_password", 380.0, title, Some(&mut close), |ui| {
+            if !first {
+                let r = Self::field(ui, &mut self.current, "Current password", true);
+                self.first(&r);
+                ui.add_space(house::S);
+            }
+            let r = Self::field(ui, &mut self.password, "New password (8 characters or more)", true);
+            if first {
+                self.first(&r);
+            }
             ui.add_space(house::S);
             let r = Self::field(ui, &mut self.password2, "New password again", true);
             go |= Self::enter(ui, &r);
-            house::note(ui, "You'll stay signed in here; other devices will need the new password.");
+            house::note(
+                ui,
+                if first {
+                    "Then you can also sign in here with your username and this password, and unlink single sign-on if you want to."
+                } else {
+                    "You'll stay signed in here; other devices will need the new password."
+                },
+            );
             self.messages(ui);
-            match house::actions(ui, &["Cancel", "Change password"]) {
+            match house::actions(ui, &["Cancel", title]) {
                 Some(0) => cancel = true,
                 Some(_) => go = true,
                 None => {}
@@ -946,11 +1455,13 @@ impl Account {
                 return;
             }
             self.busy = true;
-            call(&self.inbox, ctx, Method::Post, "api/me", Some(json!({ "current_password": self.current, "password": self.password })), |v| {
-                match me_from(&v["user"]) {
-                    Some(me) => Reply::Saved(me),
-                    None => Reply::Error("Couldn't change the password.".into()),
-                }
+            let body =
+                if first { json!({ "password": self.password }) } else { json!({ "current_password": self.current, "password": self.password }) };
+            call(&self.inbox, ctx, Method::Post, "api/me", Some(body), move |v| match me_from(&v["user"]) {
+                // The first password: the page starts again, now knowing the account has one.
+                Some(_) if first => Reply::Reload,
+                Some(me) => Reply::Saved(me),
+                None => Reply::Error("Couldn't change the password.".into()),
             });
         }
     }
@@ -960,18 +1471,37 @@ impl Account {
         let mut cancel = false;
         let mut add = false;
         let mut remove = None;
+        let mut unlink: Option<String> = None;
         let mut save_signup = false;
         let me = me().unwrap_or_default();
         house::dialog(ctx, "starsheets_people", 460.0, "People", Some(&mut close), |ui| {
             house::note(ui, "Everyone with an account on this server. Each person sees only their own files and the ones shared with them.");
             house::gap(ui);
-            for p in self.people.clone() {
+            for Person { me: p, link: linked, password } in self.people.clone() {
                 ui.horizontal(|ui| {
                     avatar(ui, &p.name, &p.colour, 28.0);
                     ui.add_space(house::S);
                     ui.vertical(|ui| {
                         ui.label(RichText::new(&p.name).size(house::BODY).color(theme::TEXT));
                         house::note(ui, &if p.owner { format!("{} · owner", p.username) } else { p.username.clone() });
+                        if let Some((shown, ids)) = &linked {
+                            ui.horizontal(|ui| {
+                                house::note_with_tip(ui, &format!("Single sign-on: {shown}"), ids);
+                                // No password: removing the link would lock them out (the
+                                // server refuses); a password set here removes it instead.
+                                if password {
+                                    if ui.add(house::link("Remove link")).clicked() {
+                                        unlink = Some(p.username.clone());
+                                    }
+                                } else {
+                                    house::note_with_tip(
+                                        ui,
+                                        "· no password",
+                                        "They sign in only through single sign-on, so the link stays until they set a password themselves (Your name and colour).",
+                                    );
+                                }
+                            });
+                        }
                     });
                     if !p.owner && p.username != me.username {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1040,6 +1570,9 @@ impl Account {
             self.remove_armed = None;
             let url = format!("api/users?username={}", crate::files::enc(&who));
             call(&self.inbox, ctx, Method::Delete, &url, None, move |_| Reply::Done(format!("Removed {who}.")));
+        } else if let Some(who) = unlink {
+            let url = format!("api/users/sso?username={}", crate::files::enc(&who));
+            call(&self.inbox, ctx, Method::Delete, &url, None, move |_| Reply::Done(format!("Removed {who}'s single sign-on link.")));
         }
     }
 }

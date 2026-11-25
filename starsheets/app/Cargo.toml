@@ -1,6 +1,6 @@
 [package]
 name = "starsheets"
-description = "StarSheets: a Google Sheets-style spreadsheet for the web on GridCraft's engine"
+description = "Starbase Sheets: a Google Sheets-style spreadsheet for the web on GridCraft's engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -22,12 +22,25 @@ serde_json = { workspace = true }
 starsheets-sync = { path = "../crates/sync" }
 serde = { version = "1", features = ["derive"] }
 regex = "1"
+# Preview pictures on the home screen (decoding them).
+png = "0.18"
+
+# The desktop app (native.rs): GridCraft's own native window setup, local mode over a folder on
+# disk (localstore.rs), the system's file dialogs and Trash; persistence remembers each
+# program's window size and place; glow is the renderer when wgpu can't start (native.rs).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "glow", "accesskit", "wayland", "x11", "clipboard", "persistence"] }
+rfd = { workspace = true }
+starsheets-sync = { path = "../crates/sync", features = ["thumbs"] }
+trash = "5"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+# A new, empty document for Starbase Docs (already in the build through GridCraft).
+zip = { version = "3", default-features = false, features = ["deflate"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit"] }
 rfd = { workspace = true }
 wasm-bindgen = "0.2"
-png = "0.18"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "Event", "EventTarget", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "HtmlIFrameElement", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration", "Clipboard", "ClipboardItem", "Navigator", "MessageEvent", "UrlSearchParams", "AddEventListenerOptions", "Storage", "CustomEvent", "CustomEventInit", "Request", "RequestInit", "Response", "Headers", "History", "WebSocket", "BinaryType", "CloseEvent"] }

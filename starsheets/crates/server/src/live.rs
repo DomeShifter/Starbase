@@ -141,7 +141,7 @@ impl Rooms {
 
 pub async fn ws(State(app): State<Shared>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
     if !crate::signed_in(&app, &headers) {
-        return crate::error(401, "please sign in").into_response();
+        return crate::please_sign_in(&app, &headers).into_response();
     }
     let user = crate::current_user(&app, &headers);
     // A tab's biggest message is a change sent whole; packed it stays well under MAX_FRAME (and
@@ -166,7 +166,7 @@ async fn connection(app: Shared, mut socket: WebSocket, user: Option<crate::auth
                 Ok(ToServer::Hello { file, build, client, protocol, have }) => {
                     // Only a different protocol needs the tab to reload (not every new build).
                     if protocol != sync::PROTOCOL {
-                        crate::log::note(&app.store, &format!("tab of {} on an older StarSheets (build {build:?}) asked to reload", who(&user)));
+                        crate::log::note(&app.store, &format!("tab of {} on an older Starbase (build {build:?}) asked to reload", who(&user)));
                         let _ = socket.send(Message::Text(text(&ToClient::Reload).into())).await;
                         return;
                     }
@@ -177,7 +177,7 @@ async fn connection(app: Shared, mut socket: WebSocket, user: Option<crate::auth
                 // A tab older than protocol 3 sends `{"t": "hello", …}` without "c": it reads our
                 // Reload (`{"t": "reload"}`) the same as before, and gets the new app.
                 Err(_) if t.contains("\"hello\"") => {
-                    crate::log::note(&app.store, &format!("tab of {} on an older StarSheets asked to reload", who(&user)));
+                    crate::log::note(&app.store, &format!("tab of {} on an older Starbase asked to reload", who(&user)));
                     let _ = socket.send(Message::Text(text(&ToClient::Reload).into())).await;
                     return;
                 }
@@ -217,7 +217,7 @@ async fn connection(app: Shared, mut socket: WebSocket, user: Option<crate::auth
         tokio::task::spawn_blocking(move || app.store.path_of(&file).ok().flatten().is_some_and(|p| crate::store::is_doc(&p))).await.unwrap_or(false)
     };
     if is_doc {
-        let _ = socket.send(Message::Text(text(&ToClient::Message { text: "That file is a document: open it in StarDocs.".into() }).into())).await;
+        let _ = socket.send(Message::Text(text(&ToClient::Message { text: "That's a document: open it in Starbase Docs.".into() }).into())).await;
         return;
     }
     let can_edit = role >= crate::sharing::Role::Edit;
@@ -343,6 +343,10 @@ struct Room {
     saving: Option<(u64, std::sync::mpsc::Receiver<Saved>)>,
     /// When everyone's access was last checked again.
     access_checked: Instant,
+    /// The tab that made the last change and the sheet it is on: the file is saved open on that
+    /// sheet, so a download or another device opens where the work was (each tab itself reopens
+    /// where its person last was, remembered in the browser).
+    last_sheet: Option<(String, usize)>,
 }
 
 /// What a background save reports.
@@ -385,6 +389,7 @@ impl Room {
             hash: None,
             saving: None,
             access_checked: Instant::now(),
+            last_sheet: None,
         };
         let opened = room.open();
         loop {
@@ -537,7 +542,7 @@ impl Room {
                 }
                 let _ = out.send(text(&self.welcome(have, can_edit, &client)));
                 let undo_as = format!("{}/{tab}", user.as_ref().map_or("", |u| u.username.as_str()));
-                // Without sign-in (STARSHEETS_AUTH=off) people are guests, numbered as they come.
+                // Without sign-in (STARBASE_AUTH=off) people are guests, numbered as they come.
                 let person = match user.clone() {
                     Some(u) => sync::Person { client: client.clone(), username: u.username, name: u.name, colour: u.colour },
                     None => {
@@ -610,6 +615,11 @@ impl Room {
                     if let Some(c) = self.clients.get_mut(&client) {
                         c.presence = Some((sheet, sel.clone()));
                     }
+                    if let Some((by, at)) = &mut self.last_sheet
+                        && *by == client
+                    {
+                        *at = sheet;
+                    }
                     let m = text(&ToClient::Presence { client: client.clone(), sheet, sel });
                     for (other, c) in &self.clients {
                         if *other != client {
@@ -668,6 +678,14 @@ impl Room {
             }
             self.to(client, &ToClient::NeedState { cseq });
             return;
+        }
+        // Where the tab is: its last Presence, else the sheet the change was made on.
+        let sheet = match &change {
+            Change::Cmd { sheet, .. } => Some(*sheet),
+            Change::State { .. } => None,
+        };
+        if let Some(at) = self.clients.get(client).and_then(|c| c.presence.as_ref().map(|p| p.0)).or(sheet) {
+            self.last_sheet = Some((client.to_string(), at));
         }
         if let Some(c) = self.clients.get_mut(client) {
             c.blocked = None;
@@ -876,8 +894,9 @@ impl Room {
         }
         let (tx, rx) = std::sync::mpsc::channel();
         let (app, file, disk, editor) = (self.app.clone(), self.file.clone(), self.disk.clone(), self.last_editor.take());
+        let sheet = self.last_sheet.as_ref().map(|(_, at)| *at);
         std::thread::spawn(move || {
-            let result = save_file(&app, &file, &wb, disk.as_deref(), editor.as_deref());
+            let result = save_file(&app, &file, &wb, sheet, disk.as_deref(), editor.as_deref());
             if let Ok(Some(v)) = &result
                 && thumb
                 && let Ok(png) = crate::thumbs::draw(&wb)
@@ -951,7 +970,7 @@ impl Room {
         crate::log::note(
             &self.app.store,
             &format!(
-                "{} changed outside StarSheets; {}",
+                "{} changed outside Starbase; {}",
                 self.path.clone().unwrap_or_default(),
                 match &kept {
                     Some(Ok(n)) => format!("unsaved changes kept in {n}"),
@@ -966,12 +985,12 @@ impl Room {
         self.reload();
         let text = match kept {
             Some(Ok(name)) => format!(
-                "This file was changed outside StarSheets (for example in Excel). You're now seeing that version; the changes made here in the last few seconds are kept in \u{201c}{name}\u{201d} in the same folder."
+                "This file was changed outside Starbase (for example in Excel). You're now seeing that version; the changes made here in the last few seconds are kept in \u{201c}{name}\u{201d} in the same folder."
             ),
             Some(Err(why)) => {
-                format!("This file was changed outside StarSheets, and the last few seconds of changes made here couldn't be kept: {why}")
+                format!("This file was changed outside Starbase, and the last few seconds of changes made here couldn't be kept: {why}")
             }
-            None => "This file was changed outside StarSheets (for example in Excel), so it was opened again.".to_string(),
+            None => "This file was changed outside Starbase (for example in Excel), so it was opened again.".to_string(),
         };
         self.all(&ToClient::Message { text });
     }
@@ -1032,8 +1051,8 @@ impl Room {
         let path = store.path_of(&self.file).map_err(|e| e.to_string())?.ok_or("the file is gone")?;
         let folder = crate::store::parent_of(&path);
         let (stem, _) = crate::store::split_name(&crate::store::base_of(&path));
-        let name =
-            store.claim_name(&folder, &format!("{stem} (StarSheets copy {})", crate::store::readable_stamp()), ".xlsx", None).map_err(|e| e.msg)?;
+        let wanted = format!("{stem} (Starbase Sheets copy {})", crate::store::readable_stamp());
+        let name = store.claim_name(&folder, &wanted, ".xlsx", None).map_err(|e| e.msg)?;
         let bytes = gridcraft_engine::io::save_bytes(wb, &name).map_err(|e| e.to_string())?;
         store.write_file(&store.full(&crate::store::join(&folder, &name)), &bytes).map_err(|e| e.to_string())?;
         Ok(name)
@@ -1054,11 +1073,21 @@ impl Room {
 
 /// Writes `wb` over file `id`, as long as the file on disk is still `expected` (never over a
 /// change made outside StarSheets). The .xlsx is made before taking the server's file lock.
-/// Returns the file's new version.
-fn save_file(app: &Shared, id: &str, wb: &Workbook, expected: Option<&str>, editor: Option<&str>) -> Result<Option<String>, SaveError> {
+/// Returns the file's new version. `sheet`: the sheet the file opens on (the last editor's).
+fn save_file(
+    app: &Shared,
+    id: &str,
+    wb: &Workbook,
+    sheet: Option<usize>,
+    expected: Option<&str>,
+    editor: Option<&str>,
+) -> Result<Option<String>, SaveError> {
     let failed = |e: String| SaveError::Failed(e);
     // Cells with Google Sheets' Clip are listed in StarSheets' section (Excel has no such setting).
     let mut wb = wb.clone();
+    if let Some(at) = sheet.filter(|at| wb.sheet(*at).is_some_and(|sh| sh.visibility == gridcraft_engine::model::Visibility::Visible)) {
+        wb.set_active_sheet(at);
+    }
     sync::clip_into_host(&mut wb);
     let name = app.store.path_of(id).ok().flatten().map(|p| crate::store::base_of(&p)).unwrap_or_else(|| "file.xlsx".into());
     let bytes = gridcraft_engine::io::save_bytes(&wb, &name).map_err(|e| failed(e.to_string()))?;
@@ -1107,8 +1136,16 @@ mod tests {
         std::fs::write(dir.join("t.csv"), "a,b\n1,2\n").unwrap();
         let store = Store { root: dir.clone(), keep: 3, spaces: false };
         let id = store.synced_index().unwrap().keys().next().unwrap().clone();
-        let app =
-            Arc::new(App { store, base: dir.clone(), lock: Mutex::new(()), location: String::new(), auth, site: None, rooms: Rooms::default() });
+        let app = Arc::new(App {
+            store,
+            base: dir.clone(),
+            lock: Mutex::new(()),
+            location: String::new(),
+            auth,
+            site: None,
+            rooms: Rooms::default(),
+            oidc: None,
+        });
         (app, id, dir)
     }
 
@@ -1209,7 +1246,8 @@ mod tests {
         std::thread::sleep(Duration::from_millis(400));
         let saved = std::fs::read_to_string(dir.join("t.csv")).unwrap();
         assert!(saved.contains("from a") && saved.contains("from b"), "{saved}");
-        assert_eq!(std::fs::read_dir(dir.join(".starsheets/versions").join(&file)).unwrap().count(), 1, "the old copy is kept");
+        let copies = std::fs::read_dir(dir.join(".starsheets/versions").join(&file)).unwrap().flatten();
+        assert_eq!(copies.filter(|e| !e.file_name().to_string_lossy().ends_with(".json")).count(), 1, "the old copy is kept");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1294,7 +1332,7 @@ mod tests {
         take_applied(&mut a);
         std::fs::write(dir.join("t.csv"), "a,b\ntheirs,9\n").unwrap();
         assert!(matches!(next(&mut a), ToClient::Reset { .. }));
-        assert!(message(&mut a).contains("StarSheets copy"));
+        assert!(message(&mut a).contains("Starbase Sheets copy"));
         app.rooms.send(&app, &file, RoomMsg::Leave { client: "a".into() });
         std::thread::sleep(Duration::from_millis(400));
         assert!(std::fs::read_to_string(dir.join("t.csv")).unwrap().contains("theirs"), "their version is untouched");
@@ -1302,7 +1340,7 @@ mod tests {
             .unwrap()
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().to_string())
-            .filter(|n| n.contains("StarSheets copy"))
+            .filter(|n| n.contains("Starbase Sheets copy"))
             .collect();
         assert_eq!(copies.len(), 1, "{copies:?}");
         let _ = std::fs::remove_dir_all(dir);
@@ -1499,6 +1537,48 @@ mod tests {
             resets += usize::from(matches!(serde_json::from_str(&m).unwrap(), ToClient::Reset { .. }));
         }
         assert_eq!(resets, 1, "the asks in between are answered once");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// The file is saved open on the sheet of whoever changed it last, not the one it was first
+    /// saved on (someone who added Sheet2 early saw an empty Sheet2 on every reopen).
+    #[test]
+    fn the_file_is_saved_open_where_the_last_change_was() {
+        let dir = std::env::temp_dir().join(format!("starsheets-live-{}", crate::store::random_hex(6)));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut s = Session::new();
+        s.execute("file.new", json!({})).unwrap();
+        s.execute("home.insertSheet", json!({})).unwrap();
+        s.execute("sheet.activate", json!({ "sheet": 1 })).unwrap();
+        let bytes = gridcraft_engine::io::save_bytes(&s.active().unwrap().wb, "t.xlsx").unwrap();
+        std::fs::write(dir.join("t.xlsx"), bytes).unwrap();
+        let store = Store { root: dir.clone(), keep: 3, spaces: false };
+        let file = store.synced_index().unwrap().keys().next().unwrap().clone();
+        let app = Arc::new(App {
+            store,
+            base: dir.clone(),
+            lock: Mutex::new(()),
+            location: String::new(),
+            auth: false,
+            site: None,
+            rooms: Rooms::default(),
+            oidc: None,
+        });
+        let opened = |dir: &std::path::Path| {
+            let bytes = std::fs::read(dir.join("t.xlsx")).unwrap();
+            gridcraft_engine::io::open_bytes("t.xlsx", &bytes).unwrap().0.active_sheet()
+        };
+        assert_eq!(opened(&dir), 1);
+        let mut a = join(&app, &file, "a");
+        let sel = gridcraft_engine::selection::Selection::default();
+        app.rooms.send(&app, &file, RoomMsg::From { client: "a".into(), msg: ToServer::Presence { sheet: 0, sel } });
+        a.session.execute("sheet.activate", json!({ "sheet": 0 })).unwrap();
+        a.session.sync_log = Some(Vec::new());
+        edit(&app, &file, &mut a, "cell.set", json!({"cell": "A1", "input": "on Sheet1"}));
+        take_applied(&mut a);
+        app.rooms.send(&app, &file, RoomMsg::Leave { client: "a".into() });
+        std::thread::sleep(Duration::from_millis(400));
+        assert_eq!(opened(&dir), 0, "saved open on Sheet1, where the change was");
         let _ = std::fs::remove_dir_all(dir);
     }
 }

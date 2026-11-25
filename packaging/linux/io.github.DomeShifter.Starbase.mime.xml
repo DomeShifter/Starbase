@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- shared-mime-info for the spreadsheet formats StarSheets opens (copied from GridCraft
+<!-- shared-mime-info for the spreadsheet formats Starbase Sheets opens (copied from GridCraft
      v0.19.1). Every type below already ships with shared-mime-info on current distros; these
      entries only make sure the glob is known on minimal systems. The system's own definitions
-     win where they exist. StarDocs' formats (docx, odt, rtf...) need no entries: like WordCraft,
+     win where they exist. Starbase Docs' formats (docx, odt, rtf...) need no entries: like WordCraft,
      it relies on the system's definitions. -->
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
   <mime-type type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">

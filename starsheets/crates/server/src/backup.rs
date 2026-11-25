@@ -22,8 +22,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use rustic_backend::BackendOptions;
 use rustic_core::{
-    BackupOptions, ConfigOptions, Credentials, KeepOptions, KeyOptions, LocalDestination, LsOptions, OpenStatus, PathList, PruneOptions, Repository,
-    RepositoryOptions, RestoreOptions, SnapshotOptions,
+    BackupOptions, ConfigOptions, Credentials, IndexedTree, KeepOptions, KeyOptions, LocalDestination, LsOptions, OpenStatus, PathList, PruneOptions,
+    Repository, RepositoryOptions, RestoreOptions, SnapshotOptions, repofile::Node,
 };
 use serde_json::{Map, Value, json};
 
@@ -273,9 +273,83 @@ pub fn list(base: &Path) -> Result<Vec<Value>, String> {
         .collect())
 }
 
+/// What a person sees when something inside rustic goes wrong: never its own words (they can say
+/// "please report this bug"). The details go to the server's log.
+fn unreadable(what: &str, e: impl std::fmt::Display) -> String {
+    eprintln!("backup: {what}: {e}");
+    "That backup couldn't be read. The server's log has the details.".to_string()
+}
+
+/// The files folder (`/starbase`) inside backup `id`, and the names of the folders at its top
+/// (the server's own `.` folders left out).
+fn top<S: IndexedTree>(repo: &Repository<S>, id: &str) -> Result<(Node, Vec<String>), String> {
+    let node = repo.node_from_snapshot_path(&format!("{id}:{AS_PATH}"), |_| true).map_err(|e| unreadable(id, e))?;
+    let Some(tree) = node.subtree else { return Ok((node, Vec::new())) };
+    let tree = repo.get_tree(&tree).map_err(|e| unreadable(id, e))?;
+    let names = tree.nodes.iter().filter(|n| n.is_dir()).map(|n| n.name().to_string_lossy().into_owned()).filter(|n| !n.starts_with('.')).collect();
+    Ok((node, names))
+}
+
+/// The folders at the top of the files folder in any backup kept (with sign-in on, one per
+/// person, including people whose accounts are gone), sorted.
+pub fn people(base: &Path) -> Result<Vec<String>, String> {
+    let s = load(base);
+    let to = s.get("to").and_then(Value::as_str).filter(|t| !t.is_empty()).ok_or("Backups aren't set up yet.")?;
+    let key = s.get("key").and_then(Value::as_str).unwrap_or("");
+    let repo = open(to, key)?.to_indexed_ids().map_err(|e| unreadable("index", e))?;
+    let snaps = repo.get_all_snapshots().map_err(|e| unreadable("snapshots", e))?;
+    let mut all = std::collections::BTreeSet::new();
+    for sn in &snaps {
+        all.extend(top(&repo, &sn.id.to_string())?.1);
+    }
+    Ok(all.into_iter().collect())
+}
+
+/// Whose folder a restore brings back. `asker` is who asks (None: sign-in is off), `whose` what
+/// they chose (None: their own; Some("") everyone's). Only the server's owner (or anyone, with
+/// sign-in off) may bring back someone else's files.
+pub fn whose_folder(asker: Option<&str>, owner: bool, whose: Option<&str>) -> Result<String, String> {
+    let whose = whose.map(str::trim);
+    let chosen = match (asker, whose) {
+        (None, w) => w.unwrap_or("").to_string(),
+        (Some(me), None) => me.to_string(),
+        (Some(me), Some(w)) if w == me => me.to_string(),
+        (Some(_), Some(w)) if owner => w.to_string(),
+        (Some(_), Some(_)) => return Err("You can only restore your own files.".into()),
+    };
+    if chosen.contains(['/', '\\']) || chosen.starts_with('.') {
+        return Err("There's no folder of that name in the backups.".into());
+    }
+    Ok(chosen)
+}
+
+/// Where restored files go (a path in the files folder, not there yet), for backup `label`:
+/// beside the person's own folder ("ann/Restored from backup <label>"); for someone with no
+/// folder here (an account that's gone, or a server made again), or for everyone's files, into
+/// the asker's own folder, named after whose they are. With sign-in off, at the top.
+pub fn restore_into(label: &str, whose: &str, asker: Option<&str>, exists: impl Fn(&str) -> bool) -> String {
+    let stem = format!("Restored from backup {label}");
+    let (folder, stem) = match asker {
+        _ if !whose.is_empty() && exists(whose) => (whose.to_string(), stem),
+        Some(me) if whose.is_empty() => (me.to_string(), format!("{stem} (everyone)")),
+        Some(me) => (me.to_string(), format!("{stem} ({whose})")),
+        None if whose.is_empty() => (String::new(), stem),
+        None => (String::new(), format!("{stem} ({whose})")),
+    };
+    let at = |name: &str| if folder.is_empty() { name.to_string() } else { format!("{folder}/{name}") };
+    let mut name = stem.clone();
+    let mut n = 2;
+    while exists(&at(&name)) {
+        name = format!("{stem} ({n})");
+        n += 1;
+    }
+    at(&name)
+}
+
 /// Copies a folder out of backup `id` into `dest` (a new folder), without touching anything else.
 /// `inside` is the folder within the files folder ("" = all of it, e.g. "james" = James's own).
-/// Returns how many files came back.
+/// All of it leaves out the server's own folders at the top (`.starsheets`: accounts, versions);
+/// restic itself brings those back. Returns how many files came back.
 pub fn restore(base: &Path, id: &str, inside: &str, dest: &Path) -> Result<u64, String> {
     let s = load(base);
     let to = s.get("to").and_then(Value::as_str).filter(|t| !t.is_empty()).ok_or("Backups aren't set up yet.")?;
@@ -283,18 +357,32 @@ pub fn restore(base: &Path, id: &str, inside: &str, dest: &Path) -> Result<u64, 
     if dest.exists() {
         return Err("That folder exists already.".into());
     }
-    let repo = open(to, key)?.to_indexed().map_err(|e| e.to_string())?;
-    let path = if inside.is_empty() { AS_PATH.to_string() } else { format!("{AS_PATH}/{inside}") };
-    let node = repo
-        .node_from_snapshot_path(&format!("{id}:{path}"), |_| true)
-        .map_err(|e| if inside.is_empty() { e.to_string() } else { format!("That backup has no folder {inside} ({e}).") })?;
-    let ls = repo.ls(&node, &LsOptions::default()).map_err(|e| e.to_string())?;
+    let repo = open(to, key)?.to_indexed().map_err(|e| unreadable("index", e))?;
+    let (node, names) = top(&repo, id)?;
+    let node = if inside.is_empty() {
+        node
+    } else {
+        // Looked up first: rustic's own answer for a missing folder is an internal error
+        // (a new server whose owner has another name asked for a folder no backup has).
+        let missing = || format!("That backup has no files for {inside}.");
+        if !names.iter().any(|n| n == inside) {
+            return Err(missing());
+        }
+        let tree = node.subtree.ok_or_else(missing)?;
+        repo.node_from_path(tree, Path::new(inside)).map_err(|e| unreadable(inside, e))?
+    };
+    let all = inside.is_empty();
+    let hidden = |p: &Path| p.components().next().is_some_and(|c| c.as_os_str().to_string_lossy().starts_with('.'));
+    let ls = repo
+        .ls(&node, &LsOptions::default())
+        .map_err(|e| unreadable("list", e))?
+        .filter(move |r| !all || r.as_ref().map_or(true, |(p, _)| !hidden(p)));
     let dest_s = dest.to_string_lossy().into_owned();
-    let target = LocalDestination::new(&dest_s, true, !node.is_dir()).map_err(|e| e.to_string())?;
+    let target = LocalDestination::new(&dest_s, true, !node.is_dir()).map_err(|e| format!("Can't make the folder for the restored files: {e}"))?;
     let opts = RestoreOptions::default();
-    let plan = repo.prepare_restore(&opts, ls.clone(), &target, false).map_err(|e| e.to_string())?;
+    let plan = repo.prepare_restore(&opts, ls.clone(), &target, false).map_err(|e| unreadable("plan", e))?;
     let files = plan.stats.files.restore + plan.stats.files.unchanged + plan.stats.files.verified + plan.stats.files.modify;
-    repo.restore(plan, &opts, ls, &target).map_err(|e| e.to_string())?;
+    repo.restore(plan, &opts, ls, &target).map_err(|e| unreadable("restore", e))?;
     Ok(files)
 }
 
@@ -326,6 +414,13 @@ mod tests {
         d
     }
 
+    /// Only one backup runs at a time (RUNNING), and tests run side by side: take turns.
+    fn run_one(base: &Path, root: &Path) -> Result<String, String> {
+        static TURN: Mutex<()> = Mutex::new(());
+        let _t = TURN.lock().unwrap_or_else(|e| e.into_inner());
+        run(base, root, "test")
+    }
+
     #[test]
     fn keys_are_typed_back_in_any_form() {
         let k = new_key();
@@ -354,7 +449,7 @@ mod tests {
             s.insert("key".into(), json!(key));
         })
         .unwrap();
-        let said = run(&base, &root, "test").unwrap();
+        let said = run_one(&base, &root).unwrap();
         assert!(said.starts_with("Backed up 2 files"), "{said}");
         // The file changes after the backup; the backup still has the old one.
         std::fs::write(root.join("james/Budget/2026.xlsx"), b"changed").unwrap();
@@ -368,9 +463,108 @@ mod tests {
         assert!(!dest.join("half.tmp").exists(), "half-written saves are skipped");
         let all = base.join("everything");
         restore(&base, id, "", &all).unwrap();
-        assert!(all.join(".starsheets/users.json").is_file());
+        assert!(all.join("james/Budget/2026.xlsx").is_file());
+        assert!(!all.join(".starsheets").exists(), "accounts stay out of a folder people can open");
         assert!(!all.join(".starsheets-backup.json").exists(), "the key never goes into a backup");
         assert!(load(&base)["last"]["ok"].as_bool().unwrap());
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// A server with two people (james the owner, ann), backed up once. Returns (base, root, key, id).
+    fn two_people() -> (PathBuf, PathBuf, String, String) {
+        let base = tmp("two");
+        let root = base.join("files");
+        for (who, file, bytes) in [("james", "Budget.xlsx", &b"james's sheet"[..]), ("ann", "Notes.docx", &b"ann's notes"[..])] {
+            std::fs::create_dir_all(root.join(who)).unwrap();
+            std::fs::write(root.join(who).join(file), bytes).unwrap();
+        }
+        std::fs::create_dir_all(root.join(".starsheets")).unwrap();
+        std::fs::write(root.join(".starsheets/users.json"), b"{}").unwrap();
+        let to = base.join("backups");
+        let key = new_key();
+        prepare(to.to_str().unwrap(), &key).unwrap();
+        update(&base, |s| {
+            s.insert("to".into(), json!(to.to_str().unwrap()));
+            s.insert("key".into(), json!(key));
+        })
+        .unwrap();
+        run_one(&base, &root).unwrap();
+        let id = list(&base).unwrap()[0]["id"].as_str().unwrap().to_string();
+        (base, root, key, id)
+    }
+
+    /// What the restore route does: whose files, where they go, then the copy.
+    fn restore_as(base: &Path, root: &Path, id: &str, asker: &str, owner: bool, whose: Option<&str>) -> Result<(String, u64), String> {
+        let whose = whose_folder(Some(asker), owner, whose)?;
+        let rel = restore_into("2026-11-24 03.00", &whose, Some(asker), |p| root.join(p).exists());
+        let n = restore(base, id, &whose, &root.join(&rel))?;
+        Ok((rel, n))
+    }
+
+    #[test]
+    fn restore_as_the_same_owner() {
+        let (base, root, _, id) = two_people();
+        let (rel, n) = restore_as(&base, &root, &id, "james", true, None).unwrap();
+        assert_eq!((rel.as_str(), n), ("james/Restored from backup 2026-11-24 03.00", 1));
+        assert_eq!(std::fs::read(root.join(&rel).join("Budget.xlsx")).unwrap(), b"james's sheet");
+        // A second time: a new folder beside the first.
+        let (rel2, _) = restore_as(&base, &root, &id, "james", true, None).unwrap();
+        assert_eq!(rel2, "james/Restored from backup 2026-11-24 03.00 (2)");
+        assert_eq!(people(&base).unwrap(), vec!["ann", "james"]);
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn restore_on_a_new_server_whose_owner_has_another_name() {
+        let (old, _, key, id) = two_people();
+        // The server is lost; a new one (owner "boss") opens the same backups with the key.
+        let base = tmp("new");
+        let root = base.join("files");
+        std::fs::create_dir_all(root.join("boss")).unwrap();
+        let to = old.join("backups");
+        assert_eq!(prepare(to.to_str().unwrap(), &key).unwrap(), "found");
+        update(&base, |s| {
+            s.insert("to".into(), json!(to.to_str().unwrap()));
+            s.insert("key".into(), json!(key));
+        })
+        .unwrap();
+        // Their own folder isn't in the backup: a plain answer, not rustic's internal error.
+        let e = restore_as(&base, &root, &id, "boss", true, None).unwrap_err();
+        assert_eq!(e, "That backup has no files for boss.");
+        // james's account is gone: his files come back into boss's folder, named after him.
+        let (rel, n) = restore_as(&base, &root, &id, "boss", true, Some("james")).unwrap();
+        assert_eq!((rel.as_str(), n), ("boss/Restored from backup 2026-11-24 03.00 (james)", 1));
+        assert_eq!(std::fs::read(root.join(&rel).join("Budget.xlsx")).unwrap(), b"james's sheet");
+        // Everyone's: one folder each, without the server's own (accounts).
+        let (rel, n) = restore_as(&base, &root, &id, "boss", true, Some("")).unwrap();
+        assert_eq!((rel.as_str(), n), ("boss/Restored from backup 2026-11-24 03.00 (everyone)", 2));
+        assert!(root.join(&rel).join("ann/Notes.docx").is_file());
+        assert!(!root.join(&rel).join(".starsheets").exists());
+        std::fs::remove_dir_all(&base).ok();
+        std::fs::remove_dir_all(&old).ok();
+    }
+
+    #[test]
+    fn owner_restores_another_persons_folder_beside_it() {
+        let (base, root, _, id) = two_people();
+        std::fs::write(root.join("ann/Notes.docx"), b"changed since").unwrap();
+        let (rel, n) = restore_as(&base, &root, &id, "james", true, Some("ann")).unwrap();
+        assert_eq!((rel.as_str(), n), ("ann/Restored from backup 2026-11-24 03.00", 1));
+        assert_eq!(std::fs::read(root.join(&rel).join("Notes.docx")).unwrap(), b"ann's notes");
+        assert_eq!(std::fs::read(root.join("ann/Notes.docx")).unwrap(), b"changed since", "nothing is overwritten");
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn others_only_restore_their_own() {
+        let (base, root, _, id) = two_people();
+        assert_eq!(restore_as(&base, &root, &id, "ann", false, Some("james")).unwrap_err(), "You can only restore your own files.");
+        assert_eq!(restore_as(&base, &root, &id, "ann", false, Some("")).unwrap_err(), "You can only restore your own files.");
+        assert!(!root.join("james").read_dir().unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with("Restored")));
+        let (rel, _) = restore_as(&base, &root, &id, "ann", false, Some("ann")).unwrap();
+        assert_eq!(rel, "ann/Restored from backup 2026-11-24 03.00");
+        assert!(whose_folder(Some("james"), true, Some("../etc")).is_err());
+        assert!(whose_folder(Some("james"), true, Some(".starsheets")).is_err());
         std::fs::remove_dir_all(&base).ok();
     }
 
@@ -397,5 +591,15 @@ mod tests {
         assert!(due(&s, &at("2026-11-26T09:00:00+00:00[UTC]")), "missed one: catch up");
         s.insert("last".into(), json!({ "when": "2026-11-26T08:30:00Z", "ok": false }));
         assert!(!due(&s, &at("2026-11-26T09:00:00+00:00[UTC]")), "failed 30 min ago: wait an hour");
+    }
+
+    #[test]
+    fn time_zones_work_without_the_systems_list() {
+        // Slim Docker images have no /usr/share/zoneinfo: the built-in copy still knows TZ names.
+        let db = jiff::tz::TimeZoneDatabase::bundled();
+        let london = db.get("Europe/London").expect("Europe/London from the built-in list");
+        assert_eq!(london.iana_name(), Some("Europe/London"));
+        let summer = "2026-07-01T12:00:00Z".parse::<jiff::Timestamp>().unwrap().to_zoned(london);
+        assert_eq!(summer.hour(), 13, "British Summer Time");
     }
 }

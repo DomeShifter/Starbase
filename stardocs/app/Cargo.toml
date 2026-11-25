@@ -1,9 +1,11 @@
 [package]
 name = "stardocs"
-description = "StarDocs: a Google Docs-style word processor for the web on WordCraft's engine"
+description = "Starbase Docs: a Google Docs-style word processor for the web and the desktop on WordCraft's engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
 publish = false
 
 [lints]
@@ -16,10 +18,6 @@ path = "src/main.rs"
 [dependencies]
 wordcraft-engine = { workspace = true }
 wordcraft-ui-egui = { workspace = true }
-# The host messages (storytold/craft-libs): one contract and one bridge for the web builds.
-# The page command API (storytold/craft-libs#413): window.wordcraft over the control channel.
-craft-web-api = { git = "https://github.com/storytold/craft-libs", rev = "fd5e2feff6ea25bed371a99cc732b3968d621505", version = "0.1.0" }
-craft-web-host = { git = "https://github.com/storytold/craft-libs", rev = "fd5e2feff6ea25bed371a99cc732b3968d621505", version = "0.1.0" }
 egui = { workspace = true }
 log = { workspace = true }
 serde_json = { workspace = true }
@@ -31,14 +29,29 @@ kurbo = { workspace = true }
 # SVG loader for the toolbar icons (resvg).
 egui_extras = { workspace = true, features = ["svg"] }
 
+# The desktop program (native.rs): the same window in a native eframe window, drawn with OpenGL
+# through glow as the web build draws with WebGL2; the system's file dialogs (rfd, waited for on
+# a thread with pollster, as WordCraft's desktop app does); local time for copy names.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# `persistence`: the window's size and place are kept for the next start.
+eframe = { workspace = true, features = ["default_fonts", "glow", "accesskit", "clipboard", "wayland", "x11", "persistence"] }
+rfd = { workspace = true }
+pollster = "1"
+chrono = { workspace = true, features = ["clock"] }
+
 # Native tests of the window (src/shell_tests.rs): egui_kittest's accessibility tree, no GPU.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 egui_kittest = { workspace = true }
 egui = { workspace = true, features = ["default_fonts"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-# `wgpu` pulls egui-wgpu's defaults: WebGPU plus the WebGL2 fallback.
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit"] }
+# The host messages (storytold/craft-libs): one contract and one bridge for the web builds.
+# The page command API (storytold/craft-libs#413): window.wordcraft over the control channel.
+craft-web-api = { git = "https://github.com/storytold/craft-libs", rev = "fd5e2feff6ea25bed371a99cc732b3968d621505", version = "0.1.0" }
+craft-web-host = { git = "https://github.com/storytold/craft-libs", rev = "fd5e2feff6ea25bed371a99cc732b3968d621505", version = "0.1.0" }
+# `glow` draws with WebGL2 only: wgpu + naga (WebGPU) cost 0.6 MB of the brotli download, and
+# WordCraft's interface paints nothing wgpu-specific (docs/research/wordcraft-trim.md).
+eframe = { workspace = true, features = ["default_fonts", "glow", "accesskit"] }
 rfd = { workspace = true }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"

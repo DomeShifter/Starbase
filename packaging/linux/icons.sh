@@ -6,11 +6,11 @@
 #
 # Writes <dest>/hicolor/scalable/apps/<id>.svg and, when rsvg-convert or resvg is on PATH,
 # <dest>/hicolor/<n>x<n>/apps/<id>.png for n in 16 24 32 48 64 128 256 512.
-# Icons that are not square (the StarDocs logo is 48x64) are centred on a square canvas first,
+# Icons that are not square (the Starbase Docs logo is 48x64) are centred on a square canvas first,
 # because icon themes scale every icon to a square.
 #
-# StarDrive's icon is starsheets/app/stardrive.svg, which is being designed on the `icons`
-# branch. Until that is merged, the StarSheets icon stands in and a warning is printed.
+# Starbase Drive's icon is starsheets/app/stardrive.svg, which is being designed on the `icons`
+# branch. Until that is merged, the Starbase Sheets icon stands in and a warning is printed.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DEST="${1:?usage: icons.sh <dest dir, e.g. AppDir/usr/share/icons>}"
@@ -20,7 +20,7 @@ SHEETS_SVG="$ROOT/starsheets/app/favicon.svg"
 DOCS_SVG="$ROOT/stardocs/app/icons/stardocs_logo.svg"
 DRIVE_SVG="$ROOT/starsheets/app/stardrive.svg"
 if [[ ! -f "$DRIVE_SVG" ]]; then
-  echo "warning: $DRIVE_SVG not found (icons branch not merged yet); using the StarSheets icon for StarDrive" >&2
+  echo "warning: $DRIVE_SVG not found (icons branch not merged yet); using the Starbase Sheets icon for Starbase Drive" >&2
   DRIVE_SVG="$SHEETS_SVG"
 fi
 

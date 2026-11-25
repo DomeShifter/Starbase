@@ -67,12 +67,15 @@ mkdir -p "$APPDIR/usr/share/metainfo"
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$BUILD_DATE/g" \
   "$HERE/$ID.metainfo.xml.in" >"$APPDIR/usr/share/metainfo/$ID.metainfo.xml"
 "$HERE/icons.sh" "$APPDIR/usr/share/icons"
+# The package version, for `Starbase.AppImage --version` (AppRun).
+install -Dm644 /dev/null "$APPDIR/usr/share/starbase/version"
+printf '%s\n' "$VERSION" >"$APPDIR/usr/share/starbase/version"
 mkdir -p "$APPDIR/usr/share/doc/starbase"
 for f in README.md LICENSE-MIT LICENSE-APACHE NOTICE; do
   if [[ -f "$ROOT/$f" ]]; then cp "$ROOT/$f" "$APPDIR/usr/share/doc/starbase/"; fi
 done
 
-# AppImage root: the dispatcher, the StarDrive menu entry (the one desktop integration tools
+# AppImage root: the dispatcher, the Starbase Drive menu entry (the one desktop integration tools
 # such as Gear Lever install) and its icon.
 install -Dm755 "$HERE/AppRun" "$APPDIR/AppRun"
 cp "$HERE/$ID.desktop" "$APPDIR/$ID.desktop"

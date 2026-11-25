@@ -2,11 +2,11 @@
 //! with SITE set, serves the web app too. Replaces server/files.py with the same API and the
 //! same files on disk (see docs/server.md), as the base for live editing.
 //!
-//! Settings (environment): STORE (folder, default /data), KEEP (versions kept, 6), PORT (8080),
-//! LOCATION (how people are told where files are kept), STARSHEETS_AUTH (off = no login),
-//! STARSHEETS_PASSWORD, SITE (a built StarSheets site to serve), and the security settings in
-//! guard.rs (STARSHEETS_PUBLIC_URL, STARSHEETS_ALLOWED_HOSTS, STARSHEETS_TRUSTED_PROXY,
-//! STARSHEETS_SECURE_COOKIE).
+//! Settings (environment): STORE (folder, default /data), KEEP (most earlier versions kept per file, 100; store.rs thin), PORT (8080),
+//! LOCATION (how people are told where files are kept), STARBASE_AUTH (off = no login),
+//! STARBASE_PASSWORD, SITE (a built StarSheets site to serve), the security settings in
+//! guard.rs (STARBASE_PUBLIC_URL, STARBASE_ALLOWED_HOSTS, STARBASE_TRUSTED_PROXY,
+//! STARBASE_SECURE_COOKIE) and single sign-on's STARBASE_OIDC_* (oidc.rs, docs/oidc.md).
 
 // Request handlers return a ready HTTP response as their error (axum's usual way); boxing it to
 // make the error smaller would only add an allocation on the error path.
@@ -17,6 +17,7 @@ mod backup;
 mod guard;
 mod live;
 mod log;
+mod oidc;
 mod sharing;
 mod spaces;
 mod store;
@@ -53,7 +54,14 @@ static ARGON_AT_ONCE: LazyLock<tokio::sync::Semaphore> = LazyLock::new(|| tokio:
 const WRONG_WAIT: Duration = Duration::from_millis(1500);
 #[cfg(test)]
 const WRONG_WAIT: Duration = Duration::from_millis(10);
+/// The session cookie over plain HTTP (a home network), and over HTTPS: the `__Host-` prefix
+/// means only this exact site can set it (not a sibling or parent domain). Over HTTPS the plain
+/// name isn't read at all (guard::drop_plain_cookies), so a session from before the prefix
+/// means signing in once more.
 const COOKIE: &str = "starsheets_session";
+const HOST_COOKIE: &str = "__Host-starsheets_session";
+/// Linking an account that has no password needs a single sign-on sign-in this recent.
+const LINK_FRESH_SECS: f64 = 600.0;
 
 struct App {
     store: Store,
@@ -65,12 +73,27 @@ struct App {
     auth: bool,
     site: Option<PathBuf>,
     rooms: live::Rooms,
+    /// Single sign-on through the owner's identity provider (STARBASE_OIDC_ISSUER set).
+    oidc: Option<Arc<oidc::Oidc>>,
 }
 
 type Shared = Arc<App>;
 
 fn env(name: &str, default: &str) -> String {
-    std::env::var(name).unwrap_or_else(|_| default.to_string())
+    setting(name).unwrap_or_else(|| default.to_string())
+}
+
+/// A setting from the environment. Every `STARBASE_*` setting may also be given by its
+/// older name, `STARSHEETS_*`; when both are set the new name wins.
+pub(crate) fn setting(name: &str) -> Option<String> {
+    setting_from(name, |k| std::env::var(k).ok())
+}
+
+fn setting_from(name: &str, get: impl Fn(&str) -> Option<String>) -> Option<String> {
+    match name.strip_prefix("STARBASE_").or_else(|| name.strip_prefix("STARSHEETS_")) {
+        Some(rest) => get(&format!("STARBASE_{rest}")).or_else(|| get(&format!("STARSHEETS_{rest}"))),
+        None => get(name),
+    }
 }
 
 // ---------------------------------------------------------------- responses
@@ -130,11 +153,7 @@ fn reply(r: Result<Reply, Bad>) -> Response<Body> {
 // ---------------------------------------------------------------- sign-in
 
 fn cookie_token(headers: &HeaderMap) -> Option<String> {
-    let cookies = headers.get_all(header::COOKIE).iter().filter_map(|v| v.to_str().ok()).collect::<Vec<_>>().join(";");
-    cookies.split(';').find_map(|part| {
-        let (name, value) = part.trim().split_once('=')?;
-        (name == COOKIE && !value.is_empty()).then(|| value.to_string())
-    })
+    named_cookie(headers, HOST_COOKIE).or_else(|| named_cookie(headers, COOKIE))
 }
 
 /// Who is asking (`None`: not signed in, or sign-in is off).
@@ -149,6 +168,14 @@ fn signed_in(app: &App, headers: &HeaderMap) -> bool {
     !app.auth || current_user(app, headers).is_some()
 }
 
+/// The answer to a request that needs sign-in. `renew`: the session was made through single
+/// sign-on and has ended, so the app renews it at the provider without asking (docs/oidc.md)
+/// rather than showing the sign-in box.
+fn please_sign_in(app: &App, headers: &HeaderMap) -> Response<Body> {
+    let renew = app.oidc.is_some() && cookie_token(headers).is_some_and(|t| auth::session_renewable(&app.store, &t));
+    send_json(&json!({ "error": "please sign in", "renew": renew }), 401)
+}
+
 /// What the request says about who sent it: their address (for the try limits) and whether
 /// it came over HTTPS (the sign-in cookie is then Secure). See guard.rs.
 #[derive(Clone, Copy, Debug, Default)]
@@ -161,15 +188,66 @@ fn same(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
+fn session_cookie(value: &str, max_age: u64, secure: bool) -> String {
+    if secure {
+        format!("{HOST_COOKIE}={value}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Strict; Secure")
+    } else {
+        format!("{COOKIE}={value}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Strict")
+    }
+}
+
+/// The Set-Cookie lines for a session (the first is the session itself): over HTTPS the old
+/// name is cleared too; signing out (`value` empty) clears both names.
+fn session_cookies(value: &str, max_age: u64, secure: bool) -> Vec<String> {
+    let mut v = vec![session_cookie(value, max_age, secure)];
+    if secure {
+        v.push(session_cookie("", 0, false));
+    } else if value.is_empty() {
+        v.push(session_cookie("", 0, true));
+    }
+    v
+}
+
+/// A JSON answer that sets cookies.
+fn json_with_cookies(body: Value, cookies: &[String]) -> Response<Body> {
+    let mut b = Response::builder().status(200).header(header::CONTENT_TYPE, "application/json").header(header::CACHE_CONTROL, "no-store");
+    for c in cookies {
+        b = b.header(header::SET_COOKIE, c);
+    }
+    b.body(Body::from(serde_json::to_vec(&body).unwrap_or_default())).unwrap()
+}
+
 fn cookie_reply(value: &str, max_age: u64, body: Value, secure: bool) -> Response<Body> {
-    let secure = if secure { "; Secure" } else { "" };
-    Response::builder()
-        .status(200)
-        .header(header::CONTENT_TYPE, "application/json")
-        .header(header::CACHE_CONTROL, "no-store")
-        .header(header::SET_COOKIE, format!("{COOKIE}={value}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Strict{secure}"))
-        .body(Body::from(serde_json::to_vec(&body).unwrap_or_default()))
-        .unwrap()
+    json_with_cookies(body, &session_cookies(value, max_age, secure))
+}
+
+/// Sends the browser on to `location` (single sign-on), setting `cookies`.
+fn see_other(location: &str, cookies: &[String]) -> Response<Body> {
+    let mut b = Response::builder().status(303).header(header::LOCATION, location).header(header::CACHE_CONTROL, "no-store");
+    for c in cookies {
+        b = b.header(header::SET_COOKIE, c);
+    }
+    b.body(Body::empty()).unwrap()
+}
+
+/// The cookie that ties a sign-in at the identity provider to this browser. SameSite=Lax: the
+/// provider sends the browser back from its own site, and a Strict cookie wouldn't come along.
+/// Over HTTPS it has the `__Host-` prefix, so a sibling subdomain can't plant its own (which
+/// would sign this browser in as someone else).
+fn oidc_cookie(value: &str, max_age: u64, secure: bool) -> String {
+    if secure {
+        format!("{}={value}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Lax; Secure", oidc::HOST_COOKIE)
+    } else {
+        format!("{}={value}; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Lax", oidc::COOKIE)
+    }
+}
+
+fn named_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
+    let cookies = headers.get_all(header::COOKIE).iter().filter_map(|v| v.to_str().ok()).collect::<Vec<_>>().join(";");
+    cookies.split(';').find_map(|part| {
+        let (n, value) = part.trim().split_once('=')?;
+        (n == name && !value.is_empty()).then(|| value.to_string())
+    })
 }
 
 /// Runs account work (Argon2 is slow) off the async threads, under the store lock.
@@ -237,9 +315,26 @@ async fn accounts(
         (["info"], "GET") => {
             let setup = on && !auth::any_users(&app.store);
             let s = auth::signup(&app.store);
-            let signup = on && !setup && s.on;
+            let sso = app.oidc.as_ref().filter(|_| on).map(|o| {
+                let linked = me.as_ref().is_some_and(|u| auth::is_linked(&app.store, &u.username));
+                let password = me.as_ref().is_some_and(|u| auth::has_password(&app.store, &u.username));
+                // A session made through single sign-on that has ended: the app renews it at the
+                // provider without asking.
+                let renew = me.is_none() && cookie_token(headers).is_some_and(|t| auth::session_renewable(&app.store, &t));
+                // Signed in through single sign-on just now, with the provider asking who it was
+                // (an account with no password may then link another sign-in).
+                let fresh = cookie_token(headers)
+                    .and_then(|t| auth::fresh_sso_session_made(&app.store, &t))
+                    .is_some_and(|made| store::now() - made < LINK_FRESH_SECS);
+                // Seconds until this session (made through single sign-on) ends: the app renews it
+                // at the provider shortly before, at a quiet moment, so nothing is interrupted.
+                let expires_in = cookie_token(headers).and_then(|t| auth::sso_session_expires(&app.store, &t)).map(|e| (e - store::now()).max(0.0).floor());
+                json!({ "label": o.cfg.label, "only": o.cfg.only, "owner_group": o.cfg.owner_group.is_some(), "linked": linked, "password": password, "renew": renew, "fresh": fresh, "expires_in": expires_in })
+            });
+            let only = app.oidc.as_ref().is_some_and(|o| o.cfg.only);
+            let signup = on && !setup && s.on && !only;
             send_json(
-                &json!({ "location": app.location, "auth": on, "signed_in": !on || me.is_some(), "setup": setup, "signup": signup, "signup_code": signup && !s.code.is_empty(), "user": me.map(|u| u.json()) }),
+                &json!({ "location": app.location, "auth": on, "signed_in": !on || me.is_some(), "setup": setup, "signup": signup, "signup_code": signup && !s.code.is_empty(), "user": me.map(|u| u.json()), "sso": sso }),
                 200,
             )
         }
@@ -293,6 +388,9 @@ async fn accounts(
         (["signup"], "POST") => {
             if !on {
                 return Some(error(400, "Sign-in is off on this server."));
+            }
+            if app.oidc.as_ref().is_some_and(|o| o.cfg.only) {
+                return Some(error(403, "This server signs people in through single sign-on only."));
             }
             if !LIMITS.take(&ip_key("signup", ask.ip), guard::SIGNUP_IP) {
                 return Some(too_many());
@@ -361,31 +459,70 @@ async fn accounts(
             let found = blocking(app, move |app| auth::login_hash(&app.store, &username)).await.flatten();
             let (hash, user) = found.map_or((None, None), |(u, h)| (Some(h), Some(u)));
             let right = slow(move || auth::verify(&password, hash.as_deref())).await.unwrap_or(false);
-            match user.filter(|_| right) {
+            // STARBASE_OIDC_ONLY: passwords only for owners (a way in when the provider is down).
+            // A right password for anyone else gets exactly the answer a wrong one gets, so the
+            // sign-in box can't be used to check passwords.
+            let only = app.oidc.as_ref().is_some_and(|o| o.cfg.only);
+            match user.filter(|u| right && (u.owner || !only)) {
                 Some(user) => blocking(app, move |app| session_reply(app, &user, secure)).await.unwrap_or_else(|| error(500, "server error")),
                 None => {
                     LIMITS.take(&user_key, guard::LOGIN_USER);
-                    wrong(401, "That username or password isn't right.").await
+                    let why = if only {
+                        "That username or password isn't right. This server signs people in through single sign-on: use the button above."
+                    } else {
+                        "That username or password isn't right."
+                    };
+                    wrong(401, why).await
                 }
             }
         }
         (["logout"], "POST") => {
+            let mut answer = json!({ "ok": true });
             if let Some(t) = cookie_token(headers) {
-                blocking(app, move |app| auth::end_session(&app.store, &t)).await;
+                let id_token = blocking(app, move |app| {
+                    let id_token = auth::session_id_token(&app.store, &t);
+                    auth::end_session(&app.store, &t);
+                    id_token
+                })
+                .await
+                .flatten();
+                // Signed in through single sign-on: sign out at the provider too, when it can.
+                if let (Some(id_token), Some(o)) = (id_token, app.oidc.clone())
+                    && let Ok(Some(url)) = tokio::task::spawn_blocking(move || o.logout_url(&id_token)).await
+                {
+                    answer["logout_url"] = json!(url);
+                }
             }
-            cookie_reply("", 0, json!({ "ok": true }), secure)
+            cookie_reply("", 0, answer, secure)
         }
+        (["oidc", ..], _) => sso(app, &path, m, q, headers, &json, ask).await,
         (["me"], "POST") => {
-            let Some(me) = me else { return Some(error(401, "please sign in")) };
+            let Some(me) = me else { return Some(please_sign_in(app, headers)) };
             let mut new_hash = None;
             if let Some(new_password) = opt_field(&json, "password") {
                 let user_key = format!("login-user:{}", me.username);
                 if !LIMITS.can(&user_key, guard::LOGIN_USER) {
                     return Some(too_many());
                 }
-                let (current, who) = (field(&json, "current_password"), me.username.clone());
-                let stored = blocking(app, move |app| auth::login_hash(&app.store, &who).map(|(_, h)| h)).await.flatten();
-                if !slow(move || auth::verify(&current, stored.as_deref())).await.unwrap_or(false) {
+                let (current, who, token) = (field(&json, "current_password"), me.username.clone(), cookie_token(headers).unwrap_or_default());
+                let found = blocking(app, move |app| {
+                    let stored = auth::login_hash(&app.store, &who).map(|(_, h)| h).filter(|h| !h.is_empty());
+                    let fresh = auth::fresh_sso_session_made(&app.store, &token).is_some_and(|made| store::now() - made < LINK_FRESH_SECS);
+                    (stored, fresh)
+                })
+                .await;
+                let Some((stored, fresh)) = found else { return Some(error(500, "server error")) };
+                if stored.is_none() {
+                    // An account made through single sign-on has no password: setting its first
+                    // one needs a fresh sign-in at the provider (as linking another sign-in does),
+                    // so a stolen session can't add a password that outlives it.
+                    if !fresh {
+                        return Some(error(
+                            403,
+                            "To set a password, first confirm who you are at the sign-in service (Your name and colour › Confirm who you are), then set it within 10 minutes.",
+                        ));
+                    }
+                } else if !slow(move || auth::verify(&current, stored.as_deref())).await.unwrap_or(false) {
                     LIMITS.take(&user_key, guard::LOGIN_USER);
                     return Some(wrong(400, "Your current password isn't right.").await);
                 }
@@ -395,11 +532,19 @@ async fn accounts(
                     None => return Some(error(500, "server error")),
                 };
             }
+            let token = cookie_token(headers).unwrap_or_default();
             let r = blocking(app, move |app| {
                 let changed_password = new_hash.is_some();
+                // A password changed in a session made through single sign-on keeps the link
+                // (whoever did it can sign in at the provider); otherwise the link goes, so
+                // someone who learned the old password and linked their own sign-in is cut off.
+                let via_sso = auth::sso_session_made(&app.store, &token).is_some();
                 auth::update_hashed(&app.store, &me.username, opt_field(&json, "name").as_deref(), opt_field(&json, "colour").as_deref(), new_hash)
                     .and_then(|u| {
                         if changed_password {
+                            if !via_sso {
+                                auth::drop_links(&app.store, &u.username)?;
+                            }
                             auth::new_session(&app.store, &u.username).map(|t| (u, Some(t))).map_err(|e| e.to_string())
                         } else {
                             Ok((u, None))
@@ -417,10 +562,62 @@ async fn accounts(
         }
         (["users"], "GET") => {
             if !signed_in(app, headers) {
-                return Some(error(401, "please sign in"));
+                return Some(please_sign_in(app, headers));
             }
-            let list = blocking(app, |app| auth::users(&app.store)).await.unwrap_or_default();
-            send_json(&Value::Array(list.iter().map(auth::User::json).collect()), 200)
+            // The owner also sees whom each account is linked to at the identity provider.
+            // The provider by name (STARBASE_OIDC_LABEL, else its host) and what it calls the
+            // person (email, else username, as at their last sign-in); the raw ids for a tooltip.
+            let owner = me.as_ref().is_some_and(|u| u.owner);
+            let (issuer, provider) = app.oidc.as_ref().map(|o| (o.cfg.issuer.clone(), o.cfg.provider.clone())).unwrap_or_default();
+            let list = blocking(app, move |app| {
+                auth::users(&app.store)
+                    .iter()
+                    .map(|u| {
+                        let mut v = u.json();
+                        if owner && let Some(l) = auth::link_of(&app.store, &u.username) {
+                            let name = if l.iss == issuer { provider.clone() } else { oidc::host_of(&l.iss) };
+                            let known = if l.email.is_empty() { l.username.clone() } else { l.email.clone() };
+                            v["sso"] = json!({ "issuer": l.iss, "subject": l.sub, "provider": name, "who": known });
+                        }
+                        if owner {
+                            v["password"] = json!(auth::has_password(&app.store, &u.username));
+                        }
+                        v
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .await
+            .unwrap_or_default();
+            send_json(&Value::Array(list), 200)
+        }
+        (["users", "sso"], "DELETE") => {
+            if me.as_ref().is_none_or(|u| !u.owner) {
+                return Some(error(403, "Only the owner can do that."));
+            }
+            let who = q.get("username").cloned().unwrap_or_default();
+            let only = app.oidc.as_ref().is_some_and(|o| o.cfg.only);
+            let r = blocking(app, move |app| {
+                let target = auth::users(&app.store).into_iter().find(|u| u.username == who);
+                // With STARBASE_OIDC_ONLY only owners may sign in with a password: anyone else
+                // unlinked couldn't sign in at all.
+                if only && target.as_ref().is_some_and(|u| !u.owner) {
+                    return Err(format!(
+                        "This server signs people in through single sign-on only, so {who}'s account must stay linked: without the link they couldn't sign in at all."
+                    ));
+                }
+                if target.is_some() && !auth::has_password(&app.store, &who) {
+                    return Err(format!(
+                        "{who} has no password, so they sign in only through single sign-on: removing the link would lock them out. They can set a password themselves first (Your name and colour › Set a password), then the link can go."
+                    ));
+                }
+                auth::unlink(&app.store, &who)
+            })
+            .await;
+            match r {
+                Some(Ok(())) => send_json(&json!({ "ok": true }), 200),
+                Some(Err(why)) => error(400, &why),
+                None => error(500, "server error"),
+            }
         }
         (["users"] | ["users", "password"], "POST" | "DELETE") => {
             let Some(me) = me.filter(|u| u.owner) else { return Some(error(403, "Only the owner can do that.")) };
@@ -451,7 +648,11 @@ async fn accounts(
                     }
                     Ok(json!({ "ok": true, "folder": moved }))
                 } else if reset {
-                    auth::update_hashed(&app.store, &field(&json, "username"), None, None, hash).map(|u| u.json())
+                    // A password set by the owner removes the person's single sign-on link: they
+                    // link again themselves if they want it.
+                    let u = auth::update_hashed(&app.store, &field(&json, "username"), None, None, hash)?;
+                    auth::drop_links(&app.store, &u.username)?;
+                    Ok(u.json())
                 } else {
                     let hash = hash.unwrap_or_default();
                     auth::add_hashed(&app.store, &field(&json, "username"), &field(&json, "name"), hash).map(|u| {
@@ -469,6 +670,179 @@ async fn accounts(
         }
         _ => return None,
     })
+}
+
+// ---------------------------------------------------------------- single sign-on
+
+/// /api/oidc/login, /api/oidc/link, /api/oidc/callback and /api/oidc/unlink (oidc.rs). The
+/// browser comes to login and callback itself (links and redirects), so problems are shown by
+/// sending it back to StarSheets with `?sso=<what happened>`, which the sign-in box explains.
+async fn sso(app: &Shared, path: &[&str], m: &str, q: &HashMap<String, String>, headers: &HeaderMap, json: &Value, ask: Ask) -> Response<Body> {
+    use guard::{LIMITS, ip_key};
+    let me = current_user(app, headers);
+    let Some(o) = app.oidc.clone().filter(|_| app.auth) else { return error(404, "Single sign-on isn't set up on this server.") };
+    let secure = ask.secure || o.cfg.https();
+    let who = |next: String| oidc::Start {
+        next,
+        from: ask.ip.map_or_else(|| "?".to_string(), guard::ip_prefix),
+        net: ask.ip.map_or_else(|| "?".to_string(), guard::ip_network),
+        ..Default::default()
+    };
+    let back = |next: &str, what: &str| see_other(&oidc::with_param(next, "sso", what), &[oidc_cookie("", 0, secure)]);
+    match (path, m) {
+        // ?silent=1: renewing an ended session without asking; ?fresh=1: the provider asks who
+        // it is again (oidc.rs, Start).
+        (["oidc", "login"], "GET") => {
+            let next = q.get("next").and_then(|n| oidc::safe_next(n)).unwrap_or_else(|| o.cfg.base_path());
+            if !LIMITS.take(&ip_key("oidc", ask.ip), guard::OIDC_IP) {
+                return back(&next, "busy");
+            }
+            let mut start = who(next.clone());
+            start.silent = q.get("silent").is_some_and(|v| v == "1");
+            start.fresh = !start.silent && q.get("fresh").is_some_and(|v| v == "1");
+            // The session being renewed: this request is a same-site navigation, so its cookie
+            // comes along (the provider's redirect back won't bring it).
+            start.renew = cookie_token(headers).filter(|_| start.silent);
+            let o2 = o.clone();
+            match tokio::task::spawn_blocking(move || o2.start(start)).await {
+                Ok(Ok((url, binding))) => see_other(&url, &[oidc_cookie(&binding, oidc::PENDING_FOR.as_secs(), secure)]),
+                Ok(Err(why)) => {
+                    eprintln!("Single sign-on: {why}");
+                    back(&next, "unreachable")
+                }
+                Err(_) => back(&next, "failed"),
+            }
+        }
+        // Linking the signed-in account: a POST (so guard.rs's cross-site checks apply) with the
+        // account's current password, or, for an account with no password, a fresh sign-in
+        // (?fresh=1) through single sign-on in the last LINK_FRESH_SECS. Answers where to send
+        // the browser.
+        (["oidc", "link"], "POST") => {
+            let Some(me) = me else { return please_sign_in(app, headers) };
+            let next = json.get("next").and_then(Value::as_str).and_then(oidc::safe_next).unwrap_or_else(|| o.cfg.base_path());
+            let user_key = format!("login-user:{}", me.username);
+            if !LIMITS.can(&user_key, guard::LOGIN_USER) || !LIMITS.take(&ip_key("oidc", ask.ip), guard::OIDC_IP) {
+                return too_many();
+            }
+            let (name, token) = (me.username.clone(), cookie_token(headers).unwrap_or_default());
+            let found = blocking(app, move |app| {
+                let hash = auth::login_hash(&app.store, &name).map(|(_, h)| h).filter(|h| !h.is_empty());
+                let fresh = auth::fresh_sso_session_made(&app.store, &token).is_some_and(|made| store::now() - made < LINK_FRESH_SECS);
+                (hash, fresh)
+            })
+            .await;
+            let Some((hash, fresh)) = found else { return error(500, "server error") };
+            match hash {
+                Some(h) => {
+                    let current = field(json, "current_password");
+                    if !slow(move || auth::verify(&current, Some(&h))).await.unwrap_or(false) {
+                        LIMITS.take(&user_key, guard::LOGIN_USER);
+                        return wrong(400, "Your current password isn't right.").await;
+                    }
+                }
+                None if !fresh => {
+                    return error(403, "To link a different sign-in, first confirm who you are at the sign-in service, then link within 10 minutes.");
+                }
+                None => {}
+            }
+            let mut start = who(next);
+            start.link = Some(me.username);
+            let o2 = o.clone();
+            match tokio::task::spawn_blocking(move || o2.start(start)).await {
+                Ok(Ok((url, binding))) => json_with_cookies(json!({ "url": url }), &[oidc_cookie(&binding, oidc::PENDING_FOR.as_secs(), secure)]),
+                Ok(Err(why)) => {
+                    eprintln!("Single sign-on: {why}");
+                    error(502, "The sign-in service couldn't be reached. Try again in a moment.")
+                }
+                Err(_) => error(500, "server error"),
+            }
+        }
+        (["oidc", "callback"], "GET") => {
+            let home = o.cfg.base_path();
+            if !LIMITS.take(&ip_key("oidc-back", ask.ip), guard::LOGIN_IP) {
+                return back(&home, "busy");
+            }
+            let state = q.get("state").cloned().unwrap_or_default();
+            // Over HTTPS only the __Host- cookie: a sibling site can set the plain one.
+            let binding = named_cookie(headers, if secure { oidc::HOST_COOKIE } else { oidc::COOKIE }).unwrap_or_default();
+            let Some(pending) = o.take(&state, &binding) else { return back(&home, "expired") };
+            // Renewing: the ended session goes, whatever the provider answers (a new one is
+            // made if it says yes).
+            if let Some(t) = pending.start.renew.clone() {
+                blocking(app, move |app| {
+                    if auth::session_user(&app.store, &t).is_none() {
+                        auth::end_session(&app.store, &t);
+                    }
+                })
+                .await;
+            }
+            if let Some(e) = q.get("error") {
+                // Renewing and the provider needs to ask something (signed out there, say): the
+                // sign-in box is shown.
+                let what = if pending.start.silent {
+                    "renew"
+                } else if e == "access_denied" {
+                    "denied"
+                } else {
+                    "failed"
+                };
+                return back(&pending.start.next, what);
+            }
+            let code = q.get("code").cloned().unwrap_or_default();
+            let o2 = o.clone();
+            let found = tokio::task::spawn_blocking(move || {
+                let r = o2.finish(&pending, &code);
+                (r, pending)
+            })
+            .await;
+            let (who, id_token, pending) = match found {
+                Ok((Ok((who, id_token)), pending)) => (who, id_token, pending),
+                Ok((Err(why), pending)) => {
+                    eprintln!("Single sign-on failed: {why}");
+                    return back(&pending.start.next, "failed");
+                }
+                Err(_) => return back(&home, "failed"),
+            };
+            let (next, link, fresh, renewed) =
+                (pending.start.next.clone(), pending.start.link.clone(), pending.start.fresh, pending.start.renew.clone());
+            let cfg = o.cfg.clone();
+            let r = blocking(app, move |app| {
+                let user = oidc::account(&app.store, &cfg, &who, link.as_deref())?;
+                let sso = auth::SsoSession { id_token: &id_token, secs: cfg.session_hours * 3600, fresh };
+                let token = auth::new_session_with(&app.store, &user.username, Some(sso)).map_err(|_| "failed")?;
+                // Renewed before it ended (the app does that at a quiet moment): the new session
+                // replaces it.
+                if let Some(t) = renewed {
+                    auth::end_session(&app.store, &t);
+                }
+                Ok(token)
+            })
+            .await;
+            match r {
+                Some(Ok(token)) => {
+                    let mut cookies = vec![oidc_cookie("", 0, secure)];
+                    cookies.extend(session_cookies(&token, auth::SESSION_DAYS * 86400, secure));
+                    see_other(&next, &cookies)
+                }
+                Some(Err(what)) => back(&next, what),
+                None => back(&next, "failed"),
+            }
+        }
+        (["oidc", "unlink"], "POST") => {
+            let Some(me) = me else { return please_sign_in(app, headers) };
+            // With STARBASE_OIDC_ONLY only owners may use passwords: anyone else unlinked
+            // couldn't sign in at all.
+            if o.cfg.only && !me.owner {
+                return error(400, "This server signs people in through single sign-on only, so your account must stay linked.");
+            }
+            match blocking(app, move |app| auth::unlink(&app.store, &me.username)).await {
+                Some(Ok(())) => send_json(&json!({ "ok": true }), 200),
+                Some(Err(why)) => error(400, &why),
+                None => error(500, "server error"),
+            }
+        }
+        _ => error(404, "not found"),
+    }
 }
 
 // ---------------------------------------------------------------- sharing
@@ -527,7 +901,8 @@ async fn gate(
                         need(role, Role::View)?;
                         let _ = spaces::note_opened(store, &me, id);
                     }
-                    (["versions", ..], "GET") => need(role, Role::View)?,
+                    // Version history is for editors, as in Google Docs: viewers see the file only.
+                    (["versions", ..] | ["history"], "GET") | (["versions", _, "name" | "restore"], "POST") => need(role, Role::Edit)?,
                     ([], "PUT") | (["rename"], "POST") | ([], "DELETE") => need(role, Role::Edit)?,
                     (["copy"], "POST") => {
                         need(role, Role::View)?;
@@ -740,7 +1115,7 @@ async fn storage(app: &Shared, m: &str, me: Option<auth::User>, body: &[u8], q: 
         match mode.as_str() {
             "use" => {
                 if !has_starsheets(&new) && auth::any_users(&app2.store) {
-                    return Err("There are no StarSheets files in that folder to switch to. Choose \"Move my files there\" instead.".into());
+                    return Err("There are no Starbase files in that folder to switch to. Choose \"Move my files there\" instead.".into());
                 }
             }
             _ => {
@@ -749,7 +1124,7 @@ async fn storage(app: &Shared, m: &str, me: Option<auth::User>, body: &[u8], q: 
                 if let Ok(rest) = new.strip_prefix(&old) {
                     let first = rest.components().next().map(|c| c.as_os_str().to_string_lossy().into_owned()).unwrap_or_default();
                     if first.is_empty() || first.starts_with('.') || auth::users(&app2.store).iter().any(|u| u.username == first) {
-                        return Err("That folder belongs to StarSheets itself. Pick another one.".into());
+                        return Err("That folder belongs to Starbase itself. Pick another one.".into());
                     }
                 }
                 // Everything moves, or nothing: check for clashes first.
@@ -810,8 +1185,10 @@ async fn storage(app: &Shared, m: &str, me: Option<auth::User>, body: &[u8], q: 
 /// GET backup: settings and how the last one went. GET backup/key: the recovery key.
 /// GET backup/list: the backups kept. POST backup {to, on, hour, key?}: choose the folder (an empty
 /// one is set up; one with backups in it opens with the key given, or this server's key).
-/// POST backup/run: one now. POST backup/restore {id}: copies the asker's own folder (everything,
-/// with sign-in off) out of backup ID into a new folder "Restored from backup <when>" beside it.
+/// POST backup/run: one now. GET backup/people: whose folders the backups hold. POST
+/// backup/restore {id, whose?}: copies a folder out of backup ID into a new folder "Restored from
+/// backup <when>" (backup::whose_folder, restore_into): the asker's own, or (the owner) anyone's
+/// or "" everyone's.
 async fn backup_api(app: &Shared, m: &str, p: &[String], me: Option<auth::User>, body: &[u8]) -> Response<Body> {
     if app.auth && !me.as_ref().is_some_and(|u| u.owner) {
         return error(403, "Only the owner of this server can look after backups.");
@@ -888,19 +1265,20 @@ async fn backup_api(app: &Shared, m: &str, p: &[String], me: Option<auth::User>,
                     let Some(snap) = list.iter().find(|s| s["id"].as_str() == Some(id.as_str())) else {
                         return Err(bad("That backup isn't there any more.".into()));
                     };
-                    // Into the asker's own folder (sign-in on: only their own files come back).
-                    let space = me.as_ref().map(|u| u.username.clone()).unwrap_or_default();
-                    let stem = format!("Restored from backup {}", snap["label"].as_str().unwrap_or(""));
-                    let mut name = stem.clone();
-                    let mut n = 2;
-                    while app.store.full(&store::join(&space, &name)).exists() {
-                        name = format!("{stem} ({n})");
-                        n += 1;
-                    }
-                    let rel = store::join(&space, &name);
-                    let files = backup::restore(&base, &id, &space, &app.store.full(&rel)).map_err(bad)?;
+                    let asker = me.as_ref().map(|u| u.username.as_str());
+                    let owner = me.as_ref().is_none_or(|u| u.owner);
+                    let whose = backup::whose_folder(asker, owner, json.get("whose").and_then(Value::as_str)).map_err(|e| (403, e))?;
+                    let label = snap["label"].as_str().unwrap_or("");
+                    let rel = backup::restore_into(label, &whose, asker, |p| app.store.full(p).exists());
+                    let files = backup::restore(&base, &id, &whose, &app.store.full(&rel)).map_err(bad)?;
                     log::note(&app.store, &format!("backup {}: restored {files} files into {rel:?}", snap["short"].as_str().unwrap_or("")));
-                    Ok(json!({ "ok": true, "folder": name, "files": files }))
+                    Ok(json!({ "ok": true, "folder": rel, "files": files }))
+                }
+                // Whose files the backups hold (one folder each), and which of them have an account.
+                ("GET", "people") => {
+                    let have: Vec<String> = auth::users(&app.store).into_iter().map(|u| u.username).collect();
+                    let people = backup::people(&base).map_err(bad)?;
+                    Ok(json!(people.iter().map(|p| json!({ "name": p, "account": have.contains(p) })).collect::<Vec<_>>()))
                 }
                 _ => Err((404, "not found".into())),
             }
@@ -1178,9 +1556,10 @@ fn takes_a_file(m: &str, p: &[String]) -> bool {
     matches!((m, p.as_slice()), ("POST", ["files"]) | ("PUT", ["files", _]) | ("POST", ["files", _, "add-sheets"]))
 }
 
-/// Paths answered before (or without) sign-in: accounts and, while setting up, storage.
+/// Paths answered before (or without) sign-in: accounts (single sign-on too) and, while
+/// setting up, storage.
 fn before_sign_in(p: &[String]) -> bool {
-    matches!(p.first().map(String::as_str), Some("info" | "setup" | "signup" | "login" | "logout" | "me" | "users" | "storage"))
+    matches!(p.first().map(String::as_str), Some("info" | "setup" | "signup" | "login" | "logout" | "me" | "users" | "storage" | "oidc"))
 }
 
 /// Reads a request's body: at most `limit` bytes, within `wait`.
@@ -1197,6 +1576,7 @@ async fn read_body(body: Body, headers: &HeaderMap, limit: u64, wait: Duration) 
     }
 }
 
+/// Every request but the live WebSocket.
 async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
     let (parts, body) = req.into_parts();
     let (method, uri, headers) = (parts.method, parts.uri, parts.headers);
@@ -1227,7 +1607,7 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
     // setup requests come before sign-in, with small bodies.
     let early = before_sign_in(&p);
     if !early && !signed_in(&app, &headers) {
-        return error(401, "please sign in");
+        return please_sign_in(&app, &headers);
     }
     let body: Bytes = if !early && takes_a_file(&m, &p) {
         let Ok(_turn) = BIG_AT_ONCE.acquire().await else { return error(503, "server busy") };
@@ -1249,7 +1629,7 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
         return storage(&app, &m, me, &body, &q, ask).await;
     }
     if !signed_in(&app, &headers) {
-        return error(401, "please sign in");
+        return please_sign_in(&app, &headers);
     }
     let me = current_user(&app, &headers);
     if p.first().map(String::as_str) == Some("backup") && p.len() <= 2 {
@@ -1291,7 +1671,8 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
     };
     let if_match = headers.get(header::IF_MATCH).and_then(|v| v.to_str().ok()).map(str::to_string);
     // A file replaced through the API (a version restored) is read again by its live room.
-    let replaced = (m == "PUT" && p.len() == 2 && p[0] == "files").then(|| p[1].clone());
+    let restored = m == "POST" && p.len() == 5 && p[0] == "files" && p[2] == "versions" && p[4] == "restore";
+    let replaced = ((m == "PUT" && p.len() == 2 && p[0] == "files") || restored).then(|| p[1].clone());
     let (m2, p2) = (m.clone(), p.clone());
     let app2 = app.clone();
     let out = tokio::task::spawn_blocking(move || {
@@ -1313,6 +1694,7 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
             if let Some(me) = &me {
                 let made = match (&r, m2.as_str(), p2.as_slice()) {
                     (Ok(Reply::Json(_, 200)), "PUT", [_, id]) => Some(id.clone()),
+                    (Ok(Reply::Json(_, 200)), "POST", [_, id, _, _, _]) if restored => Some(id.clone()),
                     (Ok(Reply::Json(v, 200 | 201)), "POST", [_] | [_, _, _]) if p2[0] == "files" => {
                         v.get("id").and_then(Value::as_str).map(str::to_string)
                     }
@@ -1398,29 +1780,54 @@ async fn main() {
     let _ = std::fs::create_dir_all(&root);
     let store = Store {
         root,
-        keep: env("KEEP", "6").parse().unwrap_or(6),
-        spaces: !matches!(env("STARSHEETS_AUTH", "on").trim().to_lowercase().as_str(), "off" | "false" | "0" | "no"),
+        keep: env("KEEP", "100").parse().unwrap_or(100),
+        spaces: !matches!(env("STARBASE_AUTH", "on").trim().to_lowercase().as_str(), "off" | "false" | "0" | "no"),
     };
     let port: u16 = env("PORT", "8080").parse().unwrap_or(8080);
-    let auth = !matches!(env("STARSHEETS_AUTH", "on").trim().to_lowercase().as_str(), "off" | "false" | "0" | "no");
+    let auth = !matches!(env("STARBASE_AUTH", "on").trim().to_lowercase().as_str(), "off" | "false" | "0" | "no");
     if let Some(why) = auth::given_setup_code().and_then(|c| auth::weak_setup_code(&c)) {
         eprintln!("{why}");
         std::process::exit(1);
     }
     let site = Some(env("SITE", "")).filter(|s| !s.is_empty()).map(PathBuf::from);
-    let app = Arc::new(App { store, base, lock: Mutex::new(()), location: env("LOCATION", "the server"), auth, site, rooms: live::Rooms::default() });
+    let oidc = match oidc::Config::from(setting) {
+        Ok(c) => c.map(|c| Arc::new(oidc::Oidc::new(c))),
+        Err(why) => {
+            eprintln!("{why}");
+            std::process::exit(1);
+        }
+    };
+    if let Some(o) = &oidc {
+        for w in o.cfg.warnings() {
+            eprintln!("{w}");
+        }
+        if auth {
+            println!("Single sign-on: {}.", o.cfg.issuer);
+            let o = o.clone();
+            tokio::task::spawn_blocking(move || match o.check() {
+                Ok(()) => println!("Single sign-on: the identity provider answered."),
+                Err(why) => {
+                    eprintln!("Single sign-on: {why}. Sign-in through it won't work until this is fixed (it is tried again at each sign-in).")
+                }
+            });
+        } else {
+            println!("Single sign-on is set, but sign-in is off (STARBASE_AUTH=off), so it isn't used.");
+        }
+    }
+    let app =
+        Arc::new(App { store, base, lock: Mutex::new(()), location: env("LOCATION", "the server"), auth, site, rooms: live::Rooms::default(), oidc });
     if let Err(e) = std::fs::create_dir_all(app.store.meta()) {
         eprintln!("Can't use the folder {}: {e}", app.store.root.display());
         std::process::exit(1);
     }
-    println!("StarSheets server {}: {} on :{port}, keeping {} versions", env!("CARGO_PKG_VERSION"), app.store.root.display(), app.store.keep);
+    println!("Starbase server {}: {} on :{port}, keeping {} versions", env!("CARGO_PKG_VERSION"), app.store.root.display(), app.store.keep);
     if !auth {
-        println!("Sign-in is OFF (STARSHEETS_AUTH=off): anyone who can reach this port can read and change every file.");
+        println!("Sign-in is OFF (STARBASE_AUTH=off): anyone who can reach this port can read and change every file.");
     } else if !auth::any_users(&app.store) {
         if auth::given_setup_code().is_some() {
-            println!("No accounts yet. Open StarSheets and create the owner account with the setup code set in STARSHEETS_PASSWORD.");
+            println!("No accounts yet. Open Starbase and create the owner account with the setup code set in STARBASE_PASSWORD.");
         } else {
-            println!("No accounts yet. Open StarSheets and create the owner account with this setup code: {}", auth::setup_code(&app.store));
+            println!("No accounts yet. Open Starbase and create the owner account with this setup code: {}", auth::setup_code(&app.store));
         }
     } else {
         println!("Sign-in is on ({} accounts).", auth::users(&app.store).len());
@@ -1452,12 +1859,26 @@ mod tests {
     use super::*;
     use tower::ServiceExt;
 
+    #[test]
+    fn settings_take_the_new_name_and_the_old_one() {
+        fn env(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+            move |k: &str| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string())
+        }
+        let old = env(&[("STARSHEETS_PASSWORD", "old")]);
+        assert_eq!(setting_from("STARBASE_PASSWORD", &old).as_deref(), Some("old"), "the old name still works");
+        let both = env(&[("STARSHEETS_PASSWORD", "old"), ("STARBASE_PASSWORD", "new")]);
+        assert_eq!(setting_from("STARBASE_PASSWORD", &both).as_deref(), Some("new"), "the new name wins");
+        assert_eq!(setting_from("STARSHEETS_PASSWORD", &both).as_deref(), Some("new"), "either name asks for the same setting");
+        assert_eq!(setting_from("PORT", env(&[("PORT", "1")])).as_deref(), Some("1"), "other names are read as they are");
+        assert_eq!(setting_from("STARBASE_AUTH", &both), None);
+    }
+
     fn app(auth: bool) -> Shared {
         let dir = std::env::temp_dir().join(format!("starsheets-main-{}", store::random_hex(6)));
         std::fs::create_dir_all(&dir).unwrap();
         let store = Store { root: dir.clone(), keep: 3, spaces: auth };
         std::fs::create_dir_all(store.meta()).unwrap();
-        Arc::new(App { store, base: dir, lock: Mutex::new(()), location: "here".into(), auth, site: None, rooms: live::Rooms::default() })
+        Arc::new(App { store, base: dir, lock: Mutex::new(()), location: "here".into(), auth, site: None, rooms: live::Rooms::default(), oidc: None })
     }
 
     /// A made-up address per call site, so the try limits of one test don't touch another's.
@@ -1607,6 +2028,53 @@ mod tests {
         let id = g.json["id"].as_str().unwrap().to_string();
         let put = [("origin", "http://192.168.1.5:8080"), ("content-type", "application/octet-stream")];
         assert_eq!(send(&app, &ip, "PUT", &format!("/api/files/{id}"), &boss, &put, b"two".to_vec()).await.status, 200);
+    }
+
+    /// Docs' version history: a document's saves become versions with who saved them; editors
+    /// see, name and restore them (a restore is a new version); viewers can't, as in Google Docs.
+    #[tokio::test]
+    async fn document_version_history() {
+        let (app, ip, boss) = owned().await;
+        for who in ["ann", "vic"] {
+            let g = post(&app, &ip, "/api/users", &boss, json!({"username": who, "name": who, "password": format!("{who}password")})).await;
+            assert_eq!(g.status, 200);
+        }
+        let ann = cookie_of(&post(&app, &ip, "/api/login", "", json!({"username": "ann", "password": "annpassword"})).await);
+        let vic = cookie_of(&post(&app, &ip, "/api/login", "", json!({"username": "vic", "password": "vicpassword"})).await);
+        let id = send(&app, &ip, "POST", "/api/files?name=Letter.docx", &boss, &[], b"one".to_vec()).await.json["id"].as_str().unwrap().to_string();
+        let g = post(&app, &ip, &format!("/api/files/{id}/sharing"), &boss, json!({"people": {"ann": "edit", "vic": "view"}})).await;
+        assert_eq!(g.status, 200, "{:?}", g.json);
+        assert_eq!(send(&app, &ip, "PUT", &format!("/api/files/{id}"), &ann, &[], b"two".to_vec()).await.status, 200);
+        let h = send(&app, &ip, "GET", &format!("/api/files/{id}/history"), &ann, &[], vec![]).await;
+        assert_eq!(h.status, 200);
+        assert_eq!(h.json["current"]["author"], "ann", "who saved the file as it is now");
+        let vs = h.json["versions"].as_array().unwrap().clone();
+        assert_eq!(vs.len(), 1, "a .docx save keeps the earlier version: {vs:?}");
+        assert_eq!(vs[0]["author"], "boss");
+        let v = vs[0]["v"].as_str().unwrap().to_string();
+        assert!(v.ends_with(".docx"), "{v}");
+        // Viewers see the document but not its history.
+        for url in [format!("/api/files/{id}/history"), format!("/api/files/{id}/versions"), format!("/api/files/{id}/versions/{v}")] {
+            assert_eq!(send(&app, &ip, "GET", &url, &vic, &[], vec![]).await.status, 403, "{url}");
+        }
+        assert_eq!(send(&app, &ip, "POST", &format!("/api/files/{id}/versions/{v}/restore"), &vic, &[], vec![]).await.status, 403);
+        assert_eq!(send(&app, &ip, "POST", &format!("/api/files/{id}/versions/current/name?name=X"), &vic, &[], vec![]).await.status, 403);
+        // Name the current version; the next save carries the name to the version it becomes.
+        let g = send(&app, &ip, "POST", &format!("/api/files/{id}/versions/current/name?name=Final%20draft"), &ann, &[], vec![]).await;
+        assert_eq!(g.status, 200);
+        // Restore the first version: a new version, nothing deleted, and the restorer is its author.
+        let g = send(&app, &ip, "POST", &format!("/api/files/{id}/versions/{v}/restore"), &boss, &[], vec![]).await;
+        assert_eq!(g.status, 200, "{:?}", g.json);
+        assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{id}"), &boss, &[], vec![]).await.bytes, b"one");
+        let h = send(&app, &ip, "GET", &format!("/api/files/{id}/history"), &boss, &[], vec![]).await;
+        assert_eq!(h.json["current"]["author"], "boss");
+        assert!(h.json["current"]["restored_from"].is_i64(), "{:?}", h.json);
+        let vs = h.json["versions"].as_array().unwrap();
+        assert_eq!(vs.len(), 2, "{vs:?}");
+        assert_eq!((vs[0]["author"].as_str(), vs[0]["name"].as_str()), (Some("ann"), Some("Final draft")));
+        let named = vs[0]["v"].as_str().unwrap();
+        assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{id}/versions/{named}"), &ann, &[], vec![]).await.bytes, b"two");
+        let _ = std::fs::remove_dir_all(&app.store.root);
     }
 
     #[tokio::test]

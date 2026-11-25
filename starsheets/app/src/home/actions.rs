@@ -22,7 +22,10 @@ impl Home {
                 Item::Folder(p) => (true, p.clone()),
                 Item::File(id) => (false, id.clone()),
             };
+            #[cfg(target_arch = "wasm32")]
             crate::share::share_item(ui.ctx(), folder, &key, &self.label_of(item));
+            #[cfg(not(target_arch = "wasm32"))]
+            let _ = (folder, key);
             ui.close();
         }
         let starred = match item {
@@ -35,7 +38,7 @@ impl Home {
                     Item::File(id) => format!("api/files/{id}/star"),
                     Item::Folder(p) => format!("api/folders/star?path={}", enc(p)),
                 };
-                call(&self.inbox, ui.ctx(), Method::Post, url, Some(format!("{{\"on\":{}}}", !starred).into_bytes()), refresh_after);
+                call(&self.store, &self.inbox, ui.ctx(), Method::Post, url, Some(format!("{{\"on\":{}}}", !starred).into_bytes()), refresh_after);
             }
             ui.close();
         }
@@ -50,12 +53,12 @@ impl Home {
         }
         if let Item::File(id) = item {
             if row(ui, "content_copy", "Make a copy", "", single) {
-                call(&self.inbox, ui.ctx(), Method::Post, format!("api/files/{id}/copy"), None, refresh_after);
+                call(&self.store, &self.inbox, ui.ctx(), Method::Post, format!("api/files/{id}/copy"), None, refresh_after);
                 ui.close();
             }
             if row(ui, "download", "Download", "", single) {
                 let name = self.label_of(item);
-                call(&self.inbox, ui.ctx(), Method::Get, format!("api/files/{id}"), None, move |b| Reply::Download(name, b));
+                call(&self.store, &self.inbox, ui.ctx(), Method::Get, format!("api/files/{id}"), None, move |b| Reply::Download(name, b));
                 ui.close();
             }
         }
@@ -147,6 +150,7 @@ impl Home {
             for t in targets {
                 if let Item::Folder(p) = t {
                     call(
+                        &self.store,
                         &self.inbox,
                         ui.ctx(),
                         Method::Post,
@@ -166,7 +170,7 @@ impl Home {
                 Item::File(id) => format!("api/files/{id}"),
                 Item::Folder(p) => format!("api/folders?path={}", enc(&p)),
             };
-            call(&self.inbox, ctx, Method::Delete, url, None, refresh_after);
+            call(&self.store, &self.inbox, ctx, Method::Delete, url, None, refresh_after);
         }
         self.selected.clear();
     }
@@ -208,7 +212,7 @@ impl Home {
                 (Item::Folder(p), true) => format!("api/folders/move?path={}&to={}", enc(p), enc(folder)),
                 (Item::Folder(p), false) => format!("api/folders/copy?path={}&to={}", enc(p), enc(folder)),
             };
-            call(&self.inbox, ctx, Method::Post, url, None, refresh_after);
+            call(&self.store, &self.inbox, ctx, Method::Post, url, None, refresh_after);
         }
     }
 
@@ -304,7 +308,7 @@ impl Home {
                     }
                 });
             });
-            choice = house::actions(ui, &["Cancel", "Move here"]);
+            choice = house::actions_in(ui, &["Cancel", "Move here"], ACCENT);
         });
         let mv = self.move_to.as_mut().expect("open");
         mv.target = target.clone();
@@ -329,7 +333,7 @@ impl Home {
                 Item::File(id) => format!("api/files/{id}/sharing"),
                 Item::Folder(p) => format!("api/folders/sharing?path={}", enc(p)),
             };
-            call(&self.inbox, ctx, Method::Get, url, None, move |b| Reply::Access(item, serde_json::from_slice(&b).unwrap_or_default()));
+            call(&self.store, &self.inbox, ctx, Method::Get, url, None, move |b| Reply::Access(item, serde_json::from_slice(&b).unwrap_or_default()));
         }
     }
 
@@ -459,7 +463,7 @@ impl Home {
             });
             let can_share = self.accounts && self.role_of(&item) == "owner" && !matches!(&item, Item::Folder(p) if !p.contains('/'));
             let labels: &[&str] = if can_share { &["Share…", "Close"] } else { &["Close"] };
-            match house::actions(ui, labels) {
+            match house::actions_in(ui, labels, ACCENT) {
                 Some(0) if can_share => share = true,
                 Some(_) => done = true,
                 None => {}
@@ -470,7 +474,10 @@ impl Home {
                 Item::Folder(p) => (true, p.clone()),
                 Item::File(id) => (false, id.clone()),
             };
+            #[cfg(target_arch = "wasm32")]
             crate::share::share_item(ctx, folder, &key, &title);
+            #[cfg(not(target_arch = "wasm32"))]
+            let _ = (folder, key, title);
             self.details = None;
         } else if close || done || ctx.input(|i| i.key_pressed(Key::Escape)) {
             self.details = None;
@@ -490,7 +497,7 @@ impl Home {
         let mut choice = None;
         house::dialog(ctx, "home_move_ask", 420.0, "Change who owns it?", Some(&mut close), |ui| {
             house::text(ui, &text);
-            choice = house::actions(ui, &["Cancel", "Move"]);
+            choice = house::actions_in(ui, &["Cancel", "Move"], ACCENT);
         });
         if close || choice == Some(0) {
             self.pending_move = None;

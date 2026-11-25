@@ -94,6 +94,13 @@ pub const MENUS: &[(&str, &[Item])] = &[
                 ],
             ),
             Cmd("Rename", "stardocs.rename", NO, ""),
+            Sub(
+                "Version history",
+                &[
+                    Cmd("Name current version", "stardocs.nameVersion", NO, ""),
+                    Cmd("See version history", "stardocs.versionHistory", NO, "Ctrl+Alt+Shift+H"),
+                ],
+            ),
             Sep,
             Cmd("Page setup", "ui.dialog:pageSetup", NO, ""),
             Cmd("Print", "file.print", NO, "Ctrl+P"),
@@ -452,7 +459,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Cmd("Search the menus", "tools.search", NO, "Alt+/"),
             Cmd("Keyboard shortcuts", "stardocs.shortcuts", NO, "Ctrl+/"),
             Sep,
-            Cmd("About StarDocs", "ui.dialog:about", NO, ""),
+            Cmd("About Starbase Docs", "ui.dialog:about", NO, ""),
         ],
     ),
 ];
@@ -495,6 +502,8 @@ pub struct Shell {
     word_count: crate::wordcount::WordCount,
     /// The colour being mixed in the Custom colour dialog, while it is open.
     custom: Option<Color32>,
+    /// File › Version history's panel and naming dialog (`versions.rs`).
+    history: crate::versions::History,
     /// The number typed in the Restart numbering dialog, while it is open.
     restart: Option<String>,
     /// The dialog has just opened: its box takes the keyboard.
@@ -508,7 +517,19 @@ pub struct Shell {
     room: f32,
     /// The window's egui context, kept from the last frame for the test hook.
     ctx: Option<egui::Context>,
+    /// The document last seen (WordCraft's id for it), to notice one being opened.
+    opened: Option<u64>,
+    /// Frames left in which an opened document's zoom follows the window's width (the window
+    /// may still be settling its size), and the zoom and fit last set then.
+    open_zoom: u8,
+    zoom_set: Option<(f32, String)>,
 }
+
+/// How many frames after opening the zoom keeps following the window's width.
+const OPEN_ZOOM_FRAMES: u8 = 10;
+/// Points to the page's pixels at 100 % (WordCraft's canvas), and the room around a page.
+const PX_PER_PT: f32 = 96.0 / 72.0;
+const PAGE_ROOM: f32 = 2.0 * 18.0 + 20.0;
 
 /// The toolbar groups' widths, starting from a guess.
 struct Widths([f32; 9]);
@@ -540,6 +561,9 @@ struct Flags {
     shortcuts: bool,
     /// Asks for the Restart numbering dialog (Format › Bullets and numbering › List options).
     restart: bool,
+    /// Asks for File › Version history: the panel, or the Name current version dialog.
+    history: bool,
+    name_version: bool,
     /// Read from storage yet.
     loaded: bool,
 }
@@ -590,6 +614,7 @@ impl Flags {
 }
 
 use crate::server::{Link, Saved};
+use crate::versions::Ask;
 
 /// Asks the title row to start renaming (File › Rename), for the next frame.
 const RENAME: &str = "stardocs_rename";
@@ -684,6 +709,7 @@ pub fn set_mode(app: &mut WordApp, mode: Mode) {
 }
 
 /// StarDocs' own menu commands, which [`run_menu`] handles itself.
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code, reason = "the test hook's, browser and tests only"))]
 fn is_own(id: &str) -> bool {
     matches!(
         id,
@@ -697,6 +723,8 @@ fn is_own(id: &str) -> bool {
             | "stardocs.downloadAs"
             | "stardocs.rename"
             | "stardocs.restartNumbering"
+            | "stardocs.versionHistory"
+            | "stardocs.nameVersion"
     )
 }
 
@@ -707,6 +735,8 @@ fn run_menu(app: &mut WordApp, ctx: &egui::Context, flags: &mut Flags, link: Opt
         ("stardocs.compact", _) => flags.compact = !flags.compact,
         ("stardocs.shortcuts", _) => flags.shortcuts = true,
         ("stardocs.restartNumbering", _) => flags.restart = true,
+        ("stardocs.versionHistory", _) => flags.history = true,
+        ("stardocs.nameVersion", _) => flags.name_version = true,
         // Someone who may only view the document stays in Viewing.
         ("stardocs.editing" | "stardocs.suggesting", Some(link)) if link.view_only() => app.status("You can view this document but not change it"),
         ("stardocs.editing", _) => set_mode(app, Mode::Editing),
@@ -846,6 +876,7 @@ impl Shell {
     /// Runs one of StarDocs' own commands (`stardocs.*`, as the menus do) for the test hook.
     /// `stardocs.rename` takes `{"name": …}` and renames at once; `stardocs.share` opens the
     /// Share dialog; `stardocs.customColour` opens the Custom colour dialog.
+    #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code, reason = "the test hook's, browser and tests only"))]
     pub fn test_command(&mut self, app: &mut WordApp, link: Option<&Link>, id: &str, params: Value) -> Result<Value, String> {
         let ctx = self.ctx.clone().ok_or("the window hasn't been drawn yet")?;
         match (id, link) {
@@ -857,12 +888,13 @@ impl Shell {
             ("stardocs.share", None) => return Err("sharing needs a Starbase server document".into()),
             ("stardocs.customColour", _) => self.custom = Some(BLUE),
             _ if is_own(id) => run_menu(app, &ctx, &mut self.flags, link, id, params),
-            _ => return Err(format!("{id}: not a StarDocs command")),
+            _ => return Err(format!("{id}: not a Starbase Docs command")),
         }
         ctx.request_repaint();
         Ok(json!(true))
     }
 
+    #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code, reason = "the test hook's, browser and tests only"))]
     pub fn test_state(&mut self, app: &mut WordApp, link: Option<&Link>) -> Value {
         let cur = current(app);
         let saved = link.map(|l| match l.saved() {
@@ -887,6 +919,8 @@ impl Shell {
             "renaming": self.renaming,
             "dialogs": {
                 "share": self.share.is_open(),
+                "versionHistory": self.history.open,
+                "nameVersion": self.history.naming(),
                 "shortcuts": self.shortcuts.open,
                 "customColour": self.custom.is_some(),
                 "restartNumbering": self.restart.is_some(),
@@ -902,6 +936,12 @@ impl Shell {
                 "rightEndWidth": self.right_end,
             },
             "fontsListed": self.fonts.as_ref().map_or(0, Vec::len),
+            "versions": {
+                "listed": self.history.list.as_ref().map(Vec::len),
+                "selected": self.history.open.then(|| self.history.selected.clone()),
+                "error": self.history.error,
+                "previewing": link.is_some_and(Link::previewing),
+            },
         })
     }
 
@@ -909,6 +949,7 @@ impl Shell {
     pub fn ui(&mut self, app: &mut WordApp, ui: &mut Ui, link: Option<&Link>) {
         self.ctx = Some(ui.ctx().clone());
         crate::theme::keep_light(app);
+        crate::theme::install(ui.ctx());
         let before = self.flags;
         if !self.flags.loaded {
             // Docs has no floating mini toolbar over selected text.
@@ -931,6 +972,8 @@ impl Shell {
                 let may_edit = !link.is_some_and(Link::view_only);
                 self.toolbar(app, ui, may_edit);
             });
+        self.version_history(app, ui, link);
+        self.zoom_on_open(app, ui.available_width());
         self.share.ui(ui.ctx());
         self.custom_colour(app, ui.ctx());
         if std::mem::take(&mut self.flags.shortcuts) {
@@ -948,11 +991,94 @@ impl Shell {
         self.flags.sync(before);
     }
 
+    /// File › Version history: the panel on the right (drawn before the page, so the page takes
+    /// the room left), the naming dialog, and what they ask of the server link.
+    fn version_history(&mut self, app: &mut WordApp, ui: &mut Ui, link: Option<&Link>) {
+        if std::mem::take(&mut self.flags.history) && !self.history.open {
+            self.history.show();
+        }
+        if std::mem::take(&mut self.flags.name_version) {
+            self.history.name_current();
+        }
+        let server = link.filter(|l| l.has_history());
+        if let Some(r) = server.and_then(Link::take_history) {
+            self.history.loaded(r);
+        }
+        self.history.panel(ui);
+        self.history.dialog(ui.ctx());
+        for ask in self.history.take_asks() {
+            let Some(link) = server else {
+                if ask == Ask::Load {
+                    self.history.loaded(Err(crate::versions::NO_SERVER.to_string()));
+                } else if let Ask::Name(..) = ask {
+                    app.status(crate::versions::NO_SERVER.to_string());
+                }
+                continue;
+            };
+            match ask {
+                Ask::Load => link.load_history(),
+                Ask::Show(v) if v == crate::versions::CURRENT => link.end_preview(),
+                Ask::Show(v) => {
+                    // Edits not saved yet go to the server before the earlier version is shown.
+                    if app.session.dirty && !link.view_only() && !link.previewing() {
+                        run(app, "file.save", json!({}));
+                    }
+                    link.show_version(&v);
+                }
+                Ask::Restore(v) => {
+                    let when = self.history.list.iter().flatten().find(|x| x.id == v).map(|x| crate::versions::when(x.saved)).unwrap_or_default();
+                    self.history.selected = crate::versions::CURRENT.to_string();
+                    link.restore_version(&v, &when);
+                }
+                Ask::Copy(v) => link.copy_version(&v),
+                Ask::Name(v, name) => link.name_version(&v, &name),
+                Ask::Close => link.end_preview(),
+            }
+        }
+    }
+
+    /// A document just opened shows at 100 %, or at the page's width when a page at 100 % is
+    /// wider than the window (`width`), as Google Docs opens every document. WordCraft would show
+    /// the zoom the file was saved at, as Word does: a python-docx file says 146 %, wider than most
+    /// windows. Once the user picks a zoom it is theirs.
+    fn zoom_on_open(&mut self, app: &mut WordApp, width: f32) {
+        let id = app.session.document_id();
+        if self.opened != Some(id) {
+            self.opened = Some(id);
+            self.open_zoom = if app.session.path.is_some() { OPEN_ZOOM_FRAMES } else { 0 };
+            self.zoom_set = None;
+        }
+        if self.open_zoom == 0 {
+            return;
+        }
+        self.open_zoom -= 1;
+        let v = &mut app.session.view;
+        if let Some((zoom, fit)) = &self.zoom_set
+            && (v.fit != *fit || (fit.is_empty() && v.zoom != *zoom))
+        {
+            self.open_zoom = 0;
+            return;
+        }
+        let doc = &app.session.doc;
+        let page = doc.sections().iter().map(|(_, p)| p.page_w).fold(doc.last_section.page_w, f32::max);
+        let fit = if page * PX_PER_PT + PAGE_ROOM <= width { "" } else { "pageWidth" };
+        v.zoom = 1.0;
+        v.fit = fit.into();
+        v.multi_page = false;
+        v.single_column = !fit.is_empty();
+        self.zoom_set = Some((v.zoom, v.fit.clone()));
+    }
+
     /// StarDocs' own shortcuts, taken before WordCraft sees the keys.
     fn keys(&mut self, app: &mut WordApp, ctx: &egui::Context) {
         use egui::{Key, KeyboardShortcut, Modifiers};
         let ctrl_shift = Modifiers::COMMAND | Modifiers::SHIFT;
         let ctrl_alt = Modifiers::COMMAND | Modifiers::ALT;
+        // Docs' version history, Ctrl+Alt+Shift+H: taken before Ctrl+Alt+H (the outline), which
+        // would otherwise match it too (egui ignores an extra Shift).
+        if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(ctrl_alt | Modifiers::SHIFT, Key::H))) {
+            self.flags.history = true;
+        }
         let (menus, outline, help, count) = ctx.input_mut(|i| {
             (
                 i.consume_shortcut(&KeyboardShortcut::new(ctrl_shift, Key::F)),
@@ -1170,7 +1296,7 @@ enum Group {
 }
 const GROUPS: [Group; 9] =
     [Group::History, Group::Zoom, Group::Style, Group::Font, Group::Size, Group::Text, Group::Insert, Group::Align, Group::Lists];
-pub const GUESSED_WIDTHS: [f32; 9] = [151.0, 79.0, 117.0, 109.0, 99.0, 151.0, 95.0, 151.0, 140.0];
+pub const GUESSED_WIDTHS: [f32; 9] = [151.0, 79.0, 129.0, 109.0, 99.0, 151.0, 95.0, 151.0, 140.0];
 /// Room kept for the mode box and the compact-mode arrow, and for the ⋮ button.
 const RIGHT_END: f32 = 170.0;
 const MORE: f32 = 34.0;
@@ -1212,7 +1338,7 @@ impl Tools<'_> {
                 });
             }
             Group::Style => {
-                drop_menu(ui, &cur.style, 104.0, |ui| {
+                drop_menu(ui, &cur.style, 116.0, |ui| {
                     ui.set_min_width(180.0);
                     for (label, name) in STYLES {
                         let size = match *name {
@@ -1380,11 +1506,11 @@ impl Shell {
             let logo = ui.add(icons::logo(36.0).sense(egui::Sense::click()));
             ui.add_space(6.0);
             if let Some(link) = link {
-                if logo.on_hover_text("Starbase home").clicked() {
+                if logo.on_hover_text(Link::HOME_TIP).clicked() {
                     link.home();
                 }
             } else {
-                logo.on_hover_text("StarDocs");
+                logo.on_hover_text("Starbase Docs");
             }
             ui.vertical(|ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
@@ -1394,7 +1520,7 @@ impl Shell {
                     ui.spacing_mut().item_spacing.x = 0.0;
                     ui.spacing_mut().button_padding = vec2(7.0, 2.0);
                     for (title, items) in MENUS {
-                        ui.menu_button(RichText::new(*title).size(14.0).color(TEXT), |ui| menu_items(app, ui, &mut self.flags, items, link));
+                        menu_bar_menu(ui, title, |ui| menu_items(app, ui, &mut self.flags, items, link));
                     }
                 });
             });
@@ -1406,6 +1532,9 @@ impl Shell {
                     Some(link) if link.id().is_some() && link.name().is_empty() && !self.share.waiting() => {
                         ui.add_enabled(false, share).on_disabled_hover_text("The document isn't open");
                     }
+                    // A document on this computer (the desktop program's local mode): no one to
+                    // share with, so no button.
+                    Some(link) if !link.can_share() => {}
                     Some(link) => {
                         if ui.add(share).on_hover_text("Share this document with people on this server").clicked() {
                             self.share.ask(app, link, ui.ctx());
@@ -1440,7 +1569,21 @@ impl Shell {
             self.renaming = Some(stem.clone());
         }
         if let (Some(text), Some(link)) = (&mut self.renaming, link) {
-            let edit = ui.add(egui::TextEdit::singleline(text).font(egui::FontId::proportional(18.0)).desired_width(320.0));
+            // Docs' rename box hugs the name (it grows as you type), with a 2 px blue outline and
+            // 4 px corners.
+            let font = egui::FontId::proportional(18.0);
+            let width = ui.painter().layout_no_wrap(text.clone(), font.clone(), TEXT).size().x + 18.0; // the 6 px margins, and room for the caret
+            let edit = ui
+                .scope(|ui| {
+                    let v = ui.visuals_mut();
+                    v.selection.stroke = Stroke::new(2.0, BLUE);
+                    for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active] {
+                        w.bg_stroke = Stroke::new(2.0, BLUE);
+                        w.corner_radius = egui::CornerRadius::same(4);
+                    }
+                    ui.add(egui::TextEdit::singleline(text).font(font).margin(vec2(6.0, 0.0)).desired_width(width.clamp(40.0, 600.0)))
+                })
+                .inner;
             if asked {
                 edit.request_focus();
             }
@@ -1465,7 +1608,7 @@ impl Shell {
                 _ if link.view_only() => ("View only".to_string(), TEXT_DIM),
                 Saved::Nothing => (String::new(), TEXT_DIM),
                 Saved::Saving => ("Saving…".to_string(), TEXT_DIM),
-                Saved::Done => ("Saved to Starbase".to_string(), TEXT_DIM),
+                Saved::Done => (Link::SAVED.to_string(), TEXT_DIM),
                 Saved::Failed(why) => (why, Color32::from_rgb(0xb3, 0x26, 0x1e)),
             };
             if !text.is_empty() {
@@ -1481,51 +1624,207 @@ impl Shell {
     }
 }
 
+/// Docs' menu rows: 32 px tall whatever they hold, 16 px from the sides.
+const ROW: f32 = 32.0;
+const ROW_INSET: f32 = 16.0;
+/// The icon column: 20 px icons (or ticks), 12 px before the label.
+const ICON: f32 = 20.0;
+const ICON_GAP: f32 = 12.0;
+/// Shortcuts and submenu arrows: Docs' grey.
+const KEYS_GREY: Color32 = Color32::from_rgb(0x5F, 0x63, 0x68);
+/// Menu dividers.
+const MENU_LINE: Color32 = Color32::from_rgb(0xDA, 0xDC, 0xE0);
+
+/// Sets a menu's `Ui` up the Docs way: flat full-width one-line rows, 32 px tall, grey on
+/// hover (the frame round it is [`docs_menu_style`]).
+fn menu_look(ui: &mut Ui) {
+    let st = ui.style_mut();
+    // One line per row, always (a wrapped label made a taller row).
+    st.wrap_mode = Some(egui::TextWrapMode::Extend);
+    st.spacing.button_padding = vec2(ROW_INSET, 6.0);
+    st.spacing.item_spacing = vec2(ICON_GAP, 0.0);
+    st.spacing.icon_spacing = ICON_GAP;
+    st.spacing.interact_size.y = ROW;
+    let w = &mut st.visuals.widgets;
+    for (state, fill) in [
+        (&mut w.inactive, Color32::TRANSPARENT),
+        (&mut w.hovered, crate::theme::MENU_HOVER),
+        (&mut w.active, crate::theme::HOVER),
+        (&mut w.open, crate::theme::MENU_HOVER),
+    ] {
+        state.bg_stroke = Stroke::NONE;
+        state.weak_bg_fill = fill;
+        state.corner_radius = egui::CornerRadius::ZERO;
+        state.expansion = 0.0;
+    }
+}
+
+/// The frame of our menus (and of their submenus, which inherit it): 8 px top and bottom, none at
+/// the sides so rows and dividers reach the edges, 8 px corners. A pop-up's frame takes the
+/// window's style (WordCraft's 6 px all round) plus this.
+fn docs_menu_style() -> egui::style::StyleModifier {
+    egui::style::StyleModifier::new(|s: &mut egui::Style| {
+        egui::containers::menu::menu_style(s);
+        s.spacing.menu_margin = egui::Margin::symmetric(0, 8);
+        s.visuals.menu_corner_radius = egui::CornerRadius::same(8);
+    })
+}
+
+/// One of the menu bar's menus with [`docs_menu_style`].
+fn menu_bar_menu(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
+    let config = egui::containers::menu::MenuConfig::new().style(docs_menu_style());
+    let _ = egui::containers::menu::MenuButton::new(RichText::new(title).size(14.0).color(TEXT)).config(config).ui(ui, add);
+}
+
+/// The wording a menu entry shows, and its shortcut.
+fn wording<'a>(app: &mut WordApp, flags: &Flags, item: &'a Item) -> (&'a str, &'a str) {
+    match item {
+        Cmd(label, _, _, keys) | Toggle(label, _, _, keys) => (*label, *keys),
+        Flip(off, on, _, key) => (if is_on(app, flags, key) { *on } else { *off }, ""),
+        Sub(label, _) => (*label, ""),
+        Sep | TableGrid => ("", ""),
+    }
+}
+
+/// Whether a menu has the icon column (any icon or tick in it): then every label lines up after it.
+fn has_icons(items: &[Item]) -> bool {
+    items.iter().any(|i| match i {
+        Toggle(..) => true,
+        Cmd(label, ..) | Sub(label, _) => icons::menu_icon_name(label).is_some(),
+        _ => false,
+    })
+}
+
+/// A menu row: the icon column (an icon, a tick, or the same space blank), the label, and the
+/// shortcut in grey at the right.
+fn menu_row(icon: Option<&str>, column: bool, label: &str, keys: &str, width: f32) -> Button<'static> {
+    let text = RichText::new(label.to_string()).size(14.0).color(TEXT);
+    let b = match icon.and_then(|n| icons::icon_px(n, ICON)) {
+        Some(img) if column => Button::image_and_text(img, text),
+        // Keeps the label lined up with its iconed neighbours.
+        _ if column => match icons::icon_px("check", ICON) {
+            Some(blank) => Button::image_and_text(blank.tint(Color32::TRANSPARENT), text),
+            None => Button::new(text),
+        },
+        _ => Button::new(text),
+    };
+    // The shortcut's stretch keeps the label at the left; without one an empty growing space
+    // does (an empty shortcut text would add a space to the entry's name).
+    let b =
+        if keys.is_empty() { b.right_text(egui::Atom::grow()) } else { b.shortcut_text(RichText::new(keys.to_string()).size(13.0).color(KEYS_GREY)) };
+    b.min_size(vec2(width, ROW))
+}
+
+/// How wide a menu is: its longest label plus shortcut, the icon column and the padding (at
+/// least 240 px, as Docs' shortest menus).
+fn menu_width(app: &mut WordApp, ui: &Ui, flags: &Flags, items: &[Item], column: bool) -> f32 {
+    let measure = |t: &str, size: f32| ui.painter().layout_no_wrap(t.to_string(), egui::FontId::proportional(size), TEXT).size().x;
+    let widest = items
+        .iter()
+        .map(|i| {
+            let (label, keys) = wording(app, flags, i);
+            let keys = if keys.is_empty() { 0.0 } else { 32.0 + measure(keys, 13.0) };
+            measure(label, 14.0) + keys + if matches!(i, Sub(..)) { ICON + ICON_GAP + 8.0 } else { 0.0 }
+        })
+        .fold(0.0_f32, f32::max);
+    (widest + 2.0 * ROW_INSET + if column { ICON + ICON_GAP } else { 0.0 } + 8.0).max(240.0).ceil()
+}
+
+/// A menu divider: a light line with 8 px above and below, the menu's full width.
+fn menu_sep(ui: &mut Ui, width: f32) {
+    ui.add_space(8.0);
+    let (r, _) = ui.allocate_exact_size(vec2(width, 1.0), egui::Sense::hover());
+    ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0, MENU_LINE));
+    ui.add_space(8.0);
+}
+
 fn menu_items(app: &mut WordApp, ui: &mut Ui, flags: &mut Flags, items: &[Item], link: Option<&Link>) {
-    ui.set_min_width(260.0);
+    menu_look(ui);
+    let column = has_icons(items);
+    let width = menu_width(app, ui, flags, items, column);
+    ui.set_min_width(width);
+    ui.set_max_width(width);
     for item in items {
+        let (label, keys) = wording(app, flags, item);
         match item {
-            Cmd(label, id, p, keys) => {
-                let b = Button::new(RichText::new(*label).size(14.0).color(TEXT))
-                    .right_text(RichText::new(*keys).size(13.0).color(TEXT_DIM))
-                    .min_size(vec2(260.0, 30.0));
+            Cmd(_, id, p, _) => {
+                let b = menu_row(icons::menu_icon_name(label), column, label, keys, width);
                 if ui.add_enabled(!greyed(app, id), b).clicked() {
                     run_menu(app, ui.ctx(), flags, link, id, params(p));
                     ui.close();
                 }
+                // The desktop program: File › Open recent, under Open.
+                #[cfg(not(target_arch = "wasm32"))]
+                if *id == "file.open"
+                    && let Some(link) = link
+                {
+                    recent_menu(ui, link, width, column);
+                }
             }
-            Toggle(label, id, key, keys) => {
-                // A tick in the margin when it is on, as Docs' View menu shows.
-                let on = is_on(app, flags, key);
-                let tick = if on { icons::icon("check") } else { None };
-                let text = RichText::new(*label).size(14.0).color(TEXT);
-                let b = match tick {
-                    Some(img) => Button::image_and_text(img, text),
-                    None => Button::new(RichText::new(format!("      {label}")).size(14.0).color(TEXT)),
+            Toggle(_, id, key, _) => {
+                // A tick in the icon column when it is on, as Docs' View menu shows.
+                let tick = is_on(app, flags, key).then_some("check");
+                if ui.add_enabled(!greyed(app, id), menu_row(tick, column, label, keys, width)).clicked() {
+                    run_menu(app, ui.ctx(), flags, link, id, json!({}));
+                    ui.close();
+                }
+            }
+            Flip(_, _, id, _) => {
+                if ui.add_enabled(!greyed(app, id), menu_row(None, column, label, "", width)).clicked() {
+                    run_menu(app, ui.ctx(), flags, link, id, json!({}));
+                    ui.close();
+                }
+            }
+            TableGrid => {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.add_space(ROW_INSET);
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 4.0;
+                        table_grid(app, ui);
+                    });
+                });
+                ui.add_space(4.0);
+            }
+            Sub(_, sub) => {
+                // Docs' submenu arrow: `arrow_right` the size of the icons (a picture, so the
+                // entry is still named just by its wording).
+                let b = menu_row(icons::menu_icon_name(label), column, label, "", width);
+                let b = match icons::icon_px("arrow_right", ICON) {
+                    Some(arrow) => b.right_text(arrow),
+                    None => b.right_text(egui::containers::menu::SubMenuButton::arrow_atom(Some(KEYS_GREY))),
                 };
-                let b = b.right_text(RichText::new(*keys).size(13.0).color(TEXT_DIM)).min_size(vec2(260.0, 30.0));
-                if ui.add_enabled(!greyed(app, id), b).clicked() {
-                    run_menu(app, ui.ctx(), flags, link, id, json!({}));
-                    ui.close();
-                }
+                egui::containers::menu::SubMenuButton::from_button(b).ui(ui, |ui| menu_items(app, ui, flags, sub, link));
             }
-            Flip(off, on, id, key) => {
-                let label = if is_on(app, flags, key) { on } else { off };
-                let b = Button::new(RichText::new(*label).size(14.0).color(TEXT)).min_size(vec2(260.0, 30.0));
-                if ui.add_enabled(!greyed(app, id), b).clicked() {
-                    run_menu(app, ui.ctx(), flags, link, id, json!({}));
-                    ui.close();
-                }
-            }
-            TableGrid => table_grid(app, ui),
-            Sub(label, sub) => {
-                ui.menu_button(RichText::new(*label).size(14.0).color(TEXT), |ui| menu_items(app, ui, flags, sub, link));
-            }
-            Sep => {
-                ui.separator();
-            }
+            Sep => menu_sep(ui, width),
         }
     }
+}
+
+/// File › Open recent (desktop): the files opened lately, each in a window of its own.
+#[cfg(not(target_arch = "wasm32"))]
+fn recent_menu(ui: &mut Ui, link: &Link, width: f32, column: bool) {
+    let recent = link.recent();
+    let b = menu_row(None, column, "Open recent", "", width);
+    let b = match icons::icon_px("arrow_right", ICON) {
+        Some(arrow) => b.right_text(arrow),
+        None => b.right_text(egui::containers::menu::SubMenuButton::arrow_atom(Some(KEYS_GREY))),
+    };
+    if recent.is_empty() {
+        ui.add_enabled(false, b);
+        return;
+    }
+    egui::containers::menu::SubMenuButton::from_button(b).ui(ui, |ui| {
+        menu_look(ui);
+        for path in recent {
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let row = menu_row(None, false, &name, "", width.max(280.0));
+            if ui.add(row).on_hover_text(path.display().to_string()).clicked() {
+                link.open_path(path);
+                ui.close();
+            }
+        }
+    });
 }
 
 /// Docs' Insert › Table grid: hover to choose rows × columns (up to 10 × 10), click to insert.
@@ -1570,13 +1869,18 @@ fn tight(ui: &mut Ui) {
     s.button_padding = vec2(4.0, 2.0);
 }
 
-/// Toolbar buttons are flat until hovered, as in Docs.
+/// Toolbar and menu bar buttons are flat until hovered, as in Docs: a rounded 4 px grey on hover
+/// ([`HOVER`](crate::theme::HOVER)), darker while pressed or while its menu is open. (StarSheets'
+/// toolbar uses the same colours.) A button that is on (Bold in bold text) is light blue ([`ON`]).
 fn flat(ui: &mut Ui) {
+    use crate::theme::{HOVER, PRESSED};
     let w = &mut ui.visuals_mut().widgets;
-    w.inactive.weak_bg_fill = Color32::TRANSPARENT;
-    w.inactive.bg_stroke = Stroke::NONE;
-    w.hovered.bg_stroke = Stroke::NONE;
-    w.active.bg_stroke = Stroke::NONE;
+    for (state, fill) in [(&mut w.inactive, Color32::TRANSPARENT), (&mut w.hovered, HOVER), (&mut w.active, PRESSED), (&mut w.open, PRESSED)] {
+        state.bg_stroke = Stroke::NONE;
+        state.weak_bg_fill = fill;
+        state.corner_radius = egui::CornerRadius::same(4);
+        state.expansion = 0.0;
+    }
 }
 
 fn bar(ui: &mut Ui) {
@@ -1591,7 +1895,9 @@ fn icon_button(ui: &mut Ui, name: &str, on: bool) -> egui::Response {
         Some(img) => Button::image(img),
         None => Button::new(name),
     };
-    ui.add(b.fill(if on { ON } else { Color32::TRANSPARENT }).corner_radius(4.0).min_size(vec2(26.0, 28.0)))
+    // A set fill would also replace the hover and pressed fills: only a button that is on has one.
+    let b = if on { b.fill(ON) } else { b };
+    ui.add(b.corner_radius(4.0).min_size(vec2(26.0, 28.0)))
 }
 
 fn tool(app: &mut WordApp, ui: &mut Ui, icon: &str, tip: &str, id: &str, p: Value, on: bool) {
@@ -1618,17 +1924,24 @@ fn named(ui: &Ui, r: &egui::Response, name: &str) {
     r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, name));
 }
 
-/// A toolbar box of a fixed `width` showing `text` (cut short with "…" when too long) and a ▾
-/// that opens a menu, as Docs' zoom, style and font boxes do.
+/// The drop-down arrow after Docs' zoom, style and font boxes: Material's `arrow_drop_down` at
+/// 20 px (a 10 × 5 triangle) in #444746.
+const ARROW: f32 = 20.0;
+
+/// A toolbar box of a fixed `width` showing `text` (cut short with "…" when too long) and a
+/// drop-down arrow that opens a menu, as Docs' zoom, style and font boxes do. The menu's rows
+/// are flat and full width.
 fn drop_menu(ui: &mut Ui, text: &str, width: f32, add: impl FnOnce(&mut Ui)) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 28.0), egui::Sense::click());
     if ui.is_rect_visible(rect) {
         let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
         let p = ui.painter();
-        if resp.hovered() || open {
-            p.rect_filled(rect, 4.0, ui.visuals().widgets.hovered.weak_bg_fill);
+        if open || resp.is_pointer_button_down_on() {
+            p.rect_filled(rect, 4.0, crate::theme::PRESSED);
+        } else if resp.hovered() {
+            p.rect_filled(rect, 4.0, crate::theme::HOVER);
         }
-        let room = rect.width() - 12.0 - 14.0;
+        let room = rect.width() - 6.0 - ARROW - 2.0;
         let galley = egui::WidgetText::from(RichText::new(text).size(14.0).color(TEXT_DIM)).into_galley(
             ui,
             Some(egui::TextWrapMode::Truncate),
@@ -1636,9 +1949,15 @@ fn drop_menu(ui: &mut Ui, text: &str, width: f32, add: impl FnOnce(&mut Ui)) -> 
             egui::TextStyle::Button,
         );
         p.galley(egui::pos2(rect.left() + 6.0, rect.center().y - galley.size().y / 2.0), galley, TEXT_DIM);
-        p.text(egui::pos2(rect.right() - 6.0, rect.center().y), egui::Align2::RIGHT_CENTER, "▾", egui::FontId::proportional(13.0), TEXT_DIM);
+        if let Some(arrow) = icons::icon_px("arrow_drop_down", ARROW) {
+            let at = egui::Rect::from_center_size(egui::pos2(rect.right() - 2.0 - ARROW / 2.0, rect.center().y), vec2(ARROW, ARROW));
+            arrow.paint_at(ui, at);
+        }
     }
-    egui::Popup::menu(&resp).show(add);
+    egui::Popup::menu(&resp).style(docs_menu_style()).show(|ui| {
+        menu_look(ui);
+        ui.with_layout(Layout::top_down_justified(Align::LEFT), add);
+    });
     resp
 }
 
@@ -1695,15 +2014,23 @@ fn size_box(app: &mut WordApp, ui: &mut Ui, size: f64) {
             _ => {}
         }
     }
-    egui::Popup::from_response(&r).id(list).open_memory(None).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
-        ui.set_min_width(60.0);
-        for s in SIZES {
-            if ui.button(format!("{s}")).clicked() {
-                run(app, "format.size", json!({ "size": s }));
-                ui.close();
-            }
-        }
-    });
+    egui::Popup::from_response(&r)
+        .id(list)
+        .open_memory(None)
+        .style(docs_menu_style())
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| {
+            menu_look(ui);
+            ui.set_min_width(60.0);
+            ui.with_layout(Layout::top_down_justified(Align::LEFT), |ui| {
+                for s in SIZES {
+                    if ui.button(format!("{s}")).clicked() {
+                        run(app, "format.size", json!({ "size": s }));
+                        ui.close();
+                    }
+                }
+            });
+        });
 }
 
 fn palette<'a>(ui: &mut Ui, colours: impl Iterator<Item = (&'a str, &'a str)>, mut pick: impl FnMut(&str)) {

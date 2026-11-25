@@ -33,7 +33,7 @@ services:
       LOCATION: "the NAS"
       TZ: "Europe/London"   # your time zone: the hour backups run (without it, UTC)
       # Your own setup code instead of a random one in the log (12+ characters):
-      # STARSHEETS_PASSWORD: "a-long-code-only-you-know"
+      # STARBASE_PASSWORD: "a-long-code-only-you-know"
     mem_limit: 1536m
     restart: unless-stopped
 ```
@@ -42,8 +42,7 @@ Port 8080 is taken on your NAS? Change the left number only, e.g. `"8095:8080"`.
 
 ## 3. First sign-in
 
-**Apps › starbase › Workloads › Logs** shows the setup code (look for `setup code:`; the log and
-sign-in screen may still say StarSheets). Open `http://<your NAS>:8080`, make the owner's account
+**Apps › starbase › Workloads › Logs** shows the setup code (look for `setup code:`). Open `http://<your NAS>:8080`, make the owner's account
 with it, then add other people from your avatar › People. Starbase Docs is at `/docs/`.
 
 ## Backups

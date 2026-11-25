@@ -1,8 +1,8 @@
-# Google Sheets reference: what StarSheets emulates
+# Google Sheets reference: what Starbase Sheets emulates
 
 > **Last reviewed:** 2026-11-21 · **Sources:** Google's keyboard-shortcut help page (support.google.com/docs/answer/181110, read in full 2026-11-21), Google Workspace Updates blog and "What's new in Google Workspace" (2026 entries), press coverage of the 2023–2025 Sheets UI refreshes. Menu and toolbar contents marked *(from memory)* are recalled, not checked against a live screen. Verify those against a screenshot before building them.
 
-This is the target we copy for **behaviour and layout**, not for branding. StarSheets never uses Google's name, logo, product icons or exact trademarked artwork. Icons come from an openly licensed set (Material Symbols, Apache-2.0).
+This is the target we copy for **behaviour and layout**, not for branding. Starbase Sheets never uses Google's name, logo, product icons or exact trademarked artwork. Icons come from an openly licensed set (Material Symbols, Apache-2.0).
 
 Status column used throughout: **P1** = phase 1 (look and feel), **P2** = phase 2 (files, autosave, history), **P3** = sharing, **P4** = live co-editing, **Later**, **No** (deliberately out of scope).
 
@@ -10,7 +10,7 @@ Status column used throughout: **P1** = phase 1 (look and feel), **P2** = phase 
 
 ## 1. Screen layout (top to bottom)
 
-| # | Area | What Sheets shows | StarSheets | Notes |
+| # | Area | What Sheets shows | Starbase Sheets | Notes |
 |---|---|---|---|---|
 | 1 | Title row | App icon (links home) · editable file name · star · "move" · cloud status icon ("Saved to Drive") · right: version history clock, comments, Meet, **Share** button (filled, rounded), account avatar | P1 (name, status), P2 (history), P3 (Share) | No star/move/Meet. The status icon becomes "Saved" / "Saving…" in P2 |
 | 2 | Menu bar | File · Edit · View · Insert · Format · Data · Tools · Extensions · Help (+ Accessibility when screen reader on) | P1 | Sits under the file name, same row block as the title. Icons beside menu items (added 2023) |
@@ -92,9 +92,9 @@ Sheet tab menu: Delete · Duplicate · Copy to ▸ · Rename · Change colour ·
 
 ## 4b. Cell interactions: Google Sheets vs Microsoft Excel
 
-GridCraft behaves like Excel. StarSheets switches each row below to the Sheets way. Status: **done**, **next** (planned soon), **later**. *(From memory unless the row says checked: verify each one in Sheets before building it.)*
+GridCraft behaves like Excel. Starbase Sheets switches each row below to the Sheets way. Status: **done**, **next** (planned soon), **later**. *(From memory unless the row says checked: verify each one in Sheets before building it.)*
 
-| # | Situation | Google Sheets | Excel / GridCraft | StarSheets |
+| # | Situation | Google Sheets | Excel / GridCraft | Starbase Sheets |
 |---|---|---|---|---|
 | 1 | Press **Enter** on a selected cell | Opens the cell for editing (cursor at the end) | Moves down a row | **done** (patch 0004) |
 | 2 | Enter while editing / Shift+Enter / Tab while editing | Saves, moves down / up / right | Same | same already |
@@ -213,7 +213,7 @@ Where GridCraft (Excel) already uses the same key, nothing to do. Rows marked **
 | Resize formula bar | Ctrl+Up / Ctrl+Down |
 | Range selection mode | F2 / Ctrl+E |
 
-Sheets also offers **"Enable compatible spreadsheet shortcuts"** (Excel keys). StarSheets: a setting with the same name that switches to GridCraft's existing Excel keymap.
+Sheets also offers **"Enable compatible spreadsheet shortcuts"** (Excel keys). Starbase Sheets: a setting with the same name that switches to GridCraft's existing Excel keymap.
 
 ## 6. Functions that Sheets has and Excel doesn't (later phases)
 
@@ -223,7 +223,7 @@ Sheets also offers **"Enable compatible spreadsheet shortcuts"** (Excel keys). S
 | ARRAYFORMULA | applies a formula over ranges | P1 (map to dynamic arrays) |
 | SPLIT, JOIN | text split/join | Later |
 | GOOGLEFINANCE, GOOGLETRANSLATE, DETECTLANGUAGE | Google services | No |
-| IMPORTRANGE | pull from another spreadsheet | P2+ (between StarSheets files only) |
+| IMPORTRANGE | pull from another spreadsheet | P2+ (between Starbase Sheets files only) |
 | IMPORTDATA, IMPORTHTML, IMPORTXML, IMPORTFEED, IMAGE | web fetch | Later (needs server proxy) |
 | SPARKLINE | in-cell chart as a function | Later (GridCraft has Excel sparklines) |
 | REGEXMATCH, REGEXEXTRACT, REGEXREPLACE | regex | Later |
@@ -232,7 +232,7 @@ Sheets also offers **"Enable compatible spreadsheet shortcuts"** (Excel keys). S
 
 ## 7. Sheets changes in 2026 (from Google's update posts)
 
-| Date | Change | StarSheets |
+| Date | Change | Starbase Sheets |
 |---|---|---|
 | 2026-02 | SHEET / SHEETS functions | Later |
 | 2026-04 | Faster performance, doubled cell limits (now GA 2026-09) | GridCraft already handles 1,048,576 × 16,384 |

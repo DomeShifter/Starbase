@@ -24,13 +24,13 @@ impl Home {
             house::menu(ui, 260.0);
             let folder = here.clone().unwrap_or_else(|| self.space.clone());
             if house::menu_row(ui, Some("note_add"), "New spreadsheet", "", true) {
-                go(&page(&format!("?folder={}", enc(&folder))));
+                self.new_file(&folder, false);
             }
             if house::menu_row(ui, Some("description"), "New document", "", true) {
-                go(&crate::files::docs_url("", &format!("&folder={}", enc(&folder))));
+                self.new_file(&folder, true);
             }
             if house::menu_row(ui, Some("create_new_folder"), "New folder", "", true) {
-                call(&self.inbox, ui.ctx(), Method::Post, format!("api/folders?path={}&name=New%20folder", enc(&folder)), None, |b| {
+                call(&self.store, &self.inbox, ui.ctx(), Method::Post, format!("api/folders?path={}&name=New%20folder", enc(&folder)), None, |b| {
                     let v: Json = serde_json::from_slice(&b).unwrap_or_default();
                     Reply::NewFolder(v["path"].as_str().unwrap_or("").to_string())
                 });
@@ -40,20 +40,11 @@ impl Home {
             }
             house::menu_sep(ui);
             if house::menu_row(ui, Some("upload"), "Upload files…", "", true) {
-                let (inbox, ctx) = (self.inbox.clone(), ui.ctx().clone());
-                wasm_bindgen_futures::spawn_local(async move {
-                    let Some(picked) =
-                        rfd::AsyncFileDialog::new().add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "csv", "ods"]).pick_files().await
-                    else {
-                        return;
-                    };
-                    for f in picked {
-                        let (name, bytes) = (f.file_name(), f.read().await);
-                        let (inbox2, ctx2) = (inbox.clone(), ctx.clone());
-                        let url = format!("api/files?name={}&folder={}", enc(&name), enc(&folder));
-                        call(&inbox2, &ctx2, Method::Post, url, Some(bytes), refresh_after);
-                    }
-                });
+                let (store, inbox, ctx) = (self.store.clone(), self.inbox.clone(), ui.ctx().clone());
+                self.store.pick_files(Box::new(move |name, bytes| {
+                    let url = format!("api/files?name={}&folder={}", enc(&name), enc(&folder));
+                    call(&store, &inbox, &ctx, Method::Post, url, Some(bytes), refresh_after);
+                }));
             }
         });
         ui.add_space(house::M);
@@ -172,7 +163,7 @@ impl Home {
             p.rect_filled(r, 17, theme::HOVER);
         }
         if dropping {
-            p.rect_stroke(r, 17, Stroke::new(2.0, GREEN), egui::StrokeKind::Inside);
+            p.rect_stroke(r, 17, Stroke::new(2.0, ACCENT), egui::StrokeKind::Inside);
             ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique("home_drop"), folder.clone().unwrap_or_default()));
         }
         let x = r.left() + 4.0 + depth as f32 * 16.0;

@@ -1,6 +1,6 @@
 # House style
 
-StarSheets should feel like Google Sheets. These are the sizes, colours and shapes every part of
+Starbase Sheets should feel like Google Sheets. These are the sizes, colours and shapes every part of
 the app uses. They live in `app/src/house.rs`: build new UI from its helpers, never with numbers of
 its own.
 
@@ -60,6 +60,7 @@ Everything sits on a 4 px scale.
 - **Main button:** green (#146C2E) pill with white text. Only one per dialog, at the far right.
 - **Other buttons:** white pill, grey outline, green text, to the left of the main one, 8 px apart.
 - **Buttons inside a list** ("Restore"): green text, no outline.
+- **Blue (#0B57D0) instead of green** in the Share dialog and on the Starbase Drive home screen (`house::BLUE` with `primary_in`, `secondary_in`, `actions_in`): Google uses blue there, and Starbase Docs' share dialog does too.
 
 ## Text fields and search bars
 
@@ -128,7 +129,7 @@ Drive: it only changes how the folder looks to the person who picked it.
 | Thing | Look |
 |---|---|
 | Tooltip | Dark grey (#3C4043), white text, 4 px corners, 8 px side padding |
-| Message ("Heads up") | A house dialog with an OK button, in StarSheets' words (never "GridCraft") |
+| Message ("Heads up") | A house dialog with an OK button, in Starbase Sheets' words (never "GridCraft") |
 
 ## Side panels
 
@@ -140,3 +141,8 @@ open at a time. Changes in them show on the sheet straight away.
 
 Where a change can be shown before it is applied (colours, formats), show it in the sheet straight
 away; Cancel puts it back.
+
+## Filter view bar
+
+While a filter view is open, a dark bar (`house::VIEW_BAR`, Google's #3C4043) sits under the toolbar:
+white labels and text, text boxes in #5F6368, a ⋮ menu and ✕ at the right.

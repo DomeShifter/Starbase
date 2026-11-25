@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=StarDocs
+Name=Starbase Docs
 GenericName=Word Processor
 Comment=Write and edit documents; open and save Word files
 Exec=stardocs %F

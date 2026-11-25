@@ -1,6 +1,6 @@
 [package]
 name = "starsheets-server"
-description = "StarSheets' server: stores spreadsheets as .xlsx files in a folder tree and serves the web app"
+description = "Starbase's server: stores spreadsheets as .xlsx files in a folder tree and serves the web app"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -15,7 +15,7 @@ path = "src/main.rs"
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
 gridcraft-engine = { workspace = true }
-starsheets-sync = { path = "../sync" }
+starsheets-sync = { path = "../sync", features = ["thumbs"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs", "net", "time"] }
 serde_json = { workspace = true }
 rand = "0.10"
@@ -31,8 +31,20 @@ png = "0.18"
 # Backups in restic's format (local folders; S3 and others later through the "opendal" feature).
 rustic_core = "0.14"
 rustic_backend = { version = "0.8", default-features = false }
-jiff = "0.2"
+# The time-zone database is built in: slim Docker images have no /usr/share/zoneinfo, so TZ
+# (the backup hour) would otherwise silently stay UTC.
+jiff = { version = "0.2", features = ["tzdb-bundle-always"] }
+# Sign-in through the person's own identity provider (OpenID Connect, oidc.rs): discovery, PKCE
+# and ID-token checks. Without its default HTTP client (reqwest): ureq below, never following
+# redirects, trusting the computer's own certificates (a home CA added to the system works).
+openidconnect = { version = "4.1", default-features = false, features = ["accept-rfc3339-timestamps", "accept-string-booleans"] }
+ureq = { version = "3.5", default-features = false, features = ["rustls", "platform-verifier"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]
 # Already in the build through axum; lets the tests send requests through the router.
 tower = { version = "0.5", default-features = false, features = ["util"] }
+# The pretend identity provider in oidc's tests signs its ID tokens with a key made per run.
+rsa = { version = "0.9", features = ["getrandom"] }

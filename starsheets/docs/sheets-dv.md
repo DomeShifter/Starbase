@@ -4,19 +4,19 @@ Studied in live Google Sheets on 2026-11-21. Data › Data validation (and Inser
 side panel on the right.
 
 ## The panel
-| Part | Sheets | StarSheets |
+| Part | Sheets | Starbase Sheets |
 |---|---|---|
 | List | "Data validation rules": one card per rule (range, criterion), "+ Add rule" | same; bin on hover removes a rule |
 | Apply to range | text box | same |
 | Criteria | 25 choices in groups (below) | all 25 |
 | Drop-down items | one row per item: colour chip, text, bin; "Add another item" | same (Sheets' light chip colours) |
-| Allow multiple selections | tick box under the items | later |
+| Allow multiple selections | tick box under the items | same (the cell holds "a, b"; the list shows tick boxes) |
 | Help text | "Show help text for a selected cell" + text | same (GridCraft's input message, shown under the cell) |
 | If invalid | Show a warning / Reject the input | same |
-| Display style | Chip / Arrow / Plain text | Arrow / Plain text (chips later) |
+| Display style | Chip / Arrow / Plain text | same |
 | Buttons | Remove rule, Done; the rule applies as you build it | same |
 
-## Criteria and how StarSheets stores them
+## Criteria and how Starbase Sheets stores them
 GridCraft only knows Excel's rule types, so some criteria become a custom formula written for the
 range's top-left cell (TL). Item colours become ordinary conditional-formatting rules ("is equal
 to", fill), so they show in that panel too and survive in .xlsx files.

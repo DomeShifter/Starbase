@@ -68,13 +68,13 @@ Google's function list (support.google.com/docs/table/25273, downloaded and pars
 | Offline | File › Make available offline | Missing | Low | L | Home server; skip |
 | Settings: locale, time zone, calculation (iterative, manual) | File › Settings | Partly | Med | S | Settings panel exists; check locale/time zone; `formulas.calculationOptions` (incl. iterative) is engine-only |
 | Undo / redo / cut / copy / paste / paste special | Edit | Has | High | – | Paste special is GridCraft's Excel-style dialog; Sheets has a sub-menu (values only, format only, formula only, data validation only, conditional formatting only, transposed, column widths) |
-| Paste special as a Sheets sub-menu | Edit › Paste special ▸ | Engine-only | High | S | Same command with params; Ctrl+Shift+V = values is the most used |
-| Move row / column up, down, left, right | Edit › Move | Engine-only | Med | S | `sheet.moveColumns`, `selection.move`; drag works already |
+| Paste special as a Sheets sub-menu | Edit › Paste special ▸ | Has (except Conditional formatting only: engine) | High | S | Same command with params; Ctrl+Shift+V = values is the most used |
+| Move row / column up, down, left, right | Edit › Move | Partly (columns; rows need an engine command) | Med | S | `sheet.moveColumns`; no row move in the engine |
 | Delete values / row / column / cells | Edit › Delete | Has | High | – | |
 | Find and replace, Ctrl+F bar | Edit | Has | High | – | `findreplace.rs`, regex included |
 | Show gridlines / formula bar / formulas | View › Show | Has | Med | – | |
 | Show protected ranges | View › Show | Missing | Low | S | Draw the hatching Sheets shows |
-| Freeze rows / columns (incl. 2 rows/cols) | View › Freeze | Partly | High | S | Has none/1/up to current; add "2 rows", "2 columns"; drag bars at the corner are "later" in the reference |
+| Freeze rows / columns (incl. 2 rows/cols) | View › Freeze | Has | High | S | Drag bars at the corner are "later" in the reference |
 | Group / ungroup rows and columns | View › Group | Has | Med | – | `data.group/ungroup` |
 | Hidden sheets list | View › Hidden sheets | Has (≡ list) | Med | – | `bottom.rs` |
 | Zoom | View › Zoom | Has | Med | – | |
@@ -86,7 +86,7 @@ Google's function list (support.google.com/docs/table/25273, downloaded and pars
 | Sheet tab menu: delete, duplicate, copy to, rename, colour, protect, hide, move | Sheet tab | Has | High | – | `bottom.rs`; "View comments" missing (no comments) |
 | Chart: line, area, column, bar (stacked, 100%), pie, doughnut, scatter, bubble, combo, histogram, radar, waterfall, treemap, candlestick, box plot | Insert › Chart | Has | High | – | `chartpanel.rs`, plus funnel and sunburst which Sheets lacks |
 | Chart: stepped area, gauge, geo, org chart, timeline, table chart, scorecard | Chart editor › Chart type | Missing | Low–Med | M each | Scorecard (one big number with change) is the most used of these on dashboards; geo needs map data |
-| Chart editor: trendlines, data labels, axis min/max, log scale, error bars, aggregate, "use row 1 as headers", switch rows/columns | Chart editor › Customise / Setup | Partly / Engine-only | Med | S–M | Panel has style, titles, slice colours, series colour, legend, gridlines. `chart.addElement`, `chart.switchRowColumn` exist |
+| Chart editor: trendlines, data labels, axis min/max, log scale, error bars, aggregate, "use row 1 as headers", switch rows/columns | Chart editor › Customise / Setup | Partly / Engine-only | Med | S–M | Panel has style, titles, slice colours, series colour, trendline options, legend, gridlines, vertical axis Min/Max (2026-11-25; no log scale). `chart.addElement`, `chart.switchRowColumn` exist |
 | Pivot table + editor | Insert › Pivot table | Has (GridCraft's Excel-style field pane) | High | S–M | `ui-egui/src/pivot_pane.rs`, `pivot.*`. Restyle it as Sheets' side panel ("Rows / Columns / Values / Filters", "Suggested") |
 | Pivot: calculated field, group by date/number, filter by condition, show as % of | Pivot editor | Engine-only | Med | S | `pivot.calculatedField`, `pivot.group`, `pivot.filter`, `pivot.valueSettings` |
 | Image in cell / over cells | Insert › Image | Has | Med | – | |
@@ -97,7 +97,7 @@ Google's function list (support.google.com/docs/table/25273, downloaded and pars
 | Link (Ctrl+K), link card | Insert › Link | Has | High | – | `linkcard.rs`; "link to a range / sheet" choice maybe missing (S) |
 | Tick box | Insert › Tick box | Has | High | – | `insert.checkbox` |
 | Drop-down (data validation) with coloured chips | Insert › Drop-down | Has | High | – | `dvpanel.rs` |
-| Drop-down: **multiple selections**, chip display style, data-range-driven colours | DV panel | Missing | Med–High | S–M | On the roadmap ("Data validation later") |
+| Drop-down: **multiple selections**, chip display style, data-range-driven colours | DV panel | Partly | Med–High | S | Multiple selections and Chip / Arrow / Plain text done (2026-11-25); colours from a data range missing |
 | Emoji | Insert › Emoji | Missing | Low | S | Picker UI only |
 | Smart chips: @person, @date, @file, place, finance, YouTube, ratings | Insert › Smart chips / type @ | Missing | Med | M | @date (date picker exists) and @person (server users) make sense; rating chip (★) is cheap; the rest are Google-tied |
 | Note (Shift+F2) | Insert › Note | Has | Med | – | `notes.rs` |
@@ -105,7 +105,7 @@ Google's function list (support.google.com/docs/table/25273, downloaded and pars
 | Comments: @mention, assign, notifications, emoji reactions | Comment box | Missing | Med | M | Needs comments first + server notifications |
 | Theme (fonts + colours for the whole file) | Format › Theme | Missing (engine has Excel themes) | Low–Med | S–M | Workbook theme exists in the file model; a picker of a few Sheets-like themes |
 | Number formats (all of Sheets' list, custom number, custom date/time) | Format › Number | Has | High | – | `customnumber.rs`, `customdate.rs` |
-| Custom currency (other symbols, e.g. $, €, ¥) | Format › Number › Custom currency | Missing | Med | S | Generate a code like `"€"#,##0.00` |
+| Custom currency (other symbols, e.g. $, €, ¥) | Format › Number › Custom currency | Has | Med | S | `currency.rs` |
 | Text: bold, italic, underline, strikethrough | Format › Text | Has | High | – | |
 | Alignment, wrapping (overflow, wrap, clip), rotation | Format | Has | High | – | |
 | Font size, fonts | Toolbar | Has | High | – | 28 fonts |
@@ -114,24 +114,24 @@ Google's function list (support.google.com/docs/table/25273, downloaded and pars
 | Convert to table (Ctrl+Alt+T) | Format › Convert to table | Partly | Med–High | M | Runs GridCraft's Excel table (`insert.table`, `table.*`). Sheets' **Tables** add column types (number, text, date, drop-down, tick box, chips), a column menu (Ctrl+Alt+\\), table references `Table[Column]` and Pre-built tables. Engine has structured refs and banded rows; column types and the Sheets look are missing |
 | Pre-built tables (templates) | Insert › Pre-built tables | Missing | Low–Med | M | Needs a template gallery (shared with the home screen's "start a new spreadsheet" row) |
 | Conditional formatting (single colour, colour scale, custom formula) | Format › Conditional formatting | Has | High | – | `cfpanel.rs` |
-| Alternating colours | Format › Alternating colours | Engine-only (as table styles) | Med–High | S | `table.style`, `table.bandedRows`, `home.formatAsTable`; Sheets' panel = header colour + two band colours + footer, on a plain range |
+| Alternating colours | Format › Alternating colours | Engine-only (as table styles) | Med–High | S–M | `table.style`, `table.bandedRows`, `home.formatAsTable`; Sheets' panel = header colour + two band colours + footer, on a plain range. Skipped in batch 1: a table rewrites header cells and adds a header row when there is none, so plain-range banding needs an engine change |
 | Clear formatting (Ctrl+\\) | Format | Has | High | – | |
 | Paint format | Toolbar | Has | High | – | `edit.formatPainter` |
 | Sort range A→Z / Z→A / advanced (several columns, header row) | Data › Sort range | Has | High | – | |
-| **Sort sheet** (by column, whole sheet keeping a frozen header) | Data › Sort sheet | Partly (right-click only) | High | S | Right-click has "Sort sheet A to Z/Z to A"; add the Data menu sub-menu |
+| **Sort sheet** (by column, whole sheet keeping a frozen header) | Data › Sort sheet | Has | High | S | `menuactions.rs` |
 | Filter: by values, by condition, filter by cell value | Data › Create a filter | Has | High | – | `data.filter`, right-click "Filter by cell value" |
-| Filter / sort by colour (fill, text, conditional formatting colours) | Filter menu | Missing | Med | S–M | On the roadmap ("later: sort/filter by colour, filter by condition") |
-| **Filter views** (personal, named, shareable by URL; temporary views for viewers) | Data › Create filter view | Missing | High (in shared sheets) | M | Biggest everyday gap for shared sheets: live editing makes one person's filter hide rows for everyone. Needs per-person view state on the server (not in the .xlsx) + URL `?fvid=` |
+| Filter / sort by colour (fill, text, conditional formatting colours) | Filter menu | Has (fill and text; not conditional-format colours) | Med | – | On the roadmap ("later: sort/filter by colour, filter by condition") |
+| **Filter views** (personal, named, shareable by URL; temporary views for viewers) | Data › Create filter view | Has (named, per person, saved in the file; no sort inside a view, no `?fvid=` link yet) | High (in shared sheets) | M | Biggest everyday gap for shared sheets: live editing makes one person's filter hide rows for everyone. Needs per-person view state on the server (not in the .xlsx) + URL `?fvid=` |
 | Group by view | Data › Create group by view | Missing | Low–Med | M | New (2025-26) Tables feature; GROUPBY function exists |
 | Slicer | Data › Add a slicer | Partly | Med | S–M | `insert.slicer` is GridCraft's Excel slicer (tables/pivots). Sheets' slicer works on any chart/pivot range with condition or values and "set current filters as default" |
 | Protect sheets and ranges (warning / restrict, except cells) | Data › Protect | Partly | Med | M | `protectpanel.rs`. Sheets restricts to **named people**; ours protects for everyone (Excel-style) — needs the server to enforce per-person edit rights on ranges |
 | Named ranges | Data › Named ranges | Has | Med | – | `namespanel.rs`, name box list |
 | **Named functions** | Data › Named functions | Engine-only (partly) | Med (power users) | S–M | LAMBDA exists; a named LAMBDA in Name Manager may already work (unverified). Needs Sheets' panel (name, arguments, description, import from another file) |
-| Randomise range | Data › Randomise range | Missing | Low | S | Shuffle the selected rows |
+| Randomise range | Data › Randomise range | Has | Low | S | Shuffles the selected rows' contents; formats stay |
 | Column stats (counts, distribution chart, frequency) | Data › Column stats | Missing | Low–Med | S–M | `selection.stats` gives the numbers; needs the side panel |
 | Data validation (all criteria, warning / reject, help text) | Data › Data validation | Has | High | – | `dvpanel.rs` |
 | Data clean-up: remove duplicates | Data › Data clean-up | Has | Med | – | `data.removeDuplicates` |
-| Data clean-up: trim whitespace, clean-up suggestions | Data › Data clean-up | Missing | Med | S | Trim = one pass over the range; suggestions (inconsistent spellings, number-as-text) are M |
+| Data clean-up: trim whitespace, clean-up suggestions | Data › Data clean-up | Partly (trim) | Med | S | Suggestions (inconsistent spellings, number-as-text) are M |
 | Split text to columns (auto-detect separator) | Data › Split text to columns | Has | Med | – | `data.textToColumns` |
 | Data extraction (pull parts out of smart chips) | Data › Data extraction | Missing | Low | – | Needs chips; skip |
 | Spelling | Tools › Spelling | Has | Med | – | Personal dictionary per browser (could move to the account) |
@@ -144,8 +144,8 @@ Google's function list (support.google.com/docs/table/25273, downloaded and pars
 | Create a form | Tools › Create a new form | Missing | Low | – | No forms product yet |
 | Macros: record, run, shortcuts | Extensions › Macros | Engine-only | Low–Med | M | `macro.*`, `automate.*` (GridCraft has its own recorder + script runtime, Excel-flavoured) |
 | Apps Script, add-ons, AppSheet | Extensions | Missing | Low (most users) | – | Not building |
-| Search the menus (Alt+/) | Help / toolbar magnifier | Missing | Med | S | Every menu item is data in `MENUS`: a filter box over it is small |
-| Keyboard shortcuts dialog (Ctrl+/) | Help | Missing | Med | S | On the Phase 1 checklist |
+| Search the menus (Alt+/) | Help / toolbar magnifier | Has | Med | S | `shortcuts.rs` |
+| Keyboard shortcuts dialog (Ctrl+/) | Help | Has | Med | S | `shortcuts.rs` |
 | "Enable compatible spreadsheet shortcuts" (Excel keys) | Shortcuts dialog | Engine-only | Low | S | GridCraft's Excel keymap exists |
 | Comment shortcuts (Ctrl+Alt+M, Ctrl+Alt+Shift+A, R/J/K/E/U) | Keys | Missing | Med | S | After comments |
 | Insert/delete menu keys (Ctrl+Alt+= / Ctrl+Alt+-), sheet menu (Alt+Shift+S), sheet list (Alt+Shift+K) | Keys | Partly | Low | S | Ctrl+Alt+= shown in menus; others to check |
@@ -174,6 +174,8 @@ Google's function list (support.google.com/docs/table/25273, downloaded and pars
 13. **Drop-down: multiple selections + chip style**, and **filter/sort by colour**.
 14. **IMPORTRANGE between Starbase files** (server resolves the file, checks the reader's access, pushes updates), then **IMAGE** + **SPARKLINE**.
 15. **Version history upgrade**: more than 6 versions, named versions, who changed what (and later per-cell edit history), using the authors the live server already knows.
+
+_Batch 2 (2026-11-25): 8 done as far as the engine goes (trendline options; axis min/max needs engine fields), 11 done without a side panel or commenter role, 12 only Create/Remove filter; 7, 12 (filter views) and 13 wait on GridCraft changes (starsheets/ROADMAP.md lists them)._
 
 _After these: **Sheets-style Tables** (column types, column menu, Pre-built tables, group by view) and **per-person protected ranges** (server-enforced) are the next M–L jobs._
 

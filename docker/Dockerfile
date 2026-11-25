@@ -1,12 +1,14 @@
-# Starbase in one container: StarSheets (with the home screen) at /, StarDocs at /docs/, and the
+# Starbase in one container: Starbase Sheets (with the home screen) at /, Starbase Docs at /docs/, and the
 # file server (starsheets/crates/server) that stores everything and serves both sites.
 # Assembled by .github/workflows/release.yml; the build context holds
-#   server-bin/<arch>/starsheets-server   (StarSheets workflow, artifact starsheets-server)
+#   server-bin/<arch>/starsheets-server   (Starbase Sheets workflow, artifact starsheets-server)
 #   site/                                  (artifact starsheets-web)
 #   site/docs/                             (artifact stardocs-web)
 #   docker run -d -p 8080:8080 -v starbase:/data ghcr.io/domeshifter/starbase
 FROM debian:13.7-slim
 ARG TARGETARCH
+# The certificate list: single sign-on (starsheets/docs/oidc.md) checks the sign-in service's HTTPS against it.
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN useradd -u 1000 -M -s /usr/sbin/nologin starbase && mkdir -p /data /backups && chown starbase /data /backups
 COPY --chmod=755 server-bin/${TARGETARCH}/starsheets-server /usr/local/bin/starsheets-server
 COPY site/ /site/

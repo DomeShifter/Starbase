@@ -45,21 +45,15 @@ pub fn start() {
         {
             log::error!("no unsaved-changes guard: {e}");
         }
-        let mut options = eframe::WebOptions::default();
-        if query().contains("webgl")
-            && let eframe::egui_wgpu::WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup
-        {
-            create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
-        }
+        // WebGL2 through glow: no WebGPU path, a smaller download (docs/research/wordcraft-trim.md).
+        let options = eframe::WebOptions::default();
         let result = eframe::WebRunner::new()
             .start(
                 canvas,
                 options,
                 Box::new(move |cc| {
-                    if let Some(rs) = &cc.wgpu_render_state {
-                        log::info!("stardocs: wgpu backend {:?}", rs.adapter.get_info().backend);
-                    }
-                    add_bundled_fonts();
+                    crate::bundled_fonts::add();
+                    crate::bundled_fonts::fetch_office(cc.egui_ctx.clone());
                     // Fonts the user added on an earlier visit (#582); the app notices them arrive.
                     font_store::load_all(cc.egui_ctx.clone());
                     let inbox: Inbox = Inbox::default();
@@ -102,6 +96,8 @@ pub fn start() {
                     let stored = stored_prefs();
                     crate::prefs::restore(&mut app, stored.as_deref());
                     crate::theme::keep_light(&mut app);
+                    // Google Docs' look for WordCraft's own dialogs and Comments pane.
+                    crate::looks::apply(&mut app);
                     // A region chosen in File › Options replaces the browser's for the first blank
                     // document too (#838).
                     if !sample && app.session.prefs.region.is_some() {
@@ -140,30 +136,10 @@ pub fn start() {
         if let Some(el) = document.get_element_by_id(LOADING_ID) {
             match result {
                 Ok(()) => el.remove(),
-                Err(e) => el.set_inner_html(&format!("<p>StarDocs failed to start: {e:?}</p><p>A browser with WebGPU or WebGL2 is required.</p>")),
+                Err(e) => el.set_inner_html(&format!("<p>Starbase Docs failed to start: {e:?}</p><p>It needs a browser with WebGPU or WebGL2.</p>")),
             }
         }
     });
-}
-
-/// Arimo's four faces (app/fonts, Apache License 2.0): drawn to Arial's widths.
-const ARIMO: [&[u8]; 4] = [
-    include_bytes!("../fonts/Arimo-Regular.ttf"),
-    include_bytes!("../fonts/Arimo-Bold.ttf"),
-    include_bytes!("../fonts/Arimo-Italic.ttf"),
-    include_bytes!("../fonts/Arimo-BoldItalic.ttf"),
-];
-
-/// Add Arimo to the font database before any text is laid out. A browser has no Arial, the
-/// default font of a new document (as in Google Docs); WordCraft draws a missing Arial in its
-/// first installed metric twin (Liberation Sans, Helvetica, Arimo), so with Arimo present Arial
-/// text keeps Arial's widths and breaks lines where Word and Google Docs do, with no warning in
-/// the font box. Added as a document's fonts are: for this run, not as a user font.
-fn add_bundled_fonts() {
-    let files = ARIMO.iter().map(|b| (b.to_vec(), "Arimo".to_string())).collect();
-    if wordcraft_fonts::FontDb::global().add_document_fonts(files) != ARIMO.len() {
-        log::warn!("Arimo (the bundled stand-in for Arial) didn't load fully");
-    }
 }
 
 fn query() -> String {

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>StarSheets</title>
+  <title>Starbase</title>
   <link id="tab_icon_ico" rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48">
   <link id="tab_icon_svg" rel="icon" type="image/svg+xml" href="favicon.svg">
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -39,21 +39,29 @@
     #ss_signin .ss_primary { min-width: 88px; height: 36px; padding: 0 24px; border: 0; border-radius: 18px; background: #146C2E;
       color: #fff; font: inherit; cursor: pointer; }
     #ss_signin .ss_primary:disabled { opacity: .6; cursor: default; }
+    #ss_signin .ss_sso { height: 36px; padding: 0 24px; border: 1px solid #747775; border-radius: 18px; background: #fff;
+      color: #146C2E; font: inherit; cursor: pointer; }
+    #ss_signin .ss_sso:hover { background: #F2F2F2; }
+    #ss_signin .ss_or { font-size: 12px; color: #444746; text-align: center; }
+    #ss_signin [hidden] { display: none !important; }
   </style>
   <link data-trunk rel="copy-file" href="fonts/Roboto-Regular.ttf" />
 </head>
 <body>
   <canvas id="starsheets_canvas"></canvas>
-  <div id="starsheets_loading">Loading StarSheets&hellip;</div>
+  <div id="starsheets_loading">Loading Starbase&hellip;</div>
   <div id="ss_signin_back">
     <form id="ss_signin" method="post" action="api/login" autocomplete="on">
-      <h1>Sign in to StarSheets</h1>
+      <h1>Sign in to Starbase</h1>
+      <button type="button" class="ss_sso" id="ss_sso" hidden>Sign in with SSO</button>
+      <div class="ss_or" id="ss_or" hidden>or with a username and password</div>
+      <button type="button" class="ss_link" id="ss_password_link" hidden>Run this server? Sign in with your password</button>
       <input id="ss_username" name="username" type="text" autocomplete="username" placeholder="Username" autocapitalize="none" spellcheck="false" required>
       <input id="ss_password" name="password" type="password" autocomplete="current-password" placeholder="Password" required>
       <div class="ss_error" id="ss_signin_error"></div>
-      <div class="ss_note">Forgotten your password? The person who runs this server can set a new one.</div>
+      <div class="ss_note" id="ss_forgot">Forgotten your password? The person who runs this server can set a new one.</div>
       <button type="button" class="ss_link" id="ss_signup_link">New here? Create an account</button>
-      <div class="ss_actions"><button type="submit" class="ss_primary" id="ss_signin_go">Sign in</button></div>
+      <div class="ss_actions" id="ss_signin_actions"><button type="submit" class="ss_primary" id="ss_signin_go">Sign in</button></div>
     </form>
   </div>
   <script>
@@ -87,18 +95,59 @@
       input.addEventListener('cancel', function () { input.remove(); window.__ssPickingImage = false; });
       input.click();
     };
-    // Sign-in box: account.rs calls __ssSignIn(true, signupAllowed) to show it and
+    // Sign-in box: account.rs calls __ssSignIn(true, signupAllowed, sso) to show it and
     // __ssSignIn(false) to hide it; "Create an account" sets __ssWantSignUp for the app.
-    // Signing in reloads the page (as the app's own sign-in did).
+    // Signing in reloads the page (as the app's own sign-in did). `sso` (JSON text, or null):
+    // the server's single sign-on button label and whether passwords are for owners only.
     (function () {
       var back = document.getElementById('ss_signin_back'), form = document.getElementById('ss_signin');
       var err = document.getElementById('ss_signin_error'), go = document.getElementById('ss_signin_go');
       var link = document.getElementById('ss_signup_link');
+      var ssoBtn = document.getElementById('ss_sso'), or = document.getElementById('ss_or');
+      var pwLink = document.getElementById('ss_password_link');
+      var pwParts = ['ss_username', 'ss_password', 'ss_forgot', 'ss_signin_actions'].map(function (id) { return document.getElementById(id); });
+      // Back from single sign-on with ?sso=<what happened> (main.rs): explain it once and take it
+      // out of the address. account.rs shows it too when already signed in (linking).
+      var ssoWhy = {
+        denied: 'Signing in was cancelled.',
+        expired: 'That sign-in took too long, or was started at a different address. Please try again.',
+        failed: "Signing in through single sign-on didn't work. The person who runs this server can see why in its log.",
+        unreachable: "The sign-in service couldn't be reached. Try again in a moment.",
+        'not-allowed': "Your account at the sign-in service isn't allowed to use this server.",
+        'no-account': 'There is no account here for you yet. Ask the person who runs this server to add you.',
+        'setup-first': "This server isn't set up yet: its owner makes the first account with the setup code.",
+        'linked-elsewhere': 'That sign-in is already linked to another account here.',
+        'signin-first': 'Sign in first, then link your account.',
+        busy: 'Too many tries. Wait a few minutes, then try again.',
+        renew: 'Your sign-in has run out. Please sign in again.'
+      };
+      var params = new URLSearchParams(location.search), ssoCode = params.get('sso');
+      window.__ssSsoMessage = ssoCode ? (ssoWhy[ssoCode] || ssoWhy.failed) : '';
+      if (ssoCode !== null) {
+        params.delete('sso');
+        var rest = params.toString();
+        history.replaceState(history.state, '', location.pathname + (rest ? '?' + rest : '') + location.hash);
+      }
+      var showPasswords = function (on) { pwParts.forEach(function (el) { el.hidden = !on; }); form.username.required = form.password.required = on; };
+      ssoBtn.addEventListener('click', function () {
+        location.href = 'api/oidc/login?next=' + encodeURIComponent(location.pathname + location.search);
+      });
+      pwLink.addEventListener('click', function () { pwLink.hidden = true; showPasswords(true); form.username.focus(); });
       window.__ssWantSignUp = false;
-      window.__ssSignIn = function (show, signup) {
+      window.__ssSignIn = function (show, signup, sso) {
+        sso = sso ? JSON.parse(sso) : null;
         back.style.display = show ? 'flex' : 'none';
         link.style.display = signup ? '' : 'none';
-        if (show) { err.textContent = ''; setTimeout(function () { document.getElementById('ss_username').focus(); }, 0); }
+        ssoBtn.hidden = !sso;
+        if (sso) ssoBtn.textContent = sso.label;
+        or.hidden = !sso || sso.only;
+        pwLink.hidden = !(sso && sso.only);
+        showPasswords(!(sso && sso.only));
+        if (show) {
+          err.textContent = window.__ssSsoMessage || '';
+          window.__ssSsoMessage = '';
+          setTimeout(function () { (sso && sso.only ? ssoBtn : document.getElementById('ss_username')).focus(); }, 0);
+        }
       };
       link.addEventListener('click', function () { window.__ssWantSignUp = true; ssWake(); });
       form.addEventListener('submit', function (e) {

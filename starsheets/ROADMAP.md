@@ -1,4 +1,4 @@
-# StarSheets roadmap
+# Starbase Sheets roadmap
 
 > **Last updated:** 2026-11-23 · **Now:** Sheets polish (find bar, Clip, Google formulas saved Excel-safe, pictures in cells) released in 0.4.0; next: desktop apps
 
@@ -28,7 +28,8 @@
 - [x] Enter edits, no selection animation, Backspace only clears (patch 0004)
 - [ ] Cell interactions list, remaining rows (docs/sheets-reference.md §4b)
 - [x] Sheets keyboard shortcuts that differ from Excel (patch 0011; Ctrl+Shift+F and Alt+1 in the app)
-- [ ] Still to do from §5: Ctrl+/ shortcut list, Alt+/ tool finder, Alt+Shift+K sheet list, comment navigation keys
+- [x] Ctrl+/ shortcut list, Alt+/ menu search, Ctrl+Shift+V paste values
+- [ ] Still to do from §5: Alt+Shift+K sheet list, comment navigation keys
 - [ ] Side panels instead of dialogs (conditional formatting, data validation, charts)
 - [x] Default text size 10 pt
 - [x] Default 21 px rows and 100 px columns for new sheets only (patch 0010; opened files keep their sizes)
@@ -38,14 +39,17 @@
 - [x] Sheets-style menus: icons, 32 px rows, grey shortcuts, ▸ submenus, dividers, rounded panel with shadow (docs/sheets-menus.md); Sheets-blue links (patch 0014); link card under its cell
 - [x] Menu contents matched to docs/sheets-menus.md where GridCraft has the command (Number, Rotation, Font size, Function, Zoom submenus; UK wording)
 - [x] Right-click menus (cell, row and column headers, sheet tab + its ▾) and toolbar dropdowns (icon strips, number formats with examples) in the Sheets look (patch 0015)
-- [ ] Still missing from Sheets menus: Clip wrapping, Help › Keyboard shortcuts (Ctrl+/), Search the menus (Alt+/), Hidden sheets, Full screen, Version history (phase 2)
+- [x] Sheets menu batch 1 (docs/research/google-sheets-gap.md items 2-6, 9): Paste special sub-menu, Move column, Freeze 2 rows/columns, Sort sheet, Randomise range, Trim whitespace, Custom currency, Keyboard shortcuts, Search the menus
+- [x] Sheets menu batch 2 (gap list items 7, 8, 11-13, what the engine allows): comment cards (Insert › Comment, Ctrl+Alt+M; reply, resolve, edit, delete), trendline type, degree, equation label and R² in the chart editor, Create/Remove filter
+- [ ] Batch 2 leftovers that need GridCraft changes: Sheets-style pivot editor (GridCraft draws its own pane), comment dates and per-reply edit/delete, Comment on the right-click menu; commenter share role (server); sorting inside a filter view (the grid can't show rows in another order for one person)
+- [ ] Still missing from Sheets menus: Clip wrapping, Hidden sheets, Full screen, Version history (phase 2), Edit › Move row up/down, Paste special › Conditional formatting only, Alternating colours (all need engine work)
 - [x] Named ranges suggested while typing formulas (patch 0016); sheet tabs: ▾ opens the menu, drag to reorder
 - [x] Conditional formatting side panel: single colour (19 Sheets conditions, style, presets) and colour scales with configurable points (docs/sheets-cf.md, patch 0017); tab colour bar inside the tab
 - [x] Data validation side panel: Sheets' 25 criteria, drop-down items with colours, help text, warning or reject, arrow or plain (docs/sheets-dv.md, patch 0018)
 - [x] Date picker when editing a cell with a date rule
 - [x] Drop-down colours as in Sheets: light and dark chips, text in the partner colour
 - [x] Phase 2 start: files on a server folder (server/files.py): autosave a moment after each change (new sheets once they have data), File › Open list, Make a copy, Move to bin, version history (last 6), free names with " (2)", a save over a newer copy becomes a "conflicted copy"
-- [x] Filter menu like Sheets (patch 0019); later: sort/filter by colour, filter by condition
+- [x] Filter menu like Sheets (patch 0019); sort/filter by colour and filter views (0093); later: filter by condition
 - [x] Conditional formatting date choices (today, tomorrow, yesterday, past week/month/year; before/after one week/month/year ago)
 - [x] Importing into a sheet that has data opens the file in a new tab
 - [x] Fonts: 28 free fonts (look-alikes for Arial, Calibri, Cambria, Comic Sans, Courier New, Georgia, Impact, Times New Roman, Trebuchet, Verdana, plus Sheets' Google fonts), fetched on first use (patch 0021, app/webfonts.txt)
@@ -55,7 +59,8 @@
 - [x] Google Sheets formulas: `{…}` array literals with formulas and ranges, ARRAYFORMULA, Ctrl+Shift+Enter wraps in ARRAYFORMULA (patch 0022)
 - [x] QUERY stage 1–3 (crates/sheets-functions): select, where (comparisons, contains, starts/ends with, matches, like, is null, and/or/not), group by with sum/avg/count/min/max, pivot, order by, limit, offset, label, format, date literals and functions; headers guessed
 - [ ] QUERY: check every case against answers recorded from Google Sheets; dates shown as dates in results
-- [ ] Data validation later: chip display style, "Allow multiple selections", hover text on invalid cells
+- [x] Data validation: chip display style, "Allow multiple selections"
+- [ ] Data validation later: hover text on invalid cells
 - [ ] Dark mode palette
 - [x] Plain-language explanation when hovering over an error cell
 
@@ -69,14 +74,14 @@
 - [x] Sign-up: people make their own account when the owner allows it (optional sign-up code)
 
 ## Files and folders checklist
-- [x] Files changed outside StarSheets (Excel, a file share) are never written over
+- [x] Files changed outside Starbase Sheets (Excel, a file share) are never written over
 - [x] Everyone's own folder; folder sharing; own bin (30 days); stars and recent
 - [x] Preview pictures, drawn on the server
-- [x] Preview pictures of documents: StarDocs sends one of page 1 after each save (server side; StarDocs side in progress)
+- [x] Preview pictures of documents: Starbase Docs sends one of page 1 after each save (server side; Starbase Docs side in progress)
 - [x] Home screen with a folder tree, cards or list, drag to move, upload
 - [x] A "Move to…" folder picker and a Details panel (owner, who changed it last, who has access)
 - [x] Sort menu; copy a sheet to another spreadsheet; choose where files are kept
-- [x] Backups (prototype): daily, encrypted, in restic's format to any folder the server can reach; keep 7 days / 4 weeks / 12 months; restore your own files into a new folder
+- [x] Backups (prototype): daily, encrypted, in restic's format to any folder the server can reach; keep 7 days / 4 weeks / 12 months; restore anyone's files (owner) or your own into a new folder
 - [ ] Backups next: S3 / Backblaze B2 targets, restore everything onto a new server from the app, choose the keep rules
 
 The full Sheets feature list with a phase per item is in [docs/sheets-reference.md](docs/sheets-reference.md).

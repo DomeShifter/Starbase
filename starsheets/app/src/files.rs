@@ -15,6 +15,8 @@ use gridcraft_ui_egui::SheetApp;
 use serde_json::{Value as Json, json};
 use wasm_bindgen::JsCast as _;
 
+pub(crate) use crate::store::{has_data, xlsx};
+
 /// Asks for the Open dialog, the version list, or another file action (menus set it in egui memory).
 pub const REQUEST: &str = "starsheets_files_request";
 /// The title-bar status line ("Saving…", "Saved to the server", …), in egui memory.
@@ -68,8 +70,9 @@ enum Reply {
         folder: String,
         modified: i64,
     },
-    /// How the server describes where files are kept.
-    Info(String, bool),
+    /// How the server describes where files are kept, whether sign-in is needed, and who is
+    /// signed in ("" with sign-in off).
+    Info(String, bool, String),
     Renamed(String),
     Navigate(String),
     /// An import saved to the server, to open in a new tab.
@@ -106,6 +109,13 @@ pub struct Files {
     /// Save the open workbook now even with nothing in it (Share on a new, empty spreadsheet:
     /// sharing needs the file on the server, as in Sheets, where it exists from the start).
     save_now: bool,
+    /// Who is signed in ("" with sign-in off), once /api/info has answered: the sheet each
+    /// person was last on is remembered per file and person.
+    user: Option<String>,
+    /// A file just opened: switch to the sheet this person was last on (document uid).
+    restore: Option<u64>,
+    /// The sheet last remembered: (document uid, sheet name, the file's sheet id).
+    remembered: Option<(u64, String, u32)>,
 }
 
 /// Asks [`Files`] to save the open workbook at once, empty or not (`ctx.data`, unit value).
@@ -143,7 +153,8 @@ impl Files {
             send(Method::Get, "api/info".into(), None, None, self.inbox.clone(), ctx.clone(), |_, _, body| {
                 let v: Json = serde_json::from_slice(&body).unwrap_or_default();
                 let locked = v["auth"].as_bool().unwrap_or(false) && !v["signed_in"].as_bool().unwrap_or(true);
-                Reply::Info(v["location"].as_str().unwrap_or("the server").to_string(), locked)
+                let user = v["user"]["username"].as_str().unwrap_or("").to_string();
+                Reply::Info(v["location"].as_str().unwrap_or("the server").to_string(), locked, user)
             });
             if let Some(id) = query_file() {
                 self.status = "Opening…".into();
@@ -199,6 +210,7 @@ impl Files {
         }
         self.autosave(app, ctx);
         self.rename_if_needed(app, ctx);
+        self.last_sheet(app);
         let live = app.session.active().and_then(|d| crate::live::status_for(d.uid));
         let unsaved = match &live {
             Some(l) => l.unsaved,
@@ -229,6 +241,35 @@ impl Files {
             m.insert_temp(egui::Id::unique(STATUS_TIP), tip);
             m.insert_temp(egui::Id::unique(LAST_EDIT), last_edit);
         });
+    }
+
+    /// Reopens a file on the sheet this person was last on in it (as Sheets does), and
+    /// remembers in the browser which sheet that is whenever it changes. The file itself opens
+    /// on the sheet of whoever changed it last.
+    fn last_sheet(&mut self, app: &mut SheetApp) {
+        let (Some(user), Some(link)) = (&self.user, &self.link) else { return };
+        let Some(d) = app.session.active().filter(|d| d.uid == link.doc) else { return };
+        let key = format!("starsheets_sheet_{}_{user}", link.id);
+        let storage = web_sys::window().and_then(|w| w.local_storage().ok().flatten());
+        if self.restore.take() == Some(link.doc)
+            && let Some(v) = storage.as_ref().and_then(|s| s.get_item(&key).ok().flatten()).and_then(|t| serde_json::from_str::<Json>(&t).ok())
+        {
+            let file_id = v["id"].as_u64().and_then(|i| u32::try_from(i).ok()).unwrap_or(0);
+            let at = starsheets_sync::pick_sheet(&d.wb, file_id, v["name"].as_str().unwrap_or(""));
+            if at != d.wb.active_sheet() {
+                let _ = app.run("sheet.activate", json!({ "sheet": at }));
+                app.after_engine();
+            }
+        }
+        let Some(d) = app.session.active().filter(|d| d.uid == link.doc) else { return };
+        let Some(sh) = d.wb.sheet(d.wb.active_sheet()) else { return };
+        let now = (d.uid, sh.name.clone(), sh.file_id);
+        if self.remembered.as_ref() != Some(&now) {
+            if let Some(s) = &storage {
+                let _ = s.set_item(&key, &json!({ "id": now.2, "name": now.1 }).to_string());
+            }
+            self.remembered = Some(now);
+        }
     }
 
     fn request(&mut self, app: &mut SheetApp, ctx: &egui::Context, req: &str) {
@@ -327,7 +368,7 @@ impl Files {
                 app.message = Some((
                     "Saved as a copy".into(),
                     format!(
-                        "Your latest changes couldn't be added to the file, because it was saved by someone else (or by StarSheets after it restarted) since this tab last had it. Nothing is lost: your changes were saved as \"{name}\", next to it."
+                        "Your latest changes couldn't be added to the file, because it was saved by someone else (or by Starbase after it restarted) since this tab last had it. Nothing is lost: your changes were saved as \"{name}\", next to it."
                     ),
                 ));
                 self.link = None;
@@ -363,8 +404,9 @@ impl Files {
                 self.browser.loading = false;
             }
             Reply::Refresh => self.refresh(ctx),
-            Reply::Info(location, locked) => {
+            Reply::Info(location, locked, user) => {
                 self.location = location;
+                self.user = Some(user);
                 // Signing in is account.rs's (it asks /api/info itself).
                 let _ = locked;
             }
@@ -407,6 +449,7 @@ impl Files {
                             d.saved = d.wb.clone();
                         }
                         self.link = Some(Link { doc, id, name, version, folder, saved: modified });
+                        self.restore = Some(doc);
                         app.after_engine();
                     }
                     Err(e) => self.error = Some(gridcraft_ui_egui::clean_error(&e)),
@@ -582,7 +625,7 @@ impl Files {
                         open = false;
                     }
                     crate::house::form_style(ui);
-                    crate::house::note(ui, "Earlier copies are kept each time the file saves (the last 6).");
+                    crate::house::note(ui, "Earlier copies are kept each time the file saves: all from the last day, then fewer the older they get.");
                     if vs.is_empty() {
                         ui.label("No earlier versions yet.");
                     }
@@ -667,7 +710,7 @@ impl Files {
             ("Formulas", formulas.to_string()),
             ("Charts", charts.to_string()),
             ("Notes", notes.to_string()),
-            ("StarSheets", env!("CARGO_PKG_VERSION").to_string()),
+            ("Starbase Sheets", env!("CARGO_PKG_VERSION").to_string()),
         ];
         let mut close = false;
         let mut done = false;
@@ -804,29 +847,8 @@ impl Files {
     }
 }
 
-/// Whether any sheet has anything in it.
-/// Whether a workbook holds anything worth a file: a value or formula, a note, a chart or a
-/// picture. Formatting alone (a format previewed on a blank sheet) doesn't count.
-/// The workbook as .xlsx bytes, with Google Sheets' Clip put back in StarSheets' section of the
-/// file (cells carry it while open: the server's and this tab's copies are read the same way).
-pub(crate) fn xlsx(wb: &Workbook, name: &str) -> Result<Vec<u8>, String> {
-    let mut wb = wb.clone();
-    starsheets_sync::clip_into_host(&mut wb);
-    gridcraft_engine::io::save_bytes(&wb, name).map_err(|e| e.to_string())
-}
-
 /// Files from this size on show "Opening …" before they are read (smaller ones open at once).
 const OPENING_NOTICE_FROM: usize = 512 * 1024;
-
-fn has_data(wb: &Workbook) -> bool {
-    wb.sheets.iter().any(|s| {
-        s.cells.iter().any(|(_, c)| c.formula.is_some() || !matches!(c.value, gridcraft_engine::core::Value::Empty))
-            || !s.comments.is_empty()
-            || !s.charts.is_empty()
-            || !s.images.is_empty()
-            || !s.shapes.is_empty()
-    })
-}
 
 /// A name without its spreadsheet extension (only known ones: "Budget v1.2" keeps its ".2").
 fn stem(name: &str) -> String {
@@ -905,10 +927,7 @@ fn go_to(id: &str) {
 }
 
 /// Whether a file name is a StarDocs document (.docx, .odt): it opens in StarDocs, not here.
-pub fn is_doc(name: &str) -> bool {
-    let lower = name.to_lowercase();
-    lower.ends_with(".docx") || lower.ends_with(".odt")
-}
+pub use crate::store::is_doc;
 
 /// StarDocs' page, which sits in `docs/` beside this one: `""` for a new document, else the
 /// file with that id. Extra query text (`&folder=…`) follows as given.
@@ -951,13 +970,7 @@ fn set_unsaved_flag(on: bool) {
     }
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum Method {
-    Get,
-    Post,
-    Put,
-    Delete,
-}
+pub(crate) use crate::store::Method;
 
 /// Sends a request and turns the answer into a Reply (network and server errors become Failed).
 fn send(
@@ -988,12 +1001,51 @@ pub(crate) async fn get_bytes(url: &str) -> Result<(u16, web_sys::Headers, Vec<u
     fetch(Method::Get, url, None, None).await
 }
 
+thread_local! {
+    /// Requests that change something (saves, uploads, renames…) still on their way: leaving the
+    /// page now (to renew the sign-in) could lose them.
+    static WRITES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Whether a request that changes something is still on its way.
+pub(crate) fn writes_in_flight() -> bool {
+    WRITES.with(|w| w.get() > 0)
+}
+
+/// Counts a writing request while it lasts.
+struct Writing;
+
+impl Writing {
+    fn new() -> Writing {
+        WRITES.with(|w| w.set(w.get() + 1));
+        Writing
+    }
+}
+
+impl Drop for Writing {
+    fn drop(&mut self) {
+        WRITES.with(|w| w.set(w.get().saturating_sub(1)));
+    }
+}
+
 pub(crate) async fn fetch(
     method: Method,
     url: &str,
     body: Option<Vec<u8>>,
     if_match: Option<String>,
 ) -> Result<(u16, web_sys::Headers, Vec<u8>), String> {
+    let _writing = (!matches!(method, Method::Get)).then(Writing::new);
+    let (status, headers, bytes) = fetch_inner(method, url, body, if_match).await?;
+    // A session made through single sign-on has ended: the server says it can be renewed at the
+    // provider without asking, and account.rs does that at a quiet moment instead of showing the
+    // sign-in box.
+    if status == 401 && serde_json::from_slice::<Json>(&bytes).is_ok_and(|v| v["renew"].as_bool() == Some(true)) {
+        crate::account::renewal_needed();
+    }
+    Ok((status, headers, bytes))
+}
+
+async fn fetch_inner(method: Method, url: &str, body: Option<Vec<u8>>, if_match: Option<String>) -> Result<(u16, web_sys::Headers, Vec<u8>), String> {
     let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
     let init = web_sys::RequestInit::new();
     init.set_method(match method {

@@ -209,7 +209,7 @@ impl SettingsWindow {
 
 /// The Style tab: look-and-feel choices, kept in this browser.
 fn style_tab(ui: &mut egui::Ui, d: &mut Prefs) {
-    house::note(ui, "How StarSheets looks in this browser. Changes show straight away; Cancel puts them back.");
+    house::note(ui, "How Starbase looks in this browser. Changes show straight away; Cancel puts them back.");
     house::gap(ui);
     house::label(ui, "Toolbar background", "The rounded bar of buttons under the menus.");
     let now = d.toolbar.map(rgb).unwrap_or(crate::theme::TOOLBAR);

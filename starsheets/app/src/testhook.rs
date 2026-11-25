@@ -176,6 +176,11 @@ impl TestHook {
 
 /// Runs one id as the menus and toolbar would, but hands back a result or an error.
 fn run(ctx: &egui::Context, app: &mut SheetApp, home: &mut Home, id: &str, params: Value) -> Result<Value, String> {
+    // The avatar menu's dialogs (account.rs), on either screen.
+    if let Some(what) = id.strip_prefix("account:") {
+        crate::account::request(ctx, what)?;
+        return Ok(json!({ "opened": id }));
+    }
     if id.starts_with("home:") {
         return if home.active { home.test_run(ctx, id, &params) } else { Err("not on the home screen".into()) };
     }
@@ -183,12 +188,21 @@ fn run(ctx: &egui::Context, app: &mut SheetApp, home: &mut Home, id: &str, param
         return Err(format!("`{id}` needs a spreadsheet open (this is the home screen)"));
     }
     let entry = id.starts_with("panel:") || id.starts_with("ui:") || matches!(id, "edit.copy" | "edit.cut" | "edit.paste");
+    // Menu entries that run engine commands themselves (Sort sheet, Freeze…) answer like commands.
+    if crate::menuactions::handles(id) {
+        crate::shell::run_entry_with(app, ctx, id, params);
+        return match app.message.take() {
+            Some((title, text)) if title != "Trim whitespace" => Err(text),
+            Some((_, text)) => Ok(json!({ "done": id, "message": text })),
+            None => Ok(json!({ "done": id })),
+        };
+    }
     if entry {
         // Panels, dialogs and the clipboard: the menus' own path (they answer nothing back).
         if !crate::shell::entry_ids().contains(&id) && !id.starts_with("edit.") {
             return Err(format!("`{id}` is not on any menu or toolbar"));
         }
-        crate::shell::run_entry(app, ctx, id);
+        crate::shell::run_entry_with(app, ctx, id, params);
         return Ok(json!({ "opened": id }));
     }
     // An engine command, with parameters as the toolbar passes them; errors come back as text
@@ -270,12 +284,32 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
                 _ => None,
             };
             let st = wb.styles.get(sheet.style_id(active));
+            let remark = sheet.comments.get(&active);
+            let comment = remark.filter(|c| c.threaded).map(|c| {
+                let replies: Vec<Value> = c.replies.iter().map(|(a, t)| json!({ "author": a, "text": t })).collect();
+                json!({ "author": c.author, "text": c.text, "replies": replies, "resolved": c.resolved })
+            });
+            // The cell's data validation rule (kind, list items, drop-down settings).
+            let validation = sheet.validations.iter().find(|v| v.ranges.iter().any(|r| r.contains(active))).map(|v| {
+                let items = gridcraft_engine::cmd::data::list_items(wb, wb.active_sheet(), active, v);
+                let colours: Vec<Value> = v.item_colors.iter().map(|c| json!({ "item": c.item, "color": c.color.resolve(&wb.theme) })).collect();
+                json!({
+                    "kind": format!("{:?}", v.kind),
+                    "items": items,
+                    "multiple": v.multiple,
+                    "display": format!("{:?}", v.display),
+                    "itemColors": colours,
+                })
+            });
             (
                 json!({
                     "value": gridcraft_engine::display::value_text(wb, sheet, active),
                     "number": number,
                     "input": input,
                     "formula": input.starts_with('=').then_some(&input),
+                    "note": remark.filter(|c| !c.threaded).map(|c| &c.text),
+                    "comment": comment,
+                    "validation": validation,
                 }),
                 json!({
                     "bold": st.font.bold,
@@ -306,6 +340,8 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
         "sheets": sheets,
         "active": active.a1(),
         "selection": ranges.join(","),
+        "freeze": wb.active().and_then(|s| s.freeze).map(|(r, c)| json!({ "rows": r, "cols": c })),
+        "filterView": crate::shell::filterviews::state(&*p.app),
         "cell": cell,
         "format": format,
         "saved": saving == "Saved",

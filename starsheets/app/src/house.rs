@@ -28,6 +28,8 @@ pub const CAPS: f32 = 11.0;
 // ── Colours (on top of theme.rs) ─────────────────────────────────────────────────────────
 /// Sheets' green for the main button in a dialog, and the text of the others.
 pub const GREEN: Color32 = Color32::from_rgb(0x14, 0x6C, 0x2E);
+/// Google's blue: the Share dialog's buttons and Starbase Drive's accent (as in Starbase Docs).
+pub const BLUE: Color32 = Color32::from_rgb(0x0B, 0x57, 0xD0);
 /// The soft blue behind a selected item (a chosen list row, a picked chip).
 pub const SELECTED: Color32 = Color32::from_rgb(0xE8, 0xF0, 0xFE);
 /// The scroll bar handle (and egui's resting widget fill outside forms).
@@ -202,6 +204,11 @@ pub fn keep(ctx: &egui::Context) {
 /// Tooltips: dark grey with white text (Google's look). egui draws them in the menu frame, so the
 /// tooltip layer is restyled after the frame is painted: call once per frame, after all UI.
 pub const TIP_BG: Color32 = Color32::from_rgb(0x3C, 0x40, 0x43);
+/// The bar above the grid while a filter view is open (Google's dark grey), its text and its
+/// text boxes.
+pub const VIEW_BAR: Color32 = TIP_BG;
+pub const VIEW_BAR_TEXT: Color32 = Color32::WHITE;
+pub const VIEW_BAR_FIELD: Color32 = TIP_HOVER;
 /// The picked row in a dark popup (white text stays readable on it).
 pub const TIP_PICKED: Color32 = Color32::from_rgb(0x0B, 0x57, 0xD0);
 /// A hovered row in a dark popup.
@@ -342,6 +349,7 @@ pub fn dialog<R>(ctx: &egui::Context, id: &str, width: f32, title: &str, close: 
 
 /// A window's title row in the house style (title left, ✕ right), for windows drawn without
 /// egui's own title bar. Returns true when ✕ was clicked.
+#[cfg(target_arch = "wasm32")]
 pub fn title_row(ui: &mut Ui, title: &str) -> bool {
     let mut close = false;
     ui.horizontal(|ui| {
@@ -374,6 +382,12 @@ pub fn note(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text).size(NOTE).color(theme::TEXT_DIM));
 }
 
+/// A note with more detail when the pointer is over it.
+#[cfg(target_arch = "wasm32")]
+pub fn note_with_tip(ui: &mut Ui, text: &str, tip: &str) {
+    ui.label(RichText::new(text).size(NOTE).color(theme::TEXT_DIM)).on_hover_text(tip);
+}
+
 /// A small-capitals heading (STANDARD, CUSTOM).
 pub fn caps(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text.to_uppercase()).size(CAPS).strong().color(theme::TEXT_DIM));
@@ -386,8 +400,13 @@ pub fn text(ui: &mut Ui, text: &str) {
 
 /// The main button: a green pill with white text.
 pub fn primary(text: &str) -> egui::Button<'static> {
+    primary_in(text, GREEN)
+}
+
+/// A main button in another accent ([`BLUE`] in the Share dialog, as in Google's).
+pub fn primary_in(text: &str, accent: Color32) -> egui::Button<'static> {
     egui::Button::new(RichText::new(text.to_string()).size(BODY).color(Color32::WHITE))
-        .fill(GREEN)
+        .fill(accent)
         .stroke(Stroke::NONE)
         .corner_radius(CornerRadius::same(BUTTON_RADIUS))
         .min_size(vec2(88.0, BUTTON_HEIGHT))
@@ -395,7 +414,12 @@ pub fn primary(text: &str) -> egui::Button<'static> {
 
 /// Any other button: a white pill with a grey outline and green text.
 pub fn secondary(text: &str) -> egui::Button<'static> {
-    egui::Button::new(RichText::new(text.to_string()).size(BODY).color(GREEN))
+    secondary_in(text, GREEN)
+}
+
+/// Any other button, its text in another accent.
+pub fn secondary_in(text: &str, accent: Color32) -> egui::Button<'static> {
+    egui::Button::new(RichText::new(text.to_string()).size(BODY).color(accent))
         .fill(Color32::WHITE)
         .stroke(Stroke::new(1.0, theme::BOX))
         .corner_radius(CornerRadius::same(BUTTON_RADIUS))
@@ -410,12 +434,17 @@ pub fn link(text: &str) -> egui::Button<'static> {
 /// A dialog's buttons, at the bottom right with 24 px above and 8 px between. The last one is
 /// the main (green) one. Returns the index of the one clicked.
 pub fn actions(ui: &mut Ui, labels: &[&str]) -> Option<usize> {
+    actions_in(ui, labels, GREEN)
+}
+
+/// A dialog's buttons in another accent.
+pub fn actions_in(ui: &mut Ui, labels: &[&str], accent: Color32) -> Option<usize> {
     ui.add_space(XL - S);
     let mut hit = None;
     ui.allocate_ui_with_layout(vec2(ui.available_width(), BUTTON_HEIGHT), Layout::right_to_left(Align::Center), |ui| {
         ui.spacing_mut().item_spacing.x = S;
         for (i, l) in labels.iter().enumerate().rev() {
-            let b = if i + 1 == labels.len() { primary(l) } else { secondary(l) };
+            let b = if i + 1 == labels.len() { primary_in(l, accent) } else { secondary_in(l, accent) };
             if ui.add(b).clicked() {
                 hit = Some(i);
             }
