@@ -172,3 +172,96 @@ jobs:
           path: starbase-windows-x64-portable.zip
           retention-days: 7
           if-no-files-found: error
+
+  windows-icons:
+    # The Start menu and file-type icons, rendered from the apps' own SVGs (packaging/linux/icons.sh)
+    # and packed into .ico files (packaging/windows/make-ico.py) for the installer.
+    name: Windows icons
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Render and pack
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq librsvg2-bin
+          packaging/linux/icons.sh "$RUNNER_TEMP/icons"
+          mkdir ico
+          for pair in drive:io.github.DomeShifter.Starbase sheets:io.github.DomeShifter.Starbase.Sheets docs:io.github.DomeShifter.Starbase.Docs; do
+            name=${pair%%:*}; id=${pair#*:}
+            python3 packaging/windows/make-ico.py "ico/$name.ico" $(for s in 16 24 32 48 64 128 256; do echo "$RUNNER_TEMP/icons/hicolor/${s}x${s}/apps/$id.png"; done)
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-icons
+          path: ico/
+          retention-days: 1
+          if-no-files-found: error
+
+  windows-installer:
+    # The UNSIGNED per-user MSI (docs/research/windows-installer.md): built with WiX from
+    # packaging/windows/Starbase.wxs, then installed, started, upgraded in place and uninstalled
+    # on a clean runner (packaging/windows/test-msi.ps1). Kept as an artifact only.
+    name: Windows installer (unsigned MSI)
+    needs: [build, windows-icons]
+    if: ${{ !cancelled() }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      # The whole history: the version comes from the last vX.Y.Z tag.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          name: starsheets-windows-x86_64
+          path: bin
+      - uses: actions/download-artifact@v8
+        with:
+          name: stardocs-windows-x86_64
+          path: bin
+      - uses: actions/download-artifact@v8
+        with:
+          name: windows-icons
+          path: icons
+      # A vX.Y.Z tag gives X.Y.Z; other builds are <last tag>-dev.<commits since>, MSI version
+      # <last tag>.<commits since> (Windows Installer compares only the first three numbers, and
+      # same-version upgrades are allowed, so newer builds replace older ones).
+      - name: Version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            v="${GITHUB_REF_NAME#v}"; mv="$v"
+          else
+            d=$(git describe --tags --match 'v[0-9]*' --long 2>/dev/null || echo v0.0.0-0-g0)
+            base=$(echo "$d" | sed -E 's/^v([0-9]+\.[0-9]+\.[0-9]+)-([0-9]+)-g.*/\1/'); n=$(echo "$d" | sed -E 's/^v[0-9.]+-([0-9]+)-g.*/\1/')
+            v="$base-dev.$n"; mv="$base.$n"
+          fi
+          echo "STARBASE_VERSION=$v" >> "$GITHUB_ENV"
+          echo "MSI_VERSION=$mv" >> "$GITHUB_ENV"
+          echo "version $v (MSI $mv)"
+      - name: Build the MSI
+        run: |
+          packaging/windows/build-msi.ps1 -MsiVersion $env:MSI_VERSION -BinDir bin -IconDir icons -Out "dist/starbase-$env:STARBASE_VERSION-x64-setup.msi"
+          # The same build one step newer, to check that it replaces the first in place.
+          $p = $env:MSI_VERSION.Split('.'); $next = "$($p[0]).$($p[1]).$($p[2]).$([int]($p[3] ?? 0) + 1)"
+          packaging/windows/build-msi.ps1 -MsiVersion $next -BinDir bin -IconDir icons -Out "upgrade/starbase-upgrade-x64-setup.msi"
+      - name: Install, start, upgrade, uninstall
+        run: packaging/windows/test-msi.ps1 -Msi "dist/starbase-$env:STARBASE_VERSION-x64-setup.msi" -Upgrade upgrade/starbase-upgrade-x64-setup.msi -Logs $env:RUNNER_TEMP
+      - name: Installer logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-installer-logs
+          path: ${{ runner.temp }}/*.log
+          retention-days: 7
+      # SIGNING PLACEHOLDER (desktop-plan.md 3c): SignPath signs the executables and the MSI here
+      # once the project is accepted. Until then the MSI is unsigned.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: starbase-${{ env.STARBASE_VERSION }}-x64-setup
+          path: dist/*.msi
+          retention-days: 7
+          if-no-files-found: error

@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Starbase for Windows: one per-user MSI (no administrator needed) with both programs, three
+     Start menu entries and optional "Open with" entries. Adapted from GridCraft's
+     packaging/windows/gridcraft.wxs (storytold/gridcraft, MIT OR Apache-2.0). Why MSI and what
+     each part does: docs/research/windows-installer.md. Built by packaging/windows/build-msi.ps1.
+
+     Variables (wix build -d): Version (MSI version, numeric a.b.c[.d]), BinDir (starsheets.exe,
+     stardocs.exe), IconDir (drive.ico, sheets.ico, docs.ico), DocDir (LICENSE-MIT,
+     LICENSE-APACHE, NOTICE). -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <!-- Never change the UpgradeCode: it is how a new version finds and replaces the old one. -->
+  <Package Name="Starbase" Manufacturer="Starbase" Version="$(var.Version)" UpgradeCode="921E99DB-A58B-4B2C-9DAB-5616EDA8D9EA" Scope="perUser" Compressed="yes" Language="1033">
+    <SummaryInformation Description="Starbase: Drive, Sheets and Docs" Manufacturer="Starbase" />
+    <!-- Upgrade in place. Same-version upgrades let development builds of one a.b.c replace each
+         other (Windows Installer compares only the first three fields). -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of Starbase is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="Drive.ico" SourceFile="$(var.IconDir)\drive.ico" />
+    <Icon Id="Sheets.ico" SourceFile="$(var.IconDir)\sheets.ico" />
+    <Icon Id="Docs.ico" SourceFile="$(var.IconDir)\docs.ico" />
+    <Property Id="ARPPRODUCTICON" Value="Drive.ico" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/DomeShifter/Starbase" />
+    <Property Id="ARPHELPLINK" Value="https://github.com/DomeShifter/Starbase/issues" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <!-- Per-user: Windows Installer puts this in %LOCALAPPDATA%\Programs\Starbase. -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Starbase" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="Starbase" Level="1">
+      <ComponentGroupRef Id="StarbaseFiles" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="StarbaseFiles" Directory="INSTALLFOLDER">
+      <!-- Starbase Drive (the home screen) and Starbase Sheets: one program. -->
+      <Component Id="SheetsApp">
+        <File Id="SheetsExe" Source="$(var.BinDir)\starsheets.exe" KeyPath="yes">
+          <Shortcut Id="DriveShortcut" Directory="ProgramMenuFolder" Name="Starbase Drive" Description="Your files: the Starbase home screen" Arguments="--home" WorkingDirectory="INSTALLFOLDER" Advertise="yes" Icon="Drive.ico" IconIndex="0" />
+          <Shortcut Id="SheetsShortcut" Directory="ProgramMenuFolder" Name="Starbase Sheets" Description="Spreadsheets" WorkingDirectory="INSTALLFOLDER" Advertise="yes" Icon="Sheets.ico" IconIndex="0" />
+        </File>
+        <RegistryValue Root="HKMU" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\starsheets.exe" Value="[#SheetsExe]" Type="string" />
+
+        <!-- ProgIds: how Explorer opens a file with Starbase. Nothing here sets a file type's
+             default (HKCU\Software\Classes\.<ext>'s own value), so the user's current default app
+             stays the default: Starbase only joins "Open with" and Settings > Default apps. -->
+        <RegistryValue Root="HKMU" Key="Software\Classes\Starbase.Sheets.Workbook" Value="Spreadsheet" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Starbase.Sheets.Workbook\DefaultIcon" Value="[INSTALLFOLDER]sheets.ico" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Starbase.Sheets.Workbook\shell\open\command" Value="&quot;[#SheetsExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Starbase.Sheets.TextData" Value="Text data" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Starbase.Sheets.TextData\DefaultIcon" Value="[INSTALLFOLDER]sheets.ico" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Starbase.Sheets.TextData\shell\open\command" Value="&quot;[#SheetsExe]&quot; &quot;%1&quot;" Type="string" />
+        <!-- "Open with": Windows reads only the value names under OpenWithProgids; the data is
+             ignored (WiX rejects an empty Value, so it repeats the ProgId). -->
+        <RegistryValue Root="HKMU" Key="Software\Classes\.xlsx\OpenWithProgids" Name="Starbase.Sheets.Workbook" Value="Starbase.Sheets.Workbook" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\.xlsm\OpenWithProgids" Name="Starbase.Sheets.Workbook" Value="Starbase.Sheets.Workbook" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\.xlsb\OpenWithProgids" Name="Starbase.Sheets.Workbook" Value="Starbase.Sheets.Workbook" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\.ods\OpenWithProgids" Name="Starbase.Sheets.Workbook" Value="Starbase.Sheets.Workbook" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\.csv\OpenWithProgids" Name="Starbase.Sheets.TextData" Value="Starbase.Sheets.TextData" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\.tsv\OpenWithProgids" Name="Starbase.Sheets.TextData" Value="Starbase.Sheets.TextData" Type="string" />
+        <!-- Settings > Default apps: lets the user choose Starbase Sheets for these types. -->
+        <RegistryValue Root="HKMU" Key="Software\Starbase\Sheets\Capabilities" Name="ApplicationName" Value="Starbase Sheets" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Starbase\Sheets\Capabilities" Name="ApplicationDescription" Value="Spreadsheets: .xlsx, .ods, CSV and TSV" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Starbase\Sheets\Capabilities\FileAssociations" Name=".xlsx" Value="Starbase.Sheets.Workbook" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Starbase\Sheets\Capabilities\FileAssociations" Name=".xlsm" Value="Starbase.Sheets.Workbook" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Starbase\Sheets\Capabilities\FileAssociations" Name=".xlsb" Value="Starbase.Sheets.Workbook" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Starbase\Sheets\Capabilities\FileAssociations" Name=".ods" Value="Starbase.Sheets.Workbook" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Starbase\Sheets\Capabilities\FileAssociations" Name=".csv" Value="Starbase.Sheets.TextData" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Starbase\Sheets\Capabilities\FileAssociations" Name=".tsv" Value="Starbase.Sheets.TextData" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\RegisteredApplications" Name="Starbase Sheets" Value="Software\Starbase\Sheets\Capabilities" Type="string" />
+      </Component>
+
+      <!-- Starbase Docs. -->
+      <Component Id="DocsApp">
+        <File Id="DocsExe" Source="$(var.BinDir)\stardocs.exe" KeyPath="yes">
+          <Shortcut Id="DocsShortcut" Directory="ProgramMenuFolder" Name="Starbase Docs" Description="Documents" WorkingDirectory="INSTALLFOLDER" Advertise="yes" Icon="Docs.ico" IconIndex="0" />
+        </File>
+        <RegistryValue Root="HKMU" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\stardocs.exe" Value="[#DocsExe]" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Starbase.Docs.Document" Value="Document" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Starbase.Docs.Document\DefaultIcon" Value="[INSTALLFOLDER]docs.ico" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\Starbase.Docs.Document\shell\open\command" Value="&quot;[#DocsExe]&quot; &quot;%1&quot;" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\.docx\OpenWithProgids" Name="Starbase.Docs.Document" Value="Starbase.Docs.Document" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\.docm\OpenWithProgids" Name="Starbase.Docs.Document" Value="Starbase.Docs.Document" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\.dotx\OpenWithProgids" Name="Starbase.Docs.Document" Value="Starbase.Docs.Document" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\.dotm\OpenWithProgids" Name="Starbase.Docs.Document" Value="Starbase.Docs.Document" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\.doc\OpenWithProgids" Name="Starbase.Docs.Document" Value="Starbase.Docs.Document" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\.odt\OpenWithProgids" Name="Starbase.Docs.Document" Value="Starbase.Docs.Document" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Classes\.rtf\OpenWithProgids" Name="Starbase.Docs.Document" Value="Starbase.Docs.Document" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Starbase\Docs\Capabilities" Name="ApplicationName" Value="Starbase Docs" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Starbase\Docs\Capabilities" Name="ApplicationDescription" Value="Documents: .docx, .odt, .doc and .rtf" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Starbase\Docs\Capabilities\FileAssociations" Name=".docx" Value="Starbase.Docs.Document" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Starbase\Docs\Capabilities\FileAssociations" Name=".docm" Value="Starbase.Docs.Document" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Starbase\Docs\Capabilities\FileAssociations" Name=".dotx" Value="Starbase.Docs.Document" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Starbase\Docs\Capabilities\FileAssociations" Name=".dotm" Value="Starbase.Docs.Document" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Starbase\Docs\Capabilities\FileAssociations" Name=".doc" Value="Starbase.Docs.Document" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Starbase\Docs\Capabilities\FileAssociations" Name=".odt" Value="Starbase.Docs.Document" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\Starbase\Docs\Capabilities\FileAssociations" Name=".rtf" Value="Starbase.Docs.Document" Type="string" />
+        <RegistryValue Root="HKMU" Key="Software\RegisteredApplications" Name="Starbase Docs" Value="Software\Starbase\Docs\Capabilities" Type="string" />
+      </Component>
+
+      <!-- File-type icons and the licences, beside the programs. -->
+      <Component Id="Icons">
+        <File Id="SheetsIco" Source="$(var.IconDir)\sheets.ico" KeyPath="yes" />
+        <File Id="DocsIco" Source="$(var.IconDir)\docs.ico" />
+        <File Id="DriveIco" Source="$(var.IconDir)\drive.ico" />
+      </Component>
+      <Component Id="Licences">
+        <File Id="LicenceMit" Source="$(var.DocDir)\LICENSE-MIT" Name="LICENSE-MIT.txt" KeyPath="yes" />
+        <File Id="LicenceApache" Source="$(var.DocDir)\LICENSE-APACHE" Name="LICENSE-APACHE.txt" />
+        <File Id="Notice" Source="$(var.DocDir)\NOTICE" Name="NOTICE.txt" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+</Wix>
