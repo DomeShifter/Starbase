@@ -1,10 +1,11 @@
 //! The desktop program: the same window as the web app (shell.rs over WordCraft's page) in a
 //! native eframe window, drawn with OpenGL through glow as the web build draws with WebGL2.
 //!
-//! Usage: `stardocs [FILE]`. Local mode only for now: the document is a file on this computer
-//! (localfile.rs), saved back to itself a moment after each change. With no file, a new
-//! document is made in `~/Documents/Starbase` on its first save. Connecting to a Starbase server
-//! is a later job: another `localfile::Store` behind the same `Link`.
+//! Usage: `stardocs [FILE]`: the document is a file on this computer (localfile.rs), saved back
+//! to itself a moment after each change. With no file, a new document is made in
+//! `~/Documents/Starbase` on its first save. `stardocs --server-file ID` opens a document on the
+//! Starbase server this computer is connected to (File › Connect to a server…, connect.rs;
+//! serverfile.rs is its `localfile::Store`), as the Drive in Starbase Sheets launches it.
 
 use std::path::{Path, PathBuf};
 
@@ -12,6 +13,7 @@ use wordcraft_engine::Session;
 use wordcraft_ui_egui::{FileDialogAnswer, FileDialogRequest, HostChrome, Services, WordApp};
 
 use crate::localfile::{self, Folders, Link, LocalFile, Request};
+use crate::serverfile::ServerDoc;
 
 /// The desktop entry's app id (packaging/linux), also the window's Wayland app id / X11 class.
 pub const APP_ID: &str = "io.github.DomeShifter.Starbase.Docs";
@@ -21,37 +23,79 @@ stardocs: Starbase Docs, a word processor
 
 USAGE:
   stardocs [FILE]
+  stardocs --server-file ID [--name NAME]
 
   FILE                a document to open (.docx, .odt, .rtf, .txt…); without one, a new
                       document is made in Documents/Starbase when you first type
+  --server-file ID    the document ID on the Starbase server this computer is connected
+                      to (File › Connect to a server); --name NAME is shown until it opens
   --version           print the version
   -h, --help          print this help
 ";
 
+/// What the command line asks for.
+#[derive(Debug, Default, PartialEq)]
+pub struct Args {
+    /// Local files: the first opens here, the rest in windows of their own.
+    pub files: Vec<PathBuf>,
+    /// `--server-file <id> [--name <name>]`: a document on the connected Starbase server (the
+    /// id, and the name shown until it opens).
+    pub server_file: Option<(String, String)>,
+    pub version: bool,
+    pub help: bool,
+}
+
+/// Reads the command line (without the program's name).
+pub fn parse_args(args: impl IntoIterator<Item = std::ffi::OsString>) -> Result<Args, String> {
+    let mut out = Args::default();
+    let mut name = None;
+    let mut it = args.into_iter();
+    while let Some(a) = it.next() {
+        match a.to_str() {
+            Some("--version") => out.version = true,
+            Some("-h" | "--help") => out.help = true,
+            Some(flag @ ("--server-file" | "--name")) => {
+                let value = it.next().and_then(|v| v.into_string().ok()).filter(|v| !v.is_empty()).ok_or(format!("{flag} needs a value"))?;
+                if flag == "--name" {
+                    name = Some(value);
+                } else {
+                    out.server_file = Some((value, String::new()));
+                }
+            }
+            Some(s) if s.starts_with("--") => return Err(format!("unknown option {s}")),
+            _ => out.files.push(std::path::absolute(PathBuf::from(&a)).unwrap_or_else(|_| PathBuf::from(&a))),
+        }
+    }
+    if let (Some(f), Some(n)) = (out.server_file.as_mut(), name) {
+        f.1 = n;
+    }
+    Ok(out)
+}
+
 /// Parses the command line and runs the window until it closes.
 pub fn main() -> std::process::ExitCode {
     env_logger_lite();
-    let mut file: Option<PathBuf> = None;
-    for a in std::env::args_os().skip(1) {
-        match a.to_str() {
-            Some("--version") => {
-                let _ = std::io::Write::write_fmt(&mut std::io::stdout(), format_args!("stardocs {}\n", env!("CARGO_PKG_VERSION")));
-                return std::process::ExitCode::SUCCESS;
-            }
-            Some("-h" | "--help") => {
-                let _ = std::io::Write::write_all(&mut std::io::stdout(), USAGE.as_bytes());
-                return std::process::ExitCode::SUCCESS;
-            }
-            Some(s) if s.starts_with("--") => {
-                let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("stardocs: unknown option {s}\n\n{USAGE}"));
-                return std::process::ExitCode::from(2);
-            }
-            _ if file.is_none() => file = Some(std::path::absolute(PathBuf::from(&a)).unwrap_or_else(|_| PathBuf::from(&a))),
-            _ => {
-                // One document per window: further files open in windows of their own.
-                spawn(Some(Path::new(&a)));
-            }
+    let args = match parse_args(std::env::args_os().skip(1)) {
+        Ok(a) => a,
+        Err(e) => {
+            let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("stardocs: {e}\n\n{USAGE}"));
+            return std::process::ExitCode::from(2);
         }
+    };
+    if args.version {
+        let _ = std::io::Write::write_fmt(&mut std::io::stdout(), format_args!("stardocs {}\n", env!("CARGO_PKG_VERSION")));
+        return std::process::ExitCode::SUCCESS;
+    }
+    if args.help {
+        let _ = std::io::Write::write_all(&mut std::io::stdout(), USAGE.as_bytes());
+        return std::process::ExitCode::SUCCESS;
+    }
+    let server_file = args.server_file;
+    let mut files = args.files.into_iter();
+    // A server document takes this window; local files open in windows of their own.
+    let file = if server_file.is_some() { None } else { files.next() };
+    for more in files {
+        spawn(Some(&more));
     }
     let folders = Folders::of_user().unwrap_or_else(|| Folders { documents: PathBuf::from("Starbase"), data: PathBuf::from(".starbase") });
     if let Err(e) = std::fs::create_dir_all(&folders.documents) {
@@ -76,7 +120,7 @@ pub fn main() -> std::process::ExitCode {
             egui_extras::install_image_loaders(&cc.egui_ctx);
             // No size kept from an earlier start: the first frames size the window to the screen.
             let kept = cc.storage.and_then(|s| s.get_string(WINDOW_KEY)).is_some();
-            Ok(Box::new(Desktop::new(&cc.egui_ctx, file, folders, !kept)))
+            Ok(Box::new(Desktop::new(&cc.egui_ctx, file, server_file, folders, !kept)))
         }),
     );
     match run {
@@ -259,20 +303,28 @@ struct Desktop {
     size_frames: u32,
     /// A close was refused once because the document couldn't be saved: the next one quits.
     close_refused: bool,
+    /// The Starbase server this computer is connected to (File › Connect to a server…).
+    server: Option<starbase_connect::Server>,
+    connect: crate::connect::ConnectDialog,
 }
 
 impl Desktop {
-    fn new(ctx: &egui::Context, file: Option<PathBuf>, folders: Folders, fit_screen: bool) -> Self {
+    fn new(ctx: &egui::Context, file: Option<PathBuf>, server_file: Option<(String, String)>, folders: Folders, fit_screen: bool) -> Self {
         crate::bundled_fonts::add();
         let stored = prefs_path().and_then(|p| std::fs::read_to_string(p).ok());
-        let link = match &file {
-            Some(f) => Link::new(Box::new(LocalFile::open(f.clone())), folders.clone()),
-            None => Link::new(Box::new(LocalFile::new_in(folders.documents.clone())), folders.clone()),
+        let server = starbase_connect::saved();
+        let (link, open) = match (&server_file, &server, &file) {
+            (Some((id, name)), Some(s), _) => (Link::new(Box::new(ServerDoc::new(Box::new(s.clone()), id, name)), folders.clone()), true),
+            (None, _, Some(f)) => (Link::new(Box::new(LocalFile::open(f.clone())), folders.clone()), true),
+            _ => (Link::new(Box::new(LocalFile::new_in(folders.documents.clone())), folders.clone()), false),
         };
+        link.set_server(server.as_ref().map(|s| s.url.clone()));
         let services = Services { file_dialog: Some(Box::new(file_dialog)), ..Default::default() };
         let mut app = make_app(&link, services, stored.as_deref());
-        if file.is_some() {
+        if open {
             link.open(&mut app);
+        } else if server_file.is_some() {
+            app.status("This computer isn't connected to a Starbase server: File › Connect to a server…, then open the document again.");
         }
         ctx.request_repaint();
         Self {
@@ -284,6 +336,8 @@ impl Desktop {
             title: String::new(),
             size_frames: if fit_screen { SIZE_FRAMES } else { 0 },
             close_refused: false,
+            server,
+            connect: crate::connect::ConnectDialog::default(),
         }
     }
 
@@ -359,6 +413,12 @@ impl eframe::App for Desktop {
             match r {
                 Request::Open(path) => self.open(path),
                 Request::New => spawn(None),
+                Request::Connect => self.connect.open(),
+                Request::Disconnect => {
+                    if let Some(s) = self.server.take() {
+                        self.connect.disconnect(s);
+                    }
+                }
             }
         }
         self.save_prefs();
@@ -393,6 +453,11 @@ impl eframe::App for Desktop {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.shell.ui(&mut self.app, ui, Some(&self.link));
         self.app.ui(ui);
+        let app = &mut self.app;
+        if let Some(server) = self.connect.ui(ui.ctx(), &mut |msg| app.status(msg)) {
+            self.link.set_server(server.as_ref().map(|s| s.url.clone()));
+            self.server = server;
+        }
         keep_title(ui.ctx(), &title(Some(&self.link.name())), &mut self.title);
     }
 

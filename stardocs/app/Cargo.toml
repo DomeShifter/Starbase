@@ -38,6 +38,9 @@ eframe = { workspace = true, features = ["default_fonts", "glow", "accesskit", "
 rfd = { workspace = true }
 pollster = "1"
 chrono = { workspace = true, features = ["clock"] }
+# File › Connect to a server… and documents on it (connect.rs, serverfile.rs): device sign-in,
+# the token in the system keyring, the files API. Shared with Starbase Sheets.
+starbase-connect = { path = "../../starsheets/crates/connect" }
 
 # Native tests of the window (src/shell_tests.rs): egui_kittest's accessibility tree, no GPU.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

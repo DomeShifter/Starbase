@@ -154,6 +154,11 @@ impl Link {
     /// The logo's tooltip: it goes to the home screen.
     pub const HOME_TIP: &str = "Starbase home";
 
+    /// What the title row says once saved (as the desktop's link, which also has local files).
+    pub fn saved_text(&self) -> String {
+        Self::SAVED.to_string()
+    }
+
     /// Documents on the server can be shared (the desktop's local files can't).
     pub fn can_share(&self) -> bool {
         true

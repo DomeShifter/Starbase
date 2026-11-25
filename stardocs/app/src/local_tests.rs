@@ -258,6 +258,23 @@ fn calibri_and_cambria_resolve_to_carlito_and_caladea() {
 }
 
 #[test]
+fn the_command_line_opens_local_files_or_a_server_document() {
+    use crate::native::{Args, parse_args};
+    let os = |v: &[&str]| v.iter().map(std::ffi::OsString::from).collect::<Vec<_>>();
+    let a = parse_args(os(&["--server-file", "abc123", "--name", "Report.docx"])).unwrap();
+    assert_eq!(a.server_file, Some(("abc123".to_string(), "Report.docx".to_string())));
+    assert!(a.files.is_empty());
+    let a = parse_args(os(&["--name", "N.docx", "--server-file", "x"])).unwrap();
+    assert_eq!(a.server_file, Some(("x".to_string(), "N.docx".to_string())), "in either order");
+    let a = parse_args(os(&["/tmp/a.docx", "/tmp/b.odt"])).unwrap();
+    assert_eq!(a.files, vec![PathBuf::from("/tmp/a.docx"), PathBuf::from("/tmp/b.odt")]);
+    assert_eq!(parse_args(os(&["--version"])).unwrap(), Args { version: true, ..Default::default() });
+    assert!(parse_args(os(&["--server-file"])).is_err(), "needs an id");
+    assert!(parse_args(os(&["--server-file", ""])).is_err());
+    assert!(parse_args(os(&["--bogus"])).is_err());
+}
+
+#[test]
 fn a_first_start_sizes_the_window_to_80_percent_of_the_screen() {
     use crate::native::first_size;
     assert_eq!(first_size(egui::vec2(1920.0, 1080.0)), egui::vec2(1536.0, 864.0));

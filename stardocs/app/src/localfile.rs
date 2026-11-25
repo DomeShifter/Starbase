@@ -14,8 +14,9 @@
 //! - Recent files are listed in the data folder (`$XDG_DATA_HOME/starbase`), never as hidden
 //!   files beside the documents.
 //!
-//! Where the bytes go is a [`Store`]: [`LocalFile`] today. A Starbase server reached from the
-//! desktop (plan job D2b) is another `Store` behind the same `Link`.
+//! Where the bytes go is a [`Store`]: [`LocalFile`], or a document on a Starbase server this
+//! computer is connected to (serverfile.rs, `stardocs --server-file <id>`), behind the same
+//! `Link`.
 
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
@@ -72,6 +73,10 @@ pub trait Store {
     fn keep_copy(&mut self, name: &str, bytes: &[u8]) -> Result<(), String>;
     /// Gives the file a new name (`stem` plus its own extension).
     fn rename(&mut self, stem: &str) -> Result<(), String>;
+    /// What the title row says once saved.
+    fn saved_text(&self) -> &'static str {
+        Link::SAVED
+    }
 }
 
 /// A file's version on disk: its modification time and size.
@@ -275,6 +280,9 @@ fn remember(folders: &Folders, path: &Path) {
 pub enum Request {
     Open(PathBuf),
     New,
+    /// File › Connect to a server… / Disconnect from <server>.
+    Connect,
+    Disconnect,
 }
 
 struct State {
@@ -290,6 +298,8 @@ struct State {
     picking: Option<Receiver<Option<PathBuf>>>,
     /// What the program should do next (see [`Request`]).
     requests: Vec<Request>,
+    /// The Starbase server this computer is connected to (its address), for the File menu.
+    server: Option<String>,
 }
 
 /// The document's link to where it is kept (local mode: a file on this computer).
@@ -322,6 +332,7 @@ impl Link {
             download_next: false,
             picking: None,
             requests: Vec::new(),
+            server: None,
         };
         Self { state: Rc::new(RefCell::new(state)), clock: Rc::new(wall_clock) }
     }
@@ -445,6 +456,25 @@ impl Link {
     /// Opens `path` (File › Open recent, a dropped file).
     pub fn open_path(&self, path: PathBuf) {
         self.state.borrow_mut().requests.push(Request::Open(path));
+    }
+
+    /// File › Connect to a server… (`true`) or Disconnect (`false`).
+    pub fn ask_connect(&self, connect: bool) {
+        self.state.borrow_mut().requests.push(if connect { Request::Connect } else { Request::Disconnect });
+    }
+
+    /// The server this computer is connected to (its address), as the File menu shows it.
+    pub fn server(&self) -> Option<String> {
+        self.state.borrow().server.clone()
+    }
+
+    pub fn set_server(&self, url: Option<String>) {
+        self.state.borrow_mut().server = url;
+    }
+
+    /// What the title row says once saved ("Saved to this computer", or to the server).
+    pub fn saved_text(&self) -> String {
+        self.state.borrow().store.saved_text().to_string()
     }
 
     /// What the program should do next, taken.
