@@ -19,6 +19,7 @@ on:
   # Pull requests only when the packaging changes: the apps' own workflows already build and test
   # the desktop programs on every app change.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths: ["packaging/**", ".github/workflows/desktop.yml"]
   workflow_dispatch:
   workflow_call: # from release.yml: a vX.Y.Z tag builds the AppImage there (signed and attached)
@@ -37,6 +38,7 @@ env:
 jobs:
   starsheets:
     name: Build starsheets (ubuntu-22.04)
+    if: ${{ github.event.pull_request.draft != true }}
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     defaults:
@@ -79,6 +81,7 @@ jobs:
 
   stardocs:
     name: Build stardocs (ubuntu-22.04)
+    if: ${{ github.event.pull_request.draft != true }}
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     defaults:
@@ -123,6 +126,7 @@ jobs:
 
   starslides:
     name: Build starslides (ubuntu-22.04)
+    if: ${{ github.event.pull_request.draft != true }}
     runs-on: ubuntu-22.04
     timeout-minutes: 90
     defaults:
@@ -163,6 +167,7 @@ jobs:
 
   appimage:
     name: AppImage (x86_64)
+    if: ${{ github.event.pull_request.draft != true }}
     needs: [starsheets, stardocs, starslides]
     runs-on: ubuntu-22.04
     timeout-minutes: 20
@@ -221,6 +226,7 @@ jobs:
     # program, the libraries it needs are there, and each window stays up under a headless X
     # server until stopped (exit 124 from timeout) instead of crashing.
     name: Smoke test (${{ matrix.os }})
+    if: ${{ github.event.pull_request.draft != true }}
     needs: appimage
     strategy:
       fail-fast: false
