@@ -1354,7 +1354,7 @@ enum Group {
 }
 const GROUPS: [Group; 9] =
     [Group::History, Group::Zoom, Group::Style, Group::Font, Group::Size, Group::Text, Group::Insert, Group::Align, Group::Lists];
-pub const GUESSED_WIDTHS: [f32; 9] = [151.0, 79.0, 129.0, 109.0, 99.0, 151.0, 95.0, 151.0, 140.0];
+pub const GUESSED_WIDTHS: [f32; 9] = [151.0, 79.0, 129.0, 109.0, 99.0, 151.0, 95.0, 151.0, 168.0];
 /// The toolbar while a picture is selected, as Docs': the text tools give way to the picture's.
 const PICTURE_GROUPS: [Group; 5] = [Group::History, Group::Zoom, Group::Insert, Group::Picture, Group::Wrap];
 const GUESSED_PICTURE_WIDTHS: [f32; 5] = [151.0, 79.0, 95.0, 125.0, 155.0];
@@ -1514,6 +1514,7 @@ impl Tools<'_> {
             }
             Group::Lists => {
                 tool(app, ui, "format_list_bulleted", "Bulleted list (Ctrl+Shift+8)", "para.bullets", json!({}), false);
+                tool(app, ui, "checklist", "Checklist (Ctrl+Shift+9)", "list.checklist", json!({}), false);
                 tool(app, ui, "format_list_numbered", "Numbered list (Ctrl+Shift+7)", "para.numbering", json!({}), false);
                 tool(app, ui, "format_indent_decrease", "Decrease indent (Ctrl+[)", "para.outdent", json!({}), false);
                 tool(app, ui, "format_indent_increase", "Increase indent (Ctrl+])", "para.indent", json!({}), false);
@@ -1631,6 +1632,7 @@ impl Shell {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // Your avatar at the far right, as in Starbase Sheets and Slides: a small menu
                 // with who you are and the way back to the home screen.
+                #[cfg(target_arch = "wasm32")]
                 if let Some((name, username, colour)) = link.and_then(Link::me) {
                     ui.add_space(8.0);
                     let r = crate::share::avatar(ui, &name, &colour, 32.0).on_hover_text(format!("{name} ({username})"));
@@ -1691,6 +1693,7 @@ impl Shell {
             None if link.is_some() => {
                 // A new document has no name until its first save: Docs' "Untitled document",
                 // which the first save keeps as the file's name unless it is renamed here.
+                #[cfg(target_arch = "wasm32")]
                 if app.session.file_name.is_none() && app.session.path.is_none() && app.session.doc.core.title.is_empty() {
                     app.session.file_name = Some(UNTITLED.to_string());
                 }
@@ -1766,6 +1769,7 @@ impl Shell {
 }
 
 /// What Docs calls a document that has no name yet.
+#[cfg(target_arch = "wasm32")]
 pub const UNTITLED: &str = "Untitled document";
 
 /// Docs' menu rows: 32 px tall whatever they hold, 16 px from the sides.

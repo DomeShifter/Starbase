@@ -4790,6 +4790,7 @@ dependencies = [
  "craft-web-host",
  "deckcraft-engine",
  "deckcraft-fonts",
+ "deckcraft-render",
  "deckcraft-ui-egui",
  "eframe",
  "egui",

@@ -455,3 +455,143 @@ fn reopen_goes_to_the_remembered_sheet() {
     Arc::make_mut(&mut hidden.sheets[0]).visibility = gridcraft_engine::model::Visibility::Hidden;
     assert_eq!(pick_sheet(&hidden, first.file_id, &first.name), 1, "a hidden sheet isn't opened on");
 }
+
+/// To-do 3 row 20: a new sheet goes right after the open one (Google Sheets), for everyone: the
+/// replay puts it in the same place, and someone on a later sheet stays on that sheet.
+#[test]
+fn a_new_sheet_goes_right_of_the_open_one_for_everyone() {
+    let mut a = session();
+    a.execute("home.insertSheet", json!({"name": "Two"})).unwrap();
+    a.execute("home.insertSheet", json!({"name": "Three"})).unwrap();
+    let mut b = copy_of(&a);
+    a.sync_log = Some(Vec::new());
+    b.execute("sheet.activate", json!({"sheet": "Three"})).unwrap();
+    a.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    a.execute("home.insertSheet", json!({})).unwrap();
+    let names = |s: &Session| wb(s).sheets.iter().map(|sh| sh.name.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&a)[0], "Sheet1");
+    assert_eq!(names(&a)[2..], ["Two".to_string(), "Three".to_string()], "the new sheet is second: {:?}", names(&a));
+    assert_eq!(wb(&a).active_sheet(), 1, "and it is opened");
+    replay(&mut a, &mut b);
+    assert_eq!(names(&b), names(&a));
+    assert_eq!(wb(&b).active().unwrap().name, "Three", "b stays on its own sheet");
+    // Undo takes it away again; a formula on another sheet that names a sheet keeps working.
+    a.execute("sheet.activate", json!({"sheet": "Two"})).unwrap();
+    a.execute("cell.set", json!({"cell": "A1", "input": "=Three!A1+1"})).unwrap();
+    a.execute("edit.undo", json!({})).unwrap();
+    a.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(names(&a), ["Sheet1", "Two", "Three"]);
+}
+
+/// To-do 3 row 18: deleting the last rows (or columns) makes the sheet smaller, as in Google
+/// Sheets; the size survives a save and reopen of the .xlsx, and Add rows grows it again.
+#[test]
+fn deleting_the_last_rows_makes_a_smaller_sheet_that_survives_xlsx() {
+    let mut a = session();
+    let mut b = copy_of(&a);
+    let sh = |s: &Session| wb(s).active().map(|sh| (sh.row_count(), sh.col_count())).unwrap();
+    assert_eq!(sh(&a), (1000, 26), "a new sheet is Google's 1000 x 26");
+    a.execute("cell.set", json!({"cell": "A50", "input": "last"})).unwrap();
+    a.execute("home.deleteRows", json!({"rows": "51:1000"})).unwrap();
+    a.execute("home.deleteColumns", json!({"cols": "F:Z"})).unwrap();
+    assert_eq!(sh(&a), (50, 5));
+    replay(&mut a, &mut b);
+    assert_eq!(sh(&b), (50, 5), "everyone sees the smaller sheet");
+    // Arrows and Ctrl+arrows stop at the end of the grid.
+    a.execute("selection.set", json!({"range": "A1"})).unwrap();
+    a.execute("selection.move", json!({"dr": 1, "jump": true})).unwrap();
+    a.execute("selection.move", json!({"dr": 1, "jump": true})).unwrap();
+    a.execute("selection.move", json!({"dr": 1})).unwrap();
+    assert_eq!(a.active().unwrap().selection.active.a1(), "A50");
+    let bytes = gridcraft_engine::io::save_bytes(&wb(&a), "t.xlsx").unwrap();
+    let (back, _) = gridcraft_engine::io::open_bytes("t.xlsx", &bytes).unwrap();
+    assert_eq!(back.active().map(|s| (s.row_count(), s.col_count())), Some((50, 5)), "the size is in the file");
+    // You can't delete every row; Add rows and inserted rows make it bigger; undo goes back.
+    assert!(a.execute("home.deleteRows", json!({"rows": "1:50"})).is_err());
+    a.execute("sheet.addRows", json!({"count": 1000})).unwrap();
+    assert_eq!(sh(&a), (1050, 5));
+    a.execute("home.insertRows", json!({"rows": "2:3"})).unwrap();
+    assert_eq!(sh(&a), (1052, 5));
+    a.execute("edit.undo", json!({})).unwrap();
+    a.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(sh(&a), (50, 5));
+    // Writing past the end grows the grid (a paste or fill that runs over it).
+    a.execute("cell.set", json!({"cell": "H60", "input": "x"})).unwrap();
+    assert_eq!(sh(&a), (60, 8));
+    a.sync_log = Some(Vec::new());
+    let mut c = copy_of(&a);
+    a.execute("sheet.addRows", json!({"count": 5})).unwrap();
+    replay(&mut a, &mut c);
+    assert_eq!(sh(&c), (65, 8));
+}
+
+/// A file from Excel keeps Excel's full grid; deleting rows that reach its end makes it sized.
+#[test]
+fn excels_full_grid_becomes_sized_when_a_delete_reaches_its_end() {
+    let mut s = session();
+    let mut wb0 = (*wb(&s)).clone();
+    let first = Arc::make_mut(&mut wb0.sheets[0]);
+    first.grid_rows = None;
+    first.grid_cols = None;
+    set_workbook(&mut s, wb0);
+    let size = |s: &Session| wb(s).active().map(|sh| (sh.grid_rows, sh.grid_cols)).unwrap();
+    s.execute("home.deleteRows", json!({"rows": "5:9"})).unwrap();
+    assert_eq!(size(&s), (None, None), "a delete in the middle keeps the full grid");
+    s.execute("home.deleteRows", json!({"rows": "101:1048576"})).unwrap();
+    assert_eq!(size(&s), (Some(100), None));
+}
+
+/// Review of PR #69, 1: a change that only resizes the grid is part of its fingerprint, so a
+/// tab whose replay sized it differently is caught.
+#[test]
+fn a_resize_alone_changes_the_fingerprint() {
+    let mut a = session();
+    let before = wb(&a);
+    a.execute("sheet.addRows", json!({"count": 10})).unwrap();
+    let after = wb(&a);
+    let mut other = (*after).clone();
+    Arc::make_mut(&mut other.sheets[0]).grid_rows = Some(1005);
+    assert_ne!(change_fingerprint(&before, &after), change_fingerprint(&before, &other));
+    assert_ne!(change_fingerprint(&before, &after), change_fingerprint(&before, &before));
+}
+
+/// Review of PR #69, 2: protocol 9 carries grid sizes; a tab on protocol 8 must reload rather
+/// than drop them.
+#[test]
+fn the_protocol_says_grid_sizes_travel() {
+    const _: () = assert!(PROTOCOL >= 9);
+    let hello: ToServer = serde_json::from_str(r#"{"t":"hello","c":{"file":"f","build":"old","client":"t","protocol":8}}"#).unwrap();
+    assert!(matches!(hello, ToServer::Hello { protocol: 8, .. }), "an old tab's hello still reads, so the server can tell it to reload");
+}
+
+/// Review of PR #69, 3: a sheet that arrives with a grid too small for what it holds (another
+/// tab's state, the server's copy) grows to show everything; a broken size is brought into range.
+#[test]
+fn an_arriving_sheet_never_hides_data() {
+    let mut a = session();
+    a.execute("cell.set", json!({"cell": "C60", "input": "below"})).unwrap();
+    let before = wb(&a);
+    let mut small = (*before).clone();
+    Arc::make_mut(&mut small.sheets[0]).grid_rows = Some(1);
+    let patch = make_patch(&before, &small);
+    let got = apply_patch(&before, &patch).unwrap();
+    assert_eq!(got.sheets[0].row_count(), 60, "the state patch can't hide C60");
+    let mut broken = (*before).clone();
+    let sh = Arc::make_mut(&mut broken.sheets[0]);
+    sh.grid_rows = Some(0);
+    sh.grid_cols = Some(u32::MAX);
+    let back = workbook_from_json(&workbook_json(&broken), None).unwrap();
+    assert_eq!((back.sheets[0].grid_rows, back.sheets[0].grid_cols), (Some(60), Some(gridcraft_engine::core::MAX_COLS)));
+}
+
+/// Review of PR #69, 4: what a formula spills past the end grows the grid (Google shows #REF!
+/// there; growing keeps one rule: a sheet's size never hides what it holds), the same in a replay.
+#[test]
+fn a_spill_past_the_end_grows_the_grid() {
+    let mut a = session();
+    let mut b = copy_of(&a);
+    a.execute("cell.set", json!({"cell": "A1", "input": "=SEQUENCE(2000)"})).unwrap();
+    assert_eq!(wb(&a).sheets[0].row_count(), 2000);
+    replay(&mut a, &mut b);
+    assert_eq!(wb(&b).sheets[0].row_count(), 2000);
+}
