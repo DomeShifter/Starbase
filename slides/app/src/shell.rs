@@ -26,7 +26,9 @@ pub enum Saved {
     Failed(String),
 }
 
-/// Where the presentation lives: the Starbase server (`server::Link`), seen from the window.
+/// Where the presentation lives, seen from the window: the Starbase server (`server::Link`, in
+/// the browser), or a file on this computer or a connected server (`localfile::Link`, the
+/// desktop program, which also has Open, Open recent and Connect).
 pub trait Drive {
     /// The file's name on the server ("Plan.pptx"); empty until it is known.
     fn name(&self) -> String;
@@ -40,6 +42,26 @@ pub trait Drive {
     /// File › New presentation: a new, named .pptx in this presentation's folder, in a new tab.
     fn new_presentation(&self);
     fn rename(&self, stem: &str);
+    /// What the title row says once saved.
+    fn saved_text(&self) -> String {
+        "Saved to Starbase".into()
+    }
+    /// The desktop program: File has Open…, Open recent and Connect to a server.
+    fn desktop(&self) -> bool {
+        false
+    }
+    /// File › Open recent (desktop), newest first.
+    fn recent(&self) -> Vec<std::path::PathBuf> {
+        Vec::new()
+    }
+    /// Opens a file (File › Open recent).
+    fn open_path(&self, _path: std::path::PathBuf) {}
+    /// The server this computer is connected to (desktop), as File shows it.
+    fn server(&self) -> Option<String> {
+        None
+    }
+    /// File › Connect to a server… (`true`) or Disconnect (`false`).
+    fn ask_connect(&self, _connect: bool) {}
 }
 
 /// A menu entry: a command (label, id, params as JSON text, shortcut shown), a sub-menu, a line,
@@ -51,8 +73,10 @@ pub enum Item {
     Sep,
     Check(&'static str, &'static str, &'static str, &'static str),
     Themes,
+    /// The desktop program's Open recent and Connect entries (nothing in the browser).
+    Desktop,
 }
-use Item::{Check, Cmd, Sep, Sub, Themes};
+use Item::{Check, Cmd, Desktop, Sep, Sub, Themes};
 
 const NO: &str = "{}";
 
@@ -63,6 +87,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
         &[
             Cmd("New presentation", "slides.new", NO, ""),
             Cmd("Open from Starbase", "slides.home", NO, ""),
+            Desktop,
             Sep,
             Cmd("Rename", "slides.rename", NO, ""),
             Sub(
@@ -366,7 +391,8 @@ impl Shell {
             ui.add_space(6.0);
             match drive {
                 Some(d) => {
-                    if logo.on_hover_text("Starbase home").clicked() {
+                    let tip = if d.desktop() { "Open a presentation" } else { "Starbase home" };
+                    if logo.on_hover_text(tip).clicked() {
                         d.home();
                     }
                 }
@@ -443,7 +469,7 @@ impl Shell {
                 _ if d.view_only() => ("View only".to_string(), pal.text_dim),
                 Saved::Nothing => (String::new(), pal.text_dim),
                 Saved::Saving => ("Saving…".to_string(), pal.text_dim),
-                Saved::Done => ("Saved to Starbase".to_string(), pal.text_dim),
+                Saved::Done => (d.saved_text(), pal.text_dim),
                 Saved::Failed(why) => (why, pal.error),
             };
             if !text.is_empty() {
@@ -589,6 +615,9 @@ impl Shell {
             match item {
                 Cmd(label, id, p, keys) => {
                     let enabled = self.allowed(app, drive, id);
+                    // The desktop program opens files on this computer.
+                    let (label, keys) =
+                        if *id == "slides.home" && drive.is_some_and(|d| d.desktop()) { ("Open…", "Ctrl+O") } else { (*label, *keys) };
                     if ui.add_enabled(enabled, row(None, label, keys, width, pal)).clicked() {
                         self.run(app, drive, id, params(p));
                         ui.close();
@@ -616,6 +645,11 @@ impl Shell {
                     ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0, pal.menu_line));
                     ui.add_space(8.0);
                 }
+                Desktop => {
+                    if let Some(d) = drive.filter(|d| d.desktop()) {
+                        self.desktop_items(app, ui, d, width, pal);
+                    }
+                }
                 Themes => {
                     let themes = self.themes.get_or_insert_with(|| theme_names(app)).clone();
                     for name in themes {
@@ -626,6 +660,36 @@ impl Shell {
                     }
                 }
             }
+        }
+    }
+
+    /// File's desktop entries: Open recent (a sub-menu of files) and Connect to a server… or
+    /// Disconnect from it.
+    fn desktop_items(&mut self, app: &mut SlideApp, ui: &mut Ui, d: &dyn Drive, width: f32, pal: &Palette) {
+        let recent = d.recent();
+        let b = row(None, "Open recent", "", width, pal).right_text(match icons::icon_px("arrow_right", 20.0, pal.keys) {
+            Some(img) => egui::Atom::from(img),
+            None => egui::Atom::grow(),
+        });
+        let _ = egui::containers::menu::SubMenuButton::from_button(b).ui(ui, |ui| {
+            menu_look(ui, pal);
+            if recent.is_empty() {
+                ui.add_enabled(false, row(None, "No recent presentations", "", 280.0, pal));
+            }
+            for path in recent {
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                let r = ui.add(row(None, &name, "", 280.0, pal)).on_hover_text(path.display().to_string());
+                if r.clicked() {
+                    let _ = self.command(app, Some(d), "slides.openRecent", json!({ "path": path }));
+                    ui.close();
+                }
+            }
+        });
+        let connected = d.server();
+        let label = connected.as_ref().map_or_else(|| "Connect to a server…".to_string(), |s| format!("Disconnect from {s}"));
+        if ui.add(row(None, &label, "", width, pal)).clicked() {
+            let _ = self.command(app, Some(d), if connected.is_some() { "slides.disconnect" } else { "slides.connect" }, json!({}));
+            ui.close();
         }
     }
 
@@ -683,6 +747,11 @@ impl Shell {
                 }
             },
             "home" => drive.ok_or("not opened from Starbase")?.home(),
+            "openRecent" => {
+                let path = p.get("path").and_then(Value::as_str).ok_or("missing `path`")?;
+                drive.filter(|d| d.desktop()).ok_or("the desktop program opens files")?.open_path(path.into());
+            }
+            "connect" | "disconnect" => drive.filter(|d| d.desktop()).ok_or("the desktop program connects to a server")?.ask_connect(id == "connect"),
             "rename" => {
                 drive.ok_or("only a presentation on the server can be renamed")?;
                 match p.get("name").and_then(Value::as_str) {
@@ -829,7 +898,7 @@ fn menu_width(ui: &Ui, items: &[Item]) -> f32 {
             Cmd(label, _, _, keys) => measure(label, 14.0) + if keys.is_empty() { 0.0 } else { 32.0 + measure(keys, 13.0) },
             Check(label, ..) => measure(label, 14.0),
             Sub(label, _) => measure(label, 14.0) + ICON + ICON_GAP + 8.0,
-            Sep | Themes => 120.0,
+            Sep | Themes | Desktop => 120.0,
         })
         .fold(0.0_f32, f32::max);
     (widest + 2.0 * ROW_INSET + ICON + ICON_GAP + 8.0).max(240.0).ceil()
@@ -900,7 +969,7 @@ pub fn menu_ids() -> Vec<&'static str> {
             match i {
                 Cmd(_, id, ..) | Check(_, id, ..) => out.push(id),
                 Sub(_, inner) => walk(inner, out),
-                Sep | Themes => {}
+                Sep | Themes | Desktop => {}
             }
         }
     }
