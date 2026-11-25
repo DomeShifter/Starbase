@@ -436,6 +436,9 @@ fn inotify_sees_a_new_picture() {
 
 // ---------------------------------------------------------------- through the router
 
+#[path = "edits_tests.rs"]
+mod edits_tests;
+
 mod http {
     use super::*;
     use crate::{Shared, auth, sharing};
@@ -443,14 +446,18 @@ mod http {
     use axum::http::{HeaderMap, header};
     use tower::ServiceExt;
 
-    struct Got {
-        status: u16,
-        headers: HeaderMap,
-        json: Value,
-        bytes: Vec<u8>,
+    pub(super) struct Got {
+        pub status: u16,
+        pub headers: HeaderMap,
+        pub json: Value,
+        pub bytes: Vec<u8>,
     }
 
-    async fn ask(app: &Shared, method: &str, uri: &str, who: Option<&str>, extra: &[(header::HeaderName, &str)]) -> Got {
+    pub(super) async fn ask(app: &Shared, method: &str, uri: &str, who: Option<&str>, extra: &[(header::HeaderName, &str)]) -> Got {
+        send(app, method, uri, who, extra, "").await
+    }
+
+    pub(super) async fn send(app: &Shared, method: &str, uri: &str, who: Option<&str>, extra: &[(header::HeaderName, &str)], body: &str) -> Got {
         let mut b = axum::http::Request::builder()
             .method(method)
             .uri(uri)
@@ -463,7 +470,7 @@ mod http {
         for (k, v) in extra {
             b = b.header(k, *v);
         }
-        let mut req = b.body(Body::empty()).unwrap();
+        let mut req = b.body(Body::from(body.to_string())).unwrap();
         req.extensions_mut().insert(axum::extract::ConnectInfo(std::net::SocketAddr::new([10, 9, 8, 6].into(), 50000)));
         let resp = crate::router(app.clone()).oneshot(req).await.unwrap();
         let status = resp.status().as_u16();
@@ -472,7 +479,7 @@ mod http {
         Got { status, headers, json: serde_json::from_slice(&bytes).unwrap_or(Value::Null), bytes }
     }
 
-    async fn get(app: &Shared, uri: &str, who: Option<&str>, extra: &[(header::HeaderName, &str)]) -> Got {
+    pub(super) async fn get(app: &Shared, uri: &str, who: Option<&str>, extra: &[(header::HeaderName, &str)]) -> Got {
         ask(app, "GET", uri, who, extra).await
     }
 

@@ -1856,8 +1856,8 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
     if let Some(resp) = findpath::route(&app, &m, &p, &q, me.clone()).await {
         return resp;
     }
-    // Photos: folder listings with EXIF dates, thumbnails, the index's status (photos/).
-    if let Some(resp) = photos::routes::route(&app, &m, &p, &q, me.clone(), &headers).await {
+    // Photos: folder listings with EXIF dates, thumbnails, edits, the index's status (photos/).
+    if let Some(resp) = photos::routes::route(&app, &m, &p, &q, me.clone(), &headers, &body).await {
         return resp;
     }
     if p.first().map(String::as_str) == Some("backup") && p.len() <= 2 {
