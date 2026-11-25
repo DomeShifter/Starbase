@@ -116,17 +116,20 @@ impl Comments {
         let pointer = ui.ctx().pointer_hover_pos();
         let over_card = self.last.filter(|(c, r)| has(c) && pointer.is_some_and(|p| r.contains(p))).map(|l| l.0);
         self.last = None;
-        let hovered = app.grid.hover_cell.filter(&has);
         if self.dismissed.is_some_and(|x| x != (uid, d.selection.active)) {
             self.dismissed = None;
         }
-        let selected = Some(d.selection.active).filter(|c| has(c) && app.editor.is_none() && self.dismissed != Some((uid, *c)));
+        // A closed card stays closed while its cell is selected, also with the pointer on it.
+        let open = |c: &CellRef| self.dismissed != Some((uid, *c));
+        let over_card = over_card.filter(open);
+        let hovered = app.grid.hover_cell.filter(&has).filter(open);
+        let selected = Some(d.selection.active).filter(|c| has(c) && app.editor.is_none() && open(c));
         // No card over a dialog (Keyboard shortcuts, Custom currency…): it would sit on top of it.
         if crate::input::modal_showing(ui.ctx()) {
             return;
         }
         let Some(cell) = drafting.or(over_card).or(hovered).or(selected) else { return };
-        let from_selection = drafting.is_none() && over_card.is_none() && hovered.is_none();
+        let from_selection = drafting.is_none() && cell == d.selection.active;
         let thread = sh.comments.get(&cell).filter(|c| is_comment(c)).cloned();
         let Some(cell_rect) = crate::linkcard::cell_rect(app, cell) else { return };
         if app.grid.cells_rect.is_some_and(|r| !r.intersects(cell_rect)) {
