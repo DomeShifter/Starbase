@@ -1,16 +1,18 @@
 #!/bin/sh
-# AppRun for the Starbase AppImage: one AppImage, two programs. Picks the program to start:
+# AppRun for the Starbase AppImage: one AppImage, three programs. Picks the program to start:
 #
 #   Starbase.AppImage                      -> starsheets --home   (the Starbase Drive home)
 #   Starbase.AppImage stardocs [args]      -> stardocs [args]
+#   Starbase.AppImage starslides [args]    -> starslides [args]
 #   Starbase.AppImage starsheets [args]    -> starsheets [args]
 #   Starbase.AppImage starbase-open FILE   -> starbase-open FILE   (the file manager's open handler)
 #   Starbase.AppImage report.docx          -> stardocs report.docx   (by the first file's extension)
+#   Starbase.AppImage talk.pptx            -> starslides talk.pptx
 #   Starbase.AppImage budget.xlsx          -> starsheets budget.xlsx
 #   Starbase.AppImage --version            -> the package version, then each program's
 #   Starbase.AppImage --anything           -> starsheets --anything (e.g. the menu entry's --home)
 #
-# A symlink to the AppImage named stardocs, starsheets or starbase-open also picks that program ($ARGV0 is
+# A symlink to the AppImage named stardocs, starslides, starsheets or starbase-open also picks that program ($ARGV0 is
 # the name the AppImage was started by).
 HERE="$(dirname "$(readlink -f "$0")")"
 BIN="$HERE/usr/bin"
@@ -18,6 +20,7 @@ export STARBASE_APPDIR="$HERE"
 
 case "$(basename "${ARGV0:-}")" in
   stardocs*) exec "$BIN/stardocs" "$@" ;;
+  starslides*) exec "$BIN/starslides" "$@" ;;
   starsheets*) exec "$BIN/starsheets" "$@" ;;
   starbase-open*) exec "$BIN/starbase-open" "$@" ;;
 esac
@@ -28,9 +31,10 @@ case "${1:-}" in
     echo "Starbase $(cat "$HERE/usr/share/starbase/version" 2>/dev/null || echo unknown)"
     "$BIN/starsheets" --version
     if [ -x "$BIN/starbase-open" ]; then "$BIN/starbase-open" --version; fi
+    if [ -x "$BIN/starslides" ]; then "$BIN/starslides" --version; fi
     exec "$BIN/stardocs" --version
     ;;
-  stardocs | starsheets | starbase-open)
+  stardocs | starslides | starsheets | starbase-open)
     prog="$1"
     shift
     exec "$BIN/$prog" "$@"
@@ -45,6 +49,7 @@ for arg in "$@"; do
   ext=$(printf '%s' "${arg##*.}" | tr '[:upper:]' '[:lower:]')
   case "$ext" in
     docx | docm | dotx | dotm | doc | odt | rtf) exec "$BIN/stardocs" "$@" ;;
+    pptx | potx | ppsx) exec "$BIN/starslides" "$@" ;;
   esac
   break
 done
