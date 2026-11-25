@@ -4,6 +4,9 @@
 Everything is upstream's (versions, lints, profiles, [patch.crates-io]) except:
 - the [workspace] block: our members only;
 - path dependencies point into upstream/wordcraft;
+- [workspace.dependencies] keeps only what the build takes from it (`workspace = true`: the app
+  and the engine crates it reaches); cargo warns about every other entry;
+- [patch.crates-io] keeps only the crates in the build (Cargo.lock), for the same reason;
 - release builds strip symbol names: wasm-bindgen then fits in 9 GB of memory (it was killed
   without this) and the site is no bigger;
 - release builds are optimised for size (opt-level "s", one codegen unit; the page painter and
@@ -11,7 +14,7 @@ Everything is upstream's (versions, lints, profiles, [patch.crates-io]) except:
   crates leave out TIFF and zopfli: a smaller download (docs/research/wordcraft-trim.md).
 Run by fetch-upstream.sh; a changed Cargo.toml after a pin bump is expected and committed.
 """
-import pathlib, re
+import pathlib, re, tomllib
 
 root = pathlib.Path(__file__).resolve().parent.parent
 up = (root / "upstream/wordcraft/Cargo.toml").read_text()
@@ -41,4 +44,47 @@ body = body[: rel.start()] + sect + body[rel.end():]
 for old, new in (('"bmp", "tiff"]', '"bmp"]'), ('features = ["deflate"]', 'features = ["deflate-flate2-zlib-rs"]')):
     assert body.count(old) == 1, f"gen-cargo.py: upstream changed, {old} not found once"
     body = body.replace(old, new)
+# Only the workspace dependencies something in the build takes (`workspace = true`): our app,
+# and the engine crates it reaches through path dependencies, which take theirs from this
+# workspace too. Cargo warns about every other entry ("unused workspace dependency"). An entry is
+# one line; the comment lines just above it go with it.
+# Dev-dependencies count: cargo counts them too.
+KINDS = ("dependencies", "build-dependencies", "dev-dependencies")
+def all_deps(t):
+    tables = [t] + list(t.get("target", {}).values())
+    return [item for tab in tables for kind in KINDS for item in tab.get(kind, {}).items()]
+ws_deps = tomllib.loads(body)["workspace"]["dependencies"]
+used, todo, seen = set(), [root / "app/Cargo.toml"], set()
+while todo:
+    path = todo.pop()
+    if path in seen:
+        continue
+    seen.add(path)
+    for name, spec in all_deps(tomllib.loads(path.read_text())):
+        base = path.parent
+        if isinstance(spec, dict) and spec.get("workspace"):
+            used.add(name)
+            spec, base = ws_deps.get(name, {}), root
+        if isinstance(spec, dict) and "path" in spec:
+            todo.append((base / spec["path"] / "Cargo.toml").resolve())
+deps = re.search(r"\[workspace\.dependencies\]\n(?:(?!\n\[).)*", body, flags=re.S)
+kept, comments = [], []
+for line in deps.group(0).split("\n"):
+    m = re.match(r"([A-Za-z0-9_-]+)\s*=", line)
+    if line.startswith("#"):
+        comments.append(line)
+    elif m and m.group(1) not in used:
+        comments = []
+    else:
+        kept += comments + [line]
+        comments = []
+body = body[: deps.start()] + "\n".join(kept + comments) + body[deps.end():]
+# Only the [patch.crates-io] entries for crates in the build (Cargo.lock's packages): cargo warns
+# about the others ("patch … was not used in the crate graph"). Without a lock yet, all stay.
+lock = root / "Cargo.lock"
+if lock.exists():
+    in_build = {p["name"] for p in tomllib.loads(lock.read_text()).get("package", [])}
+    patch = re.search(r"\[patch\.crates-io\]\n(?:(?!\n\[).)*", body, flags=re.S)
+    lines = [l for l in patch.group(0).split("\n") if not (m := re.match(r"([A-Za-z0-9_-]+)\s*=", l)) or m.group(1) in in_build]
+    body = body[: patch.start()] + "\n".join(lines) + body[patch.end():]
 (root / "Cargo.toml").write_text(head + ws + "\n" + body.lstrip("\n"))

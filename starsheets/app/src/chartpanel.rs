@@ -164,7 +164,7 @@ pub struct ChartPanel {
     pub just_opened: bool,
     tab: Option<Tab>,
     /// Which Customise sections are open.
-    open: [bool; 5],
+    open: [bool; 6],
     title_which: usize,
     series_which: usize,
     /// Pie slices: every slice listed, not only the first SLICES_SHOWN.
@@ -173,6 +173,8 @@ pub struct ChartPanel {
     /// The data range and X-axis boxes while they are being typed in.
     range_draft: Option<String>,
     x_draft: Option<String>,
+    /// The vertical axis Min and Max boxes while they are being typed in.
+    axis_drafts: [Option<String>; 2],
 }
 
 fn kind_index(c: &Chart) -> usize {
@@ -574,6 +576,17 @@ impl ChartPanel {
                 app.run_or_alert("chart.set", json!({ "chart": id, "legend": LEGEND[k].1 }));
             }
         }
+        // Vertical axis: fixed Min and Max, empty for automatic (as in Sheets).
+        if !pie && section(ui, "Vertical axis", &mut self.open[5]) {
+            let now = [c.value_axis.min, c.value_axis.max];
+            for (k, (key, label)) in [("axisMin", "Min"), ("axisMax", "Max")].into_iter().enumerate() {
+                house::label(ui, label, "");
+                if let Some(v) = axis_bound(ui, &mut self.axis_drafts[k], now[k]) {
+                    // A value that doesn't fit yet (a Max below the Min while typing) is left for the next key.
+                    let _ = app.run("chart.set", json!({ "chart": id, key: v }));
+                }
+            }
+        }
         // Gridlines.
         if !pie && section(ui, "Gridlines and ticks", &mut self.open[4]) {
             let mut on = c.gridlines;
@@ -582,6 +595,30 @@ impl ChartPanel {
             }
         }
     }
+}
+
+/// A Min or Max box: the bound as typed (empty = automatic). Returns what to set when the text
+/// changed to a number or to nothing: a number, or null for automatic.
+fn axis_bound(ui: &mut Ui, draft: &mut Option<String>, now: Option<f64>) -> Option<serde_json::Value> {
+    let mut text = draft.clone().unwrap_or_else(|| now.map(|v| v.to_string()).unwrap_or_default());
+    let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(PANEL_W).margin(vec2(house::M, house::S + 1.0)).hint_text("Auto"));
+    if r.lost_focus() {
+        *draft = None;
+    }
+    if !r.changed() {
+        return None;
+    }
+    *draft = Some(text.clone());
+    axis_value(&text)
+}
+
+/// What a Min / Max box's text sets: null when empty (automatic), the number when it is one.
+fn axis_value(text: &str) -> Option<serde_json::Value> {
+    let t = text.trim();
+    if t.is_empty() {
+        return Some(serde_json::Value::Null);
+    }
+    t.parse::<f64>().ok().filter(|v| v.is_finite()).map(|v| json!(v))
 }
 
 /// Sheets' trendline options under the Trendline tick: type, degree or period, label, R².
@@ -779,6 +816,28 @@ mod tests {
         // A colour scheme colours every slice.
         s.execute("chart.changeColors", json!({ "chart": id, "palette": "monochrome" })).unwrap();
         assert_eq!(s.active().unwrap().wb.active().unwrap().charts[0].point_colors.len(), 3);
+    }
+
+    #[test]
+    fn vertical_axis_bounds_set_clear_and_survive_xlsx() {
+        assert_eq!(axis_value(""), Some(serde_json::Value::Null));
+        assert_eq!(axis_value(" 2.5 "), Some(json!(2.5)));
+        assert_eq!(axis_value("-"), None, "half-typed: nothing set yet");
+        let mut s = gridcraft_engine::Session::new();
+        s.execute("file.new", json!({})).unwrap();
+        for (c, v) in [("A1", "x"), ("B1", "y"), ("A2", "a"), ("B2", "1"), ("A3", "b"), ("B3", "50")] {
+            s.execute("cell.set", json!({ "cell": c, "input": v })).unwrap();
+        }
+        s.execute("insert.chart", json!({ "range": "A1:B3" })).unwrap();
+        let id = s.active().unwrap().wb.active().unwrap().charts[0].id;
+        s.execute("chart.set", json!({ "chart": id, "axisMin": axis_value("10"), "axisMax": axis_value("40") })).unwrap();
+        let wb = &s.active().unwrap().wb;
+        let bytes = gridcraft_engine::io::save_bytes(wb, "t.xlsx").unwrap();
+        let (back, _) = gridcraft_engine::io::open_bytes("t.xlsx", &bytes).unwrap();
+        let b = back.sheets[0].charts[0].value_axis;
+        assert_eq!((b.min, b.max), (Some(10.0), Some(40.0)));
+        s.execute("chart.set", json!({ "chart": id, "axisMin": axis_value("") })).unwrap();
+        assert_eq!(s.active().unwrap().wb.active().unwrap().charts[0].value_axis.min, None);
     }
 
     #[test]

@@ -289,6 +289,18 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
                 let replies: Vec<Value> = c.replies.iter().map(|(a, t)| json!({ "author": a, "text": t })).collect();
                 json!({ "author": c.author, "text": c.text, "replies": replies, "resolved": c.resolved })
             });
+            // The cell's data validation rule (kind, list items, drop-down settings).
+            let validation = sheet.validations.iter().find(|v| v.ranges.iter().any(|r| r.contains(active))).map(|v| {
+                let items = gridcraft_engine::cmd::data::list_items(wb, wb.active_sheet(), active, v);
+                let colours: Vec<Value> = v.item_colors.iter().map(|c| json!({ "item": c.item, "color": c.color.resolve(&wb.theme) })).collect();
+                json!({
+                    "kind": format!("{:?}", v.kind),
+                    "items": items,
+                    "multiple": v.multiple,
+                    "display": format!("{:?}", v.display),
+                    "itemColors": colours,
+                })
+            });
             (
                 json!({
                     "value": gridcraft_engine::display::value_text(wb, sheet, active),
@@ -297,6 +309,7 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
                     "formula": input.starts_with('=').then_some(&input),
                     "note": remark.filter(|c| !c.threaded).map(|c| &c.text),
                     "comment": comment,
+                    "validation": validation,
                 }),
                 json!({
                     "bold": st.font.bold,

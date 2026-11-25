@@ -60,19 +60,23 @@ pub fn main() -> std::process::ExitCode {
     let mut viewport = egui::ViewportBuilder::default()
         .with_title(title(file.as_ref().and_then(|f| f.file_name()).map(|n| n.to_string_lossy().into_owned()).as_deref()))
         .with_app_id(APP_ID)
-        .with_inner_size([1280.0, 900.0])
-        .with_min_inner_size([640.0, 480.0])
+        .with_inner_size(FIRST_SIZE)
+        .with_min_inner_size(MIN_SIZE)
         .with_drag_and_drop(true);
     if let Some(icon) = icon() {
         viewport = viewport.with_icon(icon);
     }
-    let options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Glow, ..Default::default() };
+    // eframe keeps the window's size and place (`persist_window`) for the next start, in
+    // ~/.local/share/starbasedocs.
+    let options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Glow, centered: true, persist_window: true, ..Default::default() };
     let run = eframe::run_native(
         "Starbase Docs",
         options,
         Box::new(move |cc| {
             egui_extras::install_image_loaders(&cc.egui_ctx);
-            Ok(Box::new(Desktop::new(&cc.egui_ctx, file, folders)))
+            // No size kept from an earlier start: the first frames size the window to the screen.
+            let kept = cc.storage.and_then(|s| s.get_string(WINDOW_KEY)).is_some();
+            Ok(Box::new(Desktop::new(&cc.egui_ctx, file, folders, !kept)))
         }),
     );
     match run {
@@ -101,6 +105,34 @@ fn env_logger_lite() {
     static LOGGER: Stderr = Stderr;
     if log::set_logger(&LOGGER).is_ok() {
         log::set_max_level(log::LevelFilter::Warn);
+    }
+}
+
+/// The window's size before the screen's is known, and the smallest it can be (points).
+const FIRST_SIZE: [f32; 2] = [1024.0, 720.0];
+const MIN_SIZE: [f32; 2] = [640.0, 480.0];
+/// eframe's storage key for the window's kept size and place.
+const WINDOW_KEY: &str = "window";
+/// A first start sizes the window to this share of the screen.
+const SCREEN_SHARE: f32 = 0.8;
+/// How many frames to wait for the screen's size before leaving the first size as it is.
+const SIZE_FRAMES: u32 = 30;
+
+/// The window's size on a first start: 80 % of the screen (`monitor`, points), at least the
+/// smallest size and never more than the screen.
+pub fn first_size(monitor: egui::Vec2) -> egui::Vec2 {
+    (monitor * SCREEN_SHARE).max(egui::Vec2::from(MIN_SIZE)).min(monitor)
+}
+
+/// Gives the window our title (`ours`, from [`title`]); `sent` is the one last sent. Call after
+/// `WordApp::ui`: WordCraft sends its own ("<name> - WordCraft") from there whenever that changes
+/// (a document opened, the first change after a save), and ours, sent after it, is the one the
+/// window keeps. Otherwise nothing is sent: a title each frame would keep the window redrawing.
+pub fn keep_title(ctx: &egui::Context, ours: &str, sent: &mut String) {
+    let theirs = ctx.viewport(|v| v.commands.iter().any(|c| matches!(c, egui::ViewportCommand::Title(t) if t != ours)));
+    if theirs || ours != sent.as_str() {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(ours.to_string()));
+        *sent = ours.to_string();
     }
 }
 
@@ -223,13 +255,15 @@ struct Desktop {
     prefs: crate::prefs::PrefsSync,
     /// The window title last set.
     title: String,
+    /// Frames left to size the window to the screen (a first start), 0 once done.
+    size_frames: u32,
     /// A close was refused once because the document couldn't be saved: the next one quits.
     close_refused: bool,
 }
 
 impl Desktop {
-    fn new(ctx: &egui::Context, file: Option<PathBuf>, folders: Folders) -> Self {
-        crate::arimo::add();
+    fn new(ctx: &egui::Context, file: Option<PathBuf>, folders: Folders, fit_screen: bool) -> Self {
+        crate::bundled_fonts::add();
         let stored = prefs_path().and_then(|p| std::fs::read_to_string(p).ok());
         let link = match &file {
             Some(f) => Link::new(Box::new(LocalFile::open(f.clone())), folders.clone()),
@@ -248,6 +282,7 @@ impl Desktop {
             folders,
             prefs: crate::prefs::PrefsSync::new(stored),
             title: String::new(),
+            size_frames: if fit_screen { SIZE_FRAMES } else { 0 },
             close_refused: false,
         }
     }
@@ -271,6 +306,23 @@ impl Desktop {
             if let Some(why) = link.notice() {
                 self.app.status(why);
             }
+        }
+    }
+
+    /// A first start: once the screen's size is known, 80 % of it, around the window's centre.
+    fn fit_screen(&mut self, ctx: &egui::Context) {
+        if self.size_frames == 0 {
+            return;
+        }
+        self.size_frames -= 1;
+        let (monitor, outer) = ctx.input(|i| (i.viewport().monitor_size, i.viewport().outer_rect));
+        let Some(monitor) = monitor.filter(|m| m.x > 0.0 && m.y > 0.0) else { return };
+        self.size_frames = 0;
+        let size = first_size(monitor);
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+        if let Some(outer) = outer {
+            let at = outer.center() - size / 2.0;
+            ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(at));
         }
     }
 
@@ -310,12 +362,7 @@ impl eframe::App for Desktop {
             }
         }
         self.save_prefs();
-        let name = self.link.name();
-        let title = title(Some(&name));
-        if title != self.title {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
-            self.title = title;
-        }
+        self.fit_screen(ctx);
         // Closing saves what isn't saved yet. If that fails, the window stays open once, saying
         // why; closing again quits.
         if ctx.input(|i| i.viewport().close_requested()) && self.link.unsaved(&self.app) {
@@ -346,6 +393,13 @@ impl eframe::App for Desktop {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.shell.ui(&mut self.app, ui, Some(&self.link));
         self.app.ui(ui);
+        keep_title(ui.ctx(), &title(Some(&self.link.name())), &mut self.title);
+    }
+
+    // Only the window's size and place are kept (`persist_window`), not egui's memory of
+    // panels and popups.
+    fn persist_egui_memory(&self) -> bool {
+        false
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
