@@ -21,7 +21,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 // The window and what it needs: both the browser and the desktop.
-mod arimo;
+mod bundled_fonts;
 mod icons;
 mod looks;
 mod prefs;

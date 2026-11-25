@@ -32,9 +32,7 @@ wordcraft-proof = { package = "craft-proof", git = "https://github.com/storytold
 craft-font-store = { git = "https://github.com/storytold/craft-libs", rev = "762a06a4c6b48b522b7d4de84a87917ef90265e6", version = "=0.1.0" }
 craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "762a06a4c6b48b522b7d4de84a87917ef90265e6", version = "=0.1.0" }
 wordcraft-engine = { path = "upstream/wordcraft/crates/engine" }
-wordcraft-mcp = { path = "upstream/wordcraft/crates/mcp" }
 wordcraft-zotero = { path = "upstream/wordcraft/crates/zotero" }
-wordcraft-control-key = { path = "upstream/wordcraft/crates/control-key" }
 wordcraft-ui-egui = { path = "upstream/wordcraft/crates/ui-egui" }
 wordcraft-metafile = { path = "upstream/wordcraft/crates/metafile" }
 
@@ -47,7 +45,6 @@ log = "0.4"
 # All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 proptest = "1"
-rayon = "1"
 unicode-bidi = "0.3"
 unicode-segmentation = "1"
 unicode-linebreak = "0.1"
@@ -102,7 +99,6 @@ egui_kittest = "0.37"
 # A monotonic clock that works on native and in the browser (`performance.now()`).
 web-time = "1.1"
 rfd = "0.17"
-arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -170,8 +166,5 @@ egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6d518fc79968
 egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 egui_extras = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
 winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }

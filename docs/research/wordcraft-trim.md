@@ -43,6 +43,7 @@ passed, other jobs failed). `stardocs-…_bg.wasm` = **53.47 MB raw, 11.52 MB br
 | PDF export (krilla, subsetter, write-fonts, pdf-writer: ~1.55 MB code before wasm-opt) | ~1.2 / ~0.3 | Download as PDF (a Docs feature) | lazy-loaded second wasm, or browser print | High; not recommended |
 | Spell check (craft-proof ~0.77 MB code + 0.34 MB SCOWL list) | – | spelling (a Docs feature) | keep | – |
 | Arimo (1.29 MB raw / 0.60 br, StarDocs' own) | – | Arial metrics for every new document | keep (needed on every load) | – |
+| Carlito + Caladea (3.0 MB raw / 0.83 br, added 2026-11-25) | – | Calibri and Cambria metrics | not in the wasm: fetched from `office/` beside the page after start (Carlito cannot be subset: Reserved Font Name) | – |
 
 Already fine: no UI translations are embedded (English only); no CJK fonts; `rfd` and accesskit are tiny
 (<0.1 MB each).
