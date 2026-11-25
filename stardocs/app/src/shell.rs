@@ -386,7 +386,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
                             Cmd("1.  2.  3.", "para.numbering", r#"{"kind":"numbered"}"#, ""),
                             Cmd("1)  2)  3)", "para.numbering", r#"{"kind":"numberedParen"}"#, ""),
                             Cmd("A.  B.  C.", "para.numbering", r#"{"kind":"upperLetter"}"#, ""),
-                            Cmd("a.  b.  c.", "para.numbering", r#"{"kind":"lowerLetter"}"#, ""),
+                            Cmd("a.  b.  c.", "para.numbering", r#"{"kind":"lowerLetterDot"}"#, ""),
                             Cmd("i.  ii.  iii.", "para.numbering", r#"{"kind":"lowerRoman"}"#, ""),
                             Cmd("1.  a.  i.", "para.numbering", r#"{"kind":"outline"}"#, ""),
                         ],
@@ -2107,10 +2107,10 @@ const BULLET_STYLES: &[(&str, &str)] = &[
 const NUMBER_STYLES: &[(&str, &str)] = &[
     ("1. 2. 3.", "numbered"),
     ("1) 2) 3)", "numberedParen"),
-    ("a. b. c.", "lowerLetter"),
+    ("a. b. c.", "lowerLetterDot"),
     ("i. ii. iii.", "lowerRoman"),
     ("A. B. C.", "upperLetter"),
-    ("1. a. i.", "outline"),
+    ("1. 1.1. 1.1.1.", "legal"),
 ];
 
 /// Docs' small arrow after a list button: a grid of styles applied to the caret's list.
@@ -2123,7 +2123,7 @@ fn list_styles(app: &mut WordApp, ui: &mut Ui, tip: &str, id: &str, styles: &[(&
             egui::Grid::new(tip).spacing(vec2(4.0, 4.0)).show(ui, |ui| {
                 for (i, (label, kind)) in styles.iter().enumerate() {
                     if ui.add(Button::new(RichText::new(*label).size(15.0)).min_size(vec2(64.0, 36.0))).on_hover_text(*label).clicked() {
-                        run(app, id, json!({ "kind": kind }));
+                        run(app, id, json!({ "kind": kind, "apply": true }));
                         ui.close();
                     }
                     if i % 3 == 2 {

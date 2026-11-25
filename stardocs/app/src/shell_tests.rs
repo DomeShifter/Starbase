@@ -886,27 +886,67 @@ fn commenting_allows_comments_only() {
     assert_eq!(body_text(&mut h), "Shared words");
 }
 
-/// The little arrows beside the list buttons pick a style for the caret's list, and the style
-/// survives a save as .docx.
+/// Every item of both list-style grids: applied on plain text it shows its own markers 1-3 and
+/// the style survives a save as .docx; picking it while the paragraphs are already a list of
+/// another kind switches the style instead of removing the list.
 #[test]
-fn list_style_arrows_apply_and_round_trip_docx() {
-    let mut h = window(1400.0);
-    let got = catch_downloads(&mut h);
-    type_text(&mut h, "One");
-    click(&mut h, "Numbering styles");
-    click(&mut h, "A. B. C.");
-    let fmt = |app: &WordApp| {
-        let n = crate::shell::selection_para(app).numbering.expect("in a list");
-        app.session.doc.numbering.level(n.num, n.level).map(|l| l.format)
-    };
-    assert_eq!(fmt(&h.state().app), Some(wordcraft_doc::section::NumFormat::UpperLetter));
-    menu(&mut h, &["File", "Make a copy"]);
-    let (name, bytes) = got.borrow_mut().pop().expect("a copy was downloaded");
-    let back = wordcraft_engine::io::open_bytes(&name, &bytes).unwrap();
+fn list_style_grid_items_apply_switch_and_round_trip_docx() {
+    use wordcraft_doc::numbering::Counters;
     use wordcraft_doc::section::NumFormat;
-    assert!(back.numbering.abstracts.iter().any(|a| a.levels.first().is_some_and(|l| l.format == NumFormat::UpperLetter)), "A. B. C. survives .docx");
-    click(&mut h, "Bullet styles");
-    click(&mut h, "\u{25A0}");
-    assert_eq!(fmt(&h.state().app), Some(wordcraft_doc::section::NumFormat::Bullet));
+    let labels = |h: &Harness<'static, Win>| -> Vec<String> {
+        let doc = &h.state().app.session.doc;
+        let mut c = Counters::default();
+        doc.para_paths(wordcraft_doc::StoryRef::Body)
+            .iter()
+            .filter_map(|p| doc.para(wordcraft_doc::StoryRef::Body, p).and_then(|x| x.props.numbering))
+            .filter(|n| n.num != 0)
+            .filter_map(|n| c.next_label(&doc.numbering, n.num, n.level).map(|(l, _)| l))
+            .collect()
+    };
+    let items: &[(&str, &str, [&str; 3])] = &[
+        ("Bullet styles", "\u{25CF}", ["\u{2022}"; 3]),
+        ("Bullet styles", "\u{25CB}", ["\u{25CB}"; 3]),
+        ("Bullet styles", "\u{25A0}", ["\u{25A0}"; 3]),
+        ("Bullet styles", "\u{25B6}", ["\u{27A2}"; 3]),
+        ("Bullet styles", "\u{25C6}", ["\u{2756}"; 3]),
+        ("Bullet styles", "\u{2605}", ["\u{2605}"; 3]),
+        ("Numbering styles", "1. 2. 3.", ["1.", "2.", "3."]),
+        ("Numbering styles", "1) 2) 3)", ["1)", "2)", "3)"]),
+        ("Numbering styles", "a. b. c.", ["a.", "b.", "c."]),
+        ("Numbering styles", "i. ii. iii.", ["i.", "ii.", "iii."]),
+        ("Numbering styles", "A. B. C.", ["A.", "B.", "C."]),
+        ("Numbering styles", "1. 1.1. 1.1.1.", ["1.", "2.", "3."]),
+    ];
+    for (arrow, item, want) in items {
+        let mut h = window(1400.0);
+        let got = catch_downloads(&mut h);
+        type_text(&mut h, "a");
+        keys(&mut h, Modifiers::NONE, Key::Enter);
+        type_text(&mut h, "b");
+        keys(&mut h, Modifiers::NONE, Key::Enter);
+        type_text(&mut h, "c");
+        run(&mut h, "select.all", json!({}));
+        click(&mut h, arrow);
+        click(&mut h, item);
+        assert_eq!(labels(&h), want.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "{item}");
+        // Over a list of another kind: still a list, now this style.
+        run(&mut h, "para.numbering", json!({"kind": if arrow == &"Numbering styles" { "upperLetter" } else { "numberedParen" }, "apply": true}));
+        click(&mut h, arrow);
+        click(&mut h, item);
+        assert_eq!(labels(&h), want.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "{item} over another list");
+        menu(&mut h, &["File", "Make a copy"]);
+        let (name, bytes) = got.borrow_mut().pop().expect("a copy was downloaded");
+        let back = wordcraft_engine::io::open_bytes(&name, &bytes).unwrap();
+        let n = back
+            .para(wordcraft_doc::StoryRef::Body, &back.para_paths(wordcraft_doc::StoryRef::Body)[0])
+            .and_then(|p| p.props.numbering)
+            .expect("list survives .docx");
+        let l = back.numbering.level(n.num, n.level).expect("level").clone();
+        let first = &h.state().app.session.doc.numbering;
+        let orig = first.level(first.nums.last().unwrap().id, 0).unwrap();
+        assert_eq!((l.format, l.text.clone()), (orig.format, orig.text.clone()), "{item} survives .docx");
+        let _ = NumFormat::Bullet;
+    }
+    let h = window(1400.0);
     assert!(h.query_by_label("Checklist (Ctrl+Shift+9)").is_some(), "the checklist button sits beside the list buttons");
 }
