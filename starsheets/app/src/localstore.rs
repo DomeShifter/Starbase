@@ -320,14 +320,27 @@ pub(crate) fn program(name: &str) -> Option<PathBuf> {
 
 /// Starts `name` with `args` in its own window (and process); says why when it can't.
 pub(crate) fn launch(name: &str, args: &[&std::ffi::OsStr]) -> Result<(), String> {
-    let exe = if name == "starsheets" { std::env::current_exe().ok() } else { None }.or_else(|| program(name));
-    let Some(exe) = exe else {
+    let Some(mut cmd) = program_command(name, std::env::var_os("APPIMAGE").map(PathBuf::from)) else {
         let app = if name == "stardocs" { "Starbase Docs" } else { "Starbase Sheets" };
         return Err(format!("{app} isn't installed next to Starbase Drive, so this can't be opened here."));
     };
-    let mut cmd = std::process::Command::new(&exe);
+    let exe = PathBuf::from(cmd.get_program());
     cmd.args(args);
     start_detached(cmd).map(|_| ()).map_err(|e| format!("Couldn't start {}: {e}", exe.display()))
+}
+
+/// The command that starts program `name`. Inside the AppImage (`$APPIMAGE`, set by its runtime)
+/// that is the AppImage itself with the program's name first (AppRun picks the program by it):
+/// the new program gets a mount of its own and keeps its files when this one, and with it this
+/// one's mount, goes. Otherwise this program's own file for `starsheets`, else [`program`].
+fn program_command(name: &str, appimage: Option<PathBuf>) -> Option<std::process::Command> {
+    if let Some(image) = appimage.filter(|p| p.is_file()) {
+        let mut cmd = std::process::Command::new(image);
+        cmd.arg(name);
+        return Some(cmd);
+    }
+    let exe = if name == "starsheets" { std::env::current_exe().ok() } else { None }.or_else(|| program(name))?;
+    Some(std::process::Command::new(exe))
 }
 
 /// Starts a program that lives on by itself: in a process group of its own (Ctrl+C in the
@@ -766,6 +779,21 @@ mod tests {
             !proc.exists()
         });
         assert!(gone, "process {pid} was left behind as a zombie");
+    }
+
+    #[test]
+    fn inside_the_appimage_programs_start_through_it() {
+        let dir = temp("appimage");
+        let image = dir.join("Starbase.AppImage");
+        fs::write(&image, b"").unwrap();
+        let cmd = program_command("stardocs", Some(image.clone())).unwrap();
+        assert_eq!(cmd.get_program(), image.as_os_str());
+        assert_eq!(cmd.get_args().collect::<Vec<_>>(), ["stardocs"], "AppRun picks the program by its name");
+        // Not inside an AppImage (or it's gone): this program's own file.
+        let cmd = program_command("starsheets", Some(dir.join("missing.AppImage"))).unwrap();
+        assert_eq!(PathBuf::from(cmd.get_program()), std::env::current_exe().unwrap());
+        assert_eq!(cmd.get_args().count(), 0);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

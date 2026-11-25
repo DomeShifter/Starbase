@@ -32,7 +32,7 @@ pub const SHEETS_ID: &str = "io.github.DomeShifter.Starbase.Sheets";
 pub const DRIVE_ID: &str = "io.github.DomeShifter.Starbase";
 
 /// What the command line asked for.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Start {
     Version,
     Help,
@@ -122,42 +122,54 @@ pub fn main() -> eframe::Result<()> {
     if let Some(i) = icon_data(icon) {
         viewport = viewport.with_icon(i);
     }
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
-    eframe::run_native(
-        &title,
-        options,
-        Box::new(move |cc| {
-            let mut app = SheetApp::new(Session::new(), services());
-            load_prefs(&mut app);
-            starsheets_defaults(&mut app);
-            gridcraft_ui_egui::spelling::set(crate::spelling::known);
-            SheetApp::setup_context_for_language(&cc.egui_ctx, false, app.ui.language);
-            crate::theme::install(&cc.egui_ctx);
-            egui_extras::install_image_loaders(&cc.egui_ctx);
-            let mut files = LocalFiles::default();
-            let home = match start {
-                Start::Home => Some(crate::home::Home::with_store(crate::store::Backend::default())),
-                Start::New(dir) => {
-                    files.new_folder = dir;
-                    None
-                }
-                Start::Open(paths) => {
-                    if let Some(p) = paths.first() {
-                        app.open_path(&p.to_string_lossy());
-                    }
-                    None
-                }
-                _ => None,
-            };
-            if app.session.documents().is_empty() {
-                app.session.new_workbook();
+    // Drawn with wgpu (Vulkan, else OpenGL through EGL), as GridCraft is. A computer where wgpu
+    // can't start (no working Vulkan or EGL) gets one more try with eframe's OpenGL renderer
+    // (glow, also GLX on X11), as Starbase Docs always uses; eframe reuses its event loop for
+    // the second run.
+    let options = eframe::NativeOptions { viewport, renderer: eframe::Renderer::Wgpu, ..Default::default() };
+    let glow = eframe::NativeOptions { renderer: eframe::Renderer::Glow, ..options.clone() };
+    match eframe::run_native(&title, options, creator(start.clone())) {
+        Err(eframe::Error::Wgpu(e)) => {
+            log::error!("graphics: wgpu didn't start ({e}); trying OpenGL (glow)");
+            eframe::run_native(&title, glow, creator(start))
+        }
+        result => result,
+    }
+}
+
+/// Makes the window's app once eframe has a window: the same for either renderer.
+fn creator(start: Start) -> eframe::AppCreator<'static> {
+    Box::new(move |cc| {
+        let mut app = SheetApp::new(Session::new(), services());
+        load_prefs(&mut app);
+        starsheets_defaults(&mut app);
+        gridcraft_ui_egui::spelling::set(crate::spelling::known);
+        SheetApp::setup_context_for_language(&cc.egui_ctx, false, app.ui.language);
+        crate::theme::install(&cc.egui_ctx);
+        egui_extras::install_image_loaders(&cc.egui_ctx);
+        let mut files = LocalFiles::default();
+        let home = match start {
+            Start::Home => Some(crate::home::Home::with_store(crate::store::Backend::default())),
+            Start::New(dir) => {
+                files.new_folder = dir;
+                None
             }
-            let remembered = cc.storage.is_some_and(|s| s.get_string("window").is_some());
-            let mut shell = NativeShell::new(app, home, files);
-            shell.fit_window = if remembered { 0 } else { FIT_FRAMES };
-            Ok(Box::new(shell))
-        }),
-    )
+            Start::Open(paths) => {
+                if let Some(p) = paths.first() {
+                    app.open_path(&p.to_string_lossy());
+                }
+                None
+            }
+            _ => None,
+        };
+        if app.session.documents().is_empty() {
+            app.session.new_workbook();
+        }
+        let remembered = cc.storage.is_some_and(|s| s.get_string("window").is_some());
+        let mut shell = NativeShell::new(app, home, files);
+        shell.fit_window = if remembered { 0 } else { FIT_FRAMES };
+        Ok(Box::new(shell))
+    })
 }
 
 /// Frames to wait for the screen's size before giving up on sizing a first window to it.
@@ -778,7 +790,7 @@ impl eframe::App for NativeShell {
         self.input.end_frame(&ctx);
     }
 
-    fn on_exit(&mut self) {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         if self.home.is_none() {
             self.files.flush(&mut self.app);
         }
