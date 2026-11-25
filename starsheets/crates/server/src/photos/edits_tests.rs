@@ -74,6 +74,7 @@ async fn edits_are_saved_in_a_sidecar_by_people_who_may_edit() {
     let body = r#"{"exposure": 1.0, "crop": {"l": 0.1, "t": 0, "r": 1, "b": 1}}"#;
     assert_eq!(send(&app, "PUT", &url(a), Some("ann"), &[], body).await.status, 428);
     assert_eq!(put(&app, a, "ann", "abc", body).await.status, 409, "wrong etag");
+    assert_eq!(put(&app, a, "ann", "*", body).await.status, 409, "* needs a sidecar to be there");
     assert_eq!(put(&app, a, "ann", "none", r#"{"exposure": 99}"#).await.status, 400);
     assert_eq!(put(&app, a, "ann", "none", &format!("{{\"aspect\": \"{}\"}}", "x".repeat(17_000))).await.status, 413);
     let g = put(&app, a, "ann", "none", body).await;
@@ -135,8 +136,32 @@ async fn edits_are_saved_in_a_sidecar_by_people_who_may_edit() {
     assert_eq!(g.status, 200, "{}", g.json);
     assert!(std::fs::read_to_string(app.store.full("ann/Trip/c.jpg.xmp")).unwrap().contains("<darktable:history>"));
     let g = ask(&app, "DELETE", &url(c), Some("ann"), &[(header::IF_MATCH, g.json["etag"].as_str().unwrap())]).await;
-    assert_eq!(g.status, 200);
+    assert_eq!((g.status, g.json["removed"].as_str()), (200, Some("starbase")), "{}", g.json);
     assert!(app.store.full("ann/Trip/c.jpg.xmp").is_file(), "darktable's sidecar stays");
+
+    // Lightroom's own edits (crs: only): a reset removes them, and says so.
+    std::fs::write(
+        app.store.full("ann/Trip/c.jpg.xmp"),
+        format!("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF xmlns:rdf=\"{}\"><rdf:Description rdf:about=\"\" xmlns:crs=\"{}\" crs:Exposure2012=\"+0.50\"/></rdf:RDF></x:xmpmeta>", super::sidecar::RDF, super::sidecar::CRS),
+    )
+    .unwrap();
+    let g = get(&app, &url(c), Some("ann"), &[]).await;
+    assert_eq!((g.json["source"].as_str(), g.json["edits"]["exposure"].as_f64()), (Some("crs"), Some(0.5)), "{}", g.json);
+    let g = ask(&app, "DELETE", &url(c), Some("ann"), &[(header::IF_MATCH, g.json["etag"].as_str().unwrap())]).await;
+    assert_eq!((g.status, g.json["removed"].as_str()), (200, Some("crs")), "{}", g.json);
+
+    // A crafted sidecar (attributes that made the XML parser slow): refused quickly.
+    let attrs: String = (0..22_000).map(|i| format!(" a{i}=\"\"")).collect();
+    std::fs::write(
+        app.store.full("ann/Trip/c.jpg.xmp"),
+        format!("<rdf:RDF xmlns:rdf=\"{}\"><rdf:Description{attrs}/></rdf:RDF>", super::sidecar::RDF),
+    )
+    .unwrap();
+    let t = Instant::now();
+    let g = get(&app, &url(c), Some("ann"), &[]).await;
+    assert!(t.elapsed() < Duration::from_secs(2), "took {:?}", t.elapsed());
+    assert_eq!(g.json["writable"].as_bool(), Some(false), "{}", g.json);
+    std::fs::remove_file(app.store.full("ann/Trip/c.jpg.xmp")).unwrap();
 
     // Reset: our sidecar goes, and the picture's v is the original again.
     let g = ask(&app, "DELETE", &url(a), Some("ann"), &[(header::IF_MATCH, &etag)]).await;
@@ -145,7 +170,11 @@ async fn edits_are_saved_in_a_sidecar_by_people_who_may_edit() {
 
     // A sidecar written by another app is noticed by the next scan: new v.
     let e: super::model::Edits = serde_json::from_str(r#"{"saturation": -40}"#).unwrap();
-    let super::sidecar::Merged::Write(x) = super::sidecar::merge(None, Some(&e)).unwrap() else { panic!() };
+    let super::sidecar::Merged::Write(x) =
+        super::sidecar::merge(None, Some(&e), &super::sidecar::Geo { width: 60, height: 40, orientation: 1 }).unwrap()
+    else {
+        panic!()
+    };
     std::fs::write(app.store.full("ann/Trip/a.jpg.xmp"), x).unwrap();
     let svc = service(&app.store).unwrap();
     let t = Instant::now();
@@ -177,5 +206,52 @@ async fn edits_are_saved_in_a_sidecar_by_people_who_may_edit() {
     if let Some(svc) = service(&app.store) {
         svc.stop();
     }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A picture's sidecar is part of it: renamed, moved, copied, binned and restored with it.
+#[tokio::test]
+async fn sidecars_go_where_their_picture_goes() {
+    let root = tmp("carry");
+    let s = Store { root: root.clone(), keep: 3, spaces: true };
+    for (u, n) in [("boss", "Boss"), ("ann", "Ann")] {
+        auth::add(&s, u, n, &format!("{u}password")).unwrap();
+    }
+    for p in ["ann/Trip/a.jpg", "ann/Trip/a.jpg.xmp"] {
+        std::fs::create_dir_all(s.full(p).parent().unwrap()).unwrap();
+        std::fs::write(s.full(p), p.as_bytes()).unwrap();
+    }
+    std::fs::create_dir_all(s.full("ann/Other")).unwrap();
+    let ids: HashMap<String, String> = s.synced_index().unwrap().into_iter().map(|(id, p)| (p, id)).collect();
+    let app: Shared = Arc::new(crate::App {
+        store: s,
+        base: root.clone(),
+        lock: std::sync::Mutex::new(()),
+        location: "here".into(),
+        auth: true,
+        site: None,
+        rooms: crate::live::Rooms::default(),
+        oidc: None,
+    });
+    let a = &ids["ann/Trip/a.jpg"];
+    let side = |p: &str| std::fs::read_to_string(app.store.full(p)).ok();
+    let want = Some("ann/Trip/a.jpg.xmp".to_string());
+    assert_eq!(ask(&app, "POST", &format!("/api/files/{a}/rename?name=b.jpg"), Some("ann"), &[]).await.status, 200);
+    assert_eq!((side("ann/Trip/b.jpg.xmp"), side("ann/Trip/a.jpg.xmp")), (want.clone(), None), "renamed with it");
+    assert_eq!(ask(&app, "POST", &format!("/api/files/{a}/copy"), Some("ann"), &[]).await.status, 200);
+    assert_eq!(side("ann/Trip/Copy of b.jpg.xmp"), want, "copied with it");
+    assert_eq!(ask(&app, "POST", &format!("/api/files/{a}/move?folder=ann/Other"), Some("ann"), &[]).await.status, 200);
+    assert_eq!((side("ann/Other/b.jpg.xmp"), side("ann/Trip/b.jpg.xmp")), (want.clone(), None), "moved with it");
+    assert_eq!(ask(&app, "DELETE", &format!("/api/files/{a}"), Some("ann"), &[]).await.status, 200);
+    assert_eq!(side("ann/Other/b.jpg.xmp"), None, "binned with it");
+    let bin = get(&app, "/api/bin?space=ann", Some("ann"), &[]).await;
+    let names: Vec<&str> = bin.json.as_array().unwrap().iter().filter_map(|i| i["name"].as_str()).collect();
+    assert_eq!(names, ["b.jpg"], "the sidecar isn't an item of its own in the bin");
+    // A new picture of the same name doesn't inherit the old edits.
+    std::fs::write(app.store.full("ann/Other/b.jpg"), b"new").unwrap();
+    assert_eq!(side("ann/Other/b.jpg.xmp"), None);
+    std::fs::remove_file(app.store.full("ann/Other/b.jpg")).unwrap();
+    assert_eq!(ask(&app, "POST", "/api/bin/restore?space=ann&name=b.jpg", Some("ann"), &[]).await.status, 200);
+    assert_eq!(side("ann/Other/b.jpg.xmp"), want, "restored with it");
     let _ = std::fs::remove_dir_all(&root);
 }

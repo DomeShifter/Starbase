@@ -10,11 +10,16 @@
 //!   wrappers) stays exactly as it was. The result is parsed again and must read back as the
 //!   edits written, or nothing is written.
 //! - **Untrusted input**: at most [`MAX_SIDECAR`] bytes are read, no DTDs (so no entity
-//!   expansion: roxmltree refuses them), at most [`MAX_NODES`] nodes, UTF-8 only.
+//!   expansion: roxmltree refuses them), at most [`MAX_NODES`] nodes, UTF-8 only, and attributes
+//!   counted before parsing ([`MAX_ATTRS_PER_ELEMENT`], [`MAX_ATTRS`]): roxmltree compares each
+//!   attribute with the element's others, so 100 000 attributes on one element took seconds. The
+//!   edits API parses outside the server's store lock, so a slow sidecar can't stall other work.
 //! - **On disk**: the folder is opened once without following links and checked to be the
 //!   folder asked for; the sidecar is read, written and removed relative to that open folder
 //!   (`openat`, `renameat`), never through a symbolic link: a sidecar that is a link is refused.
-//!   Writes go to a hidden temp file in the same folder, flushed, then renamed over the sidecar.
+//!   Writes go to a hidden temp file in the same folder (with the old sidecar's permissions),
+//!   flushed; the sidecar is checked to be unchanged since it was read (another app may have
+//!   saved), then the temp file is renamed over it and the folder flushed.
 
 use std::ffi::CString;
 use std::fs::File;
@@ -24,14 +29,20 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::MetadataExt;
 
 use roxmltree::{Document, Node, ParsingOptions};
-use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use super::crs;
+pub use super::crs::Geo;
 use super::model::Edits;
 use crate::store::Store;
+use starbase_photo_edit::{Filter, FilterName};
 
-/// The biggest sidecar read (a bigger one is refused, never cut short).
-pub const MAX_SIDECAR: u64 = 1024 * 1024;
+/// The biggest sidecar read (a bigger one is refused, never cut short). darktable's sidecars with
+/// long histories are tens of KB.
+pub const MAX_SIDECAR: u64 = 256 * 1024;
+/// The most attributes on one element, and in a whole sidecar (checked before parsing).
+pub const MAX_ATTRS_PER_ELEMENT: usize = 256;
+pub const MAX_ATTRS: usize = 20_000;
 /// The most XML nodes parsed in one sidecar.
 pub const MAX_NODES: u32 = 100_000;
 /// The longest `starbase:Edits` JSON read.
@@ -40,13 +51,18 @@ const MAX_EDITS_JSON: usize = 16 * 1024;
 pub const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 pub const CRS: &str = "http://ns.adobe.com/camera-raw-settings/1.0/";
 pub const STARBASE: &str = "https://github.com/DomeShifter/Starbase/ns/photo-edit/1.0/";
+pub const TIFF: &str = "http://ns.adobe.com/tiff/1.0/";
+/// The `tiff:` fields we write (the picture's stored size and final orientation: docs/photos-edit.md 2.1).
+const OWNED_TIFF: [&str; 3] = ["ImageWidth", "ImageLength", "Orientation"];
+/// darktable's automatic history steps for a JPEG it merely imported (not someone's edits).
+const DARKTABLE_DEFAULTS: [&str; 3] = ["colorin", "colorout", "gamma"];
 const DARKTABLE: &str = "http://darktable.sf.net/";
 const XML: &str = "http://www.w3.org/XML/1998/namespace";
 /// The Camera Raw process version written with our `crs:` fields (the "2012" tone controls).
 pub const PROCESS_VERSION: &str = "11.0";
 
 /// The `crs:` fields we own: written from our edits, removed on reset.
-const OWNED_CRS: [&str; 14] = [
+const OWNED_CRS: [&str; 15] = [
     "HasCrop",
     "CropTop",
     "CropLeft",
@@ -61,6 +77,7 @@ const OWNED_CRS: [&str; 14] = [
     "Vibrance",
     "IncrementalTemperature",
     "IncrementalTint",
+    "ConvertToGrayscale",
 ];
 /// `crs:` bookkeeping fields that aren't edits (they don't make a sidecar "Lightroom's").
 const CRS_BOOKKEEPING: [&str; 7] =
@@ -82,8 +99,11 @@ pub enum Source {
 pub struct Parsed {
     pub edits: Edits,
     pub source: Source,
-    /// Other editors whose own edits are in it: "darktable", "lightroom".
+    /// Other editors whose own edits are in it: "darktable" (history beyond its automatic
+    /// steps), "crs" (Adobe's fields we don't write, or crs: edits without ours).
     pub foreign: Vec<&'static str>,
+    /// `starbase:Edits` written by a newer Starbase (another `EditsVersion`): not ours to change.
+    pub newer: bool,
 }
 
 fn options() -> ParsingOptions {
@@ -100,7 +120,59 @@ fn text_of(bytes: &[u8]) -> Result<(&str, &str), String> {
 }
 
 fn parse(text: &str) -> Result<Document<'_>, String> {
+    if too_many_attributes(text.as_bytes()) {
+        return Err("it has too many attributes".into());
+    }
     Document::parse_with_options(text, options()).map_err(|e| format!("it isn't valid XML ({e})"))
+}
+
+/// Whether some element has over [`MAX_ATTRS_PER_ELEMENT`] attributes, or the text over
+/// [`MAX_ATTRS`] in all, counting `=` outside quotes inside tags (comments, CDATA and processing
+/// instructions skipped). One pass; counting too many only refuses odd XML, never too few.
+fn too_many_attributes(b: &[u8]) -> bool {
+    let after = |from: usize, end: &[u8]| b[from..].windows(end.len()).position(|w| w == end).map_or(b.len(), |p| from + p + end.len());
+    let (mut i, mut total) = (0, 0usize);
+    while i < b.len() {
+        if b[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        let rest = &b[i..];
+        if rest.starts_with(b"<!--") {
+            i = after(i + 4, b"-->");
+            continue;
+        }
+        if rest.starts_with(b"<![CDATA[") {
+            i = after(i + 9, b"]]>");
+            continue;
+        }
+        if rest.starts_with(b"<?") {
+            i = after(i + 2, b"?>");
+            continue;
+        }
+        let (mut here, mut quote) = (0usize, 0u8);
+        i += 1;
+        while i < b.len() {
+            let c = b[i];
+            if quote != 0 {
+                if c == quote {
+                    quote = 0;
+                }
+            } else if c == b'"' || c == b'\'' {
+                quote = c;
+            } else if c == b'=' {
+                here += 1;
+            } else if c == b'>' {
+                break;
+            }
+            i += 1;
+        }
+        total += here;
+        if here > MAX_ATTRS_PER_ELEMENT || total > MAX_ATTRS {
+            return true;
+        }
+    }
+    false
 }
 
 fn rdf_root<'a, 'i>(doc: &'a Document<'i>) -> Option<Node<'a, 'i>> {
@@ -141,28 +213,53 @@ fn props<'a>(d: Node<'a, '_>) -> Vec<Prop<'a>> {
     out
 }
 
-fn is_ours(ns: Option<&str>, name: &str, our_description: bool) -> bool {
-    ns == Some(STARBASE) || (ns == Some(CRS) && (OWNED_CRS.contains(&name) || (our_description && name == "ProcessVersion")))
+/// Whether a property is ours to cut: our fields, and `crs:ProcessVersion` plus the `tiff:`
+/// size and orientation in our own description or wherever they are when we write ours (which
+/// carries its own), so none is ever there twice.
+fn is_ours(ns: Option<&str>, name: &str, ours_or_writing: bool) -> bool {
+    ns == Some(STARBASE)
+        || (ns == Some(CRS) && (OWNED_CRS.contains(&name) || (ours_or_writing && name == "ProcessVersion")))
+        || (ns == Some(TIFF) && ours_or_writing && OWNED_TIFF.contains(&name))
 }
 
-/// Reads a sidecar's edits (identity when it holds none).
+/// Whether darktable's history has a step someone made: anything but its automatic ones for a
+/// JPEG (colorin, colorout, gamma, and flip named "auto"), which it adds on mere import.
+fn darktable_edited(doc: &Document) -> bool {
+    let attr = |n: &Node, name: &str| -> Option<String> {
+        n.attributes().find(|a| a.namespace() == Some(DARKTABLE) && a.name() == name).map(|a| a.value().to_string()).or_else(|| {
+            n.children()
+                .find(|c| c.is_element() && c.tag_name().namespace() == Some(DARKTABLE) && c.tag_name().name() == name)
+                .map(|c| c.children().filter_map(|t| t.text()).collect())
+        })
+    };
+    doc.descendants().filter(|n| n.is_element() && n.tag_name().namespace() == Some(DARKTABLE) && n.tag_name().name() == "history").any(|h| {
+        h.descendants().filter(|li| li.is_element() && li.tag_name().namespace() == Some(RDF) && li.tag_name().name() == "li").any(|li| {
+            let op = attr(&li, "operation").unwrap_or_default();
+            !(DARKTABLE_DEFAULTS.contains(&op.as_str()) || (op == "flip" && attr(&li, "multi_name").as_deref() == Some("auto")))
+        })
+    })
+}
+
+/// Reads a sidecar's edits (identity when it holds none), without knowing the picture: a crop
+/// in Adobe's fields alone isn't imported. See [`read_for`].
 pub fn read(bytes: &[u8]) -> Result<Parsed, String> {
+    read_for(bytes, None)
+}
+
+/// Reads a sidecar's edits for the picture `geo` (its stored size and EXIF orientation, which
+/// Adobe's crop and orientation fields are relative to).
+pub fn read_for(bytes: &[u8], geo: Option<&Geo>) -> Result<Parsed, String> {
     let (_, text) = text_of(bytes)?;
     let doc = parse(text)?;
     let rdf = rdf_root(&doc).ok_or("it has no rdf:RDF")?;
     let mut foreign = Vec::new();
-    // darktable: a history with at least one step.
-    let dt_history = doc.descendants().any(|n| {
-        n.is_element()
-            && n.tag_name().namespace() == Some(DARKTABLE)
-            && n.tag_name().name() == "history"
-            && n.descendants().any(|li| li.is_element() && li.tag_name().namespace() == Some(RDF) && li.tag_name().name() == "li")
-    });
-    if dt_history {
+    if darktable_edited(&doc) {
         foreign.push("darktable");
     }
     let mut ours: Option<String> = None;
+    let mut version: Option<String> = None;
     let mut crs: Vec<(String, String)> = Vec::new();
+    let mut orientation: Option<u16> = None;
     let mut other_crs = false;
     for d in descriptions(rdf) {
         for p in props(d) {
@@ -172,34 +269,41 @@ pub fn read(bytes: &[u8]) -> Result<Parsed, String> {
                         ours = p.value;
                     }
                 }
+                Some(STARBASE) if p.name == "EditsVersion" => version = version.or(p.value),
                 Some(CRS) if OWNED_CRS.contains(&p.name) => {
                     if let Some(v) = p.value {
                         crs.push((p.name.to_string(), v));
                     }
                 }
                 Some(CRS) if !CRS_BOOKKEEPING.contains(&p.name) => other_crs = true,
+                Some(TIFF) if p.name == "Orientation" => {
+                    orientation = orientation.or(p.value.and_then(|v| v.trim().parse().ok()).filter(|o| (1..=8).contains(o)))
+                }
                 _ => {}
             }
         }
     }
-    let from_ours = ours.filter(|j| j.len() <= MAX_EDITS_JSON).and_then(|j| serde_json::from_str::<Edits>(&j).ok());
+    let newer = version.as_deref().is_some_and(|v| v.trim() != "1");
+    let from_ours = ours.filter(|j| j.len() <= MAX_EDITS_JSON && !newer).and_then(|j| serde_json::from_str::<Edits>(&j).ok());
+    let has_crs = !crs.is_empty() || orientation.is_some_and(|o| geo.is_some_and(|g| o != g.orientation));
     if other_crs || (from_ours.is_none() && !crs.is_empty()) {
-        foreign.push("lightroom");
+        foreign.push("crs");
     }
     let (edits, source) = match from_ours {
         Some(e) => (e, Source::Starbase),
-        None if !crs.is_empty() => (import_crs(&crs), Source::Crs),
+        None if has_crs => (import_crs(&crs, orientation, geo), Source::Crs),
         None => (Edits::default(), Source::Nothing),
     };
-    Ok(Parsed { edits, source, foreign })
+    Ok(Parsed { edits, source, foreign, newer })
 }
 
-/// Our edits from Adobe's `crs:` fields, approximately (values clamped into our ranges).
-fn import_crs(crs: &[(String, String)]) -> Edits {
+/// Our edits from Adobe's `crs:` (and `tiff:Orientation`) fields, approximately (values
+/// clamped into our ranges). The crop and turns only when the picture is known.
+fn import_crs(crs: &[(String, String)], orientation: Option<u16>, geo: Option<&Geo>) -> Edits {
     let get =
         |k: &str| crs.iter().find(|(n, _)| n == k).and_then(|(_, v)| v.trim().trim_start_matches('+').parse::<f64>().ok()).filter(|v| v.is_finite());
     let int = |k: &str| get(k).map_or(0, |v| v.round().clamp(-100.0, 100.0) as i64);
-    let mut e = serde_json::json!({
+    let e = serde_json::json!({
         "exposure": get("Exposure2012").map_or(0.0, |v| v.clamp(-5.0, 5.0)),
         "contrast": int("Contrast2012"),
         "highlights": int("Highlights2012"),
@@ -209,16 +313,20 @@ fn import_crs(crs: &[(String, String)]) -> Edits {
         "temperature": int("IncrementalTemperature"),
         "tint": int("IncrementalTint"),
     });
-    let has_crop = crs.iter().any(|(n, v)| n == "HasCrop" && v.trim().eq_ignore_ascii_case("true"));
-    if has_crop {
-        let f = |k: &str, d: f64| get(k).map_or(d, |v| v.clamp(0.0, 1.0));
-        let (l, t, r, b) = (f("CropLeft", 0.0), f("CropTop", 0.0), f("CropRight", 1.0), f("CropBottom", 1.0));
-        if r - l >= 0.01 && b - t >= 0.01 {
-            e["crop"] = serde_json::json!({"l": l, "t": t, "r": r, "b": b});
-        }
-        e["angle"] = serde_json::json!(get("CropAngle").map_or(0.0, |v| v.clamp(-45.0, 45.0)));
+    let mut e: Edits = serde_json::from_value(e).unwrap_or_default();
+    let yes = |k: &str| crs.iter().any(|(n, v)| n == k && v.trim().eq_ignore_ascii_case("true"));
+    if yes("ConvertToGrayscale") {
+        e.filter = Some(Filter { name: FilterName::Bw, amount: 1.0 });
     }
-    serde_json::from_value(e).unwrap_or_default()
+    if let Some(g) = geo {
+        let crop = yes("HasCrop").then(|| {
+            let f = |k: &str, d: f64| get(k).map_or(d, |v| v.clamp(-1.0, 2.0));
+            [f("CropLeft", 0.0), f("CropTop", 0.0), f("CropRight", 1.0), f("CropBottom", 1.0), get("CropAngle").unwrap_or(0.0)]
+        });
+        let (rot90, flip_h, angle, crop) = crs::from_crs(crop, orientation.unwrap_or(g.orientation), g);
+        (e.rot90, e.flip_h, e.angle, e.crop) = (rot90, flip_h, angle, crop);
+    }
+    e
 }
 
 /// Text safe inside a double-quoted XML attribute.
@@ -239,37 +347,42 @@ fn escape(s: &str) -> String {
     out
 }
 
-/// The `crs:` fields for these edits (only what differs from no change), then ours.
-fn fields(e: &Edits) -> Vec<(String, String)> {
-    let j = serde_json::to_value(e).unwrap_or(Value::Null);
-    let num = |k: &str| j.get(k).and_then(Value::as_f64).unwrap_or(0.0);
-    let mut out: Vec<(String, String)> = vec![("crs:ProcessVersion".into(), PROCESS_VERSION.into())];
-    let crop = j.get("crop");
-    let c = |k: &str, d: f64| crop.and_then(|c| c.get(k)).and_then(Value::as_f64).unwrap_or(d);
-    let (l, t, r, b, angle) = (c("l", 0.0), c("t", 0.0), c("r", 1.0), c("b", 1.0), num("angle"));
-    if (l, t, r, b) != (0.0, 0.0, 1.0, 1.0) || angle != 0.0 {
-        out.push(("crs:HasCrop".into(), "True".into()));
-        for (k, v) in [("CropTop", t), ("CropLeft", l), ("CropBottom", b), ("CropRight", r)] {
-            out.push((format!("crs:{k}"), format!("{v:.6}")));
+/// The `tiff:` and `crs:` fields for these edits on picture `g` (only tone fields that differ
+/// from no change), then ours. Numbers as plain decimals, never rationals (darktable ignores them).
+fn fields(e: &Edits, g: &Geo) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = vec![
+        ("tiff:ImageWidth".into(), g.width.to_string()),
+        ("tiff:ImageLength".into(), g.height.to_string()),
+        ("tiff:Orientation".into(), crs::final_orientation(g.orientation, e.rot90, e.flip_h).to_string()),
+        ("crs:ProcessVersion".into(), PROCESS_VERSION.into()),
+    ];
+    match crs::crop_to_crs(e, g) {
+        Some([l, t, r, b, angle]) => {
+            out.push(("crs:HasCrop".into(), "True".into()));
+            for (k, v) in [("CropLeft", l), ("CropTop", t), ("CropRight", r), ("CropBottom", b), ("CropAngle", angle)] {
+                out.push((format!("crs:{k}"), format!("{v:.6}")));
+            }
         }
-        out.push(("crs:CropAngle".into(), format!("{angle:.4}")));
+        None => out.push(("crs:HasCrop".into(), "False".into())),
     }
-    if num("exposure") != 0.0 {
-        out.push(("crs:Exposure2012".into(), format!("{:+.2}", num("exposure"))));
+    if e.exposure != 0.0 {
+        out.push(("crs:Exposure2012".into(), format!("{:+.2}", e.exposure)));
     }
-    for (k, crs) in [
-        ("contrast", "Contrast2012"),
-        ("highlights", "Highlights2012"),
-        ("shadows", "Shadows2012"),
-        ("saturation", "Saturation"),
-        ("vibrance", "Vibrance"),
-        ("temperature", "IncrementalTemperature"),
-        ("tint", "IncrementalTint"),
+    for (v, crs) in [
+        (e.contrast, "Contrast2012"),
+        (e.highlights, "Highlights2012"),
+        (e.shadows, "Shadows2012"),
+        (e.saturation, "Saturation"),
+        (e.vibrance, "Vibrance"),
+        (e.temperature, "IncrementalTemperature"),
+        (e.tint, "IncrementalTint"),
     ] {
-        let v = num(k).round() as i64;
         if v != 0 {
             out.push((format!("crs:{crs}"), format!("{v:+}")));
         }
+    }
+    if e.filter.is_some_and(|f| f.name == FilterName::Bw && f.amount >= 0.5) {
+        out.push(("crs:ConvertToGrayscale".into(), "True".into()));
     }
     out.push(("starbase:EditsVersion".into(), "1".into()));
     out.push(("starbase:Edits".into(), serde_json::to_string(e).unwrap_or_default()));
@@ -277,9 +390,11 @@ fn fields(e: &Edits) -> Vec<(String, String)> {
 }
 
 /// Our `rdf:Description`, declaring every namespace it uses itself.
-fn our_description(e: &Edits) -> String {
-    let mut s = format!("\n  <rdf:Description rdf:about=\"\"\n    xmlns:rdf=\"{RDF}\"\n    xmlns:crs=\"{CRS}\"\n    xmlns:starbase=\"{STARBASE}\"");
-    for (k, v) in fields(e) {
+fn our_description(e: &Edits, g: &Geo) -> String {
+    let mut s = format!(
+        "\n  <rdf:Description rdf:about=\"\"\n    xmlns:rdf=\"{RDF}\"\n    xmlns:tiff=\"{TIFF}\"\n    xmlns:crs=\"{CRS}\"\n    xmlns:starbase=\"{STARBASE}\""
+    );
+    for (k, v) in fields(e, g) {
         s.push_str(&format!("\n   {k}=\"{}\"", escape(&v)));
     }
     s.push_str("/>");
@@ -287,10 +402,10 @@ fn our_description(e: &Edits) -> String {
 }
 
 /// A new sidecar holding only `e`.
-fn fresh(e: &Edits) -> String {
+fn fresh(e: &Edits, g: &Geo) -> String {
     format!(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"Starbase\">\n <rdf:RDF xmlns:rdf=\"{RDF}\">{}\n </rdf:RDF>\n</x:xmpmeta>\n",
-        our_description(e)
+        our_description(e, g)
     )
 }
 
@@ -310,13 +425,13 @@ pub enum Merged {
     Same,
 }
 
-/// Merges `edits` (None or identity = take ours out) into the sidecar `existing` (None = there
-/// is none). Everything not ours is kept byte for byte.
-pub fn merge(existing: Option<&[u8]>, edits: Option<&Edits>) -> Result<Merged, String> {
+/// Merges `edits` (None or identity = take ours out) for picture `g` into the sidecar
+/// `existing` (None = there is none). Everything not ours is kept byte for byte.
+pub fn merge(existing: Option<&[u8]>, edits: Option<&Edits>, g: &Geo) -> Result<Merged, String> {
     let edits = edits.filter(|e| !e.is_identity());
     let Some(existing) = existing else {
         return Ok(match edits {
-            Some(e) => Merged::Write(checked(fresh(e).into_bytes(), Some(e))?),
+            Some(e) => Merged::Write(checked(fresh(e, g).into_bytes(), Some(e))?),
             None => Merged::Same,
         });
     };
@@ -328,7 +443,7 @@ pub fn merge(existing: Option<&[u8]>, edits: Option<&Edits>) -> Result<Merged, S
     for d in descriptions(rdf) {
         let ps = props(d);
         let mine = ps.iter().any(|p| p.ns == Some(STARBASE));
-        let owned: Vec<&Prop> = ps.iter().filter(|p| is_ours(p.ns, p.name, mine)).collect();
+        let owned: Vec<&Prop> = ps.iter().filter(|p| is_ours(p.ns, p.name, mine || edits.is_some())).collect();
         if owned.is_empty() {
             continue;
         }
@@ -347,11 +462,11 @@ pub fn merge(existing: Option<&[u8]>, edits: Option<&Edits>) -> Result<Merged, S
         if text[r.clone()].ends_with("/>") {
             // <rdf:RDF …/>: opened and closed around ours.
             let qname: String = text[r.start + 1..].chars().take_while(|c| !c.is_whitespace() && *c != '/' && *c != '>').collect();
-            cuts.push((r.end - 2, r.end, format!(">{}\n </{qname}>", our_description(e))));
+            cuts.push((r.end - 2, r.end, format!(">{}\n </{qname}>", our_description(e, g))));
         } else {
             let close = text[..r.end].rfind("</").ok_or("its rdf:RDF has no end")?;
             let at = back_over_space(text, close).max(r.start);
-            cuts.push((at, at, our_description(e)));
+            cuts.push((at, at, our_description(e, g)));
         }
     } else if !removed {
         return Ok(Merged::Same);
@@ -444,7 +559,7 @@ impl SideError {
     pub fn say(&self, name: &str) -> String {
         match self {
             SideError::NotAFile => format!("Its sidecar ({name}) is a link or not a plain file, so Starbase won't read or change it."),
-            SideError::TooBig => format!("Its sidecar ({name}) is too big (over 1 MB) to read."),
+            SideError::TooBig => format!("Its sidecar ({name}) is too big (over 256 KB) to read."),
             SideError::Io(e) => format!("Its sidecar ({name}) can't be read: {e}"),
         }
     }
@@ -552,9 +667,23 @@ impl Folder {
         Ok(Some(OnDisk { bytes, stat: stat_of(&m) }))
     }
 
-    /// Replaces (or makes) `name` with `bytes`: a hidden temp file in this folder, flushed, then
-    /// renamed over it (a link there is replaced, never followed). Returns the new stat.
-    pub fn write(&self, name: &str, bytes: &[u8]) -> io::Result<String> {
+    /// The size-and-time stat and permissions of `name` here, None when there is nothing there
+    /// (a link is reported as itself, never followed).
+    fn current(&self, name: &CString) -> io::Result<Option<(String, libc::mode_t)>> {
+        // SAFETY: fstatat fills the struct we give it; our own descriptor and a valid C string.
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstatat(self.fd.as_raw_fd(), name.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) } != 0 {
+            let e = io::Error::last_os_error();
+            return if e.raw_os_error() == Some(libc::ENOENT) { Ok(None) } else { Err(e) };
+        }
+        let ns = (st.st_mtime as i64).saturating_mul(1_000_000_000).saturating_add(st.st_mtime_nsec as i64);
+        Ok(Some((format!("{}-{ns}", st.st_size), st.st_mode & 0o7777)))
+    }
+
+    /// Replaces (or makes) `name` with `bytes`, if it is still as it was read (`expect`: its stat
+    /// then, None = there was none): a hidden temp file in this folder, flushed, then renamed over
+    /// it (a link there is replaced, never followed) and the folder flushed. Returns the new stat.
+    pub fn write(&self, name: &str, bytes: &[u8], expect: Option<&str>) -> Result<String, WriteError> {
         let target = cname(name)?;
         let tmp_name = format!(".{name}.{}.tmp", crate::store::random_hex(6));
         let tmp = cname(&tmp_name)?;
@@ -565,32 +694,86 @@ impl Folder {
         })?;
         // SAFETY: fd was just opened and is owned by nobody else.
         let mut f = unsafe { File::from_raw_fd(fd) };
-        let done = f.write_all(bytes).and_then(|()| f.sync_all()).and_then(|()| f.metadata());
+        let gone = || {
+            // SAFETY: as above.
+            unsafe { libc::unlinkat(dir, tmp.as_ptr(), 0) };
+        };
+        let done = (|| -> Result<std::fs::Metadata, WriteError> {
+            let now = self.current(&target)?;
+            if now.as_ref().map(|n| n.0.as_str()) != expect {
+                return Err(WriteError::Changed);
+            }
+            if let Some((_, mode)) = now {
+                // The old sidecar's permissions (not a link: a link's stat differs from any read).
+                // SAFETY: our own open file.
+                check(unsafe { libc::fchmod(f.as_raw_fd(), mode) })?;
+            }
+            f.write_all(bytes)?;
+            f.sync_all()?;
+            Ok(f.metadata()?)
+        })();
         let m = match done {
             Ok(m) => m,
             Err(e) => {
-                // SAFETY: as above.
-                unsafe { libc::unlinkat(dir, tmp.as_ptr(), 0) };
+                gone();
                 return Err(e);
             }
         };
         drop(f);
+        // Checked again right before the rename: another app's save in the meantime wins.
+        if self.current(&target)?.map(|n| n.0).as_deref() != expect {
+            gone();
+            return Err(WriteError::Changed);
+        }
         // SAFETY: as above.
         if let Err(e) = check(unsafe { libc::renameat(dir, tmp.as_ptr(), dir, target.as_ptr()) }) {
-            // SAFETY: as above.
-            unsafe { libc::unlinkat(dir, tmp.as_ptr(), 0) };
-            return Err(e);
+            gone();
+            return Err(e.into());
         }
+        // SAFETY: our own descriptor.
+        unsafe { libc::fsync(dir) };
         Ok(stat_of(&m))
     }
 
-    /// Deletes the sidecar `name` (a link there is removed, never followed).
-    pub fn remove(&self, name: &str) -> io::Result<()> {
+    /// Deletes the sidecar `name` if it is still as it was read (`expect`); a link there is
+    /// removed, never followed.
+    pub fn remove(&self, name: &str, expect: &str) -> Result<(), WriteError> {
         let c = cname(name)?;
+        match self.current(&c)? {
+            None => return Ok(()),
+            Some((now, _)) if now != expect => return Err(WriteError::Changed),
+            Some(_) => {}
+        }
         // SAFETY: our own descriptor and a valid C string.
         match check(unsafe { libc::unlinkat(self.fd.as_raw_fd(), c.as_ptr(), 0) }) {
-            Err(e) if e.raw_os_error() == Some(libc::ENOENT) => Ok(()),
-            r => r.map(|_| ()),
+            Err(e) if e.raw_os_error() != Some(libc::ENOENT) => return Err(e.into()),
+            _ => {}
+        }
+        // SAFETY: our own descriptor.
+        unsafe { libc::fsync(self.fd.as_raw_fd()) };
+        Ok(())
+    }
+}
+
+/// Why a sidecar wasn't written or removed.
+#[derive(Debug)]
+pub enum WriteError {
+    /// It changed since it was read (another app saved): nothing was done.
+    Changed,
+    Io(io::Error),
+}
+
+impl From<io::Error> for WriteError {
+    fn from(e: io::Error) -> Self {
+        WriteError::Io(e)
+    }
+}
+
+impl std::fmt::Display for WriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WriteError::Changed => f.write_str("it was changed by someone else meanwhile"),
+            WriteError::Io(e) => e.fmt(f),
         }
     }
 }

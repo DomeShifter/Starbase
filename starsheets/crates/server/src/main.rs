@@ -1837,7 +1837,10 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
             Err(resp) => return resp,
         }
     } else {
-        match read_body(body, &headers, SMALL_BYTES, SMALL_WAIT).await {
+        // Picture edits and exports: their own, smaller limit, before anything is buffered.
+        let photos = p.len() == 3 && p[0] == "photos" && (p[1] == "edits" || p[1] == "export");
+        let limit = if photos { photos::edits::MAX_BODY as u64 } else { SMALL_BYTES };
+        match read_body(body, &headers, limit, SMALL_WAIT).await {
             Ok(b) => b,
             Err(resp) => return resp,
         }

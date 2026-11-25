@@ -28,6 +28,7 @@
 //! Symbolic links are never followed (as everywhere in the store), and hidden files and
 //! folders (`.starsheets`, `.bin`) are skipped.
 
+pub mod crs;
 pub mod decode;
 pub mod edits;
 pub mod index;
@@ -440,7 +441,13 @@ impl Photos {
         let Some(dir) = sidecar::Folder::open(&self.store, folder) else { return index::Side::default() };
         match dir.read(&sidecar::name_for(name)) {
             Ok(Some(d)) => {
-                let edits = sidecar::read(&d.bytes).ok().and_then(|p| sidecar::edits_hash(&p.edits));
+                // Adobe's crop is relative to the stored picture: known once it has been read.
+                let geo = self.db().get(path).ok().flatten().filter(|r| r.meta.width > 0).map(|r| {
+                    let o = r.meta.orientation;
+                    let (w, h) = if (5..=8).contains(&o) { (r.meta.height, r.meta.width) } else { (r.meta.width, r.meta.height) };
+                    sidecar::Geo { width: w, height: h, orientation: o }
+                });
+                let edits = sidecar::read_for(&d.bytes, geo.as_ref()).ok().and_then(|p| sidecar::edits_hash(&p.edits));
                 index::Side { edits, stat: Some(d.stat) }
             }
             _ => index::Side::default(),
