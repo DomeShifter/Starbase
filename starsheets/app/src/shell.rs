@@ -1040,6 +1040,8 @@ fn title_and_menus(app: &mut SheetApp, ui: &mut Ui, title_draft: &mut Option<Str
 /// by place ("Saved", "Saved to this computer") but the state doesn't, so nothing matches on the
 /// words (looks review 2 item 4: desktop showed a red dot on a saved file).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// The live editing states are only made in the web app (live.rs); the desktop app has none.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code, reason = "live editing states are web-only"))]
 pub enum SaveState {
     Saved,
     Saving,

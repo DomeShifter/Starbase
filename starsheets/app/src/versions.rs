@@ -187,8 +187,12 @@ impl History {
                     let title = if shown.is_empty() { "Version history".to_string() } else { shown };
                     ui.label(RichText::new(title).size(house::TITLE).color(theme::TEXT));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = house::S;
                         if self.selected != CURRENT && ui.add(house::primary_in("Restore this version", house::BLUE)).clicked() {
                             self.asks.push(Ask::Restore(self.selected.clone()));
+                        }
+                        if ui.add(house::secondary_in("Make a copy", house::BLUE)).clicked() {
+                            self.asks.push(Ask::Copy(self.selected.clone()));
                         }
                     });
                 });

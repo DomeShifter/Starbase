@@ -243,7 +243,8 @@ impl Comments {
         }
         // Esc, or a click away from both the card and its cell, closes a card shown because its
         // cell is selected.
-        let away_from_cell = ui.input(|i| i.pointer.any_pressed() && i.pointer.press_origin().is_some_and(|p| !card.contains(p) && !cell_rect.contains(p)));
+        let away = |p: egui::Pos2| !card.contains(p) && !cell_rect.contains(p);
+        let away_from_cell = ui.input(|i| i.pointer.any_pressed() && i.pointer.press_origin().is_some_and(away));
         let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
         if from_selection && self.draft.is_none() && (escape || away_from_cell) {
             self.dismissed = Some((uid, cell));
