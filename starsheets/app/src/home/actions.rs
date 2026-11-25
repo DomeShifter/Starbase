@@ -13,7 +13,7 @@ impl Home {
         let is_space = matches!(item, Item::Folder(f) if !f.contains('/') && self.accounts);
         let row = |ui: &mut Ui, icon: &str, label: &str, keys: &str, enabled: bool| house::menu_row(ui, Some(icon), label, keys, enabled);
         if row(ui, "", "Open", "Enter", single) {
-            self.activate(item);
+            self.activate(ui.ctx(), item);
             ui.close();
         }
         house::menu_sep(ui);
@@ -58,7 +58,7 @@ impl Home {
             }
             if row(ui, "download", "Download", "", single) {
                 let name = self.label_of(item);
-                call(&self.store, &self.inbox, ui.ctx(), Method::Get, format!("api/files/{id}"), None, move |b| Reply::Download(name, b));
+                self.download(ui.ctx(), id, &name);
                 ui.close();
             }
         }

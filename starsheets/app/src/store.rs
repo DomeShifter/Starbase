@@ -216,8 +216,8 @@ impl Store for ServerStore {
 
     fn pick_files(&self, got: Box<dyn Fn(String, Vec<u8>)>) {
         wasm_bindgen_futures::spawn_local(async move {
-            let Some(picked) = rfd::AsyncFileDialog::new().add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "csv", "ods"]).pick_files().await
-            else {
+            // The Drive keeps any kind of file.
+            let Some(picked) = rfd::AsyncFileDialog::new().pick_files().await else {
                 return;
             };
             for f in picked {

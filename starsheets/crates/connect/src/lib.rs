@@ -7,8 +7,8 @@
 //! a password.
 //!
 //! The token goes in the system keyring (Secret Service on Linux, Credential Manager, Keychain).
-//! Where there is none, it goes in a file only this user can read (`starbase/token`, 0600, in
-//! `$XDG_CONFIG_HOME`). Which server it is goes beside it (`starbase/server.json`). Every request
+//! Where there is none, it goes in a file only this user can read (`token`, 0600 on Linux and
+//! macOS, in [`config_dir`]). Which server it is goes beside it (`server.json`). Every request
 //! then carries it as `Authorization: Bearer …` ([`Server::call`]); the server checks it like a
 //! browser session, with the same rights. Disconnecting removes it on the server and here.
 //!
@@ -332,20 +332,22 @@ fn sign_in(typed: &str, name: &str, tell: &dyn Fn(Step) -> bool) -> Result<Serve
 
 // ------------------------------------------------------------ keeping the token
 
-/// Where Starbase keeps its settings: `$STARBASE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/starbase`
-/// (`~/.config/starbase`; `%APPDATA%\starbase` on Windows).
+/// Where Starbase keeps its settings: `$STARBASE_CONFIG_DIR`, else the system's place for them:
+/// `$XDG_CONFIG_HOME/starbase` (`~/.config/starbase`) on Linux, `%APPDATA%\Starbase` on Windows,
+/// `~/Library/Application Support/Starbase` on macOS.
 pub fn config_dir() -> Option<PathBuf> {
     if let Some(d) = std::env::var_os("STARBASE_CONFIG_DIR").filter(|d| !d.is_empty()) {
         return Some(PathBuf::from(d));
     }
-    let base = std::env::var_os("XDG_CONFIG_HOME").filter(|d| !d.is_empty()).map(PathBuf::from).or_else(|| {
-        if cfg!(windows) {
-            std::env::var_os("APPDATA").map(PathBuf::from)
-        } else {
-            std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config"))
-        }
-    })?;
-    Some(base.join("starbase"))
+    let home = || std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from);
+    if cfg!(windows) {
+        std::env::var_os("APPDATA").filter(|d| !d.is_empty()).map(|d| PathBuf::from(d).join("Starbase"))
+    } else if cfg!(target_os = "macos") {
+        home().map(|h| h.join("Library").join("Application Support").join("Starbase"))
+    } else {
+        let base = std::env::var_os("XDG_CONFIG_HOME").filter(|d| !d.is_empty()).map(PathBuf::from).or_else(|| home().map(|h| h.join(".config")))?;
+        Some(base.join("starbase"))
+    }
 }
 
 /// Whether the keyring may be used (STARBASE_NO_KEYRING=1 keeps the token in the file).
