@@ -35,6 +35,14 @@ or the programs don't start under X11. The Flatpak gets it from its runtime.
 | `linux/flatpak/io.github.DomeShifter.Starbase.yml` | Flatpak manifest: org.freedesktop.Platform 26.08 plus the rust-stable SDK extension, and three modules (starsheets, stardocs, shared data). The header explains how to build it. |
 | `linux/flatpak/pin-engines.sh [--check]` | Copies the engine commits from `starsheets/upstream.pin` and `stardocs/upstream.pin` into the manifest. CI runs it before each Flatpak build. |
 
+## Windows
+
+`windows/` builds an unsigned per-user MSI with WiX v7: `Starbase.wxs` (the package),
+`make-ico.py` (icons from `linux/icons.sh`), `build-msi.ps1` and `test-msi.ps1` (install, start,
+upgrade, uninstall on a clean Windows). CI: the `windows-icons` and `windows-installer` jobs in
+`.github/workflows/desktop-other.yml`. Why MSI, what it registers and what's left:
+`docs/research/windows-installer.md`.
+
 Adapted from WordCraft's `packaging/linux` (storytold/wordcraft v0.18.1) and GridCraft's
 (storytold/gridcraft v0.19.1), both MIT OR Apache-2.0.
 
