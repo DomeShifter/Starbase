@@ -21,6 +21,7 @@ on:
     branches: [main]
     paths: ["starsheets/**", "stardocs/**", "slides/**", "packaging/**", ".github/workflows/flatpak.yml"]
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths: ["packaging/**", ".github/workflows/flatpak.yml"]
   workflow_dispatch:
   workflow_call: # from release.yml
@@ -43,6 +44,7 @@ env:
 jobs:
   sources:
     name: Cargo sources and engine pins
+    if: ${{ github.event.pull_request.draft != true }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -77,6 +79,7 @@ jobs:
 
   build:
     name: Build the Flatpak (x86_64)
+    if: ${{ github.event.pull_request.draft != true }}
     needs: sources
     runs-on: ubuntu-24.04
     timeout-minutes: 180
@@ -178,6 +181,7 @@ jobs:
 
   smoke:
     name: Smoke test (install the bundle)
+    if: ${{ github.event.pull_request.draft != true }}
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 30
