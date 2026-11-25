@@ -2,9 +2,9 @@
 //! command that has a shortcut, grouped by its menu, plus the usual text-editing keys that no menu
 //! lists. A search box filters by name or by keys.
 
-use egui::{Align, Color32, Layout, RichText, Ui, vec2};
+use egui::{Align, Layout, RichText, Ui, vec2};
 
-use crate::shell::{DIVIDER, Item, PAGE, TEXT, TEXT_DIM};
+use crate::shell::{Item, TEXT, TEXT_DIM};
 
 /// Keys that work while typing but have no menu entry.
 const TEXT_EDITING: &[(&str, &str)] = &[
@@ -66,26 +66,18 @@ fn keys_of(keys: &str) -> Vec<&str> {
     out
 }
 
-/// One key in a small grey rounded box.
-fn key_cap(ui: &mut Ui, key: &str) {
-    egui::Frame::new().fill(PAGE).stroke(egui::Stroke::new(1.0, DIVIDER)).corner_radius(4.0).inner_margin(vec2(6.0, 2.0)).show(ui, |ui| {
-        ui.label(RichText::new(key).size(12.0).monospace().color(TEXT_DIM));
-    });
+/// How the keys read: "Ctrl + Shift + V", plain grey text as Google lists them.
+fn spaced(keys: &str) -> String {
+    keys_of(keys).join(" + ")
 }
 
+/// One shortcut: what it does at the left, its keys in grey at the right, a 36 px row.
 fn row(ui: &mut Ui, label: &str, keys: &str) {
     ui.horizontal(|ui| {
-        ui.set_min_height(26.0);
+        ui.set_min_height(36.0);
         ui.label(RichText::new(label).size(14.0).color(TEXT));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            // Right to left: the last key is drawn first.
-            for (i, k) in keys_of(keys).iter().rev().enumerate() {
-                if i > 0 {
-                    ui.label(RichText::new("+").size(12.0).color(TEXT_DIM));
-                }
-                key_cap(ui, k);
-            }
+            ui.label(RichText::new(spaced(keys)).size(14.0).color(TEXT_DIM));
         });
     });
 }
@@ -122,45 +114,49 @@ impl Shortcuts {
         }
 
         let mut close = false;
-        let modal = egui::Modal::new(egui::Id::unique("stardocs_shortcuts"))
-            .frame(egui::Frame::popup(&ctx.global_style()).fill(Color32::WHITE).corner_radius(8.0).inner_margin(24.0));
+        // Google's dialog: most of the window's height, the list scrolling inside it.
+        let screen = ctx.content_rect();
+        let list_height = (screen.height() * 0.8 - 150.0).max(160.0);
+        let width = (screen.width() - 48.0).clamp(320.0, 720.0);
+        let modal = egui::Modal::new(egui::Id::unique("stardocs_shortcuts")).frame(crate::looks::dialog_frame());
         let shown = modal.show(ctx, |ui| {
-            ui.set_width(592.0);
+            ui.set_width(width);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Keyboard shortcuts").size(22.0).color(TEXT));
+                crate::looks::title(ui, "Keyboard shortcuts");
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let x = egui::Button::new(RichText::new("×").size(20.0).color(TEXT_DIM)).frame(false).min_size(vec2(32.0, 32.0));
-                    if ui.add(x).on_hover_text("Close (Esc)").clicked() {
+                    let x = match crate::icons::icon_px("close", 24.0) {
+                        Some(img) => egui::Button::image(img),
+                        None => egui::Button::new(RichText::new("×").size(20.0).color(TEXT_DIM)),
+                    };
+                    let r = ui.add(x.frame(false).min_size(vec2(40.0, 40.0)));
+                    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Close"));
+                    if r.on_hover_text("Close (Esc)").clicked() {
                         close = true;
                     }
                 });
             });
             ui.add_space(12.0);
-            let search = ui.add(
-                egui::TextEdit::singleline(&mut self.filter)
-                    .hint_text("Search shortcuts")
-                    .desired_width(f32::INFINITY)
-                    .margin(vec2(8.0, 6.0))
-                    .text_color(TEXT),
-            );
+            let search = ui
+                .scope(|ui| {
+                    crate::looks::field_style(ui);
+                    ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("Search shortcuts").desired_width(f32::INFINITY).text_color(TEXT))
+                })
+                .inner;
             if opening {
                 search.request_focus();
             }
             ui.add_space(8.0);
             // A fixed height, so the dialog keeps its size while the list is filtered.
-            egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(380.0).show(ui, |ui| {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(list_height).min_scrolled_height(list_height).show(ui, |ui| {
                 let mut any = false;
                 for (menu, list) in &groups {
                     if list.is_empty() {
                         continue;
                     }
-                    if any {
-                        ui.add_space(8.0);
-                    }
+                    ui.add_space(if any { 16.0 } else { 4.0 });
                     any = true;
-                    ui.label(RichText::new(*menu).size(14.0).strong().color(TEXT));
-                    ui.add_space(2.0);
-                    ui.separator();
+                    ui.label(RichText::new(*menu).font(wordcraft_ui_egui::theme::medium(16.0)).color(TEXT));
+                    ui.add_space(4.0);
                     for (label, keys) in list {
                         row(ui, label, keys);
                     }

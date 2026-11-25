@@ -1,4 +1,6 @@
-//! File › Version history, as in Google Docs: a panel on the right listing the document's
+//! File › Version history, as in Google Docs: a preview mode (the shell swaps its title,
+//! menus and toolbar for [`History::top_bar`] and shows the document read-only) with a panel on
+//! the right listing the document's
 //! versions kept by the Starbase server (newest first: when, who saved it, its name), "Name
 //! current version", and for an earlier version: show it (read-only, in Viewing), "Restore this
 //! version" (the server keeps the current one as a version first, so nothing is lost) and "Make
@@ -133,7 +135,43 @@ impl History {
         self.asks.push(Ask::Close);
     }
 
-    /// The panel on the right, when open. Call before the page is drawn.
+    /// The selected version's date, for the top bar ("Version history" while the list loads).
+    fn shown_title(&self) -> String {
+        self.list.iter().flatten().find(|v| v.id == self.selected).map_or_else(|| "Version history".to_string(), |v| when(v.saved))
+    }
+
+    /// Google's history bar, drawn in place of the title, menus and toolbar while the history is
+    /// open: ← back to the document, the shown version's date, and for an earlier version "Make
+    /// a copy" and the filled "Restore this version".
+    pub fn top_bar(&mut self, ui: &mut Ui) {
+        ui.horizontal(|ui| {
+            ui.set_min_height(48.0);
+            let back = match crate::icons::icon_px("arrow_back", 24.0) {
+                Some(img) => egui::Button::image(img),
+                None => egui::Button::new("←"),
+            };
+            let r = ui.add(back.frame(false).min_size(vec2(40.0, 40.0)));
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Back"));
+            if r.on_hover_text("Back to the document").clicked() {
+                self.close();
+            }
+            ui.add_space(8.0);
+            ui.label(RichText::new(self.shown_title()).size(22.0).color(TEXT));
+            if self.selected != CURRENT {
+                let id = self.selected.clone();
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if crate::looks::pill(ui, "Restore this version", true).clicked() {
+                        self.asks.push(Ask::Restore(id.clone()));
+                    }
+                    if crate::looks::pill(ui, "Make a copy", false).clicked() {
+                        self.asks.push(Ask::Copy(id.clone()));
+                    }
+                });
+            }
+        });
+    }
+
+    /// The versions list on the right, when open. Call before the page is drawn.
     pub fn panel(&mut self, ui: &mut Ui) {
         if !self.open {
             return;
@@ -141,43 +179,34 @@ impl History {
         egui::Panel::right("stardocs_versions")
             .resizable(false)
             .exact_size(WIDTH)
-            .frame(egui::Frame::NONE.fill(Color32::WHITE).stroke(egui::Stroke::new(1.0, DIVIDER)).inner_margin(16.0))
+            .frame(egui::Frame::NONE.fill(Color32::WHITE).stroke(egui::Stroke::new(1.0, DIVIDER)).inner_margin(egui::Margin::symmetric(0, 16)))
             .show(ui, |ui| self.contents(ui));
     }
 
     fn contents(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
+            ui.add_space(16.0);
             ui.label(RichText::new("Version history").size(18.0).color(TEXT));
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.add(egui::Button::new(RichText::new("Close").size(13.0).color(TEXT_DIM)).frame(false)).clicked() {
-                    self.close();
-                }
-            });
         });
-        ui.add_space(8.0);
-        if self.selected != CURRENT {
-            let id = self.selected.clone();
-            ui.horizontal_wrapped(|ui| {
-                let restore =
-                    egui::Button::new(RichText::new("Restore this version").size(14.0).color(Color32::WHITE)).fill(BLUE).corner_radius(18.0);
-                if ui.add(restore).clicked() {
-                    self.asks.push(Ask::Restore(id.clone()));
-                }
-                if ui.add(egui::Button::new(RichText::new("Make a copy").size(14.0).color(BLUE)).corner_radius(18.0)).clicked() {
-                    self.asks.push(Ask::Copy(id.clone()));
-                }
-            });
-            ui.add_space(8.0);
-        }
+        ui.add_space(12.0);
         if let Some(e) = &self.error {
-            ui.label(RichText::new(e).size(13.0).color(ERROR));
+            ui.horizontal_wrapped(|ui| {
+                ui.add_space(16.0);
+                ui.label(RichText::new(e).size(13.0).color(ERROR));
+            });
         }
         let Some(list) = self.list.clone() else {
-            ui.label(RichText::new("Loading…").size(13.0).color(TEXT_DIM));
+            ui.horizontal(|ui| {
+                ui.add_space(16.0);
+                ui.label(RichText::new("Loading…").size(13.0).color(TEXT_DIM));
+            });
             return;
         };
         if list.len() == 1 && self.error.is_none() {
-            ui.label(RichText::new("Earlier versions appear here once the document has been saved again.").size(12.0).color(TEXT_DIM));
+            ui.horizontal_wrapped(|ui| {
+                ui.add_space(16.0);
+                ui.label(RichText::new("Earlier versions appear here once the document has been saved again.").size(12.0).color(TEXT_DIM));
+            });
             ui.add_space(6.0);
         }
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
@@ -187,55 +216,83 @@ impl History {
         });
     }
 
+    /// One version, as Google lists them: its date (or name) in bold, "Current version" in
+    /// italics, who saved it after a coloured dot; the shown one on a light blue band.
     fn row(&mut self, ui: &mut Ui, v: &Version) {
         let selected = v.id == self.selected;
+        let width = ui.available_width();
         let when = when(v.saved);
+        let (rect, resp) = ui.allocate_exact_size(vec2(width, row_height(v)), egui::Sense::click());
         let title = if v.name.is_empty() { when.clone() } else { v.name.clone() };
-        let mut lines = Vec::new();
+        let mut label = title.clone();
         if v.id == CURRENT {
-            lines.push("Current version".to_string());
+            label.push_str(", Current version");
+        }
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("{label} {}", v.author)));
+        let p = ui.painter();
+        let fill = if selected {
+            ON
+        } else if resp.hovered() {
+            crate::theme::MENU_HOVER
+        } else {
+            Color32::TRANSPARENT
+        };
+        p.rect_filled(rect, 0.0, fill);
+        let x = rect.min.x + 24.0;
+        let mut y = rect.min.y + 10.0;
+        let wrap = width - 40.0;
+        let line = |y: &mut f32, text: String, font: egui::FontId, colour: Color32, dx: f32| {
+            let g = p.layout(text, font, colour, wrap);
+            let h = g.size().y;
+            p.galley(egui::pos2(x + dx, *y), g, colour);
+            *y += h + 2.0;
+        };
+        line(&mut y, title, egui::FontId::proportional(14.0), TEXT, 0.0);
+        if v.id == CURRENT {
+            line(&mut y, "Current version".into(), egui::FontId::proportional(12.0), TEXT_DIM, 0.0);
         }
         if !v.name.is_empty() {
-            lines.push(when);
+            line(&mut y, when, egui::FontId::proportional(12.0), TEXT_DIM, 0.0);
         }
         if let Some(from) = v.restored_from {
-            lines.push(format!("Restored from {}", self::when(from)));
+            line(&mut y, format!("Restored from {}", self::when(from)), egui::FontId::proportional(12.0), TEXT_DIM, 0.0);
         }
         if !v.author.is_empty() {
-            lines.push(v.author.clone());
+            p.circle_filled(egui::pos2(x + 4.0, y + 8.0), 4.0, author_colour(&v.author));
+            line(&mut y, v.author.clone(), egui::FontId::proportional(13.0), TEXT, 14.0);
         }
-        let text = format!("{title}\n{}", lines.join("\n"));
-        let fill = if selected { ON } else { Color32::TRANSPARENT };
-        let b = egui::Button::new(RichText::new(text).size(13.0).color(TEXT)).fill(fill).frame(true).stroke(egui::Stroke::NONE).corner_radius(6.0);
-        let width = ui.available_width();
-        ui.with_layout(Layout::top_down_justified(Align::Min), |ui| {
-            ui.set_max_width(width);
-            if ui.add(b.min_size(vec2(width, 0.0))).clicked() && !selected {
-                self.selected = v.id.clone();
-                self.asks.push(Ask::Show(v.id.clone()));
-            }
-        });
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if resp.clicked() && !selected {
+            self.selected = v.id.clone();
+            self.asks.push(Ask::Show(v.id.clone()));
+        }
         if selected {
-            let label = if v.id == CURRENT { "Name current version" } else { "Name this version" };
-            if ui.add(egui::Button::new(RichText::new(label).size(13.0).color(BLUE)).frame(false)).clicked() {
-                self.naming = Some((v.id.clone(), v.name.clone(), true));
-            }
+            ui.horizontal(|ui| {
+                ui.add_space(16.0);
+                let label = if v.id == CURRENT { "Name current version" } else { "Name this version" };
+                if ui.add(egui::Button::new(RichText::new(label).size(13.0).color(BLUE)).frame(false)).clicked() {
+                    self.naming = Some((v.id.clone(), v.name.clone(), true));
+                }
+            });
+            ui.add_space(4.0);
         }
-        ui.add_space(4.0);
     }
 
-    /// The naming dialog, when open.
+    /// The naming dialog, when open: Google's "Name current version", a title, one field and
+    /// Cancel / Save, in our dialogs' look.
     pub fn dialog(&mut self, ctx: &egui::Context) {
         let Some((id, mut text, focus)) = self.naming.take() else { return };
         let mut done = None;
         let title = if id == CURRENT { "Name current version" } else { "Name this version" };
-        let modal = egui::Modal::new(egui::Id::unique("stardocs_name_version"))
-            .frame(egui::Frame::popup(&ctx.global_style()).fill(Color32::WHITE).corner_radius(8.0).inner_margin(20.0));
+        let modal = egui::Modal::new(egui::Id::unique("stardocs_name_version")).frame(crate::looks::dialog_frame());
         let shown = modal.show(ctx, |ui| {
-            ui.set_width(320.0);
-            ui.label(RichText::new(title).size(18.0).color(TEXT));
-            ui.add_space(8.0);
-            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(f32::INFINITY).hint_text("Version name"));
+            ui.set_width(400.0);
+            crate::looks::title(ui, title);
+            ui.add_space(16.0);
+            crate::looks::field_style(ui);
+            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(f32::INFINITY).hint_text("Version name").text_color(TEXT));
             r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Version name"));
             if focus {
                 r.request_focus();
@@ -243,13 +300,13 @@ impl History {
             if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 done = Some(true);
             }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.button("Cancel").clicked() {
-                    done = Some(false);
-                }
-                if ui.add(egui::Button::new(RichText::new("Save").color(Color32::WHITE)).fill(BLUE)).clicked() {
+            ui.add_space(20.0);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if crate::looks::pill(ui, "Save", true).clicked() {
                     done = Some(true);
+                }
+                if crate::looks::pill(ui, "Cancel", false).clicked() {
+                    done = Some(false);
                 }
             });
         });
@@ -262,6 +319,30 @@ impl History {
             None => self.naming = Some((id, text, false)),
         }
     }
+}
+
+/// A version row's height: its lines and the padding round them.
+fn row_height(v: &Version) -> f32 {
+    let lines = 1
+        + usize::from(v.id == CURRENT)
+        + usize::from(!v.name.is_empty())
+        + usize::from(v.restored_from.is_some())
+        + usize::from(!v.author.is_empty());
+    20.0 + 18.0 + (lines - 1) as f32 * 17.0
+}
+
+/// A steady colour per person, for the dot beside their name.
+fn author_colour(name: &str) -> Color32 {
+    const DOTS: [Color32; 6] = [
+        Color32::from_rgb(0x1A, 0x73, 0xE8),
+        Color32::from_rgb(0xD9, 0x30, 0x25),
+        Color32::from_rgb(0x18, 0x80, 0x38),
+        Color32::from_rgb(0xE3, 0x74, 0x00),
+        Color32::from_rgb(0x98, 0x1E, 0xB4),
+        Color32::from_rgb(0x00, 0x7B, 0x83),
+    ];
+    let n = name.bytes().fold(0_usize, |h, b| h.wrapping_mul(31).wrapping_add(usize::from(b)));
+    DOTS[n % DOTS.len()]
 }
 
 /// "25 Nov 2026, 14:05" in the browser's time zone (UTC on the desktop's tests).
@@ -317,11 +398,18 @@ mod tests {
     fn panel(h: History) -> Harness<'static, History> {
         let mut harness = Harness::builder().with_size(vec2(900.0, 700.0)).build_ui_state(
             |ui, h: &mut History| {
+                egui::Panel::top("bar").show(ui, |ui| h.top_bar(ui));
                 h.panel(ui);
                 h.dialog(ui.ctx());
             },
             h,
         );
+        // The dialog buttons are in WordCraft's "medium" face; the app installs it, a bare
+        // window has to name one.
+        let mut fonts = egui::FontDefinitions::default();
+        let plain = fonts.families.get(&egui::FontFamily::Proportional).cloned().unwrap_or_default();
+        fonts.families.insert(egui::FontFamily::Name("medium".into()), plain);
+        harness.ctx.set_fonts(fonts);
         harness.run();
         harness
     }
@@ -357,7 +445,7 @@ mod tests {
         h.get_by_label_contains("Current version").click();
         h.run();
         assert_eq!(h.state_mut().take_asks(), vec![Ask::Show(CURRENT.into())]);
-        h.get_by_label("Close").click();
+        h.get_by_label("Back").click();
         h.run();
         assert_eq!(h.state_mut().take_asks(), vec![Ask::Close]);
         assert!(!h.state().open);

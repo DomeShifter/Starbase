@@ -45,6 +45,8 @@ static ICONS: &[(&str, &[u8])] = icons!(
     "more_vert",
     // The menus' icon column, and the submenu arrow.
     "arrow_right",
+    "arrow_back",
+    "close",
     "article",
     "bookmark",
     "border_all",
