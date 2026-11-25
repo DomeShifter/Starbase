@@ -6,7 +6,8 @@
 //! - Non-destructive: Save writes the edits beside the picture (`PUT api/photos/edits/ID` with
 //!   `If-Match`, the server keeps them in an XMP sidecar); the file itself never changes. "Save a
 //!   copy…" makes a new, edited file (`POST api/photos/export/ID`).
-//! - The live preview is the picture at 1024 px through `starbase-photo-edit`'s `render`. It is
+//! - The live preview is the picture at 1024 px through `starbase-photo-edit`'s `render`
+//!   (crates/photo-edit). It is
 //!   rendered at most once a frame and only when the edits change; while a slider is dragged and
 //!   a render takes longer than a frame, a half-size one stands in until the mouse is let go. The
 //!   texture is replaced in place ([`egui::TextureHandle::set`]), never uploaded every frame.
@@ -25,93 +26,7 @@ use crate::house;
 use crate::store::{Backend, Method};
 use crate::theme;
 
-/// The edit model and renderer (`starbase-photo-edit`, crates/photo-edit). Until that crate is
-/// merged this is a stand-in with the contract's API (§1) that leaves the picture as it is.
-pub(super) mod engine {
-    use serde::{Deserialize, Serialize};
-
-    pub use image::RgbaImage;
-
-    #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-    pub struct Crop {
-        pub l: f32,
-        pub t: f32,
-        pub r: f32,
-        pub b: f32,
-    }
-
-    impl Default for Crop {
-        fn default() -> Crop {
-            Crop { l: 0.0, t: 0.0, r: 1.0, b: 1.0 }
-        }
-    }
-
-    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-    pub struct Filter {
-        pub name: String,
-        pub amount: f32,
-    }
-
-    #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-    #[serde(default)]
-    pub struct Edits {
-        pub v: u32,
-        pub rot90: u8,
-        pub flip_h: bool,
-        pub angle: f32,
-        pub crop: Crop,
-        pub aspect: Option<String>,
-        pub exposure: f32,
-        pub contrast: i32,
-        pub highlights: i32,
-        pub shadows: i32,
-        pub saturation: i32,
-        pub vibrance: i32,
-        pub temperature: i32,
-        pub tint: i32,
-        pub filter: Option<Filter>,
-    }
-
-    impl Default for Edits {
-        fn default() -> Edits {
-            Edits {
-                v: 1,
-                rot90: 0,
-                flip_h: false,
-                angle: 0.0,
-                crop: Crop::default(),
-                aspect: None,
-                exposure: 0.0,
-                contrast: 0,
-                highlights: 0,
-                shadows: 0,
-                saturation: 0,
-                vibrance: 0,
-                temperature: 0,
-                tint: 0,
-                filter: None,
-            }
-        }
-    }
-
-    impl Edits {
-        pub fn is_identity(&self) -> bool {
-            let mut e = self.clone();
-            e.aspect = None;
-            e == Edits::default()
-        }
-    }
-
-    pub fn render(img: &RgbaImage, _e: &Edits) -> RgbaImage {
-        img.clone()
-    }
-
-    pub fn output_size(w: u32, h: u32, _e: &Edits) -> (u32, u32) {
-        (w, h)
-    }
-}
-
-use engine::{Crop, Edits, Filter, RgbaImage, output_size, render};
+use starbase_photo_edit::{Aspect, Crop, Edits, Filter, FilterName, RgbaImage, output_size, render};
 
 /// The longest side of the preview, and of the stand-in shown while dragging.
 const PREVIEW: u32 = 1024;
@@ -624,7 +539,7 @@ impl Editor {
 
     /// Picks an aspect preset: the crop becomes the largest of that shape around its middle.
     pub fn set_aspect(&mut self, name: &str) {
-        self.edits.aspect = Some(name.to_string());
+        self.edits.aspect = aspect_from(name);
         if let Some(a) = self.aspect_ratio() {
             self.edits.crop = fit_aspect(self.edits.crop, a, self.frame_ratio());
         }
@@ -654,26 +569,25 @@ impl Editor {
     fn frame_ratio(&self) -> f32 {
         let (w, h) = self.src.as_ref().map_or((4, 3), |s| s.dimensions());
         let (w, h) = output_size(w, h, &uncropped(&self.edits));
-        // The stand-in renderer doesn't turn: account for quarter turns here.
-        let (w, h) = if self.edits.rot90 % 2 == 1 && output_size(3, 2, &uncropped(&self.edits)) == (3, 2) { (h, w) } else { (w, h) };
         w.max(1) as f32 / h.max(1) as f32
     }
 
     /// The chosen aspect as width / height, None for free.
     fn aspect_ratio(&self) -> Option<f32> {
-        match self.edits.aspect.as_deref()? {
-            "original" => {
+        let r = match self.edits.aspect? {
+            Aspect::Free => return None,
+            Aspect::Original => {
                 let (w, h) = self.src.as_ref().map_or((4, 3), |s| s.dimensions());
                 let r = w.max(1) as f32 / h.max(1) as f32;
-                Some(if self.edits.rot90 % 2 == 1 { 1.0 / r } else { r })
+                if self.edits.rot90 % 2 == 1 { 1.0 / r } else { r }
             }
-            "free" => None,
-            s => {
-                let (a, b) = s.split_once(':')?;
-                let (a, b): (f32, f32) = (a.parse().ok()?, b.parse().ok()?);
-                (a > 0.0 && b > 0.0).then_some(a / b)
-            }
-        }
+            Aspect::Square => 1.0,
+            Aspect::R4x3 => 4.0 / 3.0,
+            Aspect::R3x2 => 1.5,
+            Aspect::R16x9 => 16.0 / 9.0,
+            Aspect::R4x5 => 0.8,
+        };
+        Some(r)
     }
 
     /// Sets fields from JSON (the test hook and tests): `{exposure: 1.2, contrast: 20, filter:
@@ -746,7 +660,7 @@ impl Editor {
             .iter()
             .map(|(name, _)| {
                 let mut e = base.clone();
-                e.filter = Some(Filter { name: name.to_string(), amount: 1.0 });
+                e.filter = filter_from(name).map(|name| Filter { name, amount: 1.0 });
                 to_color_image(&render(tiny, &e))
             })
             .collect();
@@ -933,7 +847,7 @@ impl Editor {
 
     fn crop_panel(&mut self, ui: &mut Ui) {
         house::caps(ui, "Aspect ratio");
-        let current = self.edits.aspect.clone().unwrap_or_else(|| "free".into());
+        let current = self.edits.aspect.map_or_else(|| "free".to_string(), name_of);
         ui.horizontal_wrapped(|ui| {
             for (name, label) in ASPECTS {
                 if chip(ui, label, current == name) {
@@ -973,7 +887,7 @@ impl Editor {
     }
 
     fn filters_panel(&mut self, ui: &mut Ui) {
-        let current = self.edits.filter.as_ref().map(|f| f.name.clone());
+        let current = self.edits.filter.map(|f| name_of(f.name));
         let side = ((ui.available_width() - 2.0 * house::S) / 3.0).floor();
         let mut picked: Option<Option<&str>> = None;
         let mut row = |ui: &mut Ui, items: &[(Option<&'static str>, &'static str, Option<usize>)]| {
@@ -1016,7 +930,8 @@ impl Editor {
             row(ui, chunk);
         }
         if let Some(p) = picked {
-            self.edits.filter = p.map(|n| Filter { name: n.to_string(), amount: self.edits.filter.as_ref().map_or(1.0, |f| f.amount) });
+            let amount = self.edits.filter.map_or(1.0, |f| f.amount);
+            self.edits.filter = p.and_then(filter_from).map(|name| Filter { name, amount });
         }
         if let Some(f) = &mut self.edits.filter {
             house::gap(ui);
@@ -1144,6 +1059,21 @@ impl Editor {
             self.answer(ctx, store, true);
         }
     }
+}
+
+/// An aspect preset from its contract name ("1:1", "free", …).
+fn aspect_from(name: &str) -> Option<Aspect> {
+    serde_json::from_value(json!(name)).ok()
+}
+
+/// A filter from its contract name ("bw", "sepia", …).
+fn filter_from(name: &str) -> Option<FilterName> {
+    serde_json::from_value(json!(name)).ok()
+}
+
+/// The contract name of an aspect or filter.
+fn name_of<T: serde::Serialize>(v: T) -> String {
+    serde_json::to_value(v).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
 }
 
 /// The edits without the crop (the Crop tab shows the whole picture with the box over it).
@@ -1694,7 +1624,7 @@ mod tests {
         assert_eq!(h.state().ed.filter_tex.len(), 6);
         h.get_by_label("Sepia").click();
         h.run();
-        assert_eq!(h.state().ed.edits.filter.as_ref().map(|f| f.name.as_str()), Some("sepia"));
+        assert_eq!(h.state().ed.edits.filter.map(|f| f.name), Some(FilterName::Sepia));
         h.get_by_label("Crop").click();
         h.run();
         h.get_by_label("Square").click();

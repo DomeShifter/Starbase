@@ -69,7 +69,7 @@ impl Home {
     }
 
     /// `home:photos` {on}, `home:photos:edit` {open} (on the picture the viewer shows),
-    /// `home:photos:edit:<what>` (photo_edit.rs `test_run`),, `home:photos:enable`, `home:photos:sub` {on}, `home:photos:order`
+    /// `home:photos:edit:<what>` (photo_edit.rs `test_run`), `home:photos:enable`, `home:photos:sub` {on}, `home:photos:order`
     /// {newest}, `home:photos:open` {index}, `home:photos:key` {key: next, prev, close, zoomin,
     /// zoomout, fit, play, pause}, `home:photos:slideshow` {every, shuffle, play}.
     fn photos_test(&mut self, ctx: &egui::Context, id: &str, params: &Json) -> Result<Json, String> {

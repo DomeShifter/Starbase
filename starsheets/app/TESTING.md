@@ -61,6 +61,16 @@ opens the viewer; `home:photos:key {key}` with `next`, `prev`, `zoomin`, `zoomou
 `viewer` (`index`, `zoom`, `playing`, `shuffle`, `every`, `showing`: which size is on screen).
 `scripts/photos-grid-smoke.sh` runs all of it in a browser.
 
+**Photo editor** (`src/home/photo_edit.rs`, over the viewer): `home:photos:edit {open}` opens or
+closes it on the picture shown; `home:photos:edit:<what>` drives it: `tab {tab}` (crop, adjust,
+filters), `slider {key, value}`, `set {…edit fields…}`, `aspect {name}`, `rotate`, `flip`,
+`undo`, `redo`, `reset`, `compare {on}`, `cancel`, `save`, `copy {strip_location, max_side}` and
+`answer {yes}` (the open question). The snapshot's `home.photos.photo_edit` has `open`, `tab`,
+`edits`, `dirty`, `writable`, `whyNot`, `foreign`, `ask`, `error`, `message`, `canUndo`,
+`canRedo`, `preview` (none, coarse, full), `renderMs` (the last preview render), `renders` and
+`uploads` (texture uploads, which only grow when the picture changes).
+`scripts/photo-edit-smoke.sh` runs it in a browser.
+
 The avatar menu's dialogs open with `starsheets.run("account:profile")` (also `account:password`,
 `account:people`), on either screen.
 

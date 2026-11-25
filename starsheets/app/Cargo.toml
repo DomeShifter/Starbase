@@ -24,7 +24,9 @@ serde = { version = "1", features = ["derive"] }
 regex = "1"
 # Preview pictures on the home screen (decoding them).
 png = "0.18"
-# The photo editor's pictures (home/photo_edit.rs), in the browser too (no decoders: the browser decodes).
+# The photo editor (home/photo_edit.rs): its edits and live preview, in the browser too (no
+# decoders: the browser decodes).
+starbase-photo-edit = { path = "../crates/photo-edit" }
 image = { version = "0.25", default-features = false }
 
 # The desktop app (native.rs): GridCraft's own native window setup, local mode over a folder on
