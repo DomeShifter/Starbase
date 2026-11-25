@@ -635,3 +635,21 @@ fn cache_dir_choice() {
     assert!(pick(None, false, true, None, None).starts_with("/var/cache/starbase/photos"));
     assert_eq!(pick(None, false, false, Some("/xdg"), None), PathBuf::from("/data/.starsheets/photos-cache"));
 }
+
+#[test]
+fn drive_tiles_get_an_upright_thumbnail_without_photos_turned_on() {
+    // Stored 40 × 20 (red left, blue right) with EXIF 6: shown 20 × 40, red at the top.
+    let dir = tmp("drive");
+    std::fs::write(dir.join("p.jpg"), with_exif(&jpeg(&halves(40, 20)), &exif_block(6, "2024:07:14 18:30:05", None))).unwrap();
+    std::fs::write(dir.join("notes.bmp"), b"BM").unwrap();
+    let store = Store { root: dir.clone(), keep: 3, spaces: false };
+    let t = image::load_from_memory(&drive_thumb(&store, "p.jpg").unwrap()).unwrap().to_rgb8();
+    assert_eq!(t.dimensions(), (20, 40));
+    assert!(t.get_pixel(10, 3)[0] > 200 && t.get_pixel(10, 36)[2] > 200, "upright");
+    // As a tile: the card's shape, cut around the middle.
+    let tile = image::load_from_memory(&crate::thumbs::tile(&drive_thumb(&store, "p.jpg").unwrap()).unwrap()).unwrap();
+    assert_eq!((tile.width(), tile.height()), (crate::thumbs::TILE_W, crate::thumbs::TILE_H));
+    assert!(drive_thumb(&store, "notes.bmp").is_err());
+    assert!(drive_thumb(&store, "missing.jpg").is_err());
+    let _ = std::fs::remove_dir_all(dir);
+}

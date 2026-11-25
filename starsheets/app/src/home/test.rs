@@ -30,7 +30,15 @@ impl Home {
             "folders": folders.iter().map(|f| json!({ "path": f.path, "name": name_of(&f.path) })).collect::<Vec<_>>(),
             "files": files
                 .iter()
-                .map(|f| json!({ "id": f.id, "name": f.name, "folder": f.folder, "starred": f.starred, "kind": super::items::file_kind(&f.name) }))
+                .map(|f| {
+                    // The tile picture: "ready" (texture loaded), "loading", "none" (plain icon) or null.
+                    let thumb = self.thumbs.get(&f.id).map(|(_, t)| match t {
+                        super::Thumb::Ready(_) => "ready",
+                        super::Thumb::Loading => "loading",
+                        super::Thumb::None => "none",
+                    });
+                    json!({ "id": f.id, "name": f.name, "folder": f.folder, "starred": f.starred, "kind": super::items::file_kind(&f.name), "thumb": thumb })
+                })
                 .collect::<Vec<_>>(),
         })
     }
