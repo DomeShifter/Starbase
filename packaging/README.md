@@ -33,6 +33,7 @@ or the programs don't start under X11. The Flatpak gets it from its runtime.
 | `linux/AppRun` | AppImage entry point. It picks the program: no arguments starts the Starbase Drive home; `stardocs …`/`starsheets …` start that program; otherwise the first file's extension decides (Word/ODT/RTF go to Starbase Docs, everything else to Starbase Sheets). A symlink named `stardocs` to the AppImage also works. |
 | `linux/appimage.sh` | Builds `starbase-<version>-linux-<arch>.AppImage` (+ `.zsync`) from two built executables: `--starsheets <path> --stardocs <path> [--version v]`. It uses appimagetool 1.9.1 and the type2 runtime 20251108, both pinned by SHA-256 (same versions and sums as WordCraft). The embedded update information is `gh-releases-zsync\|DomeShifter\|Starbase\|latest\|starbase-*-linux-<arch>.AppImage.zsync`. |
 | `linux/flatpak/io.github.DomeShifter.Starbase.yml` | Flatpak manifest: org.freedesktop.Platform 26.08 plus the rust-stable SDK extension, and three modules (starsheets, stardocs, shared data). The header explains how to build it. |
+| `linux/flatpak/make-repo.sh <bundle> <site> <url> <key> <key.asc>` | Turns the `.flatpak` bundle into our own signed Flatpak repository (a static site): the app on branch `stable`, commit and summary signed with the release key, static deltas, plus `starbase.flatpakref`, `starbase.flatpakrepo`, the public key and an `index.html`. It then checks the result as a client that trusts only that key would. See "Our own Flatpak repository" below. |
 | `linux/flatpak/pin-engines.sh [--check]` | Copies the engine commits from `starsheets/upstream.pin` and `stardocs/upstream.pin` into the manifest. CI runs it before each Flatpak build. |
 
 Adapted from WordCraft's `packaging/linux` (storytold/wordcraft v0.18.1) and GridCraft's
@@ -107,12 +108,42 @@ The commands for a local build are in the manifest's header.
    new release needs its own `<release>` entry in the metainfo.
 6. **Local-mode scope** is James's decision (plan, decision 1). The manifest assumes
    `~/Documents/Starbase`; if he chooses all of Documents, it becomes `--filesystem=xdg-documents`.
-7. **Release job (P5):** build both executables on ubuntu-22.04 / ubuntu-22.04-arm, run
-   `appimage.sh`, build the `.flatpak` bundle, then publish SHA256SUMS and a GPG signature.
-   deb/rpm (nfpm) come later.
+7. **Release job (P5):** the AppImage is signed and attached, and the Flatpak goes to our own
+   signed repository (above). deb/rpm (nfpm) come later.
 8. AppImage desktop integration tools (Gear Lever, AppImageLauncher) install only the root
    (Starbase Drive) entry. The Starbase Sheets and Starbase Docs entries and their file associations work fully
    only in the Flatpak (and the later deb/rpm).
+
+## Our own Flatpak repository
+
+Flathub is not an option for now (`linux/flathub-submission.md`), so Starbase publishes its own
+Flatpak repository on GitHub Pages: <https://domeshifter.github.io/Starbase/>. Users install with
+
+```sh
+flatpak install --user --from https://domeshifter.github.io/Starbase/starbase.flatpakref
+```
+
+and get updates with `flatpak update`; the runtime (org.freedesktop.Platform) comes from Flathub.
+`starbase.flatpakrepo` adds just the remote (`flatpak remote-add --user starbase <url>`).
+
+How it is made (`.github/workflows/release.yml`):
+
+| Job | What it does |
+|---|---|
+| `flatpak` | Calls `flatpak.yml`: the build, Flathub's linter and the smoke test. |
+| `flatpak-repo` | Imports the release key into a throwaway keyring (secrets `STARBASE_GPG_PRIVATE_KEY` / `STARBASE_GPG_PASSPHRASE`; the passphrase is preset in gpg-agent, since flatpak cannot ask for it), runs `make-repo.sh` (`flatpak build-commit-from --gpg-sign`, `build-update-repo --gpg-sign --generate-static-deltas`) and uploads the site as a Pages artifact. |
+| `flatpak-repo-publish` | `actions/deploy-pages`: on a `vX.Y.Z` tag once every other release job (signing included) is green, or when Release is run by hand with "publish_flatpak_repo" ticked. |
+| `flatpak-repo-check` | On a clean runner, installs from the published `.flatpakref` and runs both programs' `--version`. |
+
+Why deploy-pages and not a `gh-pages` branch: an OSTree repository is thousands of binary
+objects; committing them to git on every release would grow the repository for ever. The Pages
+artifact is rebuilt each release and holds only the newest version (Flatpak updates from any
+older one all the same). Pull requests never build or publish it.
+
+One-time setup in the repository settings (an admin does this once):
+1. Settings > Pages > Build and deployment > Source: **GitHub Actions**.
+2. Settings > Environments > `github-pages` > Deployment branches and tags: keep `main` and
+   **add a tag rule `v*`** (otherwise the tag run's deploy is refused).
 
 ## Checking a download
 

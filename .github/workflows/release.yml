@@ -7,11 +7,21 @@
 # Run by hand (Actions › Release › Run workflow) it does the same build without pushing or
 # releasing, and keeps an amd64 image as the `starbase-image` artifact for trying it out:
 #   docker load -i starbase-amd64.tar && docker run -p 8080:8080 ghcr.io/domeshifter/starbase:test
+#
+# The Flatpak goes into our own signed Flatpak repository on GitHub Pages (Flathub is not an
+# option for now: packaging/linux/flathub-submission.md). A version tag publishes it once every
+# other job is green; by hand it is only built and kept as the `flatpak-repo-site` artifact,
+# unless "publish_flatpak_repo" is ticked (Pages only accepts main and v* tags).
 name: Release
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      publish_flatpak_repo:
+        description: Also publish the Flatpak repository on GitHub Pages
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -40,6 +50,10 @@ jobs:
   desktop:
     name: Desktop (AppImage)
     uses: ./.github/workflows/desktop.yml
+
+  flatpak:
+    name: Flatpak
+    uses: ./.github/workflows/flatpak.yml
 
   image:
     name: Docker image
@@ -190,3 +204,102 @@ jobs:
         run: |
           cd dist
           gh release upload "$GITHUB_REF_NAME" --clobber -- *.AppImage *.AppImage.zsync SHA256SUMS *.asc
+
+  flatpak-repo:
+    # Our own Flatpak repository (packaging/linux/flatpak/make-repo.sh): the bundle from the
+    # Flatpak job as a signed OSTree repository with static deltas, plus starbase.flatpakref and
+    # starbase.flatpakrepo, signed with the same release key as the downloads.
+    name: Flatpak repository (signed)
+    needs: flatpak
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PAGES_URL: https://domeshifter.github.io/Starbase
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: starbase-flatpak
+          path: dist
+      - name: Flatpak and OSTree
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq flatpak ostree
+      # flatpak signs through gpg-agent without asking, so the passphrase is preset in the agent
+      # of a throwaway keyring (never on a command line, never printed).
+      - name: Release key
+        env:
+          KEY: ${{ secrets.STARBASE_GPG_PRIVATE_KEY }}
+          PASS: ${{ secrets.STARBASE_GPG_PASSPHRASE }}
+        run: |
+          [ -n "$KEY" ] && [ -n "$PASS" ] || { echo "release key secrets are missing"; exit 1; }
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"; mkdir -m 700 "$GNUPGHOME"
+          echo allow-preset-passphrase > "$GNUPGHOME/gpg-agent.conf"
+          printf '%s\n' "$KEY" | gpg --batch --import
+          want=$(gpg --show-keys --with-colons packaging/linux/starbase-release-signing.asc | awk -F: '/^fpr/{print $10; exit}')
+          gpg --list-secret-keys --with-colons | grep -q "^fpr:::::::::$want:" || { echo "secret key is not $want"; exit 1; }
+          preset="$(gpgconf --list-dirs libexecdir)/gpg-preset-passphrase"
+          for grip in $(gpg --with-keygrip --with-colons --list-secret-keys "$want" | awk -F: '/^grp/{print $10}'); do
+            printf '%s' "$PASS" | "$preset" --preset "$grip"
+          done
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+          echo "SIGNING_KEY=$want" >> "$GITHUB_ENV"
+      - name: Build and check the repository
+        run: |
+          packaging/linux/flatpak/make-repo.sh dist/*.flatpak site "$PAGES_URL" "$SIGNING_KEY" \
+            packaging/linux/starbase-release-signing.asc
+          gpgconf --kill gpg-agent
+          {
+            echo "### Flatpak repository"
+            echo '```'; cut -c1-100 site/starbase.flatpakref; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+          name: flatpak-repo-site
+          retention-days: 7
+
+  flatpak-repo-publish:
+    # Publishes after everything else is green (tag), or by hand when asked. The `github-pages`
+    # environment decides which refs may deploy (Settings > Environments).
+    name: Publish the Flatpak repository (GitHub Pages)
+    needs: [flatpak-repo, sign]
+    if: >-
+      !cancelled() && needs.flatpak-repo.result == 'success' &&
+      ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && needs.sign.result == 'success')
+      || (github.event_name == 'workflow_dispatch' && inputs.publish_flatpak_repo))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5
+        with:
+          artifact_name: flatpak-repo-site
+
+  flatpak-repo-check:
+    # What a user does on a fresh machine: install from the published .flatpakref, then run it.
+    name: Install from the published repository
+    needs: flatpak-repo-publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PAGES_URL: https://domeshifter.github.io/Starbase
+      APP_ID: io.github.DomeShifter.Starbase
+    steps:
+      - name: Flatpak
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq flatpak
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Install from starbase.flatpakref (runtime from Flathub)
+        run: |
+          # Pages can take a minute to serve the new site everywhere.
+          for _ in 1 2 3 4 5 6; do curl -fsS -o /dev/null "$PAGES_URL/repo/summary" && break; sleep 20; done
+          flatpak install --user -y --noninteractive --from "$PAGES_URL/starbase.flatpakref"
+          flatpak remote-list --user --show-details
+          flatpak run "$APP_ID" --version
+          flatpak run --command=stardocs "$APP_ID" --version
+          flatpak update --user -y --noninteractive
