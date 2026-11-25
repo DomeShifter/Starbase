@@ -20,7 +20,6 @@
 
 mod fonts;
 mod icons;
-mod prefs;
 mod shell;
 mod theme;
 

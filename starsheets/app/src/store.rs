@@ -19,8 +19,7 @@ use gridcraft_engine::model::Workbook;
 pub(crate) enum Method {
     Get,
     Post,
-    /// Only the web app's spreadsheet saves (files.rs); the desktop app writes files itself.
-    #[cfg(target_arch = "wasm32")]
+    /// The web app's spreadsheet saves (files.rs) and photo edits (home/photo_edit.rs).
     Put,
     Delete,
 }
@@ -33,6 +32,11 @@ pub(crate) type Done = Box<dyn FnOnce(Answer)>;
 pub(crate) trait Store {
     /// One call to the files API, `url` relative to the app (`api/files?…`).
     fn call(&self, ctx: &egui::Context, method: Method, url: &str, body: Option<Vec<u8>>, done: Done);
+    /// The same with an `If-Match` header (photo edits); stores without one ignore it.
+    fn call_if(&self, ctx: &egui::Context, method: Method, url: &str, body: Option<Vec<u8>>, if_match: Option<String>, done: Done) {
+        let _ = if_match;
+        self.call(ctx, method, url, body, done);
+    }
     /// Runs the `done` of calls answered since last time (each frame, before anything else).
     fn poll(&self) {}
     /// Opens a listed file: a spreadsheet in Starbase Sheets, a document in Starbase Docs.
@@ -200,9 +204,13 @@ pub(crate) struct ServerStore;
 #[cfg(target_arch = "wasm32")]
 impl Store for ServerStore {
     fn call(&self, ctx: &egui::Context, method: Method, url: &str, body: Option<Vec<u8>>, done: Done) {
+        self.call_if(ctx, method, url, body, None, done);
+    }
+
+    fn call_if(&self, ctx: &egui::Context, method: Method, url: &str, body: Option<Vec<u8>>, if_match: Option<String>, done: Done) {
         let (ctx, url) = (ctx.clone(), url.to_string());
         wasm_bindgen_futures::spawn_local(async move {
-            done(crate::files::fetch(method, &url, body, None).await.map(|(s, _, b)| (s, b)));
+            done(crate::files::fetch(method, &url, body, if_match).await.map(|(s, _, b)| (s, b)));
             ctx.request_repaint();
         });
     }

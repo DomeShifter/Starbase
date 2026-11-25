@@ -9,7 +9,7 @@
 //!   frame. 96 MB in the browser, 256 MB on the desktop.
 //! - Pictures are decoded by the browser on the web (`createImageBitmap`, off the main thread,
 //!   EXIF orientation applied), by the `image` crate on the desktop.
-//! - The full-screen viewer and slideshow are in viewer.rs.
+//! - The full-screen viewer and slideshow are in viewer.rs; the editor (Edit, or E) in photo_edit.rs.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
@@ -87,6 +87,15 @@ impl Textures {
     #[cfg(any(test, target_arch = "wasm32"))]
     pub fn len(&self) -> usize {
         self.map.len()
+    }
+    /// Forgets every size of picture `id` (its edits changed).
+    pub fn forget(&mut self, id: &str) {
+        let gone: Vec<Key> = self.map.keys().filter(|k| k.0 == id).cloned().collect();
+        for k in gone {
+            if let Some(v) = self.map.remove(&k) {
+                self.total -= v.1;
+            }
+        }
     }
     pub fn insert(&mut self, k: Key, t: egui::TextureHandle, frame: u64) {
         let bytes = t.size()[0] * t.size()[1] * 4;
@@ -166,6 +175,8 @@ pub(super) struct PhotoMode {
     failed: HashSet<Key>,
     pub frame: u64,
     pub viewer: Option<Viewer>,
+    /// The photo editor, over the viewer (photo_edit.rs).
+    pub editor: Option<super::photo_edit::Editor>,
 }
 
 impl Default for PhotoMode {
@@ -191,6 +202,7 @@ impl Default for PhotoMode {
             failed: HashSet::new(),
             frame: 0,
             viewer: None,
+            editor: None,
         }
     }
 }
@@ -209,6 +221,7 @@ impl PhotoMode {
         store.set_setting("starsheets_home_photos", if on { "1" } else { "0" });
         if !on {
             self.viewer = None;
+            self.editor = None;
         }
     }
 
@@ -351,6 +364,7 @@ impl PhotoMode {
             self.enabled = None;
             self.error = None;
             self.viewer = None;
+            self.editor = None;
             self.retry_at.clear();
             self.failed.clear();
             if let Some(f) = &folder {
@@ -408,6 +422,19 @@ impl PhotoMode {
                 _ => Self::push(&inbox, &ctx2, Got::Image(k, None)),
             }),
         );
+    }
+
+    /// Picture `id`'s edits were saved: its thumbnails are asked for again at version `v`
+    /// (the server's thumbnails show the edited picture).
+    pub fn edited(&mut self, id: &str, v: Option<String>) {
+        self.tex.forget(id);
+        for p in self.pics.iter_mut().filter(|p| p.id == id) {
+            if v.is_some() {
+                p.v = v.clone();
+            }
+        }
+        self.failed.retain(|k| k.0 != id);
+        self.retry_at.retain(|k, _| k.0 != id);
     }
 
     /// The best texture there is of picture `i`, preferring `size`: (texture, its size key).
@@ -619,6 +646,7 @@ impl PhotoMode {
                 "id": p.id, "name": p.name, "taken": p.taken, "state": p.state, "v": p.v,
                 "thumb": has(&p.id, SMALL), "large": has(&p.id, LARGE), "original": has(&p.id, ORIGINAL),
             })).collect::<Vec<_>>(),
+            "photo_edit": self.editor.as_ref().map_or_else(|| json!({ "open": false }), |e| e.test_state()),
             "viewer": self.viewer.as_ref().map(|v| {
                 let p = self.pics.get(v.index());
                 json!({
@@ -667,7 +695,7 @@ pub(super) fn decode_native(bytes: &[u8], max: u32) -> Option<egui::ColorImage> 
 /// The browser decodes (createImageBitmap: off the main thread, EXIF orientation applied), then
 /// the pixels come back through a canvas.
 #[cfg(target_arch = "wasm32")]
-async fn decode_web(bytes: Vec<u8>, max: u32) -> Option<egui::ColorImage> {
+pub(super) async fn decode_web(bytes: Vec<u8>, max: u32) -> Option<egui::ColorImage> {
     use wasm_bindgen::JsCast;
     use wasm_bindgen_futures::JsFuture;
     let w = web_sys::window()?;

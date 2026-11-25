@@ -39,6 +39,7 @@ fn method_name(m: Method) -> &'static str {
     match m {
         Method::Get => "GET",
         Method::Post => "POST",
+        Method::Put => "PUT",
         Method::Delete => "DELETE",
     }
 }
@@ -83,12 +84,16 @@ impl Store for RemoteStore {
     }
 
     fn call(&self, ctx: &egui::Context, method: Method, url: &str, body: Option<Vec<u8>>, done: Done) {
+        self.call_if(ctx, method, url, body, None, done);
+    }
+
+    fn call_if(&self, ctx: &egui::Context, method: Method, url: &str, body: Option<Vec<u8>>, if_match: Option<String>, done: Done) {
         let id = self.next.get();
         self.next.set(id + 1);
         self.waiting.borrow_mut().insert(id, done);
         let (tx, ctx, server, url) = (self.tx.clone(), ctx.clone(), self.server.clone(), url.to_string());
         std::thread::spawn(move || {
-            let answer = match server.call(method_name(method), &url, body.as_deref(), None) {
+            let answer = match server.call(method_name(method), &url, body.as_deref(), if_match.as_deref()) {
                 Ok(r) if r.status == 401 => Err(DISCONNECTED.to_string()),
                 Ok(r) => Ok((r.status, r.body)),
                 Err(e) => Err(e),
