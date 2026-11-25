@@ -80,3 +80,5 @@ be drawn), `signedIn`, `user`, `signInPage` (the sign-in page is up), `menuOpen`
 account menu) and `next` (where signing in goes on to, from `?next=`). Signed out the snapshot is
 `screen: "signin"` with only `account`. `starsheets.run("account:menu")` opens the account menu
 as clicking the avatar does.
+
+**Albums and Places** (`src/home/photos/albums.rs`): `home:photos:tab {tab: photos|albums|places}`; `home:photos:select {on, all | indexes}`; `home:photos:album:new {name}` (with the selection), `:open {album}`, `:back`, `:add {album}`, `:remove`, `:rename {name}`, `:delete`; `home:photos:place:open {place}`. The snapshot's `home.photos.albums` has `tab`, `albums`, `places`, `open`, `selecting`, `selected`.

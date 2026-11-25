@@ -108,6 +108,8 @@ impl Home {
                 let ed = pm.editor.as_mut().ok_or("the editor isn't open")?;
                 ed.test_run(ctx, &self.store, &id["home:photos:edit:".len()..], params)?;
             }
+            "home:photos:tab" | "home:photos:select" | "home:photos:place:open" => pm.alb_test(ctx, &self.store, id, params)?,
+            id if id.starts_with("home:photos:album:") => pm.alb_test(ctx, &self.store, id, params)?,
             "home:photos:open" => {
                 let i = params.get("index").and_then(Json::as_u64).unwrap_or(0) as usize;
                 if i >= pm.pics.len() {

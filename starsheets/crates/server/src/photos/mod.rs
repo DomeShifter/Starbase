@@ -28,6 +28,7 @@
 //! Symbolic links are never followed (as everywhere in the store), and hidden files and
 //! folders (`.starsheets`, `.bin`) are skipped.
 
+pub mod albums;
 pub mod crs;
 pub mod decode;
 pub mod edits;
