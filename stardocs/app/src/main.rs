@@ -25,6 +25,9 @@
 
 // The window and what it needs: both the browser and the desktop.
 mod bundled_fonts;
+// A commenter's ids against the server's (server.rs); tested natively.
+#[cfg(any(target_arch = "wasm32", test))]
+mod comment_ids;
 mod download;
 mod icons;
 mod looks;

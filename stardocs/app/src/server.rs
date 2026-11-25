@@ -10,6 +10,10 @@
 //!   server's file is never overwritten. This version is kept as a new file beside it,
 //!   "<name> (conflicted copy)" (as in Starbase Sheets), and the page carries on with that copy, saying so.
 //! - A new document is made on its first save: `POST api/files?folder=…&name=…`.
+//! - A commenter's new comments get the server's ids: the save reply's `ids` are kept and sent
+//!   with every later save (`X-Comment-Ids`, comment_ids.rs), so the editor's ids never change
+//!   and a save already waiting goes out right. The document is opened again only when the ids
+//!   can't be kept or it changed elsewhere ([`Link::reopen`]: waiting saves are dropped first).
 //! - Not signed in (401): the page goes to the sign-in page (the home screen's), which comes back
 //!   to this document afterwards (`?next=`, a path on this server only).
 //! - Exports (PDF, pictures, other formats) still download in the browser.
@@ -106,6 +110,19 @@ struct State {
     /// in read-only mode once (`view_applied`).
     view_only: bool,
     view_applied: bool,
+    /// The signed-in person may comment on this document but not change it (a commenter): the
+    /// editor is kept in WordCraft's Commenting state (`view.commenting`, fork change StarDocs
+    /// 0010), and the server keeps a save only if its text is unchanged.
+    comment_only: bool,
+    /// A commenter's comment ids the server gave other ids (ours → the server's, comment_ids.rs),
+    /// sent with every save; emptied when the document is read again.
+    alias: std::collections::BTreeMap<u32, u32>,
+    /// Counts the times the document was (or is being) read again: a save reply whose comment ids
+    /// are for an earlier one is not taken.
+    generation: u64,
+    /// A commenter's document is being read again ([`Link::reopen`]): what is on screen is about
+    /// to be replaced, so nothing of it is saved.
+    reopening: bool,
     /// File › Make a copy waits for the save on its way (the copy is made from the server's file).
     copy_pending: bool,
     /// Where opened documents go (the app's inbox), kept from [`Link::open`] for version history.
@@ -206,8 +223,12 @@ impl Link {
         wasm_bindgen_futures::spawn_local(async move {
             if let Ok((200, _, body)) = fetch("GET", &url, None, None).await {
                 let v: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
-                if v["you"].as_str() == Some("view") {
-                    link.state.borrow_mut().view_only = true;
+                match v["you"].as_str() {
+                    Some("view") => link.state.borrow_mut().view_only = true,
+                    Some("comment") => link.state.borrow_mut().comment_only = true,
+                    _ => {}
+                }
+                if matches!(v["you"].as_str(), Some("view" | "comment")) {
                     link.ctx.request_repaint();
                     return;
                 }
@@ -226,6 +247,11 @@ impl Link {
     /// Whether the signed-in person may only view this document.
     pub fn view_only(&self) -> bool {
         self.state.borrow().view_only
+    }
+
+    /// Whether the signed-in person may only comment on this document.
+    pub fn comment_only(&self) -> bool {
+        self.state.borrow().comment_only
     }
 
     /// File › Make a copy: once what is on screen is saved, the server copies the file ("Copy of
@@ -335,6 +361,10 @@ impl Link {
                         s.version = header(&headers, "ETag").unwrap_or_default();
                         s.name = name.clone();
                         s.folder = folder;
+                        // The document as the server has it: its ids are the server's.
+                        s.alias.clear();
+                        s.generation += 1;
+                        s.reopening = false;
                     }
                     set_title(&name);
                     inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
@@ -342,14 +372,38 @@ impl Link {
                 }
                 Ok((401, ..)) => sign_in_and_return(),
                 Ok((code, _, body)) => {
+                    link.state.borrow_mut().reopening = false;
                     // Nothing to edit: the blank page is read-only, so typing can't look like work.
                     link.state.borrow_mut().view_only = true;
                     link.fail(&format!("Couldn't open the document ({})", reason(code, &body)));
                 }
-                Err(e) => link.fail(&format!("Couldn't reach the server: {e}")),
+                Err(e) => {
+                    link.state.borrow_mut().reopening = false;
+                    link.fail(&format!("Couldn't reach the server: {e}"));
+                }
             }
             link.ctx.request_repaint();
         });
+    }
+
+    /// A commenter's document read again (changed elsewhere, or comment ids that can't be kept):
+    /// the saves waiting or failed are of the document on screen, which is replaced, so they are
+    /// dropped (sent, they would name comments by ids the new copy doesn't use), and nothing more
+    /// is saved until it is read. Called with no save of ours on its way (from its reply).
+    fn reopen(&self) {
+        let inbox = {
+            let mut s = self.state.borrow_mut();
+            s.waiting = None;
+            s.retry = None;
+            if s.id.is_some() && s.inbox.is_some() {
+                s.reopening = true;
+                s.generation += 1;
+            }
+            s.inbox.clone()
+        };
+        if let Some(inbox) = inbox {
+            self.open(inbox);
+        }
     }
 
     /// The home screen, at this document's folder.
@@ -434,6 +488,11 @@ impl Link {
             self.save(&name, bytes);
         }
         self.copy_when_saved(app);
+        // A commenter: only comments can change (WordCraft refuses the rest), every frame in case
+        // the document was opened again (opening ends it).
+        if self.comment_only() && !app.session.view.commenting {
+            crate::shell::run(app, "view.commenting", serde_json::json!({ "value": true }));
+        }
         // Version history shows an earlier version: read-only, and nothing of it is saved. Once
         // the document itself is back, editing is too.
         let (previewing, was_applied) = {
@@ -703,6 +762,9 @@ impl Link {
             self.news("You can view this document but not change it, so nothing is saved.".to_string());
             return;
         }
+        if self.state.borrow().reopening {
+            return;
+        }
         {
             let mut s = self.state.borrow_mut();
             s.saved = Saved::Saving;
@@ -721,9 +783,9 @@ impl Link {
         wasm_bindgen_futures::spawn_local(async move {
             let mut next = Some(bytes);
             while let Some(bytes) = next.take() {
-                if let Err(bytes) = link.send(bytes).await {
-                    link.state.borrow_mut().retry = Some((bytes, now()));
-                }
+                // A newer save went: one that failed before it is out of date.
+                let retry = link.send(bytes).await.err().map(|b| (b, now()));
+                link.state.borrow_mut().retry = retry;
                 next = link.state.borrow_mut().waiting.take();
             }
             let mut s = link.state.borrow_mut();
@@ -739,17 +801,47 @@ impl Link {
     /// One save: the file itself, a new file, or (changed elsewhere) a kept copy. A failed save
     /// hands its bytes back, to try again.
     async fn send(&self, bytes: Vec<u8>) -> Result<(), Vec<u8>> {
-        let (id, version, name, folder) = {
+        let (id, version, name, folder, generation, ids) = {
             let s = self.state.borrow();
-            (s.id.clone(), s.version.clone(), s.name.clone(), s.folder.clone())
+            // The comment ids the server gave ours, as they are now (a save that waited for the
+            // last reply is sent with that reply's ids).
+            let ids = if s.comment_only { crate::comment_ids::header(&s.alias) } else { String::new() };
+            (s.id.clone(), s.version.clone(), s.name.clone(), s.folder.clone(), s.generation, ids)
         };
         let r = match &id {
-            Some(id) => fetch("PUT", &api(&format!("api/files/{id}")), Some(&version), Some(&bytes)).await,
+            Some(id) => {
+                let extra = (!ids.is_empty()).then_some(("X-Comment-Ids", ids.as_str()));
+                fetch_with("PUT", &api(&format!("api/files/{id}")), Some(&version), extra, Some(&bytes)).await
+            }
             None => self.create(&folder, &name, &bytes).await,
         };
         let why = match r {
             Ok((200 | 201, _, body)) => {
                 self.took(&body);
+                // A commenter's new comments got other ids on the server (commenting.rs): kept
+                // and sent with later saves. Only when they can't be (the reply unreadable, too
+                // many) is the document opened again. A reply for a document since read again
+                // is left: its ids are the server's already.
+                if self.comment_only() {
+                    let v = serde_json::from_slice::<serde_json::Value>(&body).unwrap_or_default();
+                    let kept = {
+                        let mut s = self.state.borrow_mut();
+                        s.generation != generation || (crate::comment_ids::apply(&mut s.alias, &v["ids"]) && v["reopen"] != true)
+                    };
+                    if !kept {
+                        self.reopen();
+                    }
+                }
+                return Ok(());
+            }
+            // A commenter can't keep a copy beside it (it isn't their folder), and their comments
+            // are matched to the version they were made on: the document is opened again.
+            Ok((409, ..)) if self.comment_only() => {
+                self.news(
+                    "Someone changed this document while you were commenting, so it was opened again. Add any comment that is missing once more."
+                        .to_string(),
+                );
+                self.reopen();
                 return Ok(());
             }
             Ok((409, ..)) => {
@@ -862,12 +954,26 @@ fn header(h: &web_sys::Headers, name: &str) -> Option<String> {
 
 /// One request to the server, with the page's sign-in cookie: (status, headers, body).
 pub(crate) async fn fetch(method: &str, url: &str, if_match: Option<&str>, body: Option<&[u8]>) -> Result<(u16, web_sys::Headers, Vec<u8>), String> {
+    fetch_with(method, url, if_match, None, body).await
+}
+
+/// [`fetch`] with one more header (`extra`: name, value).
+async fn fetch_with(
+    method: &str,
+    url: &str,
+    if_match: Option<&str>,
+    extra: Option<(&str, &str)>,
+    body: Option<&[u8]>,
+) -> Result<(u16, web_sys::Headers, Vec<u8>), String> {
     let init = web_sys::RequestInit::new();
     init.set_method(method);
     init.set_credentials(web_sys::RequestCredentials::SameOrigin);
     let headers = web_sys::Headers::new().map_err(|e| format!("{e:?}"))?;
     if let Some(v) = if_match.filter(|v| !v.is_empty()) {
         headers.set("If-Match", v).map_err(|e| format!("{e:?}"))?;
+    }
+    if let Some((name, value)) = extra {
+        headers.set(name, value).map_err(|e| format!("{e:?}"))?;
     }
     init.set_headers(&headers);
     if let Some(b) = body {

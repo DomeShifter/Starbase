@@ -99,12 +99,13 @@ pub fn main() -> eframe::Result<()> {
             return Ok(());
         }
         Start::Open(files) => {
-            // Documents go to Starbase Docs; every spreadsheet after the first gets its own window.
+            // Documents go to Starbase Docs, presentations to Starbase Slides; every spreadsheet
+            // after the first gets its own window.
             let mut first = None;
             for f in files {
                 let name = f.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                 if is_doc(&name) {
-                    if let Err(e) = launch("stardocs", &[f.as_os_str()]) {
+                    if let Err(e) = launch(crate::store::program_for(&name), &[f.as_os_str()]) {
                         eprintln!("{e}");
                     }
                 } else if first.is_none() {
@@ -699,6 +700,7 @@ impl LocalFiles {
                     .set_directory(&here)
                     .add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv"])
                     .add_filter("Documents", &["docx", "odt"])
+                    .add_filter("Presentations", &["pptx"])
                     .pick_file();
                 let Some(p) = picked else { return };
                 let blank = app.session.active().is_none_or(|d| !has_data(&d.wb) && d.path.is_none());

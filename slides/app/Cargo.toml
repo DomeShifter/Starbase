@@ -26,7 +26,19 @@ serde_json = { workspace = true }
 # SVG loader for the toolbar icons (resvg).
 egui_extras = { workspace = true, features = ["svg"] }
 
-# Native tests of the window (src/shell_tests.rs): egui_kittest's accessibility tree, no GPU.
+# The desktop program (native.rs): the same window in a native eframe window, drawn with OpenGL
+# through glow as the web build draws with WebGL2; the system's file dialogs (rfd, waited for on
+# a thread with pollster, as StarDocs).
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# `persistence`: the window's size and place are kept for the next start.
+eframe = { workspace = true, features = ["default_fonts", "glow", "accesskit", "clipboard", "wayland", "x11", "persistence"] }
+rfd = { workspace = true }
+pollster = "1"
+# File › Connect to a server… and presentations on it (connect.rs, serverfile.rs): device sign-in,
+# the token in the system keyring, the files API. Shared with Starbase Sheets and Docs.
+starbase-connect = { path = "../../starsheets/crates/connect" }
+
+# Native tests of the window (src/shell_tests.rs, local_tests.rs): egui_kittest's accessibility tree, no GPU.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 egui_kittest = { workspace = true }
 egui = { workspace = true, features = ["default_fonts"] }

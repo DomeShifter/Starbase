@@ -191,6 +191,28 @@ fn run(ctx: &egui::Context, app: &mut SheetApp, home: &mut Home, id: &str, param
     if home.active {
         return Err(format!("`{id}` needs a spreadsheet open (this is the home screen)"));
     }
+    // The clipboard, which a script can't reach: `clip:copy` copies the selection as Ctrl+C does
+    // and answers the text and HTML it puts on the clipboard; `clip:paste {text, html?, values?}`
+    // pastes as Ctrl+V (Ctrl+Shift+V with `values`) does when the browser hands those over.
+    if id == "clip:copy" {
+        return app.run("edit.copy", json!({"html": true}));
+    }
+    if id == "clip:paste" {
+        let text = params.get("text").and_then(Value::as_str).ok_or("clip:paste needs `text`")?.to_string();
+        let html = params.get("html").and_then(Value::as_str).map_or(JsValue::NULL, JsValue::from_str);
+        if let Some(w) = web_sys::window() {
+            let _ = js_sys::Reflect::set(&w, &"__ssPasteHtml".into(), &html);
+        }
+        if params.get("values").and_then(Value::as_bool) == Some(true) {
+            crate::shell::paste_values(app, &text);
+        } else {
+            app.paste_external(text);
+        }
+        return match app.message.take() {
+            Some((_, text)) => Err(text),
+            None => Ok(json!({ "done": id })),
+        };
+    }
     let entry = id.starts_with("panel:") || id.starts_with("ui:") || matches!(id, "edit.copy" | "edit.cut" | "edit.paste");
     // Menu entries that run engine commands themselves (Sort sheet, Freeze…) answer like commands.
     if crate::menuactions::handles(id) {
@@ -369,6 +391,7 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
         "alternating": wb.active().map(crate::altcolours::state),
         "pivot": crate::pivotpanel::state(&*p.app),
         "imagesReady": formula_images_ready(&*p.app),
+        "linkCard": crate::linkcard::shown(),
         "history": p.files.history_state(),
         "cell": cell,
         "format": format,

@@ -116,11 +116,15 @@ pub fn not_web(server: &str) -> String {
     format!("the saved server address ({server}) doesn't start with https:// or http://, so nothing is opened from it; connect to the server again")
 }
 
-/// The desktop program for a file: Starbase Docs for documents, else Starbase Sheets (as the
-/// AppImage's AppRun decides).
+/// The desktop program for a file: Starbase Slides for presentations, Starbase Docs for
+/// documents, else Starbase Sheets (as the AppImage's AppRun decides).
 pub fn program_for(file: &Path) -> &'static str {
     let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
-    if matches!(ext.as_str(), "docx" | "docm" | "dotx" | "dotm" | "doc" | "odt" | "rtf") { "stardocs" } else { "starsheets" }
+    match ext.as_str() {
+        "pptx" | "potx" | "ppsx" => "starslides",
+        "docx" | "docm" | "dotx" | "dotm" | "doc" | "odt" | "rtf" => "stardocs",
+        _ => "starsheets",
+    }
 }
 
 /// Whether `folder` looks like a Starbase storage folder (the server keeps `.starsheets` in it).
@@ -187,6 +191,7 @@ mod tests {
     fn documents_open_in_docs() {
         assert_eq!(program_for(Path::new("/a/Letter.DOCX")), "stardocs");
         assert_eq!(program_for(Path::new("/a/Notes.odt")), "stardocs");
+        assert_eq!(program_for(Path::new("/a/Talk.PPTX")), "starslides");
         assert_eq!(program_for(Path::new("/a/Budget.xlsx")), "starsheets");
         assert_eq!(program_for(Path::new("/a/data.csv")), "starsheets");
     }

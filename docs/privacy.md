@@ -37,7 +37,9 @@ These never leave the machine, and happen only when you use the feature:
 - **Citations from Zotero** (Docs, desktop) talk to the Zotero app running on the same
   computer (its local port), if you have it.
 - **Links** in a document or sheet open in your browser only when you click them (Sheets asks
-  first).
+  first, unless its link card already shows the whole address). Sheets' link card, which shows
+  when you rest the pointer on a link, makes no request at all: it shows only the address
+  already in the cell, with a plain globe instead of the site's own icon, and no page preview.
 
 ## Checking it yourself
 

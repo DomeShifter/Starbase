@@ -1,0 +1,17 @@
+[package]
+name = "starbase-photo-edit"
+description = "Starbase Photos' non-destructive edits: the edit model (JSON) and the renderer (crop, straighten, tone, colour, filters)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+# Only the pixel buffer types: no codecs (the caller decodes and encodes), so it builds for wasm32.
+image = { version = "0.25.10", default-features = false }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -46,6 +46,9 @@ ureq = { version = "3.5", default-features = false, features = ["rustls", "platf
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
+# A commenter's save of a document is read to check only its comments changed (commenting.rs).
+zip = { version = "3", default-features = false, features = ["deflate"] }
+roxmltree = "0.20"
 # Photos (src/photos/): the index (SQLite, built in), EXIF, decoding and thumbnails. JPEGs are
 # decoded scaled down (jpeg-decoder's DCT scaling); libjpeg-turbo was about 20% quicker in our
 # measurement but needs cmake and nasm in every build, arm64 included (docs/decisions.md).

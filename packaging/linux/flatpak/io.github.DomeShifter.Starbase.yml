@@ -1,19 +1,19 @@
-# Flatpak manifest for Starbase: one app ID, two programs (starsheets, stardocs), three menu
-# entries. Adapted from WordCraft's packaging/linux/flatpak/ai.storyteller.wordcraft.yml
+# Flatpak manifest for Starbase: one app ID, three programs (starsheets, stardocs, starslides),
+# four menu entries. Adapted from WordCraft's packaging/linux/flatpak/ai.storyteller.wordcraft.yml
 # (storytold/wordcraft, MIT OR Apache-2.0).
 #
 # Built and smoke-tested by .github/workflows/flatpak.yml (artifact `starbase-flatpak`).
 #
 # Flatpak builds run offline: everything is downloaded by flatpak-builder before the build starts,
 # from the sources listed here. That means:
-#   - Crates: one generated cargo-sources-<workspace>.json per Cargo workspace (starsheets/ and
-#     stardocs/ each have their own Cargo.lock). They are NOT committed here: they are
+#   - Crates: one generated cargo-sources-<workspace>.json per Cargo workspace (starsheets/,
+#     stardocs/ and slides/ each have their own Cargo.lock). They are NOT committed here: they are
 #     regenerated from the lockfiles on every CI run, so they can never go stale after a lockfile
 #     change, and this repository does not carry thousands of lines of generated JSON. Flathub
 #     cannot run the generator, so for a Flathub submission they are generated once per release
 #     and committed in the Flathub manifest repository next to this manifest.
-#   - Engines: GridCraft and WordCraft come from our forks as `git` sources pinned to the commits
-#     in starsheets/upstream.pin and stardocs/upstream.pin. pin-engines.sh (next to this file)
+#   - Engines: GridCraft, WordCraft and DeckCraft come from our forks as `git` sources pinned to
+#     the commits in starsheets/, stardocs/ and slides/upstream.pin. pin-engines.sh (next to this file)
 #     copies them in; CI runs it before building and warns if the committed lines were behind.
 #   - Fonts: the desktop programs only embed fonts that are committed (starsheets/app/fonts,
 #     stardocs/app/fonts). The web fonts and the word list that starsheets/scripts/fetch-*.py
@@ -24,12 +24,14 @@
 #
 #   python3 flatpak-cargo-generator.py starsheets/Cargo.lock -o packaging/linux/flatpak/cargo-sources-starsheets.json
 #   python3 flatpak-cargo-generator.py stardocs/Cargo.lock   -o packaging/linux/flatpak/cargo-sources-stardocs.json
-#   for ws in starsheets stardocs; do   # one cargo source entry per git revision (see the script)
+#   python3 flatpak-cargo-generator.py slides/Cargo.lock     -o packaging/linux/flatpak/cargo-sources-slides.json
+#   for ws in starsheets stardocs slides; do   # one cargo source entry per git revision (see the script)
 #     python3 packaging/linux/flatpak/vendor-config.py $ws/Cargo.lock packaging/linux/flatpak/cargo-sources-$ws.json; done
 #   flatpak run org.flatpak.Builder --user --install --install-deps-from=flathub --force-clean \
 #     build-flatpak packaging/linux/flatpak/io.github.DomeShifter.Starbase.yml
 #   flatpak run --command=starsheets io.github.DomeShifter.Starbase --home   # Starbase Drive
 #   flatpak run --command=stardocs io.github.DomeShifter.Starbase           # Starbase Docs
+#   flatpak run --command=starslides io.github.DomeShifter.Starbase         # Starbase Slides
 #
 # For Flathub, the `dir` sources become one `git` source pinned to a release tag and commit, and
 # the two generated JSON files are committed in the Flathub manifest repository. Flathub does not
@@ -144,13 +146,58 @@ modules:
         dest: stardocs/upstream/wordcraft
       - cargo-sources-stardocs.json
 
+  - name: starslides
+    buildsystem: simple
+    subdir: slides
+    build-options:
+      env:
+        CARGO_HOME: /run/build/starslides/cargo
+        CARGO_NET_OFFLINE: 'true'
+    build-commands:
+      # Unused [patch] entries break the vendored build; see prune-patches.py.
+      - python3 ../packaging/linux/flatpak/prune-patches.py Cargo.toml Cargo.lock
+      - cargo --offline build --release --locked -p starslides
+      - install -Dm755 target/release/starslides /app/bin/starslides
+    sources:
+      - type: dir
+        path: ../../..
+        skip:
+          - .git
+          - .github
+          - .flatpak-builder
+          - build-flatpak
+          - repo
+          - dist
+          - docs
+          - stardocs
+          # Of starsheets/, only the desktop's connect crate (and the workspace file it takes its
+          # version from) is needed here.
+          - starsheets/app
+          - starsheets/crates/server
+          - starsheets/crates/sync
+          - starsheets/upstream
+          - starsheets/target
+          - starsheets/docs
+          - starsheets/docker
+          - starsheets/scripts
+          - slides/target
+          - slides/upstream
+          - slides/dist
+      # DeckCraft: our fork's `starslides` branch at the commit in slides/upstream.pin. Keep the
+      # two equal (pin-engines.sh). slides/Cargo.toml is committed, so gen-cargo.py need not run.
+      - type: git
+        url: https://github.com/DomeShifter/deckcraft.git
+        commit: 18249e914b52c828e0c9087132366bb8460bd7f1
+        dest: slides/upstream/deckcraft
+      - cargo-sources-slides.json
+
   # Menu entries, MIME types, metainfo, icons and licences for the whole package.
   - name: starbase-data
     buildsystem: simple
     build-commands:
       - >-
         for entry in io.github.DomeShifter.Starbase io.github.DomeShifter.Starbase.Sheets io.github.DomeShifter.Starbase.Docs
-        io.github.DomeShifter.Starbase.Open; do
+        io.github.DomeShifter.Starbase.Slides io.github.DomeShifter.Starbase.Open; do
         install -Dm644 packaging/linux/$entry.desktop /app/share/applications/$entry.desktop; done
       # The .Open entry is the `starbase-open` handler (built in the starsheets module): no menu
       # entry (NoDisplay=true), only an "Open with" choice for the sheet and document types, so the
@@ -180,6 +227,7 @@ modules:
           - docs
           - starsheets
           - stardocs
+          - slides
       # icons.sh reads the apps' SVGs; only these files are needed from the app folders.
       - type: file
         path: ../../../starsheets/app/favicon.svg
@@ -190,3 +238,6 @@ modules:
       - type: file
         path: ../../../stardocs/app/icons/stardocs_logo.svg
         dest: stardocs/app/icons
+      - type: file
+        path: ../../../slides/app/icons/starslides_logo.svg
+        dest: slides/app/icons

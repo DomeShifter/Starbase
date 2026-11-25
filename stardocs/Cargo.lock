@@ -4842,6 +4842,7 @@ dependencies = [
  "wordcraft-fonts",
  "wordcraft-render",
  "wordcraft-ui-egui",
+ "zip 3.0.0",
 ]
 
 [[package]]
