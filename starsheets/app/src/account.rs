@@ -39,6 +39,8 @@ thread_local! {
     static TYPING: RefCell<bool> = const { RefCell::new(false) };
     /// The signed-in account has a password (accounts made through single sign-on have none).
     static HAS_PASSWORD: RefCell<bool> = const { RefCell::new(true) };
+    /// The page is on its way to the provider to renew the session.
+    static LEAVING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// The person signed in in this tab (None with sign-in off).
@@ -262,6 +264,11 @@ fn sso_from(v: &Json) -> Option<Sso> {
 /// through single sign-on (STARSHEETS_OIDC_SESSION_HOURS), coming back to this page (the same
 /// file, which opens again from the server: callers make sure nothing is waiting to be saved).
 fn renew_sso() {
+    // Once: going again while the page is already on its way would restart the trip (and use up
+    // the server's try limit).
+    if LEAVING.with(|l| l.replace(true)) {
+        return;
+    }
     let Some(w) = web_sys::window() else { return };
     let here = format!("{}{}", w.location().pathname().unwrap_or_default(), w.location().search().unwrap_or_default());
     if let Some(s) = session_storage() {
@@ -668,7 +675,8 @@ impl Account {
             }
         }
         self.renew_in_background(ctx);
-        if SIGN_IN.with(|s| std::mem::take(&mut *s.borrow_mut())) && !matches!(self.dialog, Dialog::Setup | Dialog::SignUp) {
+        let leaving = LEAVING.with(|l| l.get());
+        if SIGN_IN.with(|s| std::mem::take(&mut *s.borrow_mut())) && !leaving && !matches!(self.dialog, Dialog::Setup | Dialog::SignUp) {
             self.open(Dialog::SignIn);
         }
     }

@@ -693,10 +693,12 @@ impl Home {
                 }
                 Reply::Error(e) => {
                     self.loading = false;
+                    // An empty error is "please sign in" (the sign-in box or a renewal follows):
+                    // asking again would only get 401 again, over and over.
                     if !e.is_empty() {
                         self.error = Some(e);
+                        self.refresh(ctx);
                     }
-                    self.refresh(ctx);
                 }
             }
         }
