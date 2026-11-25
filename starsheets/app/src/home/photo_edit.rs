@@ -135,7 +135,7 @@ enum Got {
     Loaded(Result<(u16, Vec<u8>), String>),
     Source(Option<egui::ColorImage>),
     /// PUT edits: status and body; whether a copy is to be made straight after.
-    Saved(Result<(u16, Vec<u8>), String>, bool),
+    Saved(Result<(u16, Vec<u8>), String>),
     Copied(Result<(u16, Vec<u8>), String>),
 }
 
@@ -375,18 +375,14 @@ impl Editor {
                         self.error = Some("The picture couldn't be opened.".into());
                     }
                 }
-                Got::Saved(a, then_copy) => {
+                Got::Saved(a) => {
                     self.saving = false;
                     match a {
                         Ok((200, b)) => {
                             let v: Json = serde_json::from_slice(&b).unwrap_or_default();
                             self.etag = v["etag"].as_str().map(str::to_string).or(self.etag.take());
                             self.saved = self.edits.clone();
-                            if then_copy {
-                                self.copy_now(ctx, store);
-                            } else {
-                                self.outcome = Some(Outcome::Saved(v["thumb_v"].as_str().map(str::to_string)));
-                            }
+                            self.outcome = Some(Outcome::Saved(v["thumb_v"].as_str().map(str::to_string)));
                         }
                         Ok((409 | 412, _)) => self.ask = Some(Ask::Conflict),
                         Ok((s, b)) => {
@@ -399,7 +395,7 @@ impl Editor {
                 Got::Copied(a) => {
                     self.saving = false;
                     match a {
-                        Ok((200, b)) => {
+                        Ok((200 | 201, b)) => {
                             let v: Json = serde_json::from_slice(&b).unwrap_or_default();
                             let path = v["path"].as_str().unwrap_or("");
                             let name = path.rsplit('/').next().unwrap_or(path);
@@ -463,10 +459,10 @@ impl Editor {
 
     /// Save: writes the edits beside the picture.
     pub fn save(&mut self, ctx: &egui::Context, store: &Backend) {
-        self.save_then(ctx, store, false);
+        self.save_then(ctx, store);
     }
 
-    fn save_then(&mut self, ctx: &egui::Context, store: &Backend, then_copy: bool) {
+    fn save_then(&mut self, ctx: &egui::Context, store: &Backend) {
         if !self.writable || self.saving {
             return;
         }
@@ -474,12 +470,8 @@ impl Editor {
             self.ask = Some(Ask::Foreign);
             return;
         }
-        if !self.dirty() && !then_copy {
-            self.outcome = Some(Outcome::Closed);
-            return;
-        }
         if !self.dirty() {
-            self.copy_now(ctx, store);
+            self.outcome = Some(Outcome::Closed);
             return;
         }
         // The sliders keep every field in range; this is the last check before anything is sent.
@@ -497,24 +489,28 @@ impl Editor {
             &format!("api/photos/edits/{}", self.id),
             Some(body),
             self.etag.clone(),
-            Box::new(move |a| Self::push(&inbox, &ctx2, Got::Saved(a, then_copy))),
+            Box::new(move |a| Self::push(&inbox, &ctx2, Got::Saved(a))),
         );
     }
 
-    /// "Save a copy…" confirmed: the edits are saved first (the copy is made from the saved
-    /// ones), then the copy.
+    /// "Save a copy…" confirmed: the copy is made from the edits as they are now, sent in the
+    /// request. Nothing is saved to the original's sidecar: it stays as it was before this session.
     pub fn copy(&mut self, ctx: &egui::Context, store: &Backend) {
         self.ask = None;
-        if self.dirty() {
-            self.save_then(ctx, store, true);
-        } else {
-            self.copy_now(ctx, store);
+        if self.saving {
+            return;
         }
+        if let Err(e) = self.edits.validate() {
+            self.error = Some(format!("No copy made: {e}"));
+            return;
+        }
+        self.copy_now(ctx, store);
     }
 
     fn copy_now(&mut self, ctx: &egui::Context, store: &Backend) {
         self.saving = true;
-        let body = json!({ "format": "jpeg", "quality": 90, "max_side": self.max_side, "strip_location": self.strip_location });
+        self.error = None;
+        let body = json!({ "format": "jpeg", "quality": 90, "max_side": self.max_side, "strip_location": self.strip_location, "edits": self.edits });
         let (inbox, ctx2) = (self.inbox.clone(), ctx.clone());
         store.call(
             ctx,
@@ -1634,6 +1630,23 @@ mod tests {
         // No server support at all: the same, with its own reason.
         let h = harness(Ok((404, Vec::new())));
         assert!(!h.state().ed.writable && h.state().ed.why_not.as_deref().unwrap_or("").contains("can't keep"));
+    }
+
+    #[test]
+    fn save_a_copy_sends_the_edits_and_never_saves_the_original() {
+        let mut h = harness(reply(true, &[]));
+        let c = egui::Context::default();
+        let store = h.state().store.clone();
+        h.state_mut().ed.test_run(&c, &store, "slider", &json!({"key": "contrast", "value": 30})).unwrap();
+        h.state_mut().ed.test_run(&c, &store, "copy", &json!({})).unwrap();
+        h.run();
+        let calls = h.state().fake.calls.borrow().clone();
+        assert!(calls.iter().all(|c| c.0 != Method::Put), "the original's edits are not saved");
+        let post = calls.iter().find(|c| c.0 == Method::Post).expect("export asked");
+        assert_eq!(post.1, "api/photos/export/p1");
+        let body = post.3.clone().unwrap();
+        assert_eq!(body["edits"]["contrast"], json!(h.state().ed.edits.contrast), "{body}");
+        assert_eq!(body["edits"]["exposure"], 0.5);
     }
 
     #[test]

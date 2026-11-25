@@ -157,10 +157,12 @@ the sidecar that was read: two saves can't both win, and another app's save in t
 `POST /api/photos/export/ID`, body (every field optional, at most 16 KB):
 
 ```json
-{"format": "jpeg", "quality": 90, "max_side": null, "strip_location": true}
+{"format": "jpeg", "quality": 90, "max_side": null, "strip_location": true, "edits": {}}
 ```
 
-Makes a new file next to the picture with its saved edits: `photo (edited).jpg` (or `.png`),
+Makes a new file next to the picture with its saved edits (or, when `edits` is sent, with those:
+same shape and checks as `PUT` edits, 400 if invalid; the picture's sidecar is never changed, so
+"Save a copy" leaves the original as it was): `photo (edited).jpg` (or `.png`),
 numbered when that name is taken (`photo (edited) (2).jpg`). It never replaces a file: it is
 saved like an upload. Answers 201 with `{"id", "name", "folder", "path"}`. Who may: anyone who may
 add files to the picture's folder (403 otherwise; 403 also for a picture they can't see). 400 for
