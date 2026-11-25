@@ -216,6 +216,8 @@ fn snapshot(app: &mut WordApp, shell: &mut Shell, link: Option<&Link>, ctx: &egu
         "text": text,
         "textTruncated": truncated,
         "dirty": app.session.dirty,
+        "title": app.title_stem(),
+        "me": link.and_then(Link::me).map(|(name, username, _)| json!({ "name": name, "username": username })),
         "status": app.session.status,
         "theme": crate::theme::state(ctx),
     })
