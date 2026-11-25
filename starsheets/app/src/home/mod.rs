@@ -139,6 +139,7 @@ pub struct Home {
     /// Where the files are: the server, or a folder on disk in the desktop app (store.rs).
     store: Backend,
     /// Shown instead of a spreadsheet (the page was opened without ?file=, ?new or ?folder=).
+    #[cfg(target_arch = "wasm32")]
     pub active: bool,
     booted: bool,
     inbox: Rc<RefCell<Vec<Reply>>>,
@@ -289,7 +290,7 @@ impl Home {
     /// The home screen over another store (the desktop app's local folder).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn with_store(store: Backend) -> Home {
-        Home { active: true, store, ..Default::default() }
+        Home { store, ..Default::default() }
     }
 
     fn refresh(&mut self, ctx: &egui::Context) {

@@ -341,6 +341,7 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
         "active": active.a1(),
         "selection": ranges.join(","),
         "freeze": wb.active().and_then(|s| s.freeze).map(|(r, c)| json!({ "rows": r, "cols": c })),
+        "filterView": crate::shell::filterviews::state(&*p.app),
         "cell": cell,
         "format": format,
         "saved": saving == "Saved",

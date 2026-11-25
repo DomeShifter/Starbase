@@ -204,6 +204,11 @@ pub fn keep(ctx: &egui::Context) {
 /// Tooltips: dark grey with white text (Google's look). egui draws them in the menu frame, so the
 /// tooltip layer is restyled after the frame is painted: call once per frame, after all UI.
 pub const TIP_BG: Color32 = Color32::from_rgb(0x3C, 0x40, 0x43);
+/// The bar above the grid while a filter view is open (Google's dark grey), its text and its
+/// text boxes.
+pub const VIEW_BAR: Color32 = TIP_BG;
+pub const VIEW_BAR_TEXT: Color32 = Color32::WHITE;
+pub const VIEW_BAR_FIELD: Color32 = TIP_HOVER;
 /// The picked row in a dark popup (white text stays readable on it).
 pub const TIP_PICKED: Color32 = Color32::from_rgb(0x0B, 0x57, 0xD0);
 /// A hovered row in a dark popup.
@@ -344,6 +349,7 @@ pub fn dialog<R>(ctx: &egui::Context, id: &str, width: f32, title: &str, close: 
 
 /// A window's title row in the house style (title left, ✕ right), for windows drawn without
 /// egui's own title bar. Returns true when ✕ was clicked.
+#[cfg(target_arch = "wasm32")]
 pub fn title_row(ui: &mut Ui, title: &str) -> bool {
     let mut close = false;
     ui.horizontal(|ui| {
@@ -377,6 +383,7 @@ pub fn note(ui: &mut Ui, text: &str) {
 }
 
 /// A note with more detail when the pointer is over it.
+#[cfg(target_arch = "wasm32")]
 pub fn note_with_tip(ui: &mut Ui, text: &str, tip: &str) {
     ui.label(RichText::new(text).size(NOTE).color(theme::TEXT_DIM)).on_hover_text(tip);
 }

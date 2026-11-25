@@ -9,6 +9,8 @@ use serde_json::json;
 
 use crate::{icons, theme};
 
+pub mod filterviews;
+
 /// One menu entry.
 pub enum Item {
     /// Label, command id, shortcut hint shown on the right.
@@ -282,6 +284,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
             ),
             Sep,
             Cmd("Create a filter", "data.filter", ""),
+            Sub("Filter views", &[Cmd("Create new filter view", "panel:filterViewNew", ""), Cmd("Save as filter view", "panel:filterViewSave", "")]),
             Cmd("Add a slicer", "insert.slicer", ""),
             Sep,
             Cmd("Protect sheets and ranges", "panel:protect", ""),
@@ -517,6 +520,8 @@ pub struct Shell {
     currency: crate::currency::CustomCurrency,
     /// Help › Keyboard shortcuts and Help › Search the menus.
     help: crate::shortcuts::Help,
+    /// The bar of the filter view open in this tab (Data › Filter views).
+    views: filterviews::Bar,
     /// Borders menu: the colour and line style the next border is drawn with (to-do row 66).
     border_colour: Option<u32>,
     border_style: usize,
@@ -624,6 +629,7 @@ impl Shell {
             .exact_size(48.0)
             .frame(Frame::NONE.fill(theme::PAGE).inner_margin(Margin { left: 12, right: 12, top: 4, bottom: 6 }))
             .show(ui, |ui| self.toolbar(app, ui));
+        self.views.ui(app, ui);
     }
 
     fn toolbar(&mut self, app: &mut SheetApp, ui: &mut Ui) {
@@ -935,8 +941,19 @@ fn is_merge(id: &str) -> bool {
     matches!(id, "home.mergeCells" | "home.mergeDown" | "home.mergeAcross" | "home.unmergeCells")
 }
 
+/// The name in the title row: the file's name without its extension ("Budget", not
+/// "Budget.xlsx"), as Sheets shows it; Drive's details are where the extension shows.
+pub(crate) fn header_name(app: &SheetApp) -> String {
+    let Some(d) = app.session.active() else { return "Untitled spreadsheet".into() };
+    if !d.title.trim().is_empty() {
+        return d.title.clone();
+    }
+    let shown = d.display_title();
+    std::path::Path::new(&shown).file_stem().map_or(shown.clone(), |s| s.to_string_lossy().into_owned())
+}
+
 fn title_and_menus(app: &mut SheetApp, ui: &mut Ui, title_draft: &mut Option<String>) {
-    let name = app.session.active().map(|d| d.display_title().to_string()).unwrap_or_else(|| "Untitled spreadsheet".into());
+    let name = header_name(app);
     let dirty = app.session.active().is_some_and(|d| d.is_dirty());
     ui.horizontal(|ui| {
         // Our own mark (a sheet with a star on a green tile; the favicon is a simplified copy).
@@ -1275,19 +1292,19 @@ fn rename_box(app: &mut SheetApp, ui: &mut Ui, name: &str, draft: &mut Option<St
     }
 }
 
-/// Renames the active spreadsheet: a file keeps its extension (the download uses the new name).
+/// Renames the active spreadsheet: the title, and a file keeps its folder and extension (the
+/// download uses the new name; the desktop app renames the file on disk, native.rs).
 fn rename_doc(app: &mut SheetApp, new: &str) {
     let Some(d) = app.session.active_mut() else { return };
-    match d.path.as_deref() {
-        Some(p) => {
-            let ext = std::path::Path::new(p).extension().map(|e| e.to_string_lossy().to_string());
-            let has_ext = std::path::Path::new(new).extension().is_some();
-            d.path = Some(match ext {
-                Some(e) if !has_ext => format!("{new}.{e}"),
-                _ => new.to_string(),
-            });
-        }
-        None => d.title = new.to_string(),
+    d.title = new.to_string();
+    if let Some(p) = d.path.as_deref() {
+        let p = std::path::Path::new(p);
+        let has_ext = std::path::Path::new(new).extension().is_some();
+        let file = match p.extension() {
+            Some(e) if !has_ext => format!("{new}.{}", e.to_string_lossy()),
+            _ => new.to_string(),
+        };
+        d.path = Some(p.with_file_name(file).to_string_lossy().into_owned());
     }
 }
 
@@ -1302,6 +1319,9 @@ pub fn run_entry(app: &mut SheetApp, ctx: &egui::Context, id: &str) {
 pub fn run_entry_with(app: &mut SheetApp, ctx: &egui::Context, id: &str, params: serde_json::Value) {
     if crate::menuactions::handles(id) {
         return run_steps(app, id, &params);
+    }
+    if filterviews::handles(id) {
+        return filterviews::run(app, id, &params);
     }
     if !id.starts_with("panel:") && !id.starts_with("ui:") && !matches!(id, "edit.copy" | "edit.cut" | "edit.paste") {
         return app.run_or_alert(id, params);
@@ -1508,7 +1528,8 @@ pub fn entry_ids() -> Vec<&'static str> {
     out
 }
 
-fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[Item]) {
+/// Draws a menu's entries; returns its width.
+fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[Item]) -> f32 {
     let with_icons = items.iter().any(|i| match i {
         Cmd(l, ..) | CmdWith(l, ..) | Sub(l, _) => menu_icon(l).is_some(),
         Sep => false,
@@ -1543,11 +1564,18 @@ fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[Item]) {
                     Some(arrow) => b.right_text(arrow),
                     None => b.right_text(egui::containers::menu::SubMenuButton::arrow_atom(Some(MENU_GREY))),
                 };
-                egui::containers::menu::SubMenuButton::from_button(b).ui(ui, |ui| menu_items(app, ui, sub));
+                egui::containers::menu::SubMenuButton::from_button(b).ui(ui, |ui| {
+                    let width = menu_items(app, ui, sub);
+                    // Data › Filter views also lists the sheet's views.
+                    if *label == "Filter views" {
+                        filterviews::menu_list(app, ui, width);
+                    }
+                });
             }
             Sep => menu_sep_width(ui, width),
         }
     }
+    width
 }
 
 #[cfg(test)]
@@ -1680,7 +1708,7 @@ mod tests {
             "panel:searchMenus",
         ];
         for id in ids.iter().filter(|id| id.starts_with("panel:")) {
-            assert!(crate::menuactions::handles(id) || known.contains(id), "{id}: nothing opens it");
+            assert!(crate::menuactions::handles(id) || filterviews::handles(id) || known.contains(id), "{id}: nothing opens it");
         }
     }
 
