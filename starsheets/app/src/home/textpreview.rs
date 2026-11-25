@@ -101,7 +101,7 @@ fn decode(bytes: &[u8]) -> Decoded {
     let mut d = Decoded { truncated, ..Decoded::default() };
     if b.starts_with(&[0xFF, 0xFE]) || b.starts_with(&[0xFE, 0xFF]) {
         let le = b[0] == 0xFF;
-        let units = b[2..].chunks_exact(2).map(|c| if le { u16::from_le_bytes([c[0], c[1]]) } else { u16::from_be_bytes([c[0], c[1]]) });
+        let units = b[2..].as_chunks::<2>().0.iter().map(|&c| if le { u16::from_le_bytes(c) } else { u16::from_be_bytes(c) });
         d.utf16 = true;
         d.text = char::decode_utf16(units)
             .map(|r| {
@@ -429,7 +429,7 @@ fn prepare(name: &str, bytes: &[u8]) -> Prepared {
         notes.push("Decoded from UTF-16.".to_owned());
     }
     if d.lossy {
-        notes.push("Not valid UTF-8: unreadable bytes are shown as \u{FFFD}.".to_owned());
+        notes.push("Not valid UTF-8: some characters could not be read.".to_owned());
     }
     if d.truncated {
         notes.push("Large file: showing the first 1 MB.".to_owned());
@@ -498,8 +498,8 @@ pub fn show(ui: &mut egui::Ui, name: &str, bytes: &[u8]) {
         return;
     }
     // Only the last file's preparation is kept, so big files don't pile up in memory.
-    let cache_id = Id::new("textpreview.cache");
-    let key = Id::new(("textpreview", name, bytes));
+    let cache_id = Id::unique("textpreview.cache");
+    let key = Id::unique(("textpreview", name, bytes));
     let cached = ui.data(|d| d.get_temp::<(Id, Arc<Prepared>)>(cache_id));
     let p = match cached {
         Some((k, p)) if k == key => p,
@@ -509,7 +509,7 @@ pub fn show(ui: &mut egui::Ui, name: &str, bytes: &[u8]) {
             p
         }
     };
-    let opts_id = Id::new("textpreview.opts");
+    let opts_id = Id::unique("textpreview.opts");
     let mut o = ui.data(|d| d.get_temp::<Opts>(opts_id)).unwrap_or(Opts { wrap: false, numbers: true, tree: false });
 
     ui.horizontal_wrapped(|ui| {
@@ -542,7 +542,7 @@ pub fn show(ui: &mut egui::Ui, name: &str, bytes: &[u8]) {
         Body::Json(v, _) => {
             ScrollArea::both().id_salt("textpreview.json").auto_shrink([false, false]).show(ui, |ui| {
                 let mut budget = MAX_NODES;
-                json_tree(ui, "root", v, Id::new("textpreview.json.root"), 0, &mut budget);
+                json_tree(ui, "root", v, Id::unique("textpreview.json.root"), 0, &mut budget);
                 if budget == 0 {
                     ui.weak(format!("Showing the first {MAX_NODES} values."));
                 }
@@ -561,7 +561,7 @@ fn mono(ui: &egui::Ui) -> egui::FontId {
 /// Monospace text with colours for `lang`, line numbers when not wrapping.
 fn text_view(ui: &mut egui::Ui, text: &str, numbers: &str, lang: &str, o: Opts) {
     let font = mono(ui);
-    let theme = CodeTheme::from_style(ui.style()).with_font_id(font.clone());
+    let theme = CodeTheme::from_style(ui.style());
     let job = highlight(ui.ctx(), ui.style(), &theme, text, lang);
     let area = if o.wrap { ScrollArea::vertical() } else { ScrollArea::both() };
     area.id_salt("textpreview.text").auto_shrink([false, false]).show(ui, |ui| {
@@ -964,7 +964,8 @@ mod tests {
             ("m.rs", b"fn main() { let x = 1; } // hi".to_vec(), "Wrap lines"),
             ("m.go", b"package main".to_vec(), "Copy all"),
             ("e.txt", Vec::new(), "This file is empty."),
-            ("bin.log", vec![0xff, 0xfe, 0x00, 0xd8, b'x'], "Copy all"),
+            // kittest panics on glyphs no font has (U+FFFD from lossy decoding): the app draws a box.
+            ("bom.log", b"\xEF\xBB\xBFbom\r\nline".to_vec(), "Line numbers"),
             ("big.txt", vec![b'z'; MAX_BYTES + 10], "Large file: showing the first 1 MB."),
         ];
         for dark in [false, true] {
