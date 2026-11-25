@@ -25,9 +25,9 @@
 
 // The window and what it needs: both the browser and the desktop.
 // Shared with Sheets (one definition): Ctrl+H/K/U/W never edit a text box the Emacs way.
+mod bundled_fonts;
 #[path = "../../../starsheets/app/src/emacs_keys.rs"]
 mod emacs_keys;
-mod bundled_fonts;
 // A commenter's ids against the server's (server.rs); tested natively.
 #[cfg(any(target_arch = "wasm32", test))]
 mod comment_ids;

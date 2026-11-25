@@ -21,7 +21,9 @@ struct Taken(Vec<Key>);
 /// True for a Ctrl (or Cmd) press of H/K/U/W without Shift or Alt.
 fn is_emacs_chord(e: &Event) -> Option<(Key, bool)> {
     match e {
-        Event::Key { key, pressed, repeat, modifiers, .. } if KEYS.contains(key) && (modifiers.ctrl || modifiers.command || modifiers.mac_cmd) && !modifiers.shift && !modifiers.alt => {
+        Event::Key { key, pressed, repeat, modifiers, .. }
+            if KEYS.contains(key) && (modifiers.ctrl || modifiers.command || modifiers.mac_cmd) && !modifiers.shift && !modifiers.alt =>
+        {
             Some((*key, *pressed && !*repeat))
         }
         _ => None,
