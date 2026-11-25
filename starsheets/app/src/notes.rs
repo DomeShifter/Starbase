@@ -2,13 +2,18 @@
 //! hovering over it or selecting it shows the note as a white card beside the cell. Insert › Note
 //! (or a click on the card) edits it there; clicking away saves it, and an emptied note is
 //! deleted. The grip in the card's bottom-right corner resizes it, and the size is kept in the
-//! file. (Comments are left out: StarSheets has notes only.)
+//! file. Comments (threaded, with replies) have their own card: `comments.rs`.
 
 use egui::{Align2, Color32, Pos2, Rect, RichText, Sense, Stroke, vec2};
 use gridcraft_engine::core::CellRef;
 use gridcraft_engine::model::{NoteBox, NoteCorner};
 use gridcraft_ui_egui::SheetApp;
 use serde_json::json;
+
+mod comments;
+
+/// Asks for a new comment on the active cell (Insert › Comment, Ctrl+Alt+M).
+pub use comments::REQUEST as COMMENT_REQUEST;
 
 /// Asks to edit the active cell's note (Insert › Note), through egui's memory.
 pub const REQUEST: &str = "starsheets_note";
@@ -29,6 +34,8 @@ pub struct Notes {
     /// The card shown last frame (cell, rect): it stays while the pointer is over it, so it can be
     /// clicked, scrolled or resized after leaving the cell.
     last: Option<(CellRef, Rect)>,
+    /// Comment threads, drawn as their own cards.
+    comments: comments::Comments,
 }
 
 impl Notes {
@@ -36,30 +43,44 @@ impl Notes {
     pub fn intercept(&mut self, app: &mut SheetApp, ctx: &egui::Context) {
         let asked = ctx.data_mut(|m| m.remove_temp::<bool>(egui::Id::unique(REQUEST))).is_some();
         // GridCraft names its form "note" (a note) or "comment" (a threaded comment).
-        let dialog = app.dialog.as_ref().is_some_and(|d| d.name == "note" || d.name == "comment");
-        if dialog {
+        let comment = ctx.data_mut(|m| m.remove_temp::<bool>(egui::Id::unique(COMMENT_REQUEST))).is_some()
+            || app.dialog.as_ref().is_some_and(|d| d.name == "comment");
+        let dialog = app.dialog.as_ref().is_some_and(|d| d.name == "note");
+        if dialog || comment {
             app.dialog = None;
+        }
+        if comment {
+            self.editing = None;
+            self.comments.start(app);
+            return;
         }
         if (asked || dialog)
             && let Some(d) = app.session.active()
         {
             let at = d.selection.active;
-            let text = d.wb.active().and_then(|sh| sh.comments.get(&at)).map(|c| c.text.clone()).unwrap_or_default();
+            // A comment's text doesn't carry over: a note written there replaces the comment.
+            let text =
+                d.wb.active().and_then(|sh| sh.comments.get(&at)).filter(|c| !comments::is_comment(c)).map(|c| c.text.clone()).unwrap_or_default();
             self.editing = Some((d.uid, at, text));
             self.focus = true;
         }
     }
 
     pub fn ui(&mut self, app: &mut SheetApp, ui: &mut egui::Ui) {
+        self.comments.ui(app, ui);
+        if self.comments.writing() {
+            return;
+        }
         let Some(d) = app.session.active() else { return };
         let uid = d.uid;
         let Some(sh) = d.wb.active() else { return };
         // Which note shows: the one being written, else the hovered cell's, else the selected one's.
         let editing = self.editing.as_ref().filter(|(doc, ..)| *doc == uid).map(|(_, c, _)| *c);
-        let hovered = app.grid.hover_cell.filter(|c| sh.comments.contains_key(c));
-        let selected = Some(d.selection.active).filter(|c| sh.comments.contains_key(c) && app.editor.is_none());
+        let is_note = |c: &CellRef| sh.comments.get(c).is_some_and(|n| !comments::is_comment(n));
+        let hovered = app.grid.hover_cell.filter(&is_note);
+        let selected = Some(d.selection.active).filter(|c| is_note(c) && app.editor.is_none());
         let pointer = ui.ctx().pointer_hover_pos();
-        let over_card = self.last.filter(|(c, r)| sh.comments.contains_key(c) && pointer.is_some_and(|p| r.contains(p))).map(|l| l.0);
+        let over_card = self.last.filter(|(c, r)| is_note(c) && pointer.is_some_and(|p| r.contains(p))).map(|l| l.0);
         self.last = None;
         let Some(cell) = editing.or(self.resizing.map(|r| r.0)).or(over_card).or(hovered).or(selected) else { return };
         let note = sh.comments.get(&cell);

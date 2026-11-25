@@ -33,8 +33,12 @@ fn used_part(s: &Session) -> Option<RangeRef> {
 }
 
 /// Fills `{col}` and `{row}` in a menu label with the active cell's column letter and row number,
-/// as Sheets' "Sort sheet by column B (A to Z)" and "Up to row 4" do.
+/// as Sheets' "Sort sheet by column B (A to Z)" and "Up to row 4" do. Create a filter reads
+/// Remove filter once the sheet has one, as in Sheets.
 pub fn label(s: &Session, text: &str) -> String {
+    if text == "Create a filter" && s.active().and_then(|d| d.wb.active()).is_some_and(|sh| sh.autofilter.is_some()) {
+        return "Remove filter".to_string();
+    }
     if !text.contains('{') {
         return text.to_string();
     }
@@ -247,6 +251,16 @@ mod tests {
 
     fn select(s: &mut Session, range: &str) {
         s.execute("selection.set", json!({"range": range})).unwrap();
+    }
+
+    #[test]
+    fn the_filter_entry_says_what_it_will_do() {
+        let mut s = sheet(&[("A1", "Name"), ("A2", "Al"), ("A3", "Bo")]);
+        assert_eq!(label(&s, "Create a filter"), "Create a filter");
+        s.execute("data.filter", json!({})).unwrap();
+        assert_eq!(label(&s, "Create a filter"), "Remove filter");
+        s.execute("data.filter", json!({})).unwrap();
+        assert_eq!(label(&s, "Create a filter"), "Create a filter");
     }
 
     #[test]
