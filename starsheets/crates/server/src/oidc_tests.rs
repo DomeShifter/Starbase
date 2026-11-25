@@ -756,7 +756,19 @@ fn settings_groups_and_pages() {
     assert!(!in_group(&["".into()], ""));
     // Only pages on this server.
     assert_eq!(safe_next("/a?b=c").as_deref(), Some("/a?b=c"));
-    for bad in ["//evil.example", "/\\evil.example", "https://evil.example", "evil", "/a b"] {
+    assert_eq!(safe_next("/docs/?file=a%2Fb%20c").as_deref(), Some("/docs/?file=a%2Fb%20c"));
+    for bad in [
+        "//evil.example",
+        "/\\evil.example",
+        "https://evil.example",
+        "evil",
+        "/a b",
+        "/%2F%2Fevil.example",
+        "/%2f/evil.example",
+        "/%252F%252Fevil.example",
+        "/%5Cevil.example",
+        "/%09/evil.example",
+    ] {
         assert!(safe_next(bad).is_none(), "{bad}");
     }
 }

@@ -177,6 +177,10 @@ impl TestHook {
 /// Runs one id as the menus and toolbar would, but hands back a result or an error.
 fn run(ctx: &egui::Context, app: &mut SheetApp, home: &mut Home, id: &str, params: Value) -> Result<Value, String> {
     // The avatar menu's dialogs (account.rs), on either screen.
+    if id == "account:menu" {
+        crate::account::open_menu(ctx)?;
+        return Ok(json!({ "opened": id }));
+    }
     if let Some(what) = id.strip_prefix("account:") {
         crate::account::request(ctx, what)?;
         return Ok(json!({ "opened": id }));
@@ -269,8 +273,11 @@ fn key(app: &mut SheetApp, on_home: bool, name: &str) -> Result<Value, String> {
 /// home screen what it lists.
 fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
     let others: Vec<Value> = crate::live::others().iter().map(|o| json!({ "username": o.username, "name": o.name })).collect();
+    if !crate::account::app_shown() {
+        return json!({ "screen": "signin", "account": crate::account::test_state(ctx) });
+    }
     if p.home.active {
-        return json!({ "screen": "home", "home": p.home.test_state() });
+        return json!({ "screen": "home", "home": p.home.test_state(), "account": crate::account::test_state(ctx) });
     }
     let Some(doc) = p.app.session.active() else {
         return json!({ "screen": "sheet", "file": null });
