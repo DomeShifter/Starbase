@@ -21,13 +21,23 @@ on:
   schedule:
     - cron: "0 4 * * 1"
   workflow_dispatch:
+  # From release.yml (version tags and its runs by hand): the Windows preview MSI and portable
+  # zip go on the release. Not a push trigger on tags, so a tag never runs this twice.
+  workflow_call:
+    inputs:
+      windows_only:
+        description: Build only for Windows (the release has no macOS download yet)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
-# A newer push to a pull request cancels the older run; runs on main always finish.
+# A newer push to a pull request cancels the older run; runs on main always finish. Called from
+# release.yml, github.workflow is the caller's name, so a release run on main never queues
+# behind (or cancels a pending) push run of this workflow.
 concurrency:
-  group: desktop-other-${{ github.ref }}
+  group: desktop-other-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -39,7 +49,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        os: ${{ fromJSON(inputs.windows_only && '["windows-latest"]' || '["windows-latest", "macos-latest"]') }}
         app: [starsheets, stardocs]
         include:
           - app: starsheets
@@ -121,7 +131,7 @@ jobs:
 
   windows-portable:
     # An UNSIGNED preview zip of both Windows programs (SignPath signs only an already-released
-    # build, desktop-plan.md 3c). Kept as an artifact only; release.yml attaches it later.
+    # build, desktop-plan.md 3c). An artifact; for a vX.Y.Z tag release.yml attaches it.
     name: Windows portable zip (unsigned)
     needs: build
     # Also when only a macOS build failed (a missing Windows artifact still fails it).
@@ -200,7 +210,8 @@ jobs:
   windows-installer:
     # The UNSIGNED per-user MSI (docs/research/windows-installer.md): built with WiX from
     # packaging/windows/Starbase.wxs, then installed, started, upgraded in place and uninstalled
-    # on a clean runner (packaging/windows/test-msi.ps1). Kept as an artifact only.
+    # on a clean runner (packaging/windows/test-msi.ps1). An artifact; for a vX.Y.Z tag release.yml
+    # attaches it.
     name: Windows installer (unsigned MSI)
     needs: [build, windows-icons]
     if: ${{ !cancelled() }}
