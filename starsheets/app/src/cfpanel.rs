@@ -201,7 +201,7 @@ impl CfPanel {
                                 self.error = None;
                                 let h = crate::hostdata::read(app);
                                 let none_left = app.session.active().and_then(|d| d.wb.active()).is_none_or(|sh| {
-                                    sh.cond_formats.iter().all(|cf| (crate::dvpanel::is_item_colour(sh, cf, &h) || crate::altcolours::is_ours(cf)))
+                                    sh.cond_formats.iter().all(|cf| crate::dvpanel::is_item_colour(sh, cf, &h) || crate::altcolours::is_ours(cf))
                                 });
                                 if none_left {
                                     self.open = false;
@@ -235,7 +235,7 @@ impl CfPanel {
                 sh.cond_formats
                     .iter()
                     .enumerate()
-                    .filter(|(_, cf)| (crate::dvpanel::is_item_colour(sh, cf, &h) || crate::altcolours::is_ours(cf)))
+                    .filter(|(_, cf)| crate::dvpanel::is_item_colour(sh, cf, &h) || crate::altcolours::is_ours(cf))
                     .map(|(i, _)| i)
                     .collect()
             })

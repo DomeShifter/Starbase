@@ -162,6 +162,7 @@ fn for_selection(app: &SheetApp) -> Option<(Banding, bool)> {
 }
 
 /// The test hook's view: each banding on the active sheet.
+#[cfg(target_arch = "wasm32")]
 pub fn state(sh: &Sheet) -> Json {
     let hex = |c: u32| format!("#{c:06X}");
     bandings(sh)

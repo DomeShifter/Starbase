@@ -1863,6 +1863,9 @@ mod tests {
             "panel:protect",
             "panel:shortcuts",
             "panel:searchMenus",
+            "panel:alternatingColours",
+            "panel:smartFill",
+            "panel:smartFillToggle",
         ];
         for id in ids.iter().filter(|id| id.starts_with("panel:")) {
             assert!(crate::menuactions::handles(id) || filterviews::handles(id) || known.contains(id), "{id}: nothing opens it");
