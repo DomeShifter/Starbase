@@ -57,7 +57,11 @@ jobs:
           workspaces: starsheets
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build
-        run: cargo build --release -p starsheets
+        # A vX.Y.Z tag builds in X.Y.Z, the version Help's update check compares releases with
+        # (docs/privacy.md); other builds say 0.0.0-dev.
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then export STARBASE_VERSION="${GITHUB_REF_NAME#v}"; fi
+          cargo build --release -p starsheets
       - name: Version and the C library it needs
         run: |
           target/release/starsheets --version
@@ -95,7 +99,11 @@ jobs:
           workspaces: stardocs
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build
-        run: cargo build --release -p stardocs
+        # A vX.Y.Z tag builds in X.Y.Z, the version Help's update check compares releases with
+        # (docs/privacy.md); other builds say 0.0.0-dev.
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then export STARBASE_VERSION="${GITHUB_REF_NAME#v}"; fi
+          cargo build --release -p stardocs
       - name: Version and the C library it needs
         run: |
           target/release/stardocs --version
