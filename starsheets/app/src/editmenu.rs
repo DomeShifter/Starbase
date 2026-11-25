@@ -1,7 +1,7 @@
 //! Right-click inside a cell being edited (or the formula bar while editing): Cut, Copy, Paste,
 //! Delete and Select all for the text, as the browser's own menu offers in Google Sheets
-//! (to-do 3 row 14). The page is one canvas, so the browser's text menu can't appear there:
-//! this is the house version of it.
+//! (to-do 3 row 14). This house version is the desktop app's; in the browser the browser's own
+//! menu shows instead (textmenu.rs), and this one only if a press ever gets past it.
 //!
 //! Paste reads the clipboard only where the browser allows a page to (https, after the browser
 //! asks); elsewhere it explains Ctrl+V, as Sheets does for its own Edit menu.
@@ -111,6 +111,19 @@ impl EditMenu {
             }
             _ => self.kept = None,
         }
+    }
+
+    /// Whether the menu shows.
+    #[cfg(target_arch = "wasm32")]
+    pub fn is_open(&self) -> bool {
+        self.open.is_some()
+    }
+
+    /// Closes the menu (another one opened).
+    #[cfg(target_arch = "wasm32")]
+    pub fn close(&mut self) {
+        self.open = None;
+        self.rect = None;
     }
 
     /// Call after the grid.
@@ -255,6 +268,38 @@ fn insert(app: &mut SheetApp, text: &str) {
     e.request_focus = true;
 }
 
+/// Character index `i` in `text` as a UTF-16 index (what a browser text box counts in).
+// Used by textmenu.rs, which is only in the web build (and by the tests here).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn utf16_at(text: &str, i: usize) -> u32 {
+    text.chars().take(i).map(char::len_utf16).sum::<usize>() as u32
+}
+
+/// UTF-16 index `u` in `text` as a character index.
+// Used by textmenu.rs, which is only in the web build (and by the tests here).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn char_at(text: &str, u: u32) -> usize {
+    let mut n = 0usize;
+    for (k, c) in text.chars().enumerate() {
+        if n >= u as usize {
+            return k;
+        }
+        n += c.len_utf16();
+    }
+    text.chars().count()
+}
+
+/// The egui events for a key the box caught: text for a printable key, else the key itself.
+// Used by textmenu.rs, which is only in the web build (and by the tests here).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn key_events(key: &str, modifiers: egui::Modifiers) -> Vec<egui::Event> {
+    if key.chars().count() == 1 && !modifiers.command && !modifiers.ctrl {
+        return vec![egui::Event::Text(key.to_string())];
+    }
+    let Some(k) = egui::Key::from_name(key) else { return Vec::new() };
+    [true, false].map(|pressed| egui::Event::Key { key: k, physical_key: None, pressed, repeat: false, modifiers }).to_vec()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,5 +310,27 @@ mod tests {
         assert_eq!(replace("héllo", 1, 2, "e"), "hello");
         assert_eq!(replace("abc", 3, 3, "d"), "abcd");
         assert_eq!(split_out("abc", 5, 9), ("abc".to_string(), String::new()));
+    }
+
+    #[test]
+    fn indexes_convert_between_characters_and_utf16() {
+        let t = "a😀b é";
+        assert_eq!(utf16_at(t, 0), 0);
+        assert_eq!(utf16_at(t, 2), 3);
+        assert_eq!(utf16_at(t, 99), 6);
+        assert_eq!(char_at(t, 3), 2);
+        assert_eq!(char_at(t, 6), 5);
+        assert_eq!(char_at(t, 99), 5);
+    }
+
+    #[test]
+    fn caught_keys_become_text_or_keys() {
+        let none = egui::Modifiers::NONE;
+        assert!(matches!(key_events("x", none).as_slice(), [egui::Event::Text(t)] if t == "x"));
+        assert!(matches!(
+            key_events("Enter", none).as_slice(),
+            [egui::Event::Key { key: egui::Key::Enter, pressed: true, .. }, egui::Event::Key { pressed: false, .. }]
+        ));
+        assert!(key_events("NotAKey", none).is_empty());
     }
 }

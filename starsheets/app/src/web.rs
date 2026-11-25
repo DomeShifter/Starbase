@@ -8,7 +8,7 @@ use gridcraft_ui_egui::{Inbox, Services, SheetApp};
 use wasm_bindgen::JsCast as _;
 use wasm_bindgen::JsValue;
 
-const CANVAS_ID: &str = "starsheets_canvas";
+pub(crate) const CANVAS_ID: &str = "starsheets_canvas";
 const LOADING_ID: &str = "starsheets_loading";
 
 /// Starts the eframe web runner for the StarSheets canvas. It adjusts the WebGPU device limits to the adapter's, optionally selects the WebGL backend from the query string, and builds the shell with the requested sample or host bridge, browser language rules, stored preferences and the loading/error page state.
@@ -188,6 +188,15 @@ impl WebShell {
     }
 }
 
+impl WebShell {
+    /// A right-click menu is showing (a cell's, a header's, an object's or the edit menu): only
+    /// it shows, no link card, note or tip beside it (to-do 3 row 22).
+    fn menu_open(&self) -> bool {
+        let g = &self.app.grid;
+        g.context_menu.is_some() || g.header_menu.is_some() || g.object_menu.is_some() || g.fill_menu.is_some() || self.edit_menu.is_open()
+    }
+}
+
 fn local_storage() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok()?
 }
@@ -289,6 +298,7 @@ impl eframe::App for WebShell {
         drop_alt_text(raw);
         self.input.raw_input(raw);
         self.autolink.saw_input(raw);
+        crate::textmenu::raw_input(raw);
         self.app.raw_input_hook(ctx, raw);
     }
 
@@ -337,6 +347,16 @@ impl eframe::App for WebShell {
         // Before GridCraft draws: its alerts are shown as house dialogs instead.
         self.messages.ui(&mut self.app, &ctx);
         self.spell.before(&ctx);
+        // The browser's own menu for text being edited (textmenu.rs); one menu at a time.
+        crate::textmenu::install(&ctx);
+        if crate::textmenu::before(&mut self.app) {
+            self.spell.close();
+            self.edit_menu.close();
+        }
+        if self.menu_open() {
+            // A card or tip for the cell the pointer was over would show beside the menu (row 22).
+            self.app.grid.hover_cell = None;
+        }
         self.edit_menu.before(&mut self.app, &ctx);
         self.find.keys(&self.app, &ctx);
         crate::dvpanel::delete_key(&mut self.app);
@@ -349,7 +369,9 @@ impl eframe::App for WebShell {
         browser_double_click(&mut self.app, &ctx);
         self.side_panels(&ctx);
         self.autolink.after_frame(&mut self.app);
-        self.link.ui(&mut self.app, ui);
+        if !self.menu_open() {
+            self.link.ui(&mut self.app, ui);
+        }
         self.link.confirm_ui(&mut self.app, &ctx);
         // Other people's cursors on the grid, and the account dialogs (sign-in on top of all).
         self.live.draw(&self.app, &ctx);
@@ -372,6 +394,7 @@ impl eframe::App for WebShell {
         self.panels.protect.warning_ui(&mut self.app, &ctx);
         self.spell.ui(&mut self.app, &ctx);
         self.edit_menu.ui(&mut self.app, &ctx);
+        crate::textmenu::after(&self.app, &ctx);
         crate::house::style_tooltips(&ctx);
         note_copies(ui.ctx());
         copy_without_https(ui.ctx());
