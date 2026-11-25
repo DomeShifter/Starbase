@@ -275,6 +275,8 @@ pub fn make_app(link: &Link, services: Services, stored_prefs: Option<&str>) -> 
     let mut app = WordApp::new(session, services).with_chrome(HostChrome { title_bar: false, ribbon: false, status_bar: false });
     // The link saves (a moment after the last change); WordCraft's own AutoSave stays off.
     app.autosave = false;
+    // Update checks ask for Starbase's releases, never WordCraft's; none starts here.
+    crate::updates::setup(&mut app);
     crate::prefs::restore(&mut app, stored_prefs);
     crate::theme::keep_light(&mut app);
     crate::looks::apply(&mut app);
@@ -323,6 +325,7 @@ impl Desktop {
         link.set_server(server.as_ref().map(|s| s.url.clone()));
         let services = Services { file_dialog: Some(Box::new(file_dialog)), ..Default::default() };
         let mut app = make_app(&link, services, stored.as_deref());
+        crate::updates::start_if_on(&mut app);
         if open {
             link.open(&mut app);
         } else if server_file.is_some() {

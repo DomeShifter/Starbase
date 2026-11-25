@@ -50,6 +50,13 @@ pub(crate) trait Store {
     fn start_dir(&self) -> Option<String> {
         None
     }
+    /// Whether presentations can be made here: Starbase Slides runs in the browser only, so the
+    /// desktop app offers no "New presentation".
+    fn has_slides(&self) -> bool {
+        false
+    }
+    /// Starts a new presentation (a named .pptx) in `folder`, in Starbase Slides.
+    fn new_presentation(&self, _folder: &str) {}
     /// The Starbase server the desktop app is connected to (remote.rs); None on this computer's
     /// own files.
     #[cfg(not(target_arch = "wasm32"))]
@@ -82,10 +89,27 @@ impl std::ops::Deref for Backend {
     }
 }
 
-/// Whether a file is a document (Starbase Docs) rather than a spreadsheet.
+/// Whether a file is a document (Starbase Docs) or a presentation (Starbase Slides) rather than
+/// a spreadsheet.
 pub fn is_doc(name: &str) -> bool {
     let lower = name.to_lowercase();
-    lower.ends_with(".docx") || lower.ends_with(".odt")
+    lower.ends_with(".docx") || lower.ends_with(".odt") || is_slides(name)
+}
+
+/// Whether a file is a presentation (Starbase Slides, in the browser).
+pub fn is_slides(name: &str) -> bool {
+    name.to_lowercase().ends_with(".pptx")
+}
+
+/// The app logo the home screen shows for a file: Slides, Docs or Sheets.
+pub fn app_icon(name: &str) -> &'static str {
+    if is_slides(name) {
+        "starslides"
+    } else if is_doc(name) {
+        "stardocs"
+    } else {
+        "starsheets"
+    }
 }
 
 /// Percent-encodes `s` for a URL query or path part, as JavaScript's `encodeURIComponent`.
@@ -180,6 +204,16 @@ impl Store for ServerStore {
         Ok(())
     }
 
+    fn has_slides(&self) -> bool {
+        true
+    }
+
+    fn new_presentation(&self, folder: &str) {
+        if let Some(w) = web_sys::window() {
+            let _ = w.location().set_href(&crate::files::slides_url("", &format!("&folder={}", enc(folder))));
+        }
+    }
+
     fn pick_files(&self, got: Box<dyn Fn(String, Vec<u8>)>) {
         wasm_bindgen_futures::spawn_local(async move {
             let Some(picked) = rfd::AsyncFileDialog::new().add_filter("Spreadsheets", &["xlsx", "xlsm", "xls", "csv", "ods"]).pick_files().await
@@ -215,7 +249,7 @@ impl Store for ServerStore {
 
 #[cfg(test)]
 mod tests {
-    use super::{dec, enc, is_doc};
+    use super::{dec, enc, is_doc, is_slides};
 
     #[test]
     fn encodes_like_encode_uri_component() {
@@ -232,5 +266,6 @@ mod tests {
     fn documents_are_docx_and_odt() {
         assert!(is_doc("Letter.DOCX") && is_doc("notes.odt"));
         assert!(!is_doc("Budget.xlsx"));
+        assert!(is_doc("Talk.PPTX") && is_slides("Talk.PPTX") && !is_slides("Letter.docx"));
     }
 }

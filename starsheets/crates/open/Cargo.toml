@@ -1,0 +1,20 @@
+[package]
+name = "starbase-open"
+description = "Starbase's file-manager open handler: a file in the server's storage folder opens on the server, in the browser; any other file in Starbase Sheets or Docs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "starbase-open"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"
+# The saved "Connect to a server…" connection (the token in the system keyring) and its API calls.
+starbase-connect = { path = "../connect" }
+# The one question it asks (is the server's storage folder on this computer?) and the folder picker.
+rfd = { workspace = true }
