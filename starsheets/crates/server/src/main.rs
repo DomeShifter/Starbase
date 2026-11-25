@@ -2,7 +2,7 @@
 //! with SITE set, serves the web app too. Replaces server/files.py with the same API and the
 //! same files on disk (see docs/server.md), as the base for live editing.
 //!
-//! Settings (environment): STORE (folder, default /data), KEEP (versions kept, 6), PORT (8080),
+//! Settings (environment): STORE (folder, default /data), KEEP (most earlier versions kept per file, 100; store.rs thin), PORT (8080),
 //! LOCATION (how people are told where files are kept), STARBASE_AUTH (off = no login),
 //! STARBASE_PASSWORD, SITE (a built StarSheets site to serve), the security settings in
 //! guard.rs (STARBASE_PUBLIC_URL, STARBASE_ALLOWED_HOSTS, STARBASE_TRUSTED_PROXY,
@@ -901,7 +901,8 @@ async fn gate(
                         need(role, Role::View)?;
                         let _ = spaces::note_opened(store, &me, id);
                     }
-                    (["versions", ..], "GET") => need(role, Role::View)?,
+                    // Version history is for editors, as in Google Docs: viewers see the file only.
+                    (["versions", ..] | ["history"], "GET") | (["versions", _, "name" | "restore"], "POST") => need(role, Role::Edit)?,
                     ([], "PUT") | (["rename"], "POST") | ([], "DELETE") => need(role, Role::Edit)?,
                     (["copy"], "POST") => {
                         need(role, Role::View)?;
@@ -1670,7 +1671,8 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
     };
     let if_match = headers.get(header::IF_MATCH).and_then(|v| v.to_str().ok()).map(str::to_string);
     // A file replaced through the API (a version restored) is read again by its live room.
-    let replaced = (m == "PUT" && p.len() == 2 && p[0] == "files").then(|| p[1].clone());
+    let restored = m == "POST" && p.len() == 5 && p[0] == "files" && p[2] == "versions" && p[4] == "restore";
+    let replaced = ((m == "PUT" && p.len() == 2 && p[0] == "files") || restored).then(|| p[1].clone());
     let (m2, p2) = (m.clone(), p.clone());
     let app2 = app.clone();
     let out = tokio::task::spawn_blocking(move || {
@@ -1692,6 +1694,7 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
             if let Some(me) = &me {
                 let made = match (&r, m2.as_str(), p2.as_slice()) {
                     (Ok(Reply::Json(_, 200)), "PUT", [_, id]) => Some(id.clone()),
+                    (Ok(Reply::Json(_, 200)), "POST", [_, id, _, _, _]) if restored => Some(id.clone()),
                     (Ok(Reply::Json(v, 200 | 201)), "POST", [_] | [_, _, _]) if p2[0] == "files" => {
                         v.get("id").and_then(Value::as_str).map(str::to_string)
                     }
@@ -1777,7 +1780,7 @@ async fn main() {
     let _ = std::fs::create_dir_all(&root);
     let store = Store {
         root,
-        keep: env("KEEP", "6").parse().unwrap_or(6),
+        keep: env("KEEP", "100").parse().unwrap_or(100),
         spaces: !matches!(env("STARBASE_AUTH", "on").trim().to_lowercase().as_str(), "off" | "false" | "0" | "no"),
     };
     let port: u16 = env("PORT", "8080").parse().unwrap_or(8080);
@@ -2025,6 +2028,53 @@ mod tests {
         let id = g.json["id"].as_str().unwrap().to_string();
         let put = [("origin", "http://192.168.1.5:8080"), ("content-type", "application/octet-stream")];
         assert_eq!(send(&app, &ip, "PUT", &format!("/api/files/{id}"), &boss, &put, b"two".to_vec()).await.status, 200);
+    }
+
+    /// Docs' version history: a document's saves become versions with who saved them; editors
+    /// see, name and restore them (a restore is a new version); viewers can't, as in Google Docs.
+    #[tokio::test]
+    async fn document_version_history() {
+        let (app, ip, boss) = owned().await;
+        for who in ["ann", "vic"] {
+            let g = post(&app, &ip, "/api/users", &boss, json!({"username": who, "name": who, "password": format!("{who}password")})).await;
+            assert_eq!(g.status, 200);
+        }
+        let ann = cookie_of(&post(&app, &ip, "/api/login", "", json!({"username": "ann", "password": "annpassword"})).await);
+        let vic = cookie_of(&post(&app, &ip, "/api/login", "", json!({"username": "vic", "password": "vicpassword"})).await);
+        let id = send(&app, &ip, "POST", "/api/files?name=Letter.docx", &boss, &[], b"one".to_vec()).await.json["id"].as_str().unwrap().to_string();
+        let g = post(&app, &ip, &format!("/api/files/{id}/sharing"), &boss, json!({"people": {"ann": "edit", "vic": "view"}})).await;
+        assert_eq!(g.status, 200, "{:?}", g.json);
+        assert_eq!(send(&app, &ip, "PUT", &format!("/api/files/{id}"), &ann, &[], b"two".to_vec()).await.status, 200);
+        let h = send(&app, &ip, "GET", &format!("/api/files/{id}/history"), &ann, &[], vec![]).await;
+        assert_eq!(h.status, 200);
+        assert_eq!(h.json["current"]["author"], "ann", "who saved the file as it is now");
+        let vs = h.json["versions"].as_array().unwrap().clone();
+        assert_eq!(vs.len(), 1, "a .docx save keeps the earlier version: {vs:?}");
+        assert_eq!(vs[0]["author"], "boss");
+        let v = vs[0]["v"].as_str().unwrap().to_string();
+        assert!(v.ends_with(".docx"), "{v}");
+        // Viewers see the document but not its history.
+        for url in [format!("/api/files/{id}/history"), format!("/api/files/{id}/versions"), format!("/api/files/{id}/versions/{v}")] {
+            assert_eq!(send(&app, &ip, "GET", &url, &vic, &[], vec![]).await.status, 403, "{url}");
+        }
+        assert_eq!(send(&app, &ip, "POST", &format!("/api/files/{id}/versions/{v}/restore"), &vic, &[], vec![]).await.status, 403);
+        assert_eq!(send(&app, &ip, "POST", &format!("/api/files/{id}/versions/current/name?name=X"), &vic, &[], vec![]).await.status, 403);
+        // Name the current version; the next save carries the name to the version it becomes.
+        let g = send(&app, &ip, "POST", &format!("/api/files/{id}/versions/current/name?name=Final%20draft"), &ann, &[], vec![]).await;
+        assert_eq!(g.status, 200);
+        // Restore the first version: a new version, nothing deleted, and the restorer is its author.
+        let g = send(&app, &ip, "POST", &format!("/api/files/{id}/versions/{v}/restore"), &boss, &[], vec![]).await;
+        assert_eq!(g.status, 200, "{:?}", g.json);
+        assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{id}"), &boss, &[], vec![]).await.bytes, b"one");
+        let h = send(&app, &ip, "GET", &format!("/api/files/{id}/history"), &boss, &[], vec![]).await;
+        assert_eq!(h.json["current"]["author"], "boss");
+        assert!(h.json["current"]["restored_from"].is_i64(), "{:?}", h.json);
+        let vs = h.json["versions"].as_array().unwrap();
+        assert_eq!(vs.len(), 2, "{vs:?}");
+        assert_eq!((vs[0]["author"].as_str(), vs[0]["name"].as_str()), (Some("ann"), Some("Final draft")));
+        let named = vs[0]["v"].as_str().unwrap();
+        assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{id}/versions/{named}"), &ann, &[], vec![]).await.bytes, b"two");
+        let _ = std::fs::remove_dir_all(&app.store.root);
     }
 
     #[tokio::test]

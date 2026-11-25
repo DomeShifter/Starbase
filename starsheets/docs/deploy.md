@@ -11,7 +11,7 @@ container (port 8080, files in `/data`). Settings (each also works under its old
 | `STARBASE_PASSWORD` | Your own setup code for the first (owner's) account, at least 12 characters (the server won't start with a shorter one, or with `change-me`). Without it, a random code is made on first start and printed in the log. Not needed once the owner's account exists |
 | `STARBASE_AUTH=off` | No sign-in, for a private network you trust: everyone is a guest |
 | `LOCATION` | How the app tells people where files are kept ("Saved to …") |
-| `KEEP` | How many earlier versions of each file to keep (default 6) |
+| `KEEP` | The most earlier versions kept per file (default 100). All versions from the last day are kept, then one an hour for a week, then one a day; past the limit the ones closest together go first. Named versions are always kept |
 | `STARBASE_OIDC_*` | Single sign-on through your own sign-in service (Authelia, Authentik, Keycloak…): see [oidc.md](oidc.md) |
 
 **Security settings** (all optional; a server on a home network reached by its address works

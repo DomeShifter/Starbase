@@ -400,6 +400,24 @@ impl Link {
         false
     }
 
+    /// Version history is kept by a Starbase server; a local file has none (the panel says so,
+    /// and the calls below are never made).
+    pub fn has_history(&self) -> bool {
+        false
+    }
+    pub fn load_history(&self) {}
+    pub fn take_history(&self) -> Option<Result<Vec<crate::versions::Version>, String>> {
+        None
+    }
+    pub fn previewing(&self) -> bool {
+        false
+    }
+    pub fn show_version(&self, _v: &str) {}
+    pub fn end_preview(&self) {}
+    pub fn restore_version(&self, _v: &str, _label: &str) {}
+    pub fn copy_version(&self, _v: &str) {}
+    pub fn name_version(&self, _v: &str, _name: &str) {}
+
     /// File › Open and the logo: the system's Open dialog, without freezing the window.
     pub fn home(&self) {
         if self.state.borrow().picking.is_some() {

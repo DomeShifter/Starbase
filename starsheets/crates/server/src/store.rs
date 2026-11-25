@@ -94,6 +94,75 @@ fn stamp() -> String {
     format!("{y:04}{m:02}{d:02}-{h:02}{mi:02}{s:02}")
 }
 
+/// What each earlier version is (when saved, by whom, its name), in its file's versions folder;
+/// `current` describes the file as it is now until the next save makes it a version.
+const VERSIONS_META: &str = "versions.json";
+
+/// The longest version name.
+const MAX_VERSION_NAME: usize = 100;
+
+const DAY: i64 = 86_400;
+
+/// The versions in a versions folder, oldest first (their names sort by when they were made).
+fn version_names(folder: &Path) -> Vec<String> {
+    let mut names: Vec<String> =
+        fs::read_dir(folder).map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+    names.retain(|n| !n.starts_with('.') && !n.ends_with(".json") && !n.ends_with(".tmp"));
+    names.sort();
+    names
+}
+
+/// A version's name without its extension (".xlsx", ".docx", …).
+fn version_stem(name: &str) -> &str {
+    name.split_once('.').map_or(name, |(s, _)| s)
+}
+
+/// Thins a file's versions the way Google Docs does: every version from the last day, the newest
+/// of each hour for a week, and the newest of each day before that. Named versions are always
+/// kept. At most `keep` unnamed ones stay: past that, the one closest in time to the next newer
+/// one goes first (the oldest of equals), so what is kept stays spread over the file's life.
+fn thin(folder: &Path, meta: &mut Map<String, Value>, keep: usize, now: i64) -> io::Result<()> {
+    let mut seen = BTreeSet::new();
+    let mut kept: Vec<(String, i64, bool)> = Vec::new();
+    let mut gone = Vec::new();
+    for n in version_names(folder).into_iter().rev() {
+        let e = meta.get(&n);
+        let saved = e.and_then(|e| e["saved"].as_i64()).or_else(|| fs::metadata(folder.join(&n)).ok().map(|m| mtime(&m).0)).unwrap_or(0);
+        let named = e.and_then(|e| e["name"].as_str()).is_some_and(|s| !s.is_empty());
+        let age = now - saved;
+        let bucket = if age < DAY {
+            None
+        } else if age < 7 * DAY {
+            Some((0, saved.div_euclid(3600)))
+        } else {
+            Some((1, saved.div_euclid(DAY)))
+        };
+        if named || bucket.is_none_or(|b| seen.insert(b)) {
+            kept.push((n, saved, named));
+        } else {
+            gone.push(n);
+        }
+    }
+    let keep = keep.max(1);
+    while kept.iter().filter(|k| !k.2).count() > keep {
+        let mut best: Option<(i64, usize)> = None;
+        for (i, k) in kept.iter().enumerate().filter(|(_, k)| !k.2) {
+            let gap = if i == 0 { i64::MAX } else { kept[i - 1].1 - k.1 };
+            if best.is_none_or(|(g, _)| gap <= g) {
+                best = Some((gap, i));
+            }
+        }
+        let Some((_, i)) = best else { break };
+        gone.push(kept.remove(i).0);
+    }
+    for n in &gone {
+        fs::remove_file(folder.join(n))?;
+    }
+    let names: BTreeSet<String> = kept.into_iter().map(|k| k.0).collect();
+    meta.retain(|k, _| k == "current" || names.contains(k));
+    Ok(())
+}
+
 /// "YYYY-mm-dd HH:MM:SS" (UTC) for the activity log.
 pub fn log_stamp() -> String {
     let (y, m, d, h, mi, s) = civil(now() as i64);
@@ -397,32 +466,87 @@ impl Store {
         fs::rename(&tmp, path)
     }
 
-    /// Copies the file as it is now into its versions folder, keeping the newest KEEP.
+    /// Copies the file as it is now into its versions folder ([`thin`] says which are kept). The
+    /// copy remembers when that content was saved, who saved it (`spaces::last_change`, noted
+    /// after every save) and the name it was given while it was the current version.
     pub fn keep_version(&self, fid: &str, path: &Path) -> io::Result<()> {
-        match fs::metadata(path) {
-            Ok(m) if m.len() > 0 => {}
+        let saved = match fs::metadata(path) {
+            Ok(m) if m.len() > 0 => mtime(&m).0,
             _ => return Ok(()),
-        }
+        };
         let folder = self.versions().join(fid);
         fs::create_dir_all(&folder)?;
         // Names sort in the order the versions were made, also several within one millisecond:
         // a name that wouldn't sort after the newest one takes the newest name plus "z".
         let ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.subsec_millis()).unwrap_or(0);
-        let mut existing: Vec<String> = fs::read_dir(&folder)?.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
-        existing.sort();
+        let existing = version_names(&folder);
         let mut stem = format!("{}-{ms:03}0", stamp());
-        if let Some(last) = existing.last().map(|l| l.trim_end_matches(".xlsx"))
+        if let Some(last) = existing.last().map(|l| version_stem(l))
             && stem.as_str() <= last
         {
             stem = format!("{last}z");
         }
-        fs::copy(path, folder.join(format!("{stem}.xlsx")))?;
-        let mut old: Vec<_> = fs::read_dir(&folder)?.flatten().map(|e| e.file_name()).collect();
-        old.sort();
-        let drop = old.len().saturating_sub(self.keep);
-        for v in &old[..drop] {
-            fs::remove_file(folder.join(v))?;
+        let lower = path.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+        let (_, ext) = splitext(&lower);
+        let file = format!("{stem}{}", if ext.is_empty() { ".xlsx" } else { &ext });
+        fs::copy(path, folder.join(&file))?;
+        let mut meta = self.load_json(&folder.join(VERSIONS_META));
+        let current = match meta.remove("current") {
+            Some(Value::Object(m)) => m,
+            _ => Map::new(),
+        };
+        let mut entry = Map::new();
+        entry.insert("saved".into(), json!(saved));
+        entry.insert("author".into(), json!(crate::spaces::last_change(self, fid).map(|c| c.0).unwrap_or_default()));
+        for key in ["name", "restored_from"] {
+            if let Some(v) = current.get(key).filter(|v| !v.is_null()) {
+                entry.insert(key.into(), v.clone());
+            }
         }
+        meta.insert(file, Value::Object(entry));
+        thin(&folder, &mut meta, self.keep, now() as i64)?;
+        self.save_json(&folder.join(VERSIONS_META), &Value::Object(meta))
+    }
+
+    /// A file's earlier versions, newest first: id, when that content was saved, who saved it,
+    /// the name it was given, and its size.
+    fn version_list(&self, fid: &str) -> io::Result<Vec<Value>> {
+        let folder = self.versions().join(fid);
+        let meta = self.load_json(&folder.join(VERSIONS_META));
+        let mut out = Vec::new();
+        for v in version_names(&folder).iter().rev() {
+            let m = fs::metadata(folder.join(v))?;
+            let e = meta.get(v);
+            // Copies made before versions were described: the copy's own time.
+            let saved = e.and_then(|e| e["saved"].as_i64()).unwrap_or(mtime(&m).0);
+            out.push(json!({
+                "v": v, "modified": saved, "saved": saved, "size": m.len(),
+                "author": e.and_then(|e| e["author"].as_str()).unwrap_or(""),
+                "name": e.and_then(|e| e["name"].as_str()).unwrap_or(""),
+                "restored_from": e.and_then(|e| e.get("restored_from")).cloned().unwrap_or(Value::Null),
+            }));
+        }
+        Ok(out)
+    }
+
+    /// Sets (an empty name clears) the name of version `v` of a file, or of the file as it is now
+    /// with `current` (Docs' "Name current version"). Named versions are never thinned out.
+    fn name_version(&self, fid: &str, v: &str, name: &str) -> R<()> {
+        let folder = self.versions().join(fid);
+        if v != "current" && !version_names(&folder).iter().any(|n| n == v) {
+            return Err(Bad::new(404, "no such version"));
+        }
+        let name: String = name.trim().chars().filter(|c| !c.is_control()).take(MAX_VERSION_NAME).collect();
+        fs::create_dir_all(&folder)?;
+        let mut meta = self.load_json(&folder.join(VERSIONS_META));
+        if let Value::Object(e) = meta.entry(v.to_string()).or_insert_with(|| json!({})) {
+            if name.is_empty() {
+                e.remove("name");
+            } else {
+                e.insert("name".into(), json!(name));
+            }
+        }
+        self.save_json(&folder.join(VERSIONS_META), &Value::Object(meta))?;
         Ok(())
     }
 
@@ -621,25 +745,49 @@ impl Store {
                 self.save_index(index)?;
                 ok(json!({"id": new_id, "name": name}))
             }
-            (["versions", ..], "GET") => {
+            (["versions"], "GET") => ok(Value::Array(self.version_list(fid)?)),
+            (["versions", v], "GET") => {
                 let vdir = self.versions().join(fid);
-                let mut vs: Vec<String> =
-                    fs::read_dir(&vdir).map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
-                vs.sort();
-                vs.reverse();
-                if rest.len() == 1 {
-                    let mut out = Vec::new();
-                    for v in &vs {
-                        let m = fs::metadata(vdir.join(v))?;
-                        out.push(json!({"v": v, "modified": mtime(&m).0, "size": m.len()}));
-                    }
-                    return ok(Value::Array(out));
-                }
-                if !vs.iter().any(|v| v == rest[1]) {
+                if !version_names(&vdir).iter().any(|n| n == v) {
                     return Err(Bad::new(404, "no such version"));
                 }
-                let data = fs::read(vdir.join(rest[1]))?;
+                let data = fs::read(vdir.join(v))?;
                 Ok(Reply::File { data, name: base_of(&path), version: String::new(), folder: String::new(), modified: 0 })
+            }
+            // Version history in one reply: the file as it is now, and its earlier versions.
+            (["history"], "GET") => {
+                let m = fs::metadata(&fpath)?;
+                let meta = self.load_json(&self.versions().join(fid).join(VERSIONS_META));
+                let cur = meta.get("current");
+                ok(json!({
+                    "current": {
+                        "saved": mtime(&m).0, "size": m.len(), "version": self.version_of(&fpath)?,
+                        "author": crate::spaces::last_change(self, fid).map(|c| c.0).unwrap_or_default(),
+                        "name": cur.and_then(|c| c["name"].as_str()).unwrap_or(""),
+                        "restored_from": cur.and_then(|c| c.get("restored_from")).cloned().unwrap_or(Value::Null),
+                    },
+                    "versions": self.version_list(fid)?,
+                }))
+            }
+            (["versions", v, "name"], "POST") => {
+                self.name_version(fid, v, qs(q, "name").unwrap_or(""))?;
+                ok(json!({"ok": true}))
+            }
+            // Puts an earlier version back as a new version: the current one is kept first, so
+            // nothing is lost and a restore can itself be undone.
+            (["versions", v, "restore"], "POST") => {
+                let vdir = self.versions().join(fid);
+                if !version_names(&vdir).iter().any(|n| n == v) {
+                    return Err(Bad::new(404, "no such version"));
+                }
+                let data = fs::read(vdir.join(v))?;
+                let from = self.load_json(&vdir.join(VERSIONS_META)).get(*v).and_then(|e| e["saved"].as_i64());
+                self.keep_version(fid, &fpath)?;
+                self.write_file(&fpath, &data)?;
+                let mut meta = self.load_json(&vdir.join(VERSIONS_META));
+                meta.insert("current".into(), json!({"restored_from": from}));
+                self.save_json(&vdir.join(VERSIONS_META), &Value::Object(meta))?;
+                ok(json!({"version": self.version_of(&fpath)?, "name": base_of(&path), "folder": parent_of(&path)}))
             }
             _ => Err(Bad::new(404, "not found")),
         }
@@ -854,6 +1002,69 @@ mod tests {
         assert_eq!(parent_of("a/b/c.xlsx"), "a/b");
         assert_eq!(base_of("c.xlsx"), "c.xlsx");
         assert_eq!(stamp().len(), 15);
+    }
+
+    /// Google-like thinning: all of the last day, one an hour for a week, one a day before
+    /// that; named versions stay; past the cap the most crowded go first.
+    #[test]
+    fn versions_are_thinned_like_google_docs() {
+        let dir = std::env::temp_dir().join(format!("starsheets-thin-{}", random_hex(6)));
+        fs::create_dir_all(&dir).unwrap();
+        let now = 100 * DAY;
+        let mut meta = Map::new();
+        // (age in seconds, named): name order is age order, oldest first.
+        let ages: [(i64, bool); 10] = [
+            (20 * DAY - 50, false), // 20 days ago: two in one day → the newer kept
+            (20 * DAY - 100, false),
+            (10 * DAY, true), // named: always kept
+            (10 * DAY - 60, false),
+            (3 * DAY + 120, false), // 3 days ago, same hour as the next → the newer kept
+            (3 * DAY + 60, false),
+            (3 * DAY - 7200, false),
+            (3600, false), // the last day: all kept
+            (3500, false),
+            (60, false),
+        ];
+        for (i, (age, named)) in ages.iter().enumerate() {
+            let n = format!("v{i:02}.docx");
+            fs::write(dir.join(&n), b"x").unwrap();
+            let mut e = json!({"saved": now - age});
+            if *named {
+                e["name"] = json!("Draft");
+            }
+            meta.insert(n, e);
+        }
+        meta.insert("current".into(), json!({"name": "Now"}));
+        thin(&dir, &mut meta, 100, now).unwrap();
+        let left = version_names(&dir);
+        assert_eq!(left, ["v01.docx", "v02.docx", "v03.docx", "v05.docx", "v06.docx", "v07.docx", "v08.docx", "v09.docx"]);
+        assert!(meta.contains_key("current") && !meta.contains_key("v00.docx"));
+        // A cap of 3 unnamed: the crowded last hour loses the most; the named one stays.
+        thin(&dir, &mut meta, 3, now).unwrap();
+        let left = version_names(&dir);
+        assert!(left.contains(&"v02.docx".to_string()), "named kept: {left:?}");
+        assert!(left.contains(&"v09.docx".to_string()) && left.contains(&"v01.docx".to_string()), "newest and oldest kept: {left:?}");
+        assert_eq!(left.len(), 4, "{left:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn keep_version_names_docx_versions_and_carries_the_current_name() {
+        let dir = std::env::temp_dir().join(format!("starsheets-keep-{}", random_hex(6)));
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("Letter.docx"), b"one").unwrap();
+        let store = Store { root: dir.clone(), keep: 5, spaces: false };
+        let id = store.synced_index().unwrap().keys().next().unwrap().clone();
+        store.name_version(&id, "current", "  First draft\n").unwrap();
+        store.keep_version(&id, &dir.join("Letter.docx")).unwrap();
+        let list = store.version_list(&id).unwrap();
+        assert_eq!(list.len(), 1);
+        assert!(list[0]["v"].as_str().unwrap().ends_with(".docx"));
+        assert_eq!(list[0]["name"], "First draft");
+        // The name moved with the version: the file as it is now has none.
+        assert!(store.load_json(&store.versions().join(&id).join(VERSIONS_META)).get("current").is_none());
+        assert!(store.name_version(&id, "nope.docx", "x").is_err());
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

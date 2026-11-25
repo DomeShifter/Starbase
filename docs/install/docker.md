@@ -185,5 +185,5 @@ through for live editing. Settings for proxies: [deploy.md, Security settings](.
 | `STARBASE_PUBLIC_URL` | The address people use from outside, e.g. `https://office.example.com` |
 | `TZ` | Time zone for the backup hour, e.g. `Europe/London` (default UTC) |
 | `LOCATION` | How the apps tell people where files are kept ("Saved to …"; default "the server") |
-| `KEEP` | How many earlier versions of each file to keep (default 6) |
+| `KEEP` | The most earlier versions kept per file (default 100). All versions from the last day are kept, then one an hour for a week, then one a day; past the limit the ones closest together go first. Named versions are always kept |
 | `--user 1234:1234` | Run as another user, so the files belong to that user on the host (then `chown` the folders to that user instead of 1000) |

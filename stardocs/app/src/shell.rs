@@ -94,6 +94,13 @@ pub const MENUS: &[(&str, &[Item])] = &[
                 ],
             ),
             Cmd("Rename", "stardocs.rename", NO, ""),
+            Sub(
+                "Version history",
+                &[
+                    Cmd("Name current version", "stardocs.nameVersion", NO, ""),
+                    Cmd("See version history", "stardocs.versionHistory", NO, "Ctrl+Alt+Shift+H"),
+                ],
+            ),
             Sep,
             Cmd("Page setup", "ui.dialog:pageSetup", NO, ""),
             Cmd("Print", "file.print", NO, "Ctrl+P"),
@@ -495,6 +502,8 @@ pub struct Shell {
     word_count: crate::wordcount::WordCount,
     /// The colour being mixed in the Custom colour dialog, while it is open.
     custom: Option<Color32>,
+    /// File › Version history's panel and naming dialog (`versions.rs`).
+    history: crate::versions::History,
     /// The number typed in the Restart numbering dialog, while it is open.
     restart: Option<String>,
     /// The dialog has just opened: its box takes the keyboard.
@@ -552,6 +561,9 @@ struct Flags {
     shortcuts: bool,
     /// Asks for the Restart numbering dialog (Format › Bullets and numbering › List options).
     restart: bool,
+    /// Asks for File › Version history: the panel, or the Name current version dialog.
+    history: bool,
+    name_version: bool,
     /// Read from storage yet.
     loaded: bool,
 }
@@ -602,6 +614,7 @@ impl Flags {
 }
 
 use crate::server::{Link, Saved};
+use crate::versions::Ask;
 
 /// Asks the title row to start renaming (File › Rename), for the next frame.
 const RENAME: &str = "stardocs_rename";
@@ -710,6 +723,8 @@ fn is_own(id: &str) -> bool {
             | "stardocs.downloadAs"
             | "stardocs.rename"
             | "stardocs.restartNumbering"
+            | "stardocs.versionHistory"
+            | "stardocs.nameVersion"
     )
 }
 
@@ -720,6 +735,8 @@ fn run_menu(app: &mut WordApp, ctx: &egui::Context, flags: &mut Flags, link: Opt
         ("stardocs.compact", _) => flags.compact = !flags.compact,
         ("stardocs.shortcuts", _) => flags.shortcuts = true,
         ("stardocs.restartNumbering", _) => flags.restart = true,
+        ("stardocs.versionHistory", _) => flags.history = true,
+        ("stardocs.nameVersion", _) => flags.name_version = true,
         // Someone who may only view the document stays in Viewing.
         ("stardocs.editing" | "stardocs.suggesting", Some(link)) if link.view_only() => app.status("You can view this document but not change it"),
         ("stardocs.editing", _) => set_mode(app, Mode::Editing),
@@ -902,6 +919,8 @@ impl Shell {
             "renaming": self.renaming,
             "dialogs": {
                 "share": self.share.is_open(),
+                "versionHistory": self.history.open,
+                "nameVersion": self.history.naming(),
                 "shortcuts": self.shortcuts.open,
                 "customColour": self.custom.is_some(),
                 "restartNumbering": self.restart.is_some(),
@@ -917,6 +936,12 @@ impl Shell {
                 "rightEndWidth": self.right_end,
             },
             "fontsListed": self.fonts.as_ref().map_or(0, Vec::len),
+            "versions": {
+                "listed": self.history.list.as_ref().map(Vec::len),
+                "selected": self.history.open.then(|| self.history.selected.clone()),
+                "error": self.history.error,
+                "previewing": link.is_some_and(Link::previewing),
+            },
         })
     }
 
@@ -947,6 +972,7 @@ impl Shell {
                 let may_edit = !link.is_some_and(Link::view_only);
                 self.toolbar(app, ui, may_edit);
             });
+        self.version_history(app, ui, link);
         self.zoom_on_open(app, ui.available_width());
         self.share.ui(ui.ctx());
         self.custom_colour(app, ui.ctx());
@@ -963,6 +989,52 @@ impl Shell {
             self.word_count.ui(app, ui.ctx());
         }
         self.flags.sync(before);
+    }
+
+    /// File › Version history: the panel on the right (drawn before the page, so the page takes
+    /// the room left), the naming dialog, and what they ask of the server link.
+    fn version_history(&mut self, app: &mut WordApp, ui: &mut Ui, link: Option<&Link>) {
+        if std::mem::take(&mut self.flags.history) && !self.history.open {
+            self.history.show();
+        }
+        if std::mem::take(&mut self.flags.name_version) {
+            self.history.name_current();
+        }
+        let server = link.filter(|l| l.has_history());
+        if let Some(r) = server.and_then(Link::take_history) {
+            self.history.loaded(r);
+        }
+        self.history.panel(ui);
+        self.history.dialog(ui.ctx());
+        for ask in self.history.take_asks() {
+            let Some(link) = server else {
+                if ask == Ask::Load {
+                    self.history.loaded(Err(crate::versions::NO_SERVER.to_string()));
+                } else if let Ask::Name(..) = ask {
+                    app.status(crate::versions::NO_SERVER.to_string());
+                }
+                continue;
+            };
+            match ask {
+                Ask::Load => link.load_history(),
+                Ask::Show(v) if v == crate::versions::CURRENT => link.end_preview(),
+                Ask::Show(v) => {
+                    // Edits not saved yet go to the server before the earlier version is shown.
+                    if app.session.dirty && !link.view_only() && !link.previewing() {
+                        run(app, "file.save", json!({}));
+                    }
+                    link.show_version(&v);
+                }
+                Ask::Restore(v) => {
+                    let when = self.history.list.iter().flatten().find(|x| x.id == v).map(|x| crate::versions::when(x.saved)).unwrap_or_default();
+                    self.history.selected = crate::versions::CURRENT.to_string();
+                    link.restore_version(&v, &when);
+                }
+                Ask::Copy(v) => link.copy_version(&v),
+                Ask::Name(v, name) => link.name_version(&v, &name),
+                Ask::Close => link.end_preview(),
+            }
+        }
     }
 
     /// A document just opened shows at 100 %, or at the page's width when a page at 100 % is
@@ -1002,6 +1074,11 @@ impl Shell {
         use egui::{Key, KeyboardShortcut, Modifiers};
         let ctrl_shift = Modifiers::COMMAND | Modifiers::SHIFT;
         let ctrl_alt = Modifiers::COMMAND | Modifiers::ALT;
+        // Docs' version history, Ctrl+Alt+Shift+H: taken before Ctrl+Alt+H (the outline), which
+        // would otherwise match it too (egui ignores an extra Shift).
+        if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(ctrl_alt | Modifiers::SHIFT, Key::H))) {
+            self.flags.history = true;
+        }
         let (menus, outline, help, count) = ctx.input_mut(|i| {
             (
                 i.consume_shortcut(&KeyboardShortcut::new(ctrl_shift, Key::F)),
