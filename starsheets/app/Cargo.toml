@@ -28,6 +28,8 @@ png = "0.18"
 # decoders: the browser decodes).
 starbase-photo-edit = { path = "../crates/photo-edit" }
 image = { version = "0.25", default-features = false }
+# Drive previews of Markdown files (home/textpreview.rs): parsing only, no HTML output.
+pulldown-cmark = { version = "0.13", default-features = false }
 
 # The desktop app (native.rs): GridCraft's own native window setup, local mode over a folder on
 # disk (localstore.rs), the system's file dialogs and Trash; persistence remembers each
