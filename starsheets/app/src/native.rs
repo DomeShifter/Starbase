@@ -83,6 +83,9 @@ pub fn parse_args(args: &[String]) -> Start {
 pub fn main() -> eframe::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let start = parse_args(&args);
+    if matches!(start, Start::Version | Start::Help) {
+        starbase_connect::attach_terminal();
+    }
     let start = match start {
         Start::Version => {
             println!("Starbase Sheets {}", env!("CARGO_PKG_VERSION"));
@@ -316,16 +319,10 @@ fn open_with_system(target: &str) {
 
 // ------------------------------------------------------------ preferences (GridCraft's files)
 
+/// `sheets` in Starbase's settings folder (`~/.config/starbase`, `%APPDATA%\Starbase`,
+/// `~/Library/Application Support/Starbase`), shared with the server link.
 fn config_dir() -> Option<PathBuf> {
-    let base = if cfg!(windows) {
-        std::env::var_os("APPDATA").map(PathBuf::from)
-    } else {
-        std::env::var_os("XDG_CONFIG_HOME")
-            .filter(|d| !d.is_empty())
-            .map(PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-    };
-    Some(base?.join("starbase").join("sheets"))
+    Some(starbase_connect::config_dir()?.join("sheets"))
 }
 
 fn prefs_enabled() -> bool {

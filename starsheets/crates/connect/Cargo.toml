@@ -17,3 +17,12 @@ serde_json = "1"
 ureq = { version = "3.5", default-features = false, features = ["rustls", "platform-verifier"] }
 # The device token: the system keyring (Secret Service on Linux, Credential Manager, Keychain).
 keyring = "4.2"
+
+# The Documents folder as Windows and macOS know it (desktop.rs): on Windows the Documents Known
+# Folder, which follows a move to OneDrive or another drive. Linux reads XDG user-dirs itself.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+dirs = "7"
+
+# Windows: --version and --help print in the terminal that started the windowed program (desktop.rs).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_Console"] }
