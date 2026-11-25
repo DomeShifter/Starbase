@@ -11,6 +11,14 @@ new features and the last one for fixes.
   Settings are now `STARBASE_*`; the old `STARSHEETS_*` names still work.
 
 ### Added
+- **Format › Alternating colours**, as in Google Sheets: a side panel that bands the selected
+  range's rows in two colours, with a header and footer colour if you want them; eight preset
+  styles or your own colours, and Remove alternating colours. Saved as ordinary conditional
+  formatting, so Excel shows the same bands; your own conditional formatting still wins.
+- **Smart Fill**: type two entries next to a column of data (first names beside full names, say)
+  and a card under the next cell offers to fill the rest the same way; Accept or Ctrl+Shift+Y
+  fills it, ✕ hides it. Tools › Suggestion controls has Smart Fill and turns the card off.
+- **Edit › Move › Row up / Row down** (columns could already move left and right).
 - Filter views as in Google Sheets (Data › Filter views): create one, or save the sheet's filter
   as one; each has a name and a range and is listed in the menu to reopen. An open view filters
   only for you, in a dark bar above the grid (rename, change the range, duplicate, delete, ✕ to
