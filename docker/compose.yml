@@ -2,6 +2,7 @@
 # (Starbase Sheets and the home screen; Starbase Docs is at /docs/). Install guides: docs/install/.
 # Your files are kept as ordinary .xlsx and .docx files in ./starbase-data. The server runs as
 # user 1000, so make that folder first:  mkdir starbase-data && sudo chown 1000:1000 starbase-data
+# Same for photos-cache: mkdir photos-cache && sudo chown 1000:1000 photos-cache
 services:
   starbase:
     image: ghcr.io/domeshifter/starbase:latest
@@ -9,6 +10,8 @@ services:
       - "8080:8080"
     volumes:
       - ./starbase-data:/data
+      # Photos' index and thumbnails: must be a LOCAL disk (not a NAS share), so keep this volume.
+      - ./photos-cache:/cache
       # Backups (avatar › Backups…): best on another disk or share than the files themselves.
       # - /mnt/backup-disk/starbase-backups:/backups
     environment:

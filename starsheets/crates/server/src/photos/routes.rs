@@ -50,6 +50,9 @@ pub async fn route(
     if p.first().map(String::as_str) != Some("photos") {
         return None;
     }
+    if p.len() >= 2 && (p[1] == "albums" || p[1] == "places") {
+        return Some(super::albums::route(app, m, p, q, me, body).await);
+    }
     if p.len() == 3 && p[1] == "edits" {
         return Some(super::edits::route(app, m, p[2].clone(), me, headers, body).await);
     }
@@ -110,7 +113,7 @@ async fn switch(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User
     let a = app.clone();
     let f2 = folder.clone();
     let r = off(move || {
-        let svc = service(&a.store).ok_or_else(|| "Photos aren't available on this server.".to_string())?;
+        let svc = service(&a.store).ok_or_else(|| super::NOT_SET_UP.to_string())?;
         if on { svc.enable(&f2, &who).map(|()| true) } else { svc.disable(&f2) }
     })
     .await
@@ -138,7 +141,7 @@ async fn status(app: &Shared, me: Option<auth::User>) -> Response<Body> {
     let a = app.clone();
     match off(move || service(&a.store).map(|s| s.status())).await.flatten() {
         Some(v) => send_json(&v, 200),
-        None => error(503, "Photos aren't available on this server."),
+        None => error(503, super::admin_unavailable_message()),
     }
 }
 
@@ -189,7 +192,7 @@ async fn list(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>)
     })
     .await
     .flatten();
-    let Some((enabled, rows, waiting)) = got else { return error(503, "Photos aren't available on this server.") };
+    let Some((enabled, rows, waiting)) = got else { return error(503, super::NOT_SET_UP) };
     // Where pictures were taken: for people who may edit, through their account (not a link).
     let places = role >= sharing::Role::Edit && named;
     let mut items: Vec<(String, Value)> = rows
@@ -202,27 +205,7 @@ async fn list(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>)
                 "modified" => format!("{modified:020}"),
                 _ => r.meta.taken.clone().map(|t| t.chars().take(19).collect()).unwrap_or_else(|| iso(modified)),
             };
-            let ready = r.state == State::Ready;
-            let camera = [r.meta.make.as_deref(), r.meta.model.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" ");
-            let v = json!({
-                "id": id,
-                "pid": r.id,
-                "name": r.name,
-                "folder": r.folder,
-                "media": r.media,
-                "size": r.size,
-                "modified": modified,
-                "state": r.state.name(),
-                "error": r.error,
-                "v": if ready { r.thumb_key().map(tag) } else { None },
-                "edited": r.edits.is_some(),
-                "taken": r.meta.taken,
-                "width": if ready { Some(r.meta.width) } else { None },
-                "height": if ready { Some(r.meta.height) } else { None },
-                "orientation": if ready { Some(r.meta.orientation) } else { None },
-                "camera": (!camera.is_empty()).then_some(camera),
-                "gps": r.meta.lat.zip(r.meta.lon).filter(|_| places).map(|(lat, lon)| json!({"lat": lat, "lon": lon, "alt": r.meta.alt})),
-            });
+            let v = photo_json(&r, id, places);
             Some((format!("{key}\u{0}{}", r.path), v))
         })
         .collect();
@@ -239,6 +222,32 @@ async fn list(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>)
         }),
         200,
     )
+}
+
+/// One picture as the listings show it (`gps` only when `places`: people who may edit).
+pub(super) fn photo_json(r: &super::index::Row, id: &str, places: bool) -> Value {
+    let modified = r.mtime_ns.div_euclid(1_000_000_000);
+    let ready = r.state == State::Ready;
+    let camera = [r.meta.make.as_deref(), r.meta.model.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" ");
+    json!({
+        "id": id,
+        "pid": r.id,
+        "name": r.name,
+        "folder": r.folder,
+        "media": r.media,
+        "size": r.size,
+        "modified": modified,
+        "state": r.state.name(),
+        "error": r.error,
+        "v": if ready { r.thumb_key().map(tag) } else { None },
+        "edited": r.edits.is_some(),
+        "taken": r.meta.taken,
+        "width": if ready { Some(r.meta.width) } else { None },
+        "height": if ready { Some(r.meta.height) } else { None },
+        "orientation": if ready { Some(r.meta.orientation) } else { None },
+        "camera": (!camera.is_empty()).then_some(camera),
+        "gps": r.meta.lat.zip(r.meta.lon).filter(|_| places).map(|(lat, lon)| json!({"lat": lat, "lon": lon, "alt": r.meta.alt})),
+    })
 }
 
 /// Seconds since 1970 as `YYYY-MM-DDTHH:MM:SS` (UTC), to sort pictures without an EXIF date.
@@ -284,7 +293,7 @@ async fn thumb(app: &Shared, me: Option<auth::User>, id: String, size: &str, v: 
     }
     let a = app.clone();
     let got = off(move || -> Result<Found, (u16, Value)> {
-        let svc = service(&a.store).ok_or((503, json!({"error": "Photos aren't available on this server."})))?;
+        let svc = service(&a.store).ok_or((503, json!({"error": super::NOT_SET_UP})))?;
         if !svc.covers(&path) {
             return Err((404, json!({"error": "Photos isn't turned on for this folder.", "state": "off"})));
         }

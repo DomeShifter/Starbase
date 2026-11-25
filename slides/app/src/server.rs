@@ -95,6 +95,8 @@ struct State {
 pub struct Link {
     state: Rc<RefCell<State>>,
     ctx: egui::Context,
+    /// The Share and Version history dialogs.
+    dialogs: Rc<RefCell<(crate::dialogs::Share, crate::dialogs::History)>>,
 }
 
 fn query_param(key: &str) -> Option<String> {
@@ -103,11 +105,11 @@ fn query_param(key: &str) -> Option<String> {
 }
 
 /// The server's address for `path` (`api/…`): Starbase Slides sits in `slides/` beside the home page.
-fn api(path: &str) -> String {
+pub(crate) fn api(path: &str) -> String {
     format!("../{path}")
 }
 
-fn enc(s: &str) -> String {
+pub(crate) fn enc(s: &str) -> String {
     js_sys::encode_uri_component(s).as_string().unwrap_or_default()
 }
 
@@ -132,7 +134,7 @@ impl Link {
         let folder = query_param("folder").unwrap_or_default();
         let state = Rc::new(RefCell::new(State { id, make_new, folder, ..Default::default() }));
         CURRENT.with(|c| *c.borrow_mut() = Some(state.clone()));
-        let link = Self { state, ctx };
+        let link = Self { state, ctx, dialogs: Rc::default() };
         link.ask_who();
         Some(link)
     }
@@ -500,6 +502,29 @@ impl Link {
 }
 
 impl crate::shell::Drive for Link {
+    fn file_id(&self) -> Option<String> {
+        self.id()
+    }
+
+    fn share(&self) {
+        if let Some(id) = self.id() {
+            let name = self.name();
+            self.dialogs.borrow_mut().0.start(&id, &name, &self.ctx);
+        }
+    }
+
+    fn history(&self) {
+        if let Some(id) = self.id() {
+            self.dialogs.borrow_mut().1.start(&id, &self.ctx);
+        }
+    }
+
+    fn dialogs(&self, ctx: &egui::Context) {
+        let mut d = self.dialogs.borrow_mut();
+        d.0.ui(ctx);
+        d.1.ui(ctx);
+    }
+
     fn name(&self) -> String {
         self.state.borrow().name.clone()
     }
