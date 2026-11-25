@@ -67,8 +67,12 @@ pub(crate) fn find(store: &Store, auth: bool, me: Option<&User>, path: &str) -> 
     }
     let a = Access::new(store, auth, me);
     let id = a.file_paths.iter().find(|(_, p)| **p == path).map(|(id, _)| id.clone());
+    // Both checks run whether or not the path was found, so "not yours" and "not there" take the
+    // same work as well as giving the same answer.
+    let probe = id.as_deref().unwrap_or("");
+    let (listed, role) = (a.file_listed(probe), a.file_role(probe));
     match id {
-        Some(id) if a.file_listed(&id) && a.file_role(&id) >= Role::View => {
+        Some(id) if listed && role >= Role::View => {
             let name = store::base_of(&path);
             let kind = if store::is_doc(&name) { "doc" } else { "sheet" };
             Ok(json!({ "id": id, "name": name, "path": path, "kind": kind }))

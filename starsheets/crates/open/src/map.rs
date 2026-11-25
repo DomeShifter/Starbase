@@ -30,11 +30,10 @@ pub fn load(dir: &Path, server: &str) -> Option<Storage> {
 }
 
 pub fn save(dir: &Path, s: &Storage) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
     let folder = s.folder.as_ref().map(|f| f.to_string_lossy().into_owned());
-    let tmp = dir.join(format!("{SETTING}.tmp"));
-    std::fs::write(&tmp, serde_json::to_vec_pretty(&json!({ "server": s.server, "folder": folder })).unwrap_or_default())?;
-    std::fs::rename(&tmp, dir.join(SETTING))
+    // Only this user can read it, like server.json beside it.
+    let bytes = serde_json::to_vec_pretty(&json!({ "server": s.server, "folder": folder })).unwrap_or_default();
+    starbase_connect::write_private(&dir.join(SETTING), &bytes)
 }
 
 /// Forgets the setting (asked again next time).
@@ -91,14 +90,30 @@ pub fn encode(s: &str) -> String {
 
 /// The page a found file opens on (the server's answer to `api/find-path`): the spreadsheet page
 /// or Docs' page beside it, as the web app's own links. Built here from the id, never taken as an
-/// address from the answer, so the server can only ever send the browser to itself.
-pub fn web_url(server: &str, found: &Value) -> Option<String> {
-    let id = found.get("id").and_then(Value::as_str)?;
+/// address from the answer, so the server can only ever send the browser to itself. The saved
+/// server address must be http:// or https:// ([`web_address`]): anything else could open a
+/// local file (on Windows the browser is started through the system's "open this" handler).
+pub fn web_url(server: &str, found: &Value) -> Result<String, String> {
+    if !web_address(server) {
+        return Err(not_web(server));
+    }
+    let id = found.get("id").and_then(Value::as_str).unwrap_or("");
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
-        return None;
+        return Err("the server's answer wasn't understood".into());
     }
     let page = if found.get("kind").and_then(Value::as_str) == Some("doc") { "docs/" } else { "" };
-    Some(format!("{}/{page}?file={id}", server.trim_end_matches('/')))
+    Ok(format!("{}/{page}?file={id}", server.trim_end_matches('/')))
+}
+
+/// Whether a saved server address is a web address: http:// or https://, with a host.
+pub fn web_address(server: &str) -> bool {
+    let lower = server.to_ascii_lowercase();
+    lower.strip_prefix("https://").or_else(|| lower.strip_prefix("http://")).is_some_and(|rest| !rest.is_empty() && !rest.starts_with('/'))
+}
+
+/// Why nothing is opened from a saved address that isn't a web address.
+pub fn not_web(server: &str) -> String {
+    format!("the saved server address ({server}) doesn't start with https:// or http://, so nothing is opened from it; connect to the server again")
 }
 
 /// The desktop program for a file: Starbase Docs for documents, else Starbase Sheets (as the
@@ -150,10 +165,15 @@ mod tests {
     #[test]
     fn the_web_address_is_built_here() {
         let s = "https://files.example.org";
-        assert_eq!(web_url(s, &json!({"id": "a1b2c3", "kind": "sheet"})).as_deref(), Some("https://files.example.org/?file=a1b2c3"));
-        assert_eq!(web_url("https://x.org/sb/", &json!({"id": "a1", "kind": "doc"})).as_deref(), Some("https://x.org/sb/docs/?file=a1"));
+        assert_eq!(web_url(s, &json!({"id": "a1b2c3", "kind": "sheet"})).as_deref(), Ok("https://files.example.org/?file=a1b2c3"));
+        assert_eq!(web_url("https://x.org/sb/", &json!({"id": "a1", "kind": "doc"})).as_deref(), Ok("https://x.org/sb/docs/?file=a1"));
+        assert!(web_url("HTTP://nas.local:8080", &json!({"id": "a1"})).is_ok());
         for bad in [json!({}), json!({"id": ""}), json!({"id": "x&y=1"}), json!({"id": "//evil.example"}), json!({"id": 5})] {
-            assert_eq!(web_url(s, &bad), None, "{bad}");
+            assert!(web_url(s, &bad).is_err(), "{bad}");
+        }
+        // Only web addresses: an edited server.json can't make the browser open a local file.
+        for bad in ["file:///etc", "C:\\x", "javascript:alert(1)", "https://", "https:///x", "smb://nas/share", ""] {
+            assert!(web_url(bad, &json!({"id": "a1"})).unwrap_err().contains("https://"), "{bad}");
         }
     }
 
@@ -178,6 +198,11 @@ mod tests {
         assert_eq!(load(&dir, "https://a.example"), None);
         let s = Storage { server: "https://a.example".into(), folder: Some("/mnt/nas/starbase".into()) };
         save(&dir, &s).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(std::fs::metadata(dir.join(SETTING)).unwrap().permissions().mode() & 0o777, 0o600, "this user only");
+        }
         assert_eq!(load(&dir, "https://a.example"), Some(s));
         assert_eq!(load(&dir, "https://b.example"), None, "another server: asked again");
         let no = Storage { server: "https://a.example".into(), folder: None };

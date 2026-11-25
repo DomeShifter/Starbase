@@ -353,8 +353,9 @@ fn keyring_allowed() -> bool {
     std::env::var("STARBASE_NO_KEYRING").map_or(true, |v| v.trim().is_empty() || v.trim() == "0")
 }
 
-/// Writes `bytes` to `path` readable by this user only (0600), atomically.
-fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+/// Writes `bytes` to `path` readable by this user only (0600), atomically. Also used for
+/// starbase-open's setting beside `server.json`.
+pub fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;

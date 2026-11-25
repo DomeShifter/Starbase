@@ -122,6 +122,10 @@ fn plan(file: &Path, asked: &mut Asked) -> Plan {
     let desktop = |why: &str| Plan::Desktop(map::program_for(file), why.to_string());
     let Some(server) = starbase_connect::saved() else { return desktop("not connected to a server") };
     let Some(dir) = starbase_connect::config_dir() else { return desktop("no settings folder") };
+    // Nothing is sent to, or opened from, a saved address that isn't http:// or https://.
+    if !map::web_address(&server.url) {
+        return desktop(&map::not_web(&server.url));
+    }
     let storage = match map::load(&dir, &server.url) {
         Some(s) => s,
         None if *asked == Asked::Not => {
@@ -151,8 +155,8 @@ fn plan(file: &Path, asked: &mut Asked) -> Plan {
     };
     match reply.status {
         200 => match map::web_url(&server.url, &reply.json()) {
-            Some(url) => Plan::Web(url),
-            None => desktop("the server's answer wasn't understood"),
+            Ok(url) => Plan::Web(url),
+            Err(why) => desktop(&why),
         },
         401 => {
             server.forget_if_current();
