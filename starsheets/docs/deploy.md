@@ -11,6 +11,7 @@ container (port 8080, files in `/data`). Settings:
 | `STARSHEETS_AUTH=off` | No sign-in, for a private network you trust: everyone is a guest |
 | `LOCATION` | How the app tells people where files are kept ("Saved to …") |
 | `KEEP` | How many earlier versions of each file to keep (default 6) |
+| `STARSHEETS_OIDC_*` | Single sign-on through your own sign-in service (Authelia, Authentik, Keycloak…): see [oidc.md](oidc.md) |
 
 **Security settings** (all optional; a server on a home network reached by its address works
 without them):

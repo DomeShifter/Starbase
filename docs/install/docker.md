@@ -181,6 +181,7 @@ through for live editing. Settings for proxies: [deploy.md, Security settings](.
 |---|---|
 | `STARSHEETS_PASSWORD` | Your own setup code for the owner's account (12+ characters) |
 | `STARSHEETS_AUTH=off` | No sign-in at all, for a private network you trust |
+| `STARSHEETS_OIDC_*` | Single sign-on through your own sign-in service ([details](../../starsheets/docs/oidc.md)) |
 | `STARSHEETS_PUBLIC_URL` | The address people use from outside, e.g. `https://office.example.com` |
 | `TZ` | Time zone for the backup hour, e.g. `Europe/London` (default UTC) |
 | `LOCATION` | How the apps tell people where files are kept ("Saved to …"; default "the server") |

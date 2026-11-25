@@ -376,6 +376,11 @@ pub fn note(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text).size(NOTE).color(theme::TEXT_DIM));
 }
 
+/// A note with more detail when the pointer is over it.
+pub fn note_with_tip(ui: &mut Ui, text: &str, tip: &str) {
+    ui.label(RichText::new(text).size(NOTE).color(theme::TEXT_DIM)).on_hover_text(tip);
+}
+
 /// A small-capitals heading (STANDARD, CUSTOM).
 pub fn caps(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text.to_uppercase()).size(CAPS).strong().color(theme::TEXT_DIM));

@@ -325,6 +325,12 @@ impl Live {
                 self.ws = None;
                 self.open = false;
                 self.failures += 1;
+                // Reconnecting keeps failing: the sign-in may have ended (a WebSocket can't say
+                // why it was refused), so the account checks, and renews a single sign-on
+                // session at a quiet moment (account.rs).
+                if self.failures >= 2 {
+                    crate::account::check_session();
+                }
                 if !self.joined && self.failures >= 3 {
                     // Never got in: an older server, or a plain web host. Save as before.
                     log::warn!("live editing: no connection to the server; saving the usual way");

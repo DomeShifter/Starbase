@@ -1,5 +1,7 @@
 //! Accounts (live editing step 2): people sign in with a username and password kept on this
-//! server (Argon2 hashes in STORE/.starsheets/users.json). No sign-in through other companies.
+//! server (Argon2 hashes in STORE/.starsheets/users.json), or through the server owner's own
+//! identity provider (single sign-on, oidc.rs), whose accounts are linked here by issuer and
+//! subject. No sign-in through other companies.
 //!
 //! The first account is the owner's. It is made in the app with a setup code from the server's
 //! log (or STARSHEETS_PASSWORD when set), so nobody else can claim a new server first. The owner
@@ -265,7 +267,7 @@ pub fn update_hashed(store: &Store, username: &str, name: Option<&str>, colour: 
     let user = to_user(u);
     save(store, &users).map_err(|e| e.to_string())?;
     if new_password {
-        end_sessions(store, username);
+        end_all_sessions(store, username);
     }
     Ok(user)
 }
@@ -278,8 +280,194 @@ pub fn remove(store: &Store, username: &str) -> Result<(), String> {
         return Err("That person can't be removed.".into());
     }
     save(store, &users).map_err(|e| e.to_string())?;
-    end_sessions(store, username);
+    end_all_sessions(store, username);
     Ok(())
+}
+
+// ---------------------------------------------------------------- single sign-on (oidc.rs)
+
+/// Whether account `u` is linked to the sign-in `sub` at identity provider `iss`.
+fn has_link(u: &Map<String, Value>, iss: &str, sub: &str) -> bool {
+    u.get("oidc").and_then(Value::as_array).is_some_and(|links| {
+        links.iter().any(|l| l.get("iss").and_then(Value::as_str) == Some(iss) && l.get("sub").and_then(Value::as_str) == Some(sub))
+    })
+}
+
+/// The account linked to a provider's sign-in (issuer and subject: never by email or username,
+/// which anyone could set to someone else's at their provider). The link is kept on the account
+/// itself, so it goes when the account is removed.
+pub fn linked(store: &Store, iss: &str, sub: &str) -> Option<User> {
+    load(store).iter().find(|u| has_link(u, iss, sub)).map(to_user)
+}
+
+/// Whether `username` has a single sign-on link.
+pub fn is_linked(store: &Store, username: &str) -> bool {
+    link_of(store, username).is_some()
+}
+
+/// A single sign-on link: the provider's sign-in (issuer and subject, what the account is found
+/// by) and, only to show the owner in People, what the provider called the person at their last
+/// sign-in.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Link {
+    pub iss: String,
+    pub sub: String,
+    pub email: String,
+    pub username: String,
+}
+
+/// The provider's sign-in `username` is linked to.
+pub fn link_of(store: &Store, username: &str) -> Option<Link> {
+    let users = load(store);
+    let l = users.iter().find(|u| u.get("username").and_then(Value::as_str) == Some(username))?.get("oidc")?.as_array()?.first()?.clone();
+    let s = |k: &str| l.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    Some(Link { iss: l.get("iss")?.as_str()?.to_string(), sub: l.get("sub")?.as_str()?.to_string(), email: s("email"), username: s("username") })
+}
+
+/// Keeps what the provider calls the person (email, preferred username) on the link `username`
+/// signed in with, for People. Never used to find an account. Saved only when it changed.
+pub fn note_link_names(store: &Store, username: &str, iss: &str, sub: &str, email: &str, at_provider: &str) -> Result<(), String> {
+    let clean = |s: &str| s.trim().chars().filter(|c| !c.is_control()).take(200).collect::<String>();
+    let (email, at_provider) = (clean(email), clean(at_provider));
+    let mut users = load(store);
+    let Some(l) = users
+        .iter_mut()
+        .find(|u| u.get("username").and_then(Value::as_str) == Some(username))
+        .and_then(|u| u.get_mut("oidc"))
+        .and_then(Value::as_array_mut)
+        .and_then(|links| {
+            links.iter_mut().find(|l| l.get("iss").and_then(Value::as_str) == Some(iss) && l.get("sub").and_then(Value::as_str) == Some(sub))
+        })
+    else {
+        return Ok(());
+    };
+    if l.get("email").and_then(Value::as_str) == Some(email.as_str()) && l.get("username").and_then(Value::as_str) == Some(at_provider.as_str()) {
+        return Ok(());
+    }
+    l["email"] = json!(email);
+    l["username"] = json!(at_provider);
+    save(store, &users).map_err(|e| e.to_string())
+}
+
+/// Whether `username` has a password (accounts made through single sign-on have none).
+pub fn has_password(store: &Store, username: &str) -> bool {
+    login_hash(store, username).is_some_and(|(_, h)| !h.is_empty())
+}
+
+/// Removes `username`'s single sign-on link, whatever it is (a new password was set, so the
+/// account can still be signed in to).
+pub fn drop_links(store: &Store, username: &str) -> Result<(), String> {
+    let mut users = load(store);
+    let u = users.iter_mut().find(|u| u.get("username").and_then(Value::as_str) == Some(username)).ok_or("No such person.")?;
+    if u.remove("oidc").is_some() {
+        save(store, &users).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Links `username` to a provider's sign-in (one link per account; a new one replaces it).
+pub fn link(store: &Store, username: &str, iss: &str, sub: &str) -> Result<User, String> {
+    let mut users = load(store);
+    if users.iter().any(|u| has_link(u, iss, sub) && u.get("username").and_then(Value::as_str) != Some(username)) {
+        return Err("That sign-in is already linked to another account.".into());
+    }
+    let u = users.iter_mut().find(|u| u.get("username").and_then(Value::as_str) == Some(username)).ok_or("No such person.")?;
+    u.insert("oidc".into(), json!([{ "iss": iss, "sub": sub }]));
+    let user = to_user(u);
+    save(store, &users).map_err(|e| e.to_string())?;
+    Ok(user)
+}
+
+/// Why an account with no password keeps its link (it couldn't sign in at all without it).
+pub const NO_PASSWORD_UNLINK: &str = "This account has no password, so it signs in only through single sign-on: removing the link would lock it out. Set a password first (your avatar › Your name and colour › Set a password), then remove the link.";
+
+/// Removes `username`'s single sign-on link. An account with no password keeps its link: it
+/// couldn't sign in at all otherwise.
+pub fn unlink(store: &Store, username: &str) -> Result<(), String> {
+    let mut users = load(store);
+    let u = users.iter_mut().find(|u| u.get("username").and_then(Value::as_str) == Some(username)).ok_or("No such person.")?;
+    if u.get("hash").and_then(Value::as_str).is_none_or(str::is_empty) {
+        return Err(NO_PASSWORD_UNLINK.into());
+    }
+    u.remove("oidc");
+    save(store, &users).map_err(|e| e.to_string())?;
+    // Sessions made through that sign-in end now, not when they run out.
+    end_sso_sessions(store, username);
+    Ok(())
+}
+
+/// Makes `username` an owner or not because of STARSHEETS_OIDC_OWNER_GROUP. Only takes away
+/// what the group gave: an owner made with the setup code stays one, whatever group the
+/// sign-in they link is in (so linking can't lock them out). Never takes it from the last owner
+/// (nobody could manage the server then). Unchanged: the account as it is.
+pub fn set_owner_by_group(store: &Store, username: &str, owner: bool) -> Result<User, String> {
+    let mut users = load(store);
+    let owners = users.iter().filter(|u| u.get("owner").and_then(Value::as_bool) == Some(true)).count();
+    let u = users.iter_mut().find(|u| u.get("username").and_then(Value::as_str) == Some(username)).ok_or("No such person.")?;
+    let was = u.get("owner").and_then(Value::as_bool).unwrap_or(false);
+    let from_group = u.get("owner_from").and_then(Value::as_str) == Some("group");
+    if was == owner || (was && (owners <= 1 || !from_group)) {
+        return Ok(to_user(u));
+    }
+    u.insert("owner".into(), json!(owner));
+    if owner {
+        u.insert("owner_from".into(), json!("group"));
+    } else {
+        u.remove("owner_from");
+    }
+    let user = to_user(u);
+    save(store, &users).map_err(|e| e.to_string())?;
+    Ok(user)
+}
+
+/// A username made from what the provider calls the person (`wanted`), free on this server:
+/// lower case, only the characters usernames allow, a number added when it is taken.
+pub fn free_username(store: &Store, wanted: &str) -> String {
+    let mut base: String = wanted
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') { c } else { '-' })
+        .collect::<String>()
+        .trim_start_matches('.')
+        .chars()
+        .take(28)
+        .collect();
+    if base.chars().count() < 2 {
+        base = format!("user{base}");
+    }
+    let taken: Vec<String> = users(store).into_iter().map(|u| u.username).collect();
+    if !taken.contains(&base) {
+        return base;
+    }
+    (2..).map(|n| format!("{base}{n}")).find(|c| !taken.contains(c)).unwrap_or(base)
+}
+
+/// Adds an account for someone signing in through single sign-on: linked to their provider's
+/// sign-in, with no password (password sign-in always fails for it). Owner only when asked
+/// (`owner`: the provider says they are in STARSHEETS_OIDC_OWNER_GROUP).
+pub fn add_linked(store: &Store, wanted: &str, name: &str, iss: &str, sub: &str, owner: bool) -> Result<User, String> {
+    let username = free_username(store, wanted);
+    let name = clean_display(name).or_else(|_| clean_display(&username))?;
+    let mut users = load(store);
+    if users.iter().any(|u| has_link(u, iss, sub)) {
+        return Err("That sign-in is already linked to another account.".into());
+    }
+    let colour = COLOURS[users.len() % COLOURS.len()].to_string();
+    let mut u = Map::new();
+    u.insert("username".into(), json!(clean_username(&username)?));
+    u.insert("name".into(), json!(name));
+    u.insert("colour".into(), json!(colour));
+    u.insert("owner".into(), json!(owner));
+    if owner {
+        u.insert("owner_from".into(), json!("group"));
+    }
+    u.insert("oidc".into(), json!([{ "iss": iss, "sub": sub }]));
+    u.insert("created".into(), json!(now() as i64));
+    let user = to_user(&u);
+    users.push(u);
+    save(store, &users).map_err(|e| e.to_string())?;
+    Ok(user)
 }
 
 // ---------------------------------------------------------------- sessions
@@ -291,14 +479,88 @@ fn token_hash(token: &str) -> String {
 
 /// A new sign-in for `username`: the cookie value.
 pub fn new_session(store: &Store, username: &str) -> std::io::Result<String> {
+    new_session_with(store, username, None)
+}
+
+/// When a session (a stored one) stops being kept: an ended single sign-on session is kept
+/// until it can't be renewed any more.
+fn kept_until(v: &Value) -> f64 {
+    let f = |k: &str| v.get(k).and_then(Value::as_f64).unwrap_or(0.0);
+    f("expires").max(f("renew_until"))
+}
+
+/// A session made through single sign-on.
+pub struct SsoSession<'a> {
+    /// The provider's ID token, for signing out there too.
+    pub id_token: &'a str,
+    /// How long it lasts, in seconds.
+    pub secs: u64,
+    /// The provider checked who it was just now (oidc::Start::fresh).
+    pub fresh: bool,
+}
+
+/// A new sign-in. Through single sign-on it is marked as such: it lasts `secs`, then can be
+/// renewed at the provider (without a password) until SESSION_DAYS are up.
+pub fn new_session_with(store: &Store, username: &str, sso: Option<SsoSession>) -> std::io::Result<String> {
     let token = random_hex(32);
     let t = now();
     let mut sessions = store.load_json(&sessions_path(store));
     // Sessions from before accounts (a bare expiry time) and expired ones go.
-    sessions.retain(|_, v| v.get("expires").and_then(Value::as_f64).unwrap_or(0.0) > t);
-    sessions.insert(token_hash(&token), json!({ "user": username, "expires": t + (SESSION_DAYS * 86400) as f64 }));
+    sessions.retain(|_, v| kept_until(v) > t);
+    let days = (SESSION_DAYS * 86400) as f64;
+    let mut s = json!({ "user": username, "expires": t + days, "made": t });
+    if let Some(sso) = sso {
+        s["id_token"] = json!(sso.id_token);
+        s["sso"] = json!(true);
+        s["fresh"] = json!(sso.fresh);
+        s["expires"] = json!(t + (sso.secs as f64).min(days));
+        s["renew_until"] = json!(t + days);
+    }
+    sessions.insert(token_hash(&token), s);
     store.save_json(&sessions_path(store), &Value::Object(sessions))?;
     Ok(token)
+}
+
+/// A session made through single sign-on, still valid: when it was made.
+pub fn sso_session_made(store: &Store, token: &str) -> Option<f64> {
+    let sessions = store.load_json(&sessions_path(store));
+    let s = sessions.get(&token_hash(token))?;
+    let valid = s.get("expires").and_then(Value::as_f64).unwrap_or(0.0) > now();
+    (valid && s.get("sso").and_then(Value::as_bool) == Some(true)).then(|| s.get("made").and_then(Value::as_f64).unwrap_or(0.0))
+}
+
+/// A session made through single sign-on, still valid: when it ends (the app renews it at the
+/// provider shortly before).
+pub fn sso_session_expires(store: &Store, token: &str) -> Option<f64> {
+    let sessions = store.load_json(&sessions_path(store));
+    let s = sessions.get(&token_hash(token))?;
+    let expires = s.get("expires").and_then(Value::as_f64).unwrap_or(0.0);
+    (expires > now() && s.get("sso").and_then(Value::as_bool) == Some(true)).then_some(expires)
+}
+
+/// A session made through a fresh single sign-on (the provider asked who it was again), still
+/// valid: when it was made.
+pub fn fresh_sso_session_made(store: &Store, token: &str) -> Option<f64> {
+    let sessions = store.load_json(&sessions_path(store));
+    let fresh = sessions.get(&token_hash(token))?.get("fresh").and_then(Value::as_bool) == Some(true);
+    if fresh { sso_session_made(store, token) } else { None }
+}
+
+/// Whether a session made through single sign-on has ended (STARSHEETS_OIDC_SESSION_HOURS) but
+/// may be renewed at the provider: the app then goes there without asking.
+pub fn session_renewable(store: &Store, token: &str) -> bool {
+    let sessions = store.load_json(&sessions_path(store));
+    let Some(s) = sessions.get(&token_hash(token)) else { return false };
+    let t = now();
+    s.get("sso").and_then(Value::as_bool) == Some(true)
+        && s.get("expires").and_then(Value::as_f64).unwrap_or(0.0) <= t
+        && s.get("renew_until").and_then(Value::as_f64).unwrap_or(0.0) > t
+        && s.get("user").and_then(Value::as_str).is_some_and(|u| users(store).iter().any(|x| x.username == u))
+}
+
+/// The provider's ID token of a session that came through single sign-on.
+pub fn session_id_token(store: &Store, token: &str) -> Option<String> {
+    store.load_json(&sessions_path(store)).get(&token_hash(token))?.get("id_token")?.as_str().map(str::to_string)
 }
 
 pub fn end_session(store: &Store, token: &str) {
@@ -308,9 +570,17 @@ pub fn end_session(store: &Store, token: &str) {
     }
 }
 
-fn end_sessions(store: &Store, username: &str) {
+/// Signs `username` out everywhere.
+pub fn end_all_sessions(store: &Store, username: &str) {
     let mut sessions = store.load_json(&sessions_path(store));
     sessions.retain(|_, v| v.get("user").and_then(Value::as_str) != Some(username));
+    let _ = store.save_json(&sessions_path(store), &Value::Object(sessions));
+}
+
+/// Ends `username`'s sessions made through single sign-on (password ones stay).
+pub fn end_sso_sessions(store: &Store, username: &str) {
+    let mut sessions = store.load_json(&sessions_path(store));
+    sessions.retain(|_, v| v.get("user").and_then(Value::as_str) != Some(username) || v.get("sso").and_then(Value::as_bool) != Some(true));
     let _ = store.save_json(&sessions_path(store), &Value::Object(sessions));
 }
 

@@ -235,6 +235,7 @@ impl eframe::App for WebShell {
         if self.home.active {
             // The home screen: no spreadsheet runs; dropped files are uploaded where you are.
             self.home.logic(ctx);
+            crate::account::set_typing(false);
             self.share.logic(&self.app, ctx, &self.files);
             let dropped: Vec<(String, Vec<u8>)> = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(|e| e.into_inner()));
             for (name, bytes) in dropped {
@@ -254,6 +255,8 @@ impl eframe::App for WebShell {
         crate::images::logic(&mut self.app, ctx);
         crate::house::keep(ctx);
         self.app.logic(ctx);
+        // A cell being typed in: renewing the sign-in waits (account.rs).
+        crate::account::set_typing(self.app.editor.is_some());
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#1562).
         // Settings change after input (the frame of a click or key and the one after it, as the
         // change happens in `ui`), so only then, and once a second for anything else.

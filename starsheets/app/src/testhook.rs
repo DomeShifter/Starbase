@@ -176,6 +176,11 @@ impl TestHook {
 
 /// Runs one id as the menus and toolbar would, but hands back a result or an error.
 fn run(ctx: &egui::Context, app: &mut SheetApp, home: &mut Home, id: &str, params: Value) -> Result<Value, String> {
+    // The avatar menu's dialogs (account.rs), on either screen.
+    if let Some(what) = id.strip_prefix("account:") {
+        crate::account::request(ctx, what)?;
+        return Ok(json!({ "opened": id }));
+    }
     if id.starts_with("home:") {
         return if home.active { home.test_run(ctx, id, &params) } else { Err("not on the home screen".into()) };
     }

@@ -141,7 +141,7 @@ impl Rooms {
 
 pub async fn ws(State(app): State<Shared>, headers: HeaderMap, upgrade: WebSocketUpgrade) -> Response {
     if !crate::signed_in(&app, &headers) {
-        return crate::error(401, "please sign in").into_response();
+        return crate::please_sign_in(&app, &headers).into_response();
     }
     let user = crate::current_user(&app, &headers);
     // A tab's biggest message is a change sent whole; packed it stays well under MAX_FRAME (and
@@ -1136,8 +1136,16 @@ mod tests {
         std::fs::write(dir.join("t.csv"), "a,b\n1,2\n").unwrap();
         let store = Store { root: dir.clone(), keep: 3, spaces: false };
         let id = store.synced_index().unwrap().keys().next().unwrap().clone();
-        let app =
-            Arc::new(App { store, base: dir.clone(), lock: Mutex::new(()), location: String::new(), auth, site: None, rooms: Rooms::default() });
+        let app = Arc::new(App {
+            store,
+            base: dir.clone(),
+            lock: Mutex::new(()),
+            location: String::new(),
+            auth,
+            site: None,
+            rooms: Rooms::default(),
+            oidc: None,
+        });
         (app, id, dir)
     }
 
@@ -1553,6 +1561,7 @@ mod tests {
             auth: false,
             site: None,
             rooms: Rooms::default(),
+            oidc: None,
         });
         let opened = |dir: &std::path::Path| {
             let bytes = std::fs::read(dir.join("t.xlsx")).unwrap();

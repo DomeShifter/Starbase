@@ -4,6 +4,8 @@
 #   docker run -p 8080:8080 -v starsheets:/data ghcr.io/domeshifter/starsheets
 FROM debian:13.7-slim
 ARG TARGETARCH
+# The certificate list: single sign-on (docs/oidc.md) checks the sign-in service's HTTPS against it.
+RUN apt-get update -qq && apt-get install -y -qq --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN useradd -u 1000 -M -s /usr/sbin/nologin starsheets && mkdir -p /data && chown starsheets /data
 COPY --chmod=755 server-bin/${TARGETARCH}/starsheets-server /usr/local/bin/starsheets-server
 COPY site/ /site/
