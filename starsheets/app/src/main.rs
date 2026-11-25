@@ -27,6 +27,7 @@ mod customnumber;
 mod datepicker;
 mod dvpanel;
 mod editmenu;
+mod emacs_keys;
 mod errortip;
 #[cfg(target_arch = "wasm32")]
 mod filebrowser;

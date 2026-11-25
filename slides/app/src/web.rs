@@ -185,6 +185,7 @@ impl eframe::App for WebShell {
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        crate::emacs_keys::strip(ctx, raw);
         // Browsers cannot read dropped files synchronously: consume this pass's drops here and
         // deliver them through the inbox once read.
         for f in std::mem::take(&mut raw.dropped_files) {

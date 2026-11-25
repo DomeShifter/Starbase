@@ -295,6 +295,7 @@ impl eframe::App for WebShell {
 
     /// Forwards a browser frame's raw input to the shared app before eframe handles it.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        crate::emacs_keys::strip(ctx, raw);
         drop_alt_text(raw);
         self.input.raw_input(raw);
         self.autolink.saw_input(raw);
