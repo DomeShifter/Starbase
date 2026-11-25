@@ -6224,6 +6224,7 @@ dependencies = [
  "gridcraft-engine",
  "hex",
  "jiff 0.2.46",
+ "libc",
  "mime_guess",
  "openidconnect",
  "percent-encoding",

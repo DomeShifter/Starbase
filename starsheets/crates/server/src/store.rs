@@ -227,6 +227,9 @@ pub fn clean_name(name: Option<&str>) -> String {
         .unwrap_or("")
         .trim()
         .chars()
+        // Direction marks (U+202A–202E, U+2066–2069, U+200E/F) go: they can make "gpj.exe" look
+        // like "exe.jpg".
+        .filter(|c| !matches!(*c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}' | '\u{200E}' | '\u{200F}'))
         .map(|c| if matches!(c, '\\' | '/' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || (c as u32) < 0x20 { '-' } else { c })
         .collect();
     let s: String = swapped.trim_matches(|c| c == '.' || c == ' ').chars().take(150).collect();
@@ -441,13 +444,10 @@ impl Store {
             if name.starts_with('.') {
                 continue;
             }
-            // A symbolic link counts only when it leads somewhere inside the store, and a linked
-            // folder only when it isn't one this one is inside (no endless loops).
-            let linked = e.file_type().map(|t| t.is_symlink()).unwrap_or(true);
-            if linked && !self.link_ok(&e.path()) {
-                continue;
-            }
-            let Ok(meta) = fs::metadata(e.path()) else { continue };
+            // Symbolic links are never followed, to files or folders: one made over a file share
+            // could lead to StarSheets' own data (.starsheets: sign-ins, passwords) or into
+            // someone else's folder, past the sharing checks of the folder it sits in.
+            let Ok(meta) = fs::symlink_metadata(e.path()) else { continue };
             if meta.is_dir() {
                 dirs.push(name);
             } else if meta.is_file() {
@@ -462,31 +462,76 @@ impl Store {
         }
     }
 
-    /// Whether symbolic link `link` leads inside the store (and, for a folder, not to a folder
-    /// it is itself inside).
-    fn link_ok(&self, link: &Path) -> bool {
-        let (Ok(root), Ok(to)) = (fs::canonicalize(&self.root), fs::canonicalize(link)) else { return false };
-        if !to.starts_with(&root) || to == root {
-            return false;
-        }
-        if to.is_dir() {
-            let here = link.parent().and_then(|p| fs::canonicalize(p).ok()).unwrap_or_default();
-            return !here.starts_with(&to);
+    /// Whether no part of `relpath` (below the store's own folder) is a symbolic link or hidden.
+    /// Missing parts are fine (checked by whoever needs them to exist).
+    pub fn no_links(&self, relpath: &str) -> bool {
+        let mut p = self.root.clone();
+        for part in relpath.split('/').filter(|x| !x.is_empty()) {
+            if part.starts_with('.') {
+                return false;
+            }
+            p.push(part);
+            if fs::symlink_metadata(&p).is_ok_and(|m| m.file_type().is_symlink()) {
+                return false;
+            }
         }
         true
     }
 
-    /// The file at `relpath` on disk, if it is a plain file inside the store: never one a
-    /// symbolic link (of the file or of a folder on the way) takes outside it, never a pipe, never
-    /// a hidden one. Every read and write of a file by id goes through this.
+    /// The file at `relpath` on disk, if it is a plain file reached without any symbolic link
+    /// (never a pipe, never a hidden one). Every file read or written by id is checked with this
+    /// ([`Self::path_of`]); reads open it with [`Self::open_safe`].
     pub fn safe_file(&self, relpath: &str) -> Option<PathBuf> {
-        if relpath.split('/').any(|p| p.is_empty() || p.starts_with('.')) {
+        if relpath.split('/').any(|p| p.is_empty() || p.starts_with('.')) || !self.no_links(relpath) {
             return None;
         }
         let full = self.full(relpath);
-        let root = fs::canonicalize(&self.root).ok()?;
-        let real = fs::canonicalize(&full).ok()?;
-        (real.starts_with(&root) && real != root && fs::metadata(&real).ok()?.is_file()).then_some(full)
+        fs::symlink_metadata(&full).ok()?.is_file().then_some(full)
+    }
+
+    /// Opens the file at `relpath` for reading, as [`Self::safe_file`] allows, and makes sure the
+    /// file opened is that one: the last part is opened without following a link, and the opened
+    /// file's real path (or, without /proc, its device and inode) must be the path checked, so a
+    /// link swapped in between the check and the open is refused.
+    pub fn open_safe(&self, relpath: &str) -> Option<fs::File> {
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+        use std::os::unix::io::AsRawFd;
+        let full = self.safe_file(relpath)?;
+        let f = fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(&full).ok()?;
+        let m = f.metadata().ok()?;
+        if !m.is_file() {
+            return None;
+        }
+        match fs::read_link(format!("/proc/self/fd/{}", f.as_raw_fd())) {
+            Ok(real) => (real == fs::canonicalize(&self.root).ok()?.join(relpath)).then_some(f),
+            Err(_) => {
+                let again = fs::symlink_metadata(self.safe_file(relpath)?).ok()?;
+                ((again.dev(), again.ino()) == (m.dev(), m.ino())).then_some(f)
+            }
+        }
+    }
+
+    /// Keeps a copy of the file at `relpath` in its owner's bin (restorable, under its own name),
+    /// before it is replaced by an upload: files without versions don't lose what they held.
+    pub fn copy_to_bin(&self, relpath: &str) -> io::Result<()> {
+        use std::io::Read;
+        let space = if self.spaces { space_of(relpath) } else { "" };
+        let bin = self.bin(space);
+        fs::create_dir_all(&bin)?;
+        let name = base_of(relpath);
+        let (stem, ext) = splitext(&name);
+        let mut target = name;
+        let mut n = 1;
+        while bin.join(&target).exists() {
+            n += 1;
+            target = numbered(&stem, n, &ext);
+        }
+        let mut data = Vec::new();
+        self.open_safe(relpath).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no such file"))?.read_to_end(&mut data)?;
+        fs::write(bin.join(&target), data)?;
+        let mut bins = self.load_json(&self.bin_index_path());
+        bins.insert(self.bin_key(space, &target), json!({"original": relpath, "deleted": now() as i64, "files": {}, "folders": {}}));
+        self.save_json(&self.bin_index_path(), &Value::Object(bins))
     }
 
     /// Where file `id` is now. The index is trusted while the file is still at the path it
@@ -495,11 +540,11 @@ impl Store {
     /// tree over a network share every few seconds for each open file held up everyone else.
     pub fn path_of(&self, id: &str) -> io::Result<Option<String>> {
         if let Some(path) = self.load_index().get(id)
-            && self.full(path).is_file()
+            && self.safe_file(path).is_some()
         {
             return Ok(Some(path.clone()));
         }
-        Ok(self.synced_index()?.get(id).cloned())
+        Ok(self.synced_index()?.get(id).filter(|p| self.safe_file(p).is_some()).cloned())
     }
 
     /// The index ({id: path}), in line with the folder tree: new files get ids, gone ones drop.
@@ -685,7 +730,8 @@ impl Store {
     }
 
     fn need_folder(&self, folder: &str) -> R<()> {
-        if self.full(folder).is_dir() { Ok(()) } else { Err(Bad::new(404, "no such folder")) }
+        // Never through a symbolic link (walk() doesn't list them either).
+        if self.no_links(folder) && self.full(folder).is_dir() { Ok(()) } else { Err(Bad::new(404, "no such folder")) }
     }
 
     // ------------------------------------------------------------ the API
@@ -757,7 +803,8 @@ impl Store {
         let rest: Vec<&str> = p[2..].iter().map(String::as_str).collect();
         match (rest.as_slice(), method) {
             ([], "GET") => {
-                let data = fs::read(&fpath)?;
+                let mut data = Vec::new();
+                std::io::Read::read_to_end(&mut self.open_safe(&path).ok_or_else(|| Bad::new(404, "no such file"))?, &mut data)?;
                 let modified = mtime(&fs::metadata(&fpath)?).0;
                 Ok(Reply::File { data, name: base_of(&path), version: self.version_of(&fpath)?, folder: parent_of(&path), modified })
             }
@@ -767,9 +814,11 @@ impl Store {
                 {
                     return Ok(Reply::Json(json!({"error": "changed elsewhere", "name": base_of(&path)}), 409));
                 }
-                // Versions are for Sheets and Docs files; another file is just replaced.
+                // Versions are for Sheets and Docs files; another file's old content goes to the bin.
                 if is_editable(&path) {
                     self.keep_version(fid, &fpath)?;
+                } else {
+                    self.copy_to_bin(&path)?;
                 }
                 self.write_file(&fpath, body)?;
                 ok(json!({"version": self.version_of(&fpath)?, "name": base_of(&path), "folder": parent_of(&path)}))
@@ -978,7 +1027,7 @@ impl Store {
                 let info = bins.get(&key).cloned().unwrap_or(json!({}));
                 let original = info.get("original").and_then(Value::as_str).unwrap_or(name).to_string();
                 let mut folder = parent_of(&original);
-                if !self.full(&folder).is_dir() || (self.spaces && space_of(&folder) != space) {
+                if !self.full(&folder).is_dir() || !self.no_links(&folder) || (self.spaces && space_of(&folder) != space) {
                     folder = space.clone();
                 }
                 let src = bin.join(name);
@@ -1076,6 +1125,8 @@ mod tests {
         assert_eq!(renamed("README", "NOTES"), ("NOTES".into(), String::new()));
         assert_eq!(renamed("Budget.xlsx", "Plan.txt"), ("Plan.txt".into(), ".xlsx".into()));
         assert!(is_editable("a.CSV") && is_editable("b.docx") && !is_editable("c.png"));
+        assert_eq!(clean_name(Some("photo\u{202E}gpj.exe")), "photogpj.exe", "no direction marks");
+        assert_eq!(clean_name(Some("\u{2066}a\u{2069}\u{200E}\u{200F}.png")), "a.png");
         assert_eq!(splitext("a.b.csv"), ("a.b".into(), ".csv".into()));
         assert!(rel(Some("a/../b")).is_err());
         assert_eq!(rel(Some("\\a//b/")).unwrap(), "a/b");

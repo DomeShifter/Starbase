@@ -2682,9 +2682,15 @@ mod tests {
         for url in [format!("/api/files/{photo}"), format!("/api/files/{photo}/preview"), format!("/api/files/{photo}/raw")] {
             assert_eq!(send(&app, &ip, "GET", &url, &ann, &[], vec![]).await.status, 403, "{url}");
         }
-        // Replacing it keeps no versions; renaming keeps its type; moving too.
+        assert_eq!(g.headers[header::CACHE_CONTROL], "no-store", "never cached: access can be taken away");
+        // Replacing it keeps no versions, but the old content goes to the bin (restorable);
+        // renaming keeps its type; moving too.
         assert_eq!(send(&app, &ip, "PUT", &format!("/api/files/{photo}"), &boss, &[], b"new".to_vec()).await.status, 200);
         assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{photo}/versions"), &boss, &[], vec![]).await.json, json!([]));
+        let bin = send(&app, &ip, "GET", "/api/bin", &boss, &[], vec![]).await.json;
+        assert!(bin.as_array().unwrap().iter().any(|b| b["name"] == "photo.png" && b["original"] == "boss/photo.png"), "{bin}");
+        assert_eq!(std::fs::read(app.store.full("boss/.bin/photo.png")).unwrap(), png, "the replaced content");
+        assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{photo}"), &boss, &[], vec![]).await.bytes, b"new");
         let g = send(&app, &ip, "POST", &format!("/api/files/{photo}/rename?name=Holiday"), &boss, &[], vec![]).await;
         assert_eq!(g.json["name"], "Holiday.png");
         let g = send(&app, &ip, "POST", &format!("/api/files/{photo}/rename?name=Trip.PNG"), &boss, &[], vec![]).await;
@@ -2703,9 +2709,31 @@ mod tests {
         let outside = std::env::temp_dir().join(format!("starsheets-outside-{}", store::random_hex(4)));
         std::fs::write(&outside, b"secret").unwrap();
         std::os::unix::fs::symlink(&outside, app.store.full("boss/link.txt")).unwrap();
+        // Links are never followed, even inside the store: not to StarSheets' own data, not into
+        // someone else's folder.
         std::os::unix::fs::symlink(app.store.full("boss/read me.md"), app.store.full("boss/inside.md")).unwrap();
+        std::os::unix::fs::symlink(app.store.meta().join("users.json"), app.store.full("boss/users.json")).unwrap();
+        std::os::unix::fs::symlink(app.store.full("boss/Pics/Trip.png"), app.store.full("ann/boss-photo.png")).unwrap();
+        std::os::unix::fs::symlink(app.store.full("boss/Pics"), app.store.full("ann/boss-pics")).unwrap();
         let names = send(&app, &ip, "GET", "/api/files", &boss, &[], vec![]).await.json.to_string();
-        assert!(!names.contains("link.txt") && names.contains("inside.md"), "{names}");
+        for n in ["link.txt", "inside.md", "users.json", "boss-photo.png", "boss-pics"] {
+            assert!(!names.contains(n), "{n} listed: {names}");
+        }
+        let anns = send(&app, &ip, "GET", "/api/files", &ann, &[], vec![]).await.json.to_string();
+        assert!(!anns.contains("boss-photo") && !anns.contains("Trip.png") && !anns.contains("boss-pics"), "{anns}");
+        // Nothing can be put through a linked folder either.
+        assert_eq!(send(&app, &ip, "POST", "/api/files?name=x.txt&as_is=1&folder=ann/boss-pics", &ann, &[], b"x".to_vec()).await.status, 404);
+        assert!(!app.store.full("boss/Pics/x.txt").exists());
+        // A listed file swapped for a link to StarSheets' own data afterwards isn't read.
+        let md = std::fs::read(app.store.full("boss/read me.md")).unwrap();
+        std::fs::remove_file(app.store.full("boss/read me.md")).unwrap();
+        std::os::unix::fs::symlink(app.store.meta().join("users.json"), app.store.full("boss/read me.md")).unwrap();
+        for url in [format!("/api/files/{txt}"), format!("/api/files/{txt}/preview"), format!("/api/files/{txt}/raw")] {
+            let g = send(&app, &ip, "GET", &url, &boss, &[], vec![]).await;
+            assert!(g.status == 404 && !String::from_utf8_lossy(&g.bytes).contains("hash"), "{url}: {}", g.status);
+        }
+        std::fs::remove_file(app.store.full("boss/read me.md")).unwrap();
+        std::fs::write(app.store.full("boss/read me.md"), md).unwrap();
         // A listed file swapped for a link out of the store afterwards isn't read either.
         std::fs::remove_file(app.store.full("boss/read me.md")).unwrap();
         std::os::unix::fs::symlink(&outside, app.store.full("boss/read me.md")).unwrap();

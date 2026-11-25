@@ -21,10 +21,12 @@
 //!   An SVG picture isn't worth that.
 //!
 //! Who may: anyone who may view the file (the same check as a download). Paths come from the
-//! index and go through `Store::safe_file` (no symbolic links out of the store).
+//! index and are opened with `Store::open_safe` (never through a symbolic link). Streams are
+//! limited per person ([`Ticket`]).
 
+use std::collections::HashMap;
 use std::io::SeekFrom;
-use std::path::PathBuf;
+use std::sync::{LazyLock, Mutex};
 
 use axum::body::{Body, Bytes};
 use axum::http::{HeaderMap, Response, header};
@@ -36,6 +38,41 @@ use crate::{Shared, auth, blocking, error, sharing, spaces, store};
 pub const TEXT_MAX: u64 = 1024 * 1024;
 /// Bytes read from disk at a time while streaming.
 const CHUNK: usize = 64 * 1024;
+/// Files streamed at once, per person and in all. The request limit (guard.rs) ends when the
+/// answer starts, not when a long download ends, so streams have their own.
+const STREAMS_PER_PERSON: usize = 16;
+const STREAMS_AT_ONCE: usize = 64;
+static STREAMS: LazyLock<Mutex<HashMap<String, usize>>> = LazyLock::new(Default::default);
+
+/// One running stream of someone's: given back when the stream ends (or is dropped).
+pub struct Ticket(String);
+
+impl Ticket {
+    /// A ticket for `who` ("" without accounts), or None when they (or everyone) already stream
+    /// as many files as allowed.
+    pub fn take(who: &str) -> Option<Ticket> {
+        let mut m = STREAMS.lock().unwrap_or_else(|e| e.into_inner());
+        let all: usize = m.values().sum();
+        let mine = m.get(who).copied().unwrap_or(0);
+        if all >= STREAMS_AT_ONCE || mine >= STREAMS_PER_PERSON {
+            return None;
+        }
+        *m.entry(who.to_string()).or_default() += 1;
+        Some(Ticket(who.to_string()))
+    }
+}
+
+impl Drop for Ticket {
+    fn drop(&mut self) {
+        let mut m = STREAMS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(n) = m.get_mut(&self.0) {
+            *n -= 1;
+            if *n == 0 {
+                m.remove(&self.0);
+            }
+        }
+    }
+}
 
 /// The CSP of the preview page and of raw media.
 pub const SANDBOX: &str = "sandbox allow-same-origin allow-downloads; default-src 'none'; img-src 'self'; media-src 'self'; style-src 'unsafe-inline'; form-action 'none'; base-uri 'none'; frame-ancestors 'none'";
@@ -105,9 +142,12 @@ pub fn kind(name: &str) -> Kind {
 
 /// A file found for a request: where it is on disk and what it's called.
 struct Found {
-    full: PathBuf,
+    /// Opened by `Store::open_safe`: the file checked is the file read.
+    file: std::fs::File,
     name: String,
     version: String,
+    /// Who asked (their username; "" without accounts), for the stream limits.
+    who: String,
 }
 
 /// Finds file `id` for `me` (who must be able to view it). Err = the reply to send.
@@ -117,12 +157,12 @@ async fn find(app: &Shared, me: Option<auth::User>, id: String, opened: bool) ->
             return Err(error(403, "You don't have access to that."));
         }
         let path = a.store.path_of(&id).ok().flatten().ok_or_else(|| error(404, "no such file"))?;
-        let full = a.store.safe_file(&path).ok_or_else(|| error(404, "no such file"))?;
-        let version = a.store.version_of(&full).map_err(|_| error(404, "no such file"))?;
+        let file = a.store.open_safe(&path).ok_or_else(|| error(404, "no such file"))?;
+        let version = a.store.version_of(&a.store.full(&path)).map_err(|_| error(404, "no such file"))?;
         if opened && let Some(u) = &me {
             let _ = spaces::note_opened(&a.store, u, &id);
         }
-        Ok(Found { full, name: store::base_of(&path), version })
+        Ok(Found { file, name: store::base_of(&path), version, who: me.map(|u| u.username).unwrap_or_default() })
     })
     .await
     .unwrap_or_else(|| Err(error(500, "server error")))
@@ -166,8 +206,11 @@ pub fn range(h: Option<&str>, len: u64) -> Result<Option<(u64, u64)>, ()> {
 }
 
 /// Streams the file from disk: `extra` headers, the Range asked for.
-async fn stream(f: &Found, headers: &HeaderMap, extra: &[(header::HeaderName, String)]) -> Response<Body> {
-    let Ok(mut file) = tokio::fs::File::open(&f.full).await else { return error(404, "no such file") };
+async fn stream(f: Found, headers: &HeaderMap, extra: &[(header::HeaderName, String)]) -> Response<Body> {
+    let Some(ticket) = Ticket::take(&f.who) else {
+        return error(503, "Too many downloads at once. Wait for one to finish, then try again.");
+    };
+    let mut file = tokio::fs::File::from_std(f.file);
     let len = match file.metadata().await {
         Ok(m) => m.len(),
         Err(_) => return error(404, "no such file"),
@@ -191,7 +234,8 @@ async fn stream(f: &Found, headers: &HeaderMap, extra: &[(header::HeaderName, St
     if start > 0 && file.seek(SeekFrom::Start(start)).await.is_err() {
         return error(500, "storage error");
     }
-    let body = futures_util::stream::unfold((file, count), |(mut file, left)| async move {
+    // The ticket rides along with the stream: given back when it ends or the reader goes away.
+    let body = futures_util::stream::unfold((file, count, ticket), |(mut file, left, ticket)| async move {
         if left == 0 {
             return None;
         }
@@ -200,9 +244,9 @@ async fn stream(f: &Found, headers: &HeaderMap, extra: &[(header::HeaderName, St
             Ok(0) => None,
             Ok(n) => {
                 buf.truncate(n);
-                Some((Ok::<Bytes, std::io::Error>(Bytes::from(buf)), (file, left - n as u64)))
+                Some((Ok::<Bytes, std::io::Error>(Bytes::from(buf)), (file, left - n as u64, ticket)))
             }
-            Err(e) => Some((Err(e), (file, 0))),
+            Err(e) => Some((Err(e), (file, 0, ticket))),
         }
     });
     b.header(header::CONTENT_LENGTH, count).body(Body::from_stream(body)).unwrap()
@@ -220,7 +264,7 @@ pub async fn download(app: &Shared, me: Option<auth::User>, id: String, headers:
         (header::CACHE_CONTROL, "no-store".to_string()),
         (header::HeaderName::from_static("x-file-name"), crate::json_ascii(&f.name)),
     ];
-    stream(&f, headers, &extra).await
+    stream(f, headers, &extra).await
 }
 
 /// GET /api/files/ID/raw: the bytes, for the preview page (media types only).
@@ -229,10 +273,10 @@ pub async fn raw(app: &Shared, me: Option<auth::User>, id: String, headers: &Hea
         Ok(f) => f,
         Err(r) => return r,
     };
-    serve_raw(&f, headers).await
+    serve_raw(f, headers).await
 }
 
-async fn serve_raw(f: &Found, headers: &HeaderMap) -> Response<Body> {
+async fn serve_raw(f: Found, headers: &HeaderMap) -> Response<Body> {
     let k = kind(&f.name);
     let Some(ctype) = k.raw_type() else {
         return error(415, "This file can't be shown in the browser: download it.");
@@ -240,7 +284,8 @@ async fn serve_raw(f: &Found, headers: &HeaderMap) -> Response<Body> {
     let mut extra = vec![
         (header::CONTENT_TYPE, ctype.to_string()),
         (header::CONTENT_DISPOSITION, disposition("inline", &f.name)),
-        (header::CACHE_CONTROL, "private, no-cache".to_string()),
+        // Never kept by the browser or a proxy: access can be taken away.
+        (header::CACHE_CONTROL, "no-store".to_string()),
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
     ];
     if k != Kind::Pdf {
@@ -273,7 +318,7 @@ pub async fn preview(app: &Shared, me: Option<auth::User>, id: String, headers: 
     };
     let k = kind(&f.name);
     if k == Kind::Pdf {
-        return serve_raw(&f, headers).await;
+        return serve_raw(f, headers).await;
     }
     let raw = format!("raw?v={}", esc(&f.version));
     let body = match k {
@@ -281,10 +326,9 @@ pub async fn preview(app: &Shared, me: Option<auth::User>, id: String, headers: 
         Kind::Audio(_) => format!("<audio controls preload=\"metadata\" src=\"{raw}\"></audio>"),
         Kind::Video(_) => format!("<video controls preload=\"metadata\" src=\"{raw}\"></video>"),
         Kind::Text => {
-            let full = f.full.clone();
+            let file = f.file;
             let read = tokio::task::spawn_blocking(move || -> std::io::Result<(Vec<u8>, u64)> {
                 use std::io::Read;
-                let file = std::fs::File::open(&full)?;
                 let len = file.metadata()?.len();
                 let mut buf = Vec::new();
                 file.take(TEXT_MAX).read_to_end(&mut buf)?;
@@ -329,6 +373,17 @@ pre{align-self:stretch;margin:0;padding:16px;background:var(--bar);border:1px so
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn streams_are_limited_per_person() {
+        let mine: Vec<Ticket> = (0..STREAMS_PER_PERSON).map_while(|_| Ticket::take("streams-test-person")).collect();
+        assert_eq!(mine.len(), STREAMS_PER_PERSON);
+        assert!(Ticket::take("streams-test-person").is_none(), "one too many");
+        let other = Ticket::take("streams-test-other");
+        assert!(other.is_some(), "someone else still can");
+        drop(mine);
+        assert!(Ticket::take("streams-test-person").is_some(), "given back when a stream ends");
+    }
 
     #[test]
     fn kinds_and_ranges() {
