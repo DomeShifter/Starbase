@@ -289,6 +289,29 @@ fn numbered(stem: &str, n: u32, ext: &str) -> String {
     if n == 1 { format!("{stem}{ext}") } else { format!("{stem} ({n}){ext}") }
 }
 
+/// A picture's XMP sidecar (`photo.jpg.xmp`: its edits, photos/sidecar.rs) is part of it: it is
+/// renamed, moved, copied, binned and restored with it, so edits are never lost and a later file
+/// of the same name never inherits them. Only a plain file is carried, never a link.
+fn sidecar_of(file: &Path) -> PathBuf {
+    let mut s = file.as_os_str().to_owned();
+    s.push(".xmp");
+    PathBuf::from(s)
+}
+
+/// Brings `src`'s sidecar (if any) along to `dst` (a file just moved or copied there).
+fn carry_sidecar(src: &Path, dst: &Path, copy: bool) -> io::Result<()> {
+    let side = sidecar_of(src);
+    if !fs::symlink_metadata(&side).is_ok_and(|m| m.is_file()) {
+        return Ok(());
+    }
+    if copy { fs::copy(&side, sidecar_of(dst)).map(|_| ()) } else { move_any(&side, &sidecar_of(dst)) }
+}
+
+/// Where the sidecar of `name` in a bin is kept (a hidden folder: not listed as its own item).
+fn binned_sidecar(bin: &Path, name: &str) -> PathBuf {
+    bin.join(".sidecars").join(format!("{name}.xmp"))
+}
+
 /// Moves a file or folder, copying when it has to cross file systems.
 fn move_any(src: &Path, dst: &Path) -> io::Result<()> {
     match fs::rename(src, dst) {
@@ -690,7 +713,13 @@ impl Store {
         let file_ids: Map<String, Value> = index.iter().filter_map(|(id, p)| Some((under(p)?, json!(id)))).collect();
         let mut folders = self.load_folders();
         let folder_ids: Map<String, Value> = folders.iter().filter_map(|(id, p)| Some((under(p)?, json!(id)))).collect();
+        let was_file = self.full(relpath).is_file();
         move_any(&self.full(relpath), &bin.join(&target))?;
+        let side = sidecar_of(&self.full(relpath));
+        if was_file && fs::symlink_metadata(&side).is_ok_and(|m| m.is_file()) {
+            fs::create_dir_all(bin.join(".sidecars"))?;
+            move_any(&side, &binned_sidecar(&bin, &target))?;
+        }
         index.retain(|_, p| under(p).is_none());
         self.save_index(index)?;
         folders.retain(|_, p| under(p).is_none());
@@ -840,6 +869,7 @@ impl Store {
                 let new = join(&folder, &name);
                 if new != path {
                     fs::rename(&fpath, self.full(&new))?;
+                    carry_sidecar(&fpath, &self.full(&new), false)?;
                     index.insert(fid.to_string(), new);
                     self.save_index(index)?;
                 }
@@ -854,6 +884,7 @@ impl Store {
                 let (stem, ext) = split_existing(&base_of(&path));
                 let name = self.claim_name(&folder, &stem, &ext, None)?;
                 move_any(&fpath, &self.full(&folder).join(&name))?;
+                carry_sidecar(&fpath, &self.full(&folder).join(&name), false)?;
                 index.insert(fid.to_string(), join(&folder, &name));
                 self.save_index(index)?;
                 ok(json!({"name": name}))
@@ -868,6 +899,7 @@ impl Store {
                 }
                 let name = self.claim_name(&folder, &stem, &ext, None)?;
                 fs::copy(&fpath, self.full(&folder).join(&name))?;
+                carry_sidecar(&fpath, &self.full(&folder).join(&name), true)?;
                 let new_id = random_hex(8);
                 index.insert(new_id.clone(), join(&folder, &name));
                 self.save_index(index)?;
@@ -1045,6 +1077,10 @@ impl Store {
                     let (stem, ext) = split_existing(&base_of(&original));
                     let t = join(&folder, &self.claim_name(&folder, &stem, &ext, None)?);
                     fs::rename(&src, self.full(&t))?;
+                    let side = binned_sidecar(&bin, name);
+                    if fs::symlink_metadata(&side).is_ok_and(|m| m.is_file()) {
+                        move_any(&side, &sidecar_of(&self.full(&t)))?;
+                    }
                     t
                 };
                 // The ids come back with it: versions and sharing are kept.
@@ -1096,7 +1132,8 @@ impl Store {
         if src.is_dir() {
             fs::remove_dir_all(&src)?
         } else {
-            fs::remove_file(&src)?
+            fs::remove_file(&src)?;
+            let _ = fs::remove_file(binned_sidecar(bin, name));
         }
         if let Some(info) = bins.remove(&self.bin_key(space, name))
             && let Some(ids) = info.get("files").and_then(Value::as_object)
