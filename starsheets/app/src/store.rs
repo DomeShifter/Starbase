@@ -57,6 +57,11 @@ pub(crate) trait Store {
     }
     /// Starts a new presentation (a named .pptx) in `folder`, in Starbase Slides.
     fn new_presentation(&self, _folder: &str) {}
+    /// Whether [`Store::open`] opens every kind of file itself (this computer's own files: Sheets,
+    /// Docs, else the system's default app), instead of the Drive's preview or download.
+    fn opens_any_file(&self) -> bool {
+        false
+    }
     /// The Starbase server the desktop app is connected to (remote.rs); None on this computer's
     /// own files.
     #[cfg(not(target_arch = "wasm32"))]
