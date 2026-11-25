@@ -1,5 +1,5 @@
 //! The side panels at the right of the sheet (conditional formatting, data validation, the chart
-//! editor, named ranges, protected ranges, alternating colours): one shape for all of them, and the rule that only one
+//! editor, named ranges, protected ranges, alternating colours, pivot tables): one shape for all of them, and the rule that only one
 //! shows at a time (the one that just opened wins).
 
 use egui::Ui;
@@ -10,6 +10,7 @@ use crate::cfpanel::CfPanel;
 use crate::chartpanel::ChartPanel;
 use crate::dvpanel::DvPanel;
 use crate::namespanel::NamesPanel;
+use crate::pivotpanel::PivotPanel;
 use crate::protectpanel::ProtectPanel;
 
 /// What every side panel does each frame.
@@ -65,6 +66,7 @@ side_panel!(ChartPanel, |p, app, ctx| p.intercept(app, ctx));
 side_panel!(NamesPanel, |p, app, _| p.intercept(app));
 side_panel!(ProtectPanel, |p, app, ctx| p.intercept(app, ctx));
 side_panel!(AltColoursPanel, |p, app, ctx| p.intercept(app, ctx));
+side_panel!(PivotPanel, |p, app, ctx| p.intercept(app, ctx));
 
 /// All the side panels.
 #[derive(Default)]
@@ -75,22 +77,24 @@ pub struct SidePanels {
     pub names: NamesPanel,
     pub protect: ProtectPanel,
     pub alternating: AltColoursPanel,
+    pub pivot: PivotPanel,
 }
 
 impl SidePanels {
     /// In the order they are drawn.
-    fn all(&mut self) -> [&mut dyn SidePanel; 6] {
-        [&mut self.cf, &mut self.dv, &mut self.chart, &mut self.names, &mut self.protect, &mut self.alternating]
+    fn all(&mut self) -> [&mut dyn SidePanel; 7] {
+        [&mut self.cf, &mut self.dv, &mut self.chart, &mut self.names, &mut self.protect, &mut self.alternating, &mut self.pivot]
     }
 
     /// Opens a panel in place of GridCraft's dialog; if one opened, the others close. When two
     /// open in the same frame the chart editor wins, then named ranges, protected ranges,
-    /// alternating colours, data validation and conditional formatting.
+    /// alternating colours, data validation, conditional formatting and the pivot table editor
+    /// (it opens by itself when the active cell is in a pivot table).
     pub fn intercept(&mut self, app: &mut SheetApp, ctx: &egui::Context) {
         for p in self.all() {
             p.intercept(app, ctx);
         }
-        const PRIORITY: [usize; 6] = [2, 3, 4, 5, 1, 0];
+        const PRIORITY: [usize; 7] = [2, 3, 4, 5, 1, 0, 6];
         let mut panels = self.all();
         let Some(winner) = PRIORITY.into_iter().find(|&i| panels[i].just_opened()) else { return };
         for (i, p) in panels.iter_mut().enumerate() {

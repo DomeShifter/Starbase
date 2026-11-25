@@ -360,6 +360,7 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
             "cells": s.cells.iter().map(|(c, t)| json!([c.a1(), t])).collect::<Vec<_>>(),
         })),
         "alternating": wb.active().map(crate::altcolours::state),
+        "pivot": crate::pivotpanel::state(&*p.app),
         "imagesReady": formula_images_ready(&*p.app),
         "history": p.files.history_state(),
         "cell": cell,
