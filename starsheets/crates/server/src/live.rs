@@ -144,9 +144,12 @@ pub async fn ws(State(app): State<Shared>, headers: HeaderMap, upgrade: WebSocke
         return crate::please_sign_in(&app, &headers).into_response();
     }
     let user = crate::current_user(&app, &headers);
+    // A desktop app signed in with a device token (devices.rs): its connection ends as soon as
+    // that device is removed.
+    let device = crate::guard::bearer(&headers).filter(|_| app.auth).map(|t| crate::devices::hash(&t));
     // A tab's biggest message is a change sent whole; packed it stays well under MAX_FRAME (and
     // a frame may unpack to at most sync::MAX_UNPACKED).
-    upgrade.max_message_size(sync::MAX_FRAME).max_frame_size(sync::MAX_FRAME).on_upgrade(move |socket| connection(app, socket, user))
+    upgrade.max_message_size(sync::MAX_FRAME).max_frame_size(sync::MAX_FRAME).on_upgrade(move |socket| connection(app, socket, user, device))
 }
 
 fn text(m: &ToClient) -> String {
@@ -158,7 +161,8 @@ fn who(user: &Option<crate::auth::User>) -> String {
     user.as_ref().map_or_else(|| "a guest".to_string(), |u| u.username.clone())
 }
 
-async fn connection(app: Shared, mut socket: WebSocket, user: Option<crate::auth::User>) {
+async fn connection(app: Shared, mut socket: WebSocket, user: Option<crate::auth::User>, device: Option<String>) {
+    let mut revoked = crate::devices::REVOKED.subscribe();
     // The first message says which file.
     let (file, tab, have) = loop {
         match socket.recv().await {
@@ -224,12 +228,22 @@ async fn connection(app: Shared, mut socket: WebSocket, user: Option<crate::auth
     // The connection's name is the server's, never the tab's: a tab can't speak as another.
     let client = format!("c{}", NEXT_CONNECTION.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
     let (out, mut outbox) = unbounded_channel::<String>();
+    let name = who(&user);
     app.rooms.send(&app, &file, RoomMsg::Join { client: client.clone(), tab, user, can_edit, out, have });
     // A ping now and then keeps proxies from closing a quiet connection.
     let mut ping = tokio::time::interval(Duration::from_secs(30));
     ping.tick().await;
     loop {
         tokio::select! {
+            // A device was removed: if it was this one, the connection ends now.
+            gone = revoked.changed(), if device.is_some() => {
+                let token_hash = device.as_deref().unwrap_or_default();
+                if gone.is_err() || !crate::devices::is_live(&app.store, token_hash) {
+                    crate::log::note(&app.store, &format!("{name}'s desktop app was disconnected (device removed)"));
+                    let _ = socket.send(Message::Text(text(&ToClient::NoAccess { text: DEVICE_REMOVED.into() }).into())).await;
+                    break;
+                }
+            },
             _ = ping.tick() => {
                 if socket.send(Message::Ping(Vec::new().into())).await.is_err() {
                     break;
@@ -275,6 +289,7 @@ async fn connection(app: Shared, mut socket: WebSocket, user: Option<crate::auth
 // ---------------------------------------------------------------- rooms
 
 const NO_ACCESS: &str = "You don't have access to this file.";
+const DEVICE_REMOVED: &str = "This app was disconnected from your account. Connect it again to carry on.";
 
 struct Client {
     out: UnboundedSender<String>,

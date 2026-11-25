@@ -167,7 +167,12 @@ pub fn check(method: &Method, uri: &axum::http::Uri, headers: &HeaderMap, peer: 
         }
     }
     let changes = !matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS);
-    if changes || uri.path() == "/api/live" {
+    // A desktop app's request: signed in only by the device token it sends itself, with no
+    // cookies, so another site can't have made it in someone's name (there is nothing ambient
+    // to borrow). With cookies too, the usual check applies (and the cookies aren't read:
+    // main.rs current_user).
+    let token_only = headers.contains_key(header::AUTHORIZATION) && !headers.contains_key(header::COOKIE);
+    if (changes || uri.path() == "/api/live") && !token_only {
         let Some(origin) = header_str(headers, "origin") else { return Ok(()) };
         let from = origin.split_once("://").map(|(_, rest)| rest.trim_end_matches('/').to_lowercase());
         let forwarded_host = peer
@@ -182,6 +187,13 @@ pub fn check(method: &Method, uri: &axum::http::Uri, headers: &HeaderMap, peer: 
         }
     }
     Ok(())
+}
+
+/// A device token sent as `Authorization: Bearer …` (the desktop apps, devices.rs).
+pub fn bearer(headers: &HeaderMap) -> Option<String> {
+    let (scheme, token) = header_str(headers, "authorization")?.trim().split_once(' ')?;
+    let token = token.trim();
+    (scheme.eq_ignore_ascii_case("bearer") && !token.is_empty()).then(|| token.to_string())
 }
 
 // ---------------------------------------------------------------- the middleware
@@ -247,6 +259,13 @@ pub const SETUP_IP: Bucket = Bucket { burst: 10.0, every: Duration::from_secs(10
 /// Single sign-ons started from one address: at most 50 in ten minutes (10 + 600 s / 15 s), no
 /// more than oidc.rs keeps waiting for one address.
 pub const OIDC_IP: Bucket = Bucket { burst: 10.0, every: Duration::from_secs(15) };
+
+/// Desktop sign-ins started from one address.
+pub const DEVICE_IP: Bucket = Bucket { burst: 10.0, every: Duration::from_secs(30) };
+/// A desktop app asking whether it was allowed yet (every 5 seconds), per address.
+pub const DEVICE_POLL_IP: Bucket = Bucket { burst: 30.0, every: Duration::from_secs(2) };
+/// Wrong device codes typed by one account.
+pub const DEVICE_CODE_USER: Bucket = Bucket { burst: 10.0, every: Duration::from_secs(30) };
 
 #[derive(Default)]
 pub struct Limiter {
@@ -416,6 +435,27 @@ mod tests {
         let c = cfg(&[("STARBASE_ALLOWED_HOSTS", "nas.local")]);
         assert!(check(&Method::GET, &uri, &headers(&[("host", "NAS.local:8080")]), None, &c).is_ok());
         assert!(check(&Method::GET, &"/healthz".parse().unwrap(), &rebound, None, &c).is_ok());
+    }
+
+    #[test]
+    fn device_tokens_skip_the_origin_check_only_without_cookies() {
+        let open = Config::default();
+        let uri: axum::http::Uri = "/api/files".parse().unwrap();
+        let live: axum::http::Uri = "/api/live".parse().unwrap();
+        let token = headers(&[("host", "a:1"), ("origin", "https://evil.example"), ("authorization", "Bearer sbd_x")]);
+        assert!(check(&Method::POST, &uri, &token, None, &open).is_ok(), "nothing ambient: sign-in decides");
+        assert!(check(&Method::GET, &live, &token, None, &open).is_ok());
+        let with_cookie =
+            headers(&[("host", "a:1"), ("origin", "https://evil.example"), ("authorization", "Bearer sbd_x"), ("cookie", "starsheets_session=s")]);
+        assert_eq!(check(&Method::POST, &uri, &with_cookie, None, &open).unwrap_err().0, 403);
+        assert_eq!(check(&Method::GET, &live, &with_cookie, None, &open).unwrap_err().0, 403);
+        // The host-name allow-list still applies.
+        let c = cfg(&[("STARBASE_ALLOWED_HOSTS", "nas.local")]);
+        let rebound = headers(&[("host", "attacker.example"), ("authorization", "Bearer sbd_x")]);
+        assert_eq!(check(&Method::GET, &uri, &rebound, None, &c).unwrap_err().0, 421);
+        assert_eq!(bearer(&headers(&[("authorization", "bearer  sbd_abc ")])).as_deref(), Some("sbd_abc"));
+        assert!(bearer(&headers(&[("authorization", "Basic abc")])).is_none());
+        assert!(bearer(&headers(&[("authorization", "Bearer ")])).is_none());
     }
 
     #[test]

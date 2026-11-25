@@ -14,6 +14,7 @@
 
 mod auth;
 mod backup;
+mod devices;
 mod guard;
 mod live;
 mod log;
@@ -152,16 +153,33 @@ fn reply(r: Result<Reply, Bad>) -> Response<Body> {
 
 // ---------------------------------------------------------------- sign-in
 
+/// The browser session's token. A request that carries an Authorization header (a desktop app's
+/// device token) is signed in by that alone: its cookies aren't read, so a token can never be
+/// mixed with someone's browser session.
 fn cookie_token(headers: &HeaderMap) -> Option<String> {
+    if headers.contains_key(header::AUTHORIZATION) {
+        return None;
+    }
     named_cookie(headers, HOST_COOKIE).or_else(|| named_cookie(headers, COOKIE))
 }
 
-/// Who is asking (`None`: not signed in, or sign-in is off).
+/// Who is asking (`None`: not signed in, or sign-in is off): a browser session, or a desktop
+/// app's device token (devices.rs), with exactly the same rights.
 fn current_user(app: &App, headers: &HeaderMap) -> Option<auth::User> {
     if !app.auth {
         return None;
     }
+    if headers.contains_key(header::AUTHORIZATION) {
+        let username = devices::user_of(&app.store, &guard::bearer(headers)?)?;
+        return auth::users(&app.store).into_iter().find(|u| u.username == username);
+    }
     cookie_token(headers).and_then(|t| auth::session_user(&app.store, &t))
+}
+
+/// Who is asking through a browser session only (never a device token): approving a new device
+/// needs the person themselves, in their browser.
+fn session_user(app: &App, headers: &HeaderMap) -> Option<auth::User> {
+    if headers.contains_key(header::AUTHORIZATION) { None } else { current_user(app, headers) }
 }
 
 fn signed_in(app: &App, headers: &HeaderMap) -> bool {
@@ -496,6 +514,7 @@ async fn accounts(
             cookie_reply("", 0, answer, secure)
         }
         (["oidc", ..], _) => sso(app, &path, m, q, headers, &json, ask).await,
+        (["devices", ..], _) => device_api(app, &path, m, q, headers, &json, ask).await,
         (["me"], "POST") => {
             let Some(me) = me else { return Some(please_sign_in(app, headers)) };
             let mut new_hash = None;
@@ -838,6 +857,160 @@ async fn sso(app: &Shared, path: &[&str], m: &str, q: &HashMap<String, String>, 
             match blocking(app, move |app| auth::unlink(&app.store, &me.username)).await {
                 Some(Ok(())) => send_json(&json!({ "ok": true }), 200),
                 Some(Err(why)) => error(400, &why),
+                None => error(500, "server error"),
+            }
+        }
+        _ => error(404, "not found"),
+    }
+}
+
+// ---------------------------------------------------------------- desktop apps
+
+/// The page a person opens to let a desktop app in (devices.rs).
+const CONNECT_PAGE: &str = include_str!("connect.html");
+
+/// The connect page's address as the person's browser reaches this server: STARBASE_PUBLIC_URL
+/// when set, else the address the app used.
+fn connect_url(headers: &HeaderMap, ask: Ask, user_code: &str) -> String {
+    let base = setting("STARBASE_PUBLIC_URL").map(|u| u.trim().trim_end_matches('/').to_string()).filter(|u| !u.is_empty()).unwrap_or_else(|| {
+        let host = headers.get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("localhost");
+        format!("{}://{host}", if ask.secure { "https" } else { "http" })
+    });
+    format!("{base}/connect?code={}", devices::show_code(user_code))
+}
+
+/// /api/devices…: desktop sign-in (start, poll; the connect page's code and approve) and the
+/// list of connected desktop apps (GET, DELETE).
+async fn device_api(
+    app: &Shared,
+    path: &[&str],
+    m: &str,
+    q: &HashMap<String, String>,
+    headers: &HeaderMap,
+    json: &Value,
+    ask: Ask,
+) -> Response<Body> {
+    use guard::{LIMITS, ip_key};
+    if !app.auth {
+        return error(400, "Sign-in is off on this server, so there is nothing to connect to: open files without signing in.");
+    }
+    match (path, m) {
+        (["devices", "start"], "POST") => {
+            if !LIMITS.take(&ip_key("device", ask.ip), guard::DEVICE_IP) {
+                return too_many();
+            }
+            let from = ask.ip.map_or_else(|| "?".to_string(), guard::ip_prefix);
+            match devices::WAITING.start(&field(json, "name"), &from, store::now()) {
+                Ok((device_code, user_code)) => send_json(
+                    &json!({
+                        "device_code": device_code,
+                        "user_code": devices::show_code(&user_code),
+                        "verify_url": connect_url(headers, ask, &user_code),
+                        "expires_in": devices::CODE_SECS,
+                        "interval": devices::INTERVAL,
+                    }),
+                    200,
+                ),
+                Err(why) => error(429, why),
+            }
+        }
+        (["devices", "poll"], "POST") => {
+            if !LIMITS.take(&ip_key("device-poll", ask.ip), guard::DEVICE_POLL_IP) {
+                return send_json(&json!({ "error": "slow down", "status": "slow_down" }), 429);
+            }
+            let (answer, name) = devices::WAITING.poll(&field(json, "device_code"), store::now());
+            match answer {
+                devices::Poll::Waiting => send_json(&json!({ "status": "pending", "interval": devices::INTERVAL }), 200),
+                devices::Poll::Allowed(username) => {
+                    let made = blocking(app, move |app| {
+                        let user = auth::users(&app.store).into_iter().find(|u| u.username == username)?;
+                        let token = devices::new_token(&app.store, &user.username, &name).ok()?;
+                        // Never the token itself.
+                        log::note(&app.store, &format!("{} connected a desktop app ({name:?})", user.username));
+                        Some((user, token))
+                    })
+                    .await
+                    .flatten();
+                    match made {
+                        Some((user, token)) => send_json(&json!({ "status": "ok", "token": token, "user": user.json() }), 200),
+                        None => error(500, "server error"),
+                    }
+                }
+                devices::Poll::Denied => send_json(&json!({ "status": "denied", "error": "The sign-in wasn't allowed." }), 403),
+                devices::Poll::Expired => send_json(&json!({ "status": "expired", "error": "The code ran out. Start again." }), 410),
+                devices::Poll::Unknown => send_json(&json!({ "status": "unknown", "error": "No such sign-in. Start again." }), 404),
+            }
+        }
+        // The connect page: what is asking (a signed-in browser session only).
+        (["devices", "code"], "GET") => {
+            let Some(me) = session_user(app, headers) else { return please_sign_in(app, headers) };
+            let key = format!("device-code:{}", me.username);
+            if !LIMITS.can(&key, guard::DEVICE_CODE_USER) {
+                return too_many();
+            }
+            let code = q.get("code").cloned().unwrap_or_default();
+            match devices::WAITING.name_of(&code, store::now()) {
+                Some(name) => send_json(&json!({ "name": name, "code": devices::show_code(&devices::clean_code(&code)), "user": me.json() }), 200),
+                None => {
+                    LIMITS.take(&key, guard::DEVICE_CODE_USER);
+                    wrong(404, "That code isn't right, or it has run out. Start again in the app.").await
+                }
+            }
+        }
+        // Allowing (or not) a desktop app: a browser session, from this server's own page (the
+        // Origin header must be there; guard.rs checks it is this site's).
+        (["devices", "approve"], "POST") => {
+            let Some(me) = session_user(app, headers) else { return please_sign_in(app, headers) };
+            if !headers.contains_key(header::ORIGIN) {
+                return error(403, "Allow the app from the connect page in your browser.");
+            }
+            let key = format!("device-code:{}", me.username);
+            if !LIMITS.can(&key, guard::DEVICE_CODE_USER) {
+                return too_many();
+            }
+            let allow = json.get("allow").and_then(Value::as_bool).unwrap_or(false);
+            match devices::WAITING.answer(&field(json, "code"), &me.username, allow, store::now()) {
+                Ok(name) => {
+                    let (who, what) = (me.username.clone(), if allow { "allowed" } else { "refused" });
+                    blocking(app, move |a| log::note(&a.store, &format!("{who} {what} a desktop app ({name:?})"))).await;
+                    send_json(&json!({ "ok": true }), 200)
+                }
+                Err(why) => {
+                    LIMITS.take(&key, guard::DEVICE_CODE_USER);
+                    wrong(404, why).await
+                }
+            }
+        }
+        // Connected desktop apps: your own, or (the owner) someone else's (?username=).
+        (["devices"], "GET" | "DELETE") => {
+            let Some(me) = current_user(app, headers) else { return please_sign_in(app, headers) };
+            let who = q.get("username").cloned().filter(|u| !u.is_empty()).unwrap_or_else(|| me.username.clone());
+            if who != me.username && !me.owner {
+                return error(403, "Only the owner can do that.");
+            }
+            let current = guard::bearer(headers).map(|t| devices::hash(&t));
+            let token = guard::bearer(headers);
+            let (id, deleting) = (q.get("id").cloned().unwrap_or_default(), m == "DELETE");
+            let r = blocking(app, move |app| {
+                if !deleting {
+                    return Ok(Value::Array(devices::list(&app.store, &who, current.as_deref())));
+                }
+                // "this": the app disconnecting itself.
+                let gone = if id == "this" {
+                    token.is_some_and(|t| devices::remove_token(&app.store, &t).unwrap_or(false))
+                } else {
+                    devices::remove(&app.store, &who, &id).unwrap_or(false)
+                };
+                if !gone {
+                    return Err("There's no such device.");
+                }
+                log::note(&app.store, &format!("{} removed a desktop app of {who}", me.username));
+                Ok(json!({ "ok": true }))
+            })
+            .await;
+            match r {
+                Some(Ok(v)) => send_json(&v, 200),
+                Some(Err(why)) => error(404, why),
                 None => error(500, "server error"),
             }
         }
@@ -1559,7 +1732,7 @@ fn takes_a_file(m: &str, p: &[String]) -> bool {
 /// Paths answered before (or without) sign-in: accounts (single sign-on too) and, while
 /// setting up, storage.
 fn before_sign_in(p: &[String]) -> bool {
-    matches!(p.first().map(String::as_str), Some("info" | "setup" | "signup" | "login" | "logout" | "me" | "users" | "storage" | "oidc"))
+    matches!(p.first().map(String::as_str), Some("info" | "setup" | "signup" | "login" | "logout" | "me" | "users" | "storage" | "oidc" | "devices"))
 }
 
 /// Reads a request's body: at most `limit` bytes, within `wait`.
@@ -1585,6 +1758,14 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
     let path = uri.path().to_string();
     if path == "/healthz" {
         return Response::builder().header(header::CONTENT_TYPE, "text/plain").body(Body::from("ok")).unwrap();
+    }
+    // The page where a desktop app is allowed in (devices.rs), with or without the web app.
+    if path == "/connect" && (method == Method::GET || method == Method::HEAD) {
+        return Response::builder()
+            .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+            .header(header::CACHE_CONTROL, "no-store")
+            .body(Body::from(CONNECT_PAGE))
+            .unwrap();
     }
     if let Some(site) = &app.site
         && !path.starts_with("/api/")
@@ -2142,5 +2323,239 @@ mod tests {
         assert!(r.headers()[header::CACHE_CONTROL].to_str().unwrap().contains("immutable"));
         assert_eq!(body(r).await, b"zipped");
         let _ = std::fs::remove_dir_all(&site);
+    }
+
+    // ------------------------------------------------------------ desktop apps (devices.rs)
+
+    const SAME: (&str, &str) = ("origin", "http://192.168.1.5:8080");
+    const EVIL: (&str, &str) = ("origin", "https://evil.example");
+
+    /// A desktop app asking to connect: (device_code, user_code).
+    async fn start_device(app: &Shared, ip: &str, name: &str) -> (String, String) {
+        let g = post(app, ip, "/api/devices/start", "", json!({ "name": name })).await;
+        assert_eq!(g.status, 200, "{:?}", g.json);
+        let uc = g.json["user_code"].as_str().unwrap().to_string();
+        assert_eq!(g.json["verify_url"].as_str().unwrap(), format!("http://192.168.1.5:8080/connect?code={uc}"));
+        (g.json["device_code"].as_str().unwrap().to_string(), uc)
+    }
+
+    async fn approve(app: &Shared, ip: &str, cookie: &str, extra: &[(&str, &str)], code: &str, allow: bool) -> Got {
+        send(app, ip, "POST", "/api/devices/approve", cookie, extra, serde_json::to_vec(&json!({ "code": code, "allow": allow })).unwrap()).await
+    }
+
+    async fn poll_device(app: &Shared, ip: &str, dc: &str) -> Got {
+        post(app, ip, "/api/devices/poll", "", json!({ "device_code": dc })).await
+    }
+
+    /// A device token for the account signed in with `cookie`, through the whole flow.
+    async fn device_token(app: &Shared, ip: &str, cookie: &str, name: &str) -> String {
+        let (dc, uc) = start_device(app, ip, name).await;
+        assert_eq!(approve(app, ip, cookie, &[SAME], &uc, true).await.status, 200);
+        let g = poll_device(app, ip, &dc).await;
+        assert_eq!(g.json["status"], "ok", "{:?}", g.json);
+        g.json["token"].as_str().unwrap().to_string()
+    }
+
+    fn bearer(t: &str) -> String {
+        format!("Bearer {t}")
+    }
+
+    fn body_of(v: Value) -> Vec<u8> {
+        serde_json::to_vec(&v).unwrap()
+    }
+
+    #[tokio::test]
+    async fn desktop_sign_in_needs_the_person_in_their_browser() {
+        let (app, ip, boss) = owned().await;
+        let (dc, uc) = start_device(&app, &ip, "Work laptop").await;
+        assert_eq!(uc.len(), 9, "ABCD-EFGH");
+        assert_eq!(poll_device(&app, &ip, &dc).await.json["status"], "pending");
+        // The connect page's questions need a browser session.
+        let ask = format!("/api/devices/code?code={uc}");
+        assert_eq!(send(&app, &ip, "GET", &ask, "", &[], vec![]).await.status, 401);
+        let g = send(&app, &ip, "GET", &ask, &boss, &[], vec![]).await;
+        assert_eq!((g.status, g.json["name"].as_str()), (200, Some("Work laptop")));
+        // Approving: signed in, from this site's own page (CSRF: another site, or no Origin, is refused).
+        assert_eq!(approve(&app, &ip, "", &[SAME], &uc, true).await.status, 401, "signed in");
+        assert_eq!(approve(&app, &ip, &boss, &[EVIL], &uc, true).await.status, 403, "another site");
+        assert_eq!(approve(&app, &ip, &boss, &[], &uc, true).await.status, 403, "no Origin");
+        assert_eq!(poll_device(&app, &ip, &dc).await.json["status"], "pending", "none of those counted");
+        // A device token can't approve another device (only the person, in their browser).
+        let other = device_token(&app, &ip, &boss, "Other").await;
+        let other = bearer(&other);
+        assert_eq!(approve(&app, &ip, "", &[SAME, ("authorization", &other)], &uc, true).await.status, 401);
+        assert_eq!(approve(&app, &ip, &boss, &[SAME, ("authorization", &other)], &uc, true).await.status, 401, "with a token, the cookie isn't read");
+        assert_eq!(approve(&app, &ip, &boss, &[SAME], &uc.to_lowercase(), true).await.status, 200, "typed in lower case");
+        assert_eq!(approve(&app, &ip, &boss, &[SAME], &uc, true).await.status, 404, "a code is used once");
+        let g = poll_device(&app, &ip, &dc).await;
+        assert_eq!(g.json["status"], "ok");
+        assert_eq!(g.json["user"]["username"], "boss");
+        let token = g.json["token"].as_str().unwrap().to_string();
+        assert_eq!(poll_device(&app, &ip, &dc).await.json["status"], "unknown", "the token is handed out once");
+        // The token signs the app in on the API (no Origin: not a browser).
+        let auth = bearer(&token);
+        assert_eq!(send(&app, &ip, "GET", "/api/files", "", &[("authorization", &auth)], vec![]).await.status, 200);
+        let g = send(&app, &ip, "POST", "/api/folders?name=Desk", "", &[("authorization", &auth)], vec![]).await;
+        assert_eq!(g.status, 201, "{:?}", g.json);
+        // Never in the log, nor in the server's own files.
+        let log = std::fs::read_to_string(app.store.meta().join("log.txt")).unwrap_or_default();
+        assert!(log.contains("connected a desktop app") && !log.contains(&token));
+        for f in std::fs::read_dir(app.store.meta()).unwrap() {
+            let text = std::fs::read_to_string(f.unwrap().path()).unwrap_or_default();
+            assert!(!text.contains(&token[devices::PREFIX.len()..]));
+        }
+        // Not allowed.
+        let (dc, uc) = start_device(&app, &ip, "Stranger").await;
+        assert_eq!(approve(&app, &ip, &boss, &[SAME], &uc, false).await.status, 200);
+        assert_eq!(poll_device(&app, &ip, &dc).await.json["status"], "denied");
+        assert_eq!(send(&app, &ip, "GET", "/api/devices/code?code=XXXX-XXXX", &boss, &[], vec![]).await.status, 404);
+        let _ = std::fs::remove_dir_all(&app.store.root);
+    }
+
+    #[tokio::test]
+    async fn device_tokens_get_their_account_rights_and_no_more() {
+        let (app, ip, boss) = owned().await;
+        let g = send(&app, &ip, "POST", "/api/users", &boss, &[SAME], body_of(json!({"username": "ann", "name": "Ann", "password": "annpassword"})))
+            .await;
+        assert_eq!(g.status, 200, "{:?}", g.json);
+        let ann = cookie_of(&post(&app, &ip, "/api/login", "", json!({"username": "ann", "password": "annpassword"})).await);
+        let token = device_token(&app, &ip, &ann, "Ann's laptop").await;
+        let auth = bearer(&token);
+        let me = send(&app, &ip, "GET", "/api/info", "", &[("authorization", &auth)], vec![]).await;
+        assert_eq!(me.json["user"]["username"], "ann");
+        // Owner-only: no.
+        let eve = body_of(json!({"username": "eve", "name": "Eve", "password": "evepassword"}));
+        assert_eq!(send(&app, &ip, "POST", "/api/users", "", &[("authorization", &auth)], eve.clone()).await.status, 403);
+        assert_eq!(send(&app, &ip, "GET", "/api/devices?username=boss", "", &[("authorization", &auth)], vec![]).await.status, 403);
+        // Cross-site: a token without cookies is the app's own (nothing ambient for another site
+        // to borrow); with the browser's cookies too, another site is refused, and the cookie
+        // never adds anything: a wrong token with the owner's cookie is simply signed out.
+        assert_eq!(send(&app, &ip, "POST", "/api/folders?name=X", "", &[EVIL, ("authorization", &auth)], vec![]).await.status, 201);
+        assert_eq!(send(&app, &ip, "POST", "/api/folders?name=Y", &boss, &[EVIL, ("authorization", &auth)], vec![]).await.status, 403);
+        assert_eq!(send(&app, &ip, "GET", "/api/files", &boss, &[("authorization", "Bearer sbd_wrong")], vec![]).await.status, 401);
+        let g = send(&app, &ip, "POST", "/api/users", &boss, &[SAME, ("authorization", &auth)], eve).await;
+        assert_eq!(g.status, 403, "Ann's token with the owner's cookie is still Ann");
+        // Your devices, and the owner in People.
+        let g = send(&app, &ip, "GET", "/api/devices", "", &[("authorization", &auth)], vec![]).await;
+        assert_eq!(g.json.as_array().unwrap().len(), 1);
+        assert_eq!(g.json[0]["current"], true);
+        assert_eq!(g.json[0]["name"], "Ann's laptop");
+        let g = send(&app, &ip, "GET", "/api/devices?username=ann", &boss, &[], vec![]).await;
+        let id = g.json[0]["id"].as_str().unwrap().to_string();
+        assert_eq!(send(&app, &ip, "DELETE", &format!("/api/devices?username=ann&id={id}"), &boss, &[SAME], vec![]).await.status, 200);
+        assert_eq!(send(&app, &ip, "GET", "/api/files", "", &[("authorization", &auth)], vec![]).await.status, 401, "removed: stops at once");
+        // The app disconnecting itself; a new password removes every device.
+        let t2 = bearer(&device_token(&app, &ip, &ann, "Desk").await);
+        assert_eq!(send(&app, &ip, "DELETE", "/api/devices?id=this", "", &[("authorization", &t2)], vec![]).await.status, 200);
+        assert_eq!(send(&app, &ip, "GET", "/api/files", "", &[("authorization", &t2)], vec![]).await.status, 401);
+        let t3 = bearer(&device_token(&app, &ip, &ann, "Desk").await);
+        let g = send(&app, &ip, "POST", "/api/me", &ann, &[SAME], body_of(json!({"current_password": "annpassword", "password": "a new password"})))
+            .await;
+        assert_eq!(g.status, 200, "{:?}", g.json);
+        assert_eq!(send(&app, &ip, "GET", "/api/files", "", &[("authorization", &t3)], vec![]).await.status, 401);
+        let _ = std::fs::remove_dir_all(&app.store.root);
+    }
+
+    /// Reads one WebSocket frame from the server: (opcode, payload).
+    async fn read_frame(s: &mut tokio::net::TcpStream) -> Option<(u8, Vec<u8>)> {
+        use tokio::io::AsyncReadExt;
+        let mut h = [0u8; 2];
+        s.read_exact(&mut h).await.ok()?;
+        let len = match h[1] & 0x7f {
+            126 => {
+                let mut l = [0u8; 2];
+                s.read_exact(&mut l).await.ok()?;
+                u16::from_be_bytes(l) as usize
+            }
+            127 => {
+                let mut l = [0u8; 8];
+                s.read_exact(&mut l).await.ok()?;
+                u64::from_be_bytes(l) as usize
+            }
+            n => n as usize,
+        };
+        let mut body = vec![0u8; len];
+        s.read_exact(&mut body).await.ok()?;
+        Some((h[0] & 0x0f, body))
+    }
+
+    /// A removed device's open live connection ends at once (over a real socket).
+    #[tokio::test]
+    async fn removing_a_device_ends_its_live_connection() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (app, ip, boss) = owned().await;
+        let token = device_token(&app, &ip, &boss, "Laptop").await;
+        let g = send(&app, &ip, "POST", "/api/files?name=t.csv", &boss, &[SAME], b"a,b\n1,2\n".to_vec()).await;
+        let file = g.json["id"].as_str().unwrap().to_string();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let served = router(app.clone()).into_make_service_with_connect_info::<SocketAddr>();
+        tokio::spawn(async move { axum::serve(listener, served).await });
+        let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let req = format!(
+            "GET /api/live HTTP/1.1\r\nHost: {addr}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nAuthorization: Bearer {token}\r\n\r\n"
+        );
+        s.write_all(req.as_bytes()).await.unwrap();
+        let mut head = Vec::new();
+        while !head.ends_with(b"\r\n\r\n") {
+            let mut b = [0u8; 1];
+            s.read_exact(&mut b).await.unwrap();
+            head.push(b[0]);
+        }
+        assert!(head.starts_with(b"HTTP/1.1 101"), "{}", String::from_utf8_lossy(&head));
+        // One masked text frame: the hello.
+        let hello = serde_json::to_vec(&starsheets_sync::ToServer::Hello {
+            file,
+            build: "test".into(),
+            client: "t1".into(),
+            protocol: starsheets_sync::PROTOCOL,
+            have: None,
+        })
+        .unwrap();
+        let mut frame = vec![0x81u8];
+        if hello.len() < 126 {
+            frame.push(0x80 | hello.len() as u8);
+        } else {
+            frame.push(0x80 | 126);
+            frame.extend_from_slice(&(hello.len() as u16).to_be_bytes());
+        }
+        let mask = [1u8, 2, 3, 4];
+        frame.extend_from_slice(&mask);
+        frame.extend(hello.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
+        s.write_all(&frame).await.unwrap();
+        // The welcome: the app is in.
+        let (op, _) = tokio::time::timeout(Duration::from_secs(10), read_frame(&mut s)).await.unwrap().unwrap();
+        assert!(op == 1 || op == 2, "a message");
+        // The owner removes the device in the browser.
+        let g = send(&app, &ip, "GET", "/api/devices", &boss, &[], vec![]).await;
+        let id = g.json[0]["id"].as_str().unwrap().to_string();
+        assert_eq!(send(&app, &ip, "DELETE", &format!("/api/devices?id={id}"), &boss, &[SAME], vec![]).await.status, 200);
+        let mut told = false;
+        loop {
+            match tokio::time::timeout(Duration::from_secs(10), read_frame(&mut s)).await.expect("the connection ends at once") {
+                Some((1, body)) if String::from_utf8_lossy(&body).contains("disconnected from your account") => told = true,
+                Some((8, _)) | None => break,
+                Some(_) => {}
+            }
+        }
+        assert!(told, "the app is told why");
+        // And it can't connect again.
+        let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+        s.write_all(req.as_bytes()).await.unwrap();
+        let mut head = [0u8; 12];
+        s.read_exact(&mut head).await.unwrap();
+        assert_eq!(&head, b"HTTP/1.1 401");
+        let _ = std::fs::remove_dir_all(&app.store.root);
+    }
+
+    #[tokio::test]
+    async fn the_connect_page_is_served() {
+        let (app, ip, _) = owned().await;
+        let g = send(&app, &ip, "GET", "/connect?code=ABCD-EFGH", "", &[], vec![]).await;
+        assert_eq!(g.status, 200);
+        let page = String::from_utf8_lossy(&g.bytes);
+        assert!(page.contains("Connect an app") && page.contains("api/devices/approve"));
+        assert_eq!(g.headers[header::X_FRAME_OPTIONS], "DENY", "never inside another site's frame");
+        let _ = std::fs::remove_dir_all(&app.store.root);
     }
 }

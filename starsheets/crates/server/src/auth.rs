@@ -570,11 +570,13 @@ pub fn end_session(store: &Store, token: &str) {
     }
 }
 
-/// Signs `username` out everywhere.
+/// Signs `username` out everywhere, desktop apps included.
 pub fn end_all_sessions(store: &Store, username: &str) {
     let mut sessions = store.load_json(&sessions_path(store));
     sessions.retain(|_, v| v.get("user").and_then(Value::as_str) != Some(username));
     let _ = store.save_json(&sessions_path(store), &Value::Object(sessions));
+    // Desktop apps connected to the account too (devices.rs).
+    crate::devices::remove_all(store, username);
 }
 
 /// Ends `username`'s sessions made through single sign-on (password ones stay).
