@@ -25,9 +25,10 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request cancels the older run; runs on main always finish.
 concurrency:
   group: desktop-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -53,7 +54,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: desktop-2204
+          # The same build as the StarSheets workflow's desktop job (main and tags): one cache.
+          shared-key: starsheets-native-release-2204
           workspaces: starsheets
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build
@@ -61,7 +63,7 @@ jobs:
         # (docs/privacy.md); other builds say 0.0.0-dev.
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then export STARBASE_VERSION="${GITHUB_REF_NAME#v}"; fi
-          cargo build --release -p starsheets
+          cargo build --release -p starsheets -p starbase-open
       - name: Version and the C library it needs
         run: |
           target/release/starsheets --version
@@ -69,7 +71,9 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: desktop-starsheets
-          path: starsheets/target/release/starsheets
+          path: |
+            starsheets/target/release/starsheets
+            starsheets/target/release/starbase-open
           retention-days: 3
 
   stardocs:
@@ -80,9 +84,10 @@ jobs:
       run:
         working-directory: stardocs
     steps:
-      - name: Make disk space (WordCraft's build needs more than the runner leaves free)
+      # WordCraft's build needs more disk than the runner leaves free; deleting runs in the background.
+      - name: Make disk space (in the background)
         working-directory: /
-        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+        run: sudo nohup rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL >/dev/null 2>&1 &
       - uses: actions/checkout@v7
       # The scripts use tomllib (Python 3.11+); ubuntu-22.04 ships 3.10.
       - uses: actions/setup-python@v6
@@ -95,7 +100,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: desktop-2204
+          # The same build as the StarDocs workflow's native job (main and tags): one cache.
+          shared-key: stardocs-native-release-2204
           workspaces: stardocs
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build
@@ -143,8 +149,8 @@ jobs:
         env:
           DIST: ${{ github.workspace }}/dist
         run: |
-          chmod +x bin/starsheets bin/stardocs
-          packaging/linux/appimage.sh --starsheets bin/starsheets --stardocs bin/stardocs
+          chmod +x bin/starsheets bin/stardocs bin/starbase-open
+          packaging/linux/appimage.sh --starsheets bin/starsheets --stardocs bin/stardocs --starbase-open bin/starbase-open
           ls -la dist
           {
             echo "### Starbase AppImage $STARBASE_VERSION"
@@ -196,10 +202,11 @@ jobs:
           "$app" --version
           "$app" stardocs --version | grep '^stardocs '
           "$app" starsheets --version
+          "$app" starbase-open --explain "$PWD/x.xlsx"
           # The runtime reads its own --appimage-* options only without APPIMAGE_EXTRACT_AND_RUN.
           env -u APPIMAGE_EXTRACT_AND_RUN "$app" --appimage-extract >/dev/null
           ls squashfs-root squashfs-root/usr/bin
-          if ldd squashfs-root/usr/bin/starsheets squashfs-root/usr/bin/stardocs | grep 'not found'; then exit 1; fi
+          if ldd squashfs-root/usr/bin/starsheets squashfs-root/usr/bin/stardocs squashfs-root/usr/bin/starbase-open | grep 'not found'; then exit 1; fi
           env -u APPIMAGE_EXTRACT_AND_RUN "$app" --appimage-updateinformation; echo
       - name: Starbase Drive (the home) stays up for 15 s
         run: |
