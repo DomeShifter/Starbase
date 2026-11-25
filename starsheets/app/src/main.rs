@@ -6,6 +6,7 @@
 
 #[cfg(target_arch = "wasm32")]
 mod account;
+mod altcolours;
 mod autolink;
 mod bottom;
 mod calcpreview;

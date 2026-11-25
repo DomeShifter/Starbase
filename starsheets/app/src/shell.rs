@@ -267,6 +267,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
             ),
             Cmd("Convert to table", "insert.table", "Ctrl+Alt+T"),
             Cmd("Conditional formatting", "ui:manageRules", ""),
+            Cmd("Alternating colours", "panel:alternatingColours", ""),
             Sep,
             Cmd("Clear formatting", "edit.clearFormats", "Ctrl+\\"),
         ],
@@ -1180,6 +1181,7 @@ pub const MENU_ICONS: &[(&str, &str)] = &[
     ("Merge cells", "cell_merge"),
     ("Convert to table", "table"),
     ("Conditional formatting", "format_paint"),
+    ("Alternating colours", "format_color_fill"),
     ("Clear formatting", "format_clear"),
     ("Sort range A → Z", "sort_by_alpha"),
     ("Sort range Z → A", "sort_by_alpha"),
@@ -1450,6 +1452,20 @@ pub fn run_entry_with(app: &mut SheetApp, ctx: &egui::Context, id: &str, params:
     }
     if filterviews::handles(id) {
         return filterviews::run(app, id, &params);
+    }
+    match id {
+        // With parameters (the test hook) it applies them; from the menu it opens the panel.
+        "panel:alternatingColours" if params.as_object().is_some_and(|o| !o.is_empty()) => {
+            if let Err(e) = crate::altcolours::run(app, &params) {
+                app.message = Some(("Alternating colours".into(), e));
+            }
+            return;
+        }
+        "panel:alternatingColours" => {
+            ctx.data_mut(|m| m.insert_temp(egui::Id::unique(crate::altcolours::REQUEST), true));
+            return;
+        }
+        _ => {}
     }
     if !id.starts_with("panel:") && !id.starts_with("ui:") && !matches!(id, "edit.copy" | "edit.cut" | "edit.paste") {
         return app.run_or_alert(id, params);

@@ -142,7 +142,7 @@ impl CfPanel {
             .session
             .active()
             .and_then(|d| d.wb.active())
-            .is_some_and(|sh| sh.cond_formats.iter().any(|cf| !crate::dvpanel::is_item_colour(sh, cf, &h)));
+            .is_some_and(|sh| sh.cond_formats.iter().any(|cf| !(crate::dvpanel::is_item_colour(sh, cf, &h) || crate::altcolours::is_ours(cf))));
         self.draft = if has_rules { None } else { Some(Draft::new(selection_text(app))) };
     }
 
@@ -200,11 +200,9 @@ impl CfPanel {
                                 self.revert(app);
                                 self.error = None;
                                 let h = crate::hostdata::read(app);
-                                let none_left = app
-                                    .session
-                                    .active()
-                                    .and_then(|d| d.wb.active())
-                                    .is_none_or(|sh| sh.cond_formats.iter().all(|cf| crate::dvpanel::is_item_colour(sh, cf, &h)));
+                                let none_left = app.session.active().and_then(|d| d.wb.active()).is_none_or(|sh| {
+                                    sh.cond_formats.iter().all(|cf| (crate::dvpanel::is_item_colour(sh, cf, &h) || crate::altcolours::is_ours(cf)))
+                                });
                                 if none_left {
                                     self.open = false;
                                 }
@@ -233,7 +231,14 @@ impl CfPanel {
             .session
             .active()
             .and_then(|d| d.wb.active())
-            .map(|sh| sh.cond_formats.iter().enumerate().filter(|(_, cf)| crate::dvpanel::is_item_colour(sh, cf, &h)).map(|(i, _)| i).collect())
+            .map(|sh| {
+                sh.cond_formats
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, cf)| (crate::dvpanel::is_item_colour(sh, cf, &h) || crate::altcolours::is_ours(cf)))
+                    .map(|(i, _)| i)
+                    .collect()
+            })
             .unwrap_or_default();
         for (i, cf) in rules.iter().enumerate() {
             // A drop-down item's colour is kept as a rule of this kind, but it belongs to the
@@ -454,7 +459,7 @@ pub(crate) fn hex(rgb: u32) -> String {
 }
 
 /// A colour button that opens the palette.
-fn colour_pick(ui: &mut Ui, id: &str, colour: Option<u32>, icon: &str, tip: &str) -> Option<Option<u32>> {
+pub(crate) fn colour_pick(ui: &mut Ui, id: &str, colour: Option<u32>, icon: &str, tip: &str) -> Option<Option<u32>> {
     let mut picked = None;
     let r = ui
         .menu_button(crate::icons::icon(icon).map_or_else(|| egui::Atom::from(tip.to_string()), egui::Atom::from), |ui| {
