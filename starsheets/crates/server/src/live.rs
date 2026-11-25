@@ -1318,7 +1318,7 @@ mod tests {
         // Leaving saves at once.
         app.rooms.send(&app, &file, RoomMsg::Leave { client: "a".into() });
         app.rooms.send(&app, &file, RoomMsg::Leave { client: "b".into() });
-        wait_until(|| std::fs::read_to_string(dir.join("t.csv")).map_or(false, |s| s.contains("from a") && s.contains("from b")));
+        wait_until(|| std::fs::read_to_string(dir.join("t.csv")).is_ok_and(|s| s.contains("from a") && s.contains("from b")));
         let saved = std::fs::read_to_string(dir.join("t.csv")).unwrap();
         assert!(saved.contains("from a") && saved.contains("from b"), "{saved}");
         let copies = std::fs::read_dir(dir.join(".starsheets/versions").join(&file)).unwrap().flatten();
