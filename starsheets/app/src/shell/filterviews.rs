@@ -121,6 +121,8 @@ pub fn refresh(app: &mut SheetApp) {
 }
 
 /// The open view as the test hook reports it: `{id, name, range, hiddenRows}`, or null.
+/// Web only: the test hook (testhook.rs) exists only in the browser build.
+#[cfg(target_arch = "wasm32")]
 pub fn state(app: &SheetApp) -> Value {
     let Some(id) = open_view(app) else { return Value::Null };
     let Some(sh) = app.session.active().and_then(|d| d.wb.active()) else { return Value::Null };
