@@ -12,7 +12,7 @@
 //! reappeared: to-do row 14).
 
 use egui::{Color32, RichText, Sense, Stroke, Ui, vec2};
-use gridcraft_engine::model::{CfOperator, CfRule, ErrorStyle, Validation, ValidationKind};
+use gridcraft_engine::model::{CfOperator, CfRule, DropdownDisplay, ErrorStyle, Validation, ValidationKind};
 use gridcraft_ui_egui::SheetApp;
 use serde_json::{Value as Json, json};
 
@@ -141,8 +141,16 @@ struct Draft {
     help_on: bool,
     help: String,
     reject: bool,
-    plain: bool,
+    /// Display style, an index into DISPLAY.
+    display: usize,
+    /// Drop-downs: "Allow multiple selections".
+    multiple: bool,
 }
+
+/// Sheets' display styles for a drop-down: label and GridCraft's name. Chip is the default for a
+/// new drop-down, as in Sheets.
+const DISPLAY: [(&str, &str); 3] = [("Chip", "chip"), ("Arrow", "arrow"), ("Plain text", "plain")];
+const PLAIN: usize = 2;
 
 impl Draft {
     fn new(range: String) -> Draft {
@@ -157,7 +165,8 @@ impl Draft {
             help_on: false,
             help: String::new(),
             reject: true,
-            plain: false,
+            display: 0,
+            multiple: false,
         }
     }
     fn crit(&self) -> Crit {
@@ -378,8 +387,9 @@ impl DvPanel {
             if matches!(d.crit(), Crit::Dropdown | Crit::DropdownRange) {
                 ui.add_space(6.0);
                 ui.label(RichText::new("Display style").color(theme::TEXT_DIM));
-                ui.radio_value(&mut d.plain, false, "Arrow");
-                ui.radio_value(&mut d.plain, true, "Plain text");
+                for (i, (label, _)) in DISPLAY.iter().enumerate() {
+                    ui.radio_value(&mut d.display, i, *label);
+                }
             }
         });
 
@@ -470,8 +480,14 @@ fn criterion_inputs(ui: &mut Ui, d: &mut Draft) {
             if ui.add(crate::house::secondary("Add another item")).clicked() {
                 d.items.push(Item::default());
             }
+            ui.add_space(4.0);
+            ui.checkbox(&mut d.multiple, "Allow multiple selections");
         }
-        Crit::DropdownRange => boxed(ui, &mut d.v1, "e.g. Sheet1!A1:A10"),
+        Crit::DropdownRange => {
+            boxed(ui, &mut d.v1, "e.g. Sheet1!A1:A10");
+            ui.add_space(4.0);
+            ui.checkbox(&mut d.multiple, "Allow multiple selections");
+        }
         Crit::TextContains | Crit::TextNotContains | Crit::TextExactly => boxed(ui, &mut d.v1, "Value or formula"),
         Crit::Email | Crit::Url | Crit::ValidDate | Crit::TickBox => {}
         Crit::Date(op) => {
@@ -605,7 +621,8 @@ fn commands(d: &Draft) -> Result<Vec<(&'static str, Json)>, String> {
     let range = crate::refs::plain(&d.range);
     let tl = top_left(&range).ok_or("Choose the cells the rule applies to (e.g. A1:A10).")?;
     let need = |v: &str| if v.trim().is_empty() { Err("Enter a value for the rule.".to_string()) } else { Ok(()) };
-    let mut p = json!({ "range": range, "errorStyle": if d.reject { "stop" } else { "warning" }, "dropdown": !d.plain });
+    let plain = d.display == PLAIN && matches!(d.crit(), Crit::Dropdown | Crit::DropdownRange);
+    let mut p = json!({ "range": range, "errorStyle": if d.reject { "stop" } else { "warning" }, "dropdown": !plain });
     let mut extra = Vec::new();
     let custom = |f: String| json!({ "type": "custom", "formula1": format!("={f}") });
     let rule = match d.crit() {
@@ -626,11 +643,16 @@ fn commands(d: &Draft) -> Result<Vec<(&'static str, Json)>, String> {
                     ));
                 }
             }
-            json!({ "type": "list", "formula1": items.iter().map(|i| i.text.trim()).collect::<Vec<_>>().join(",") })
+            // The colours also go in the rule itself, for chips (and multiple selections, which an
+            // "is equal to" rule can't colour); the conditional formats carry them to Excel.
+            let colours: Vec<Json> = items.iter().filter_map(|i| i.colour.map(|c| json!({ "item": i.text.trim(), "color": hex(c) }))).collect();
+            let formula1 = items.iter().map(|i| i.text.trim()).collect::<Vec<_>>().join(",");
+            json!({ "type": "list", "formula1": formula1, "multiple": d.multiple, "display": DISPLAY[d.display].1, "itemColors": colours })
         }
         Crit::DropdownRange => {
             need(&d.v1)?;
-            json!({ "type": "list", "formula1": format!("={}", d.v1.trim().trim_start_matches('=')) })
+            let formula1 = format!("={}", d.v1.trim().trim_start_matches('='));
+            json!({ "type": "list", "formula1": formula1, "multiple": d.multiple, "display": DISPLAY[d.display].1 })
         }
         Crit::TextContains => {
             need(&d.v1)?;
@@ -859,6 +881,10 @@ fn draft_from(
                     coloured.push(it.text.trim().to_string());
                 }
             }
+            // Colours kept in the rule itself (chips, multiple selections).
+            for it in d.items.iter_mut().filter(|it| it.colour.is_none()) {
+                it.colour = dv.item_color(it.text.trim()).and_then(|c| rgb_of(&c, theme_colours));
+            }
         }
         ValidationKind::List => {
             d.crit = pos(Crit::DropdownRange);
@@ -917,7 +943,15 @@ fn draft_from(
     d.help_on = !dv.input_message.is_empty();
     d.help = dv.input_message.clone();
     d.reject = dv.error_style == ErrorStyle::Stop;
-    d.plain = !dv.in_cell_dropdown;
+    if dv.kind == ValidationKind::List {
+        d.multiple = dv.multiple;
+        d.display = match dv.display {
+            _ if !dv.in_cell_dropdown => PLAIN,
+            DropdownDisplay::Chip => 0,
+            DropdownDisplay::Arrow => 1,
+            DropdownDisplay::Plain => PLAIN,
+        };
+    }
     // StarSheets' section says when a custom formula only looks like one of the text criteria.
     if let (Some(m), ValidationKind::Custom) = (meta, dv.kind)
         && CRITERIA.iter().any(|c| c.0 == m.crit && c.1 == Crit::Custom)
@@ -1123,6 +1157,62 @@ mod tests {
         h.set_dv(meta_of(&sh.name, &d, "B2:B9"));
         assert!(!is_item_colour(&sh, &sh.cond_formats[0], &h));
         assert!(draft_from(&sh.validations[0], &sh.cond_formats, &theme, h.dv_for(&sh.name, "B2:B9")).items[0].colour.is_none());
+    }
+
+    #[test]
+    fn multiple_selection_chips_come_back_from_the_sheet_and_the_file() {
+        let mut d = draft(Crit::Dropdown, "", "");
+        d.items = vec![Item { text: "Open".into(), colour: Some(0xD4EDBC) }, Item { text: "Closed".into(), colour: None }];
+        d.multiple = true;
+        assert!(accepts(&d, "Open, Closed") && accepts(&d, "Closed") && !accepts(&d, "Open, Maybe"));
+        let mut s = Session::new();
+        s.execute("file.new", json!({})).unwrap();
+        for (cmd, p) in commands(&d).unwrap() {
+            s.execute(cmd, p).unwrap();
+        }
+        let wb = s.active().unwrap().wb.clone();
+        let dv = &wb.active().unwrap().validations[0];
+        assert!(dv.multiple && dv.display == DropdownDisplay::Chip);
+        assert_eq!(dv.item_colors.len(), 1);
+        // Through .xlsx (the settings Excel has no place for are kept beside the list rule).
+        let bytes = gridcraft_engine::io::save_bytes(&wb, "t.xlsx").unwrap();
+        let (back, _) = gridcraft_engine::io::open_bytes("t.xlsx", &bytes).unwrap();
+        let sh = back.active().unwrap().clone();
+        let mut got = draft_from(&sh.validations[0], &sh.cond_formats, &back.theme, None);
+        got.orig = None;
+        assert!(got == d, "came back as {} / multiple {} / display {}", describe(&got), got.multiple, got.display);
+        // Each display style comes back.
+        for style in 0..DISPLAY.len() {
+            let mut d = d.clone();
+            d.display = style;
+            d.multiple = false;
+            let mut s = Session::new();
+            s.execute("file.new", json!({})).unwrap();
+            for (cmd, p) in commands(&d).unwrap() {
+                s.execute(cmd, p).unwrap();
+            }
+            let doc = s.active().unwrap();
+            let sh = doc.wb.active().unwrap().clone();
+            let got = draft_from(&sh.validations[0], &sh.cond_formats, &doc.wb.theme, None);
+            assert_eq!(got.display, style, "{}", DISPLAY[style].0);
+        }
+    }
+
+    #[test]
+    fn a_colour_kept_only_in_the_rule_is_read_back() {
+        // A multiple-selection cell holds "Open, Closed", which no "is equal to" rule colours:
+        // the chip colour comes from the rule itself.
+        let mut s = Session::new();
+        s.execute("file.new", json!({})).unwrap();
+        let colours = json!([{ "item": "Closed", "color": "#FFCFC9" }]);
+        let p = json!({ "range": "B2:B9", "type": "list", "formula1": "Open,Closed", "multiple": true, "display": "chip", "itemColors": colours });
+        s.execute("data.validation", p).unwrap();
+        let doc = s.active().unwrap();
+        let sh = doc.wb.active().unwrap().clone();
+        let got = draft_from(&sh.validations[0], &sh.cond_formats, &doc.wb.theme, None);
+        assert_eq!(got.items[1].colour, Some(0xFFCFC9));
+        assert_eq!(got.items[0].colour, None);
+        assert!(got.multiple);
     }
 
     #[test]

@@ -10,10 +10,10 @@ side panel on the right.
 | Apply to range | text box | same |
 | Criteria | 25 choices in groups (below) | all 25 |
 | Drop-down items | one row per item: colour chip, text, bin; "Add another item" | same (Sheets' light chip colours) |
-| Allow multiple selections | tick box under the items | later |
+| Allow multiple selections | tick box under the items | same (the cell holds "a, b"; the list shows tick boxes) |
 | Help text | "Show help text for a selected cell" + text | same (GridCraft's input message, shown under the cell) |
 | If invalid | Show a warning / Reject the input | same |
-| Display style | Chip / Arrow / Plain text | Arrow / Plain text (chips later) |
+| Display style | Chip / Arrow / Plain text | same |
 | Buttons | Remove rule, Done; the rule applies as you build it | same |
 
 ## Criteria and how Starbase Sheets stores them
