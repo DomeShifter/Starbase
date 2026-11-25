@@ -36,6 +36,9 @@ impl Home {
             {
                 self.error = Some(e);
             }
+            if house::menu_row(ui, Some("description"), "From a template…", "", true) {
+                templates::open(ui.ctx(), &folder);
+            }
             if house::menu_row(ui, Some("create_new_folder"), "New folder", "", true) {
                 call(&self.store, &self.inbox, ui.ctx(), Method::Post, format!("api/folders?path={}&name=New%20folder", enc(&folder)), None, |b| {
                     let v: Json = serde_json::from_slice(&b).unwrap_or_default();

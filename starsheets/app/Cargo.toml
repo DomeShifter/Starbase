@@ -27,6 +27,7 @@ png = "0.18"
 # The photo editor (home/photo_edit.rs): its edits and live preview, in the browser too (no
 # decoders: the browser decodes).
 starbase-photo-edit = { path = "../crates/photo-edit" }
+starbase-templates = { path = "../crates/templates" }
 image = { version = "0.25", default-features = false }
 
 # The desktop app (native.rs): GridCraft's own native window setup, local mode over a folder on

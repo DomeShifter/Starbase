@@ -28,6 +28,7 @@ mod items;
 mod photo_edit;
 mod photos;
 mod sidebar;
+mod templates;
 #[cfg(target_arch = "wasm32")]
 mod test;
 mod undo;
@@ -904,6 +905,7 @@ impl Home {
 
     pub fn ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        self.templates_ui(&ctx);
         ui.painter().rect_filled(ui.max_rect(), 0, theme::PAGE);
         egui::Panel::top("home_top")
             .show_separator_line(false)

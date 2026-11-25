@@ -775,6 +775,13 @@ fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
 /// for the same calls on a server). Runs on a worker thread.
 pub(crate) fn answer(root: &Path, data: &Path, method: Method, url: &str, body: Option<&[u8]>) -> Answer {
     let (parts, q) = parse(url);
+    // New from a template: an upload of the template's file as "<name> (copy).<ext>", as on a server.
+    if let (Method::Post, ["api", "templates", key]) = (method, parts.iter().map(String::as_str).collect::<Vec<_>>().as_slice()) {
+        let Some(t) = starbase_templates::find(key) else { return refuse(404, "no such template") };
+        let folder = q.get("folder").cloned().unwrap_or_default();
+        let url = format!("api/files?name={}&folder={}", enc(&starbase_templates::upload_name(t)), enc(&folder));
+        return answer(root, data, method, &url, starbase_templates::bytes(t.key));
+    }
     let parts: Vec<&str> = parts.iter().map(String::as_str).collect();
     let qs = |k: &str| q.get(k).cloned().unwrap_or_default();
     macro_rules! place {
