@@ -152,6 +152,20 @@ One-time setup in the repository settings (an admin does this once):
 1. Settings > Pages > Build and deployment > Source: **GitHub Actions**.
 2. Settings > Environments > `github-pages` > Deployment branches and tags: keep `main` and
    **add a tag rule `v*`** (otherwise the tag run's deploy is refused).
+3. Settings > Environments > **New environment `release-signing`** > Deployment branches and
+   tags: "Selected branches and tags", add branch **`main`** and tag **`v*`**. Add the two
+   secrets **`STARBASE_GPG_PRIVATE_KEY`** and **`STARBASE_GPG_PASSPHRASE`** there, then delete
+   them from Settings > Secrets and variables > Actions (repository secrets), so a run from any
+   other branch never sees the key. Only the jobs `sign` and `flatpak-repo` use this environment.
+4. First publish: Actions > Release > Run workflow on `main`, tick **publish_flatpak_repo** and
+   **flatpak_repo_start_empty**. Every later publish (each `vX.Y.Z` tag) builds on the
+   published repository, and fails rather than starting empty if Pages has nothing.
+
+Two runs never publish at once (concurrency group `pages`), and the publish job stops if another
+run published after its repository was built, so no version is lost. The check job waits until
+Pages serves the new commit, installs from the `.flatpakref`, and compares the installed commit
+(and, for a tag, the version from the metainfo's newest `<release>`) with what was published.
+The `.flatpak` bundle is also attached to the release, signed and in `SHA256SUMS`.
 
 ## Checking a download
 

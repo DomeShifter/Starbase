@@ -11,7 +11,11 @@
 # The Flatpak goes into our own signed Flatpak repository on GitHub Pages (Flathub is not an
 # option for now: packaging/linux/flathub-submission.md). A version tag publishes it once every
 # other job is green; by hand it is only built and kept as the `flatpak-repo-site` artifact,
-# unless "publish_flatpak_repo" is ticked (Pages only accepts main and v* tags).
+# unless "publish_flatpak_repo" is ticked (Pages only accepts main and v* tags). The very first
+# publish is a run by hand on main with both boxes ticked (packaging/README.md).
+#
+# The release key's secrets live in the `release-signing` environment (tags v* and main only),
+# used by the two signing jobs alone.
 name: Release
 on:
   push:
@@ -20,6 +24,10 @@ on:
     inputs:
       publish_flatpak_repo:
         description: Also publish the Flatpak repository on GitHub Pages
+        type: boolean
+        default: false
+      flatpak_repo_start_empty:
+        description: Start the Flatpak repository empty (first publish only; otherwise it fails if nothing is published)
         type: boolean
         default: false
 
@@ -159,13 +167,14 @@ jobs:
   sign:
     # Signs every Linux download on the draft release with the project's release key
     # (packaging/linux/starbase-release-signing.asc): SHA256SUMS + SHA256SUMS.asc, and a detached
-    # .asc next to each file. The private key and its passphrase live only in the repository
-    # secrets STARBASE_GPG_PRIVATE_KEY / STARBASE_GPG_PASSPHRASE.
+    # .asc next to each file. The private key and its passphrase live only in the secrets
+    # STARBASE_GPG_PRIVATE_KEY / STARBASE_GPG_PASSPHRASE of the `release-signing` environment.
     name: Sign the downloads
-    needs: [image, desktop]
+    needs: [image, desktop, flatpak]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    environment: release-signing
     permissions:
       contents: write
     steps:
@@ -173,6 +182,10 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: starbase-appimage
+          path: dist
+      - uses: actions/download-artifact@v8
+        with:
+          name: starbase-flatpak
           path: dist
       - name: The draft's web zip
         env:
@@ -203,7 +216,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd dist
-          gh release upload "$GITHUB_REF_NAME" --clobber -- *.AppImage *.AppImage.zsync SHA256SUMS *.asc
+          gh release upload "$GITHUB_REF_NAME" --clobber -- *.AppImage *.AppImage.zsync *.flatpak SHA256SUMS *.asc
 
   flatpak-repo:
     # Our own Flatpak repository (packaging/linux/flatpak/make-repo.sh): the bundle from the
@@ -213,8 +226,20 @@ jobs:
     needs: flatpak
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    environment: release-signing
+    # One Flatpak repository build or publish at a time across runs: two tags close together
+    # would otherwise both build on the same published version and the last deploy would drop
+    # the other's version. flatpak-repo-publish also checks that nothing was published meanwhile.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    outputs:
+      commit: ${{ steps.repo.outputs.commit }}
+      base: ${{ steps.repo.outputs.base }}
     env:
       PAGES_URL: https://domeshifter.github.io/Starbase
+      REF: app/io.github.DomeShifter.Starbase/x86_64/stable
+      ALLOW_EMPTY: ${{ github.event_name == 'workflow_dispatch' && inputs.flatpak_repo_start_empty && '1' || '0' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
@@ -243,10 +268,13 @@ jobs:
           echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
           echo "SIGNING_KEY=$want" >> "$GITHUB_ENV"
       - name: Build and check the repository
+        id: repo
         run: |
           packaging/linux/flatpak/make-repo.sh dist/*.flatpak site "$PAGES_URL" "$SIGNING_KEY" \
             packaging/linux/starbase-release-signing.asc
           gpgconf --kill gpg-agent
+          echo "commit=$(ostree rev-parse --repo=site/repo "$REF")" >> "$GITHUB_OUTPUT"
+          echo "base=$(ostree rev-parse --repo=site/repo "$REF^" 2>/dev/null || echo none)" >> "$GITHUB_OUTPUT"
           {
             echo "### Flatpak repository"
             echo '```'; cut -c1-100 site/starbase.flatpakref; echo '```'
@@ -274,7 +302,22 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    env:
+      PAGES_URL: https://domeshifter.github.io/Starbase
+      REF: app/io.github.DomeShifter.Starbase/x86_64/stable
+      BASE: ${{ needs.flatpak-repo.outputs.base }}
     steps:
+      # The artifact was built on top of $BASE; if another run published since, deploying it
+      # would drop that version. Stop instead (rerun the release to build on the new one).
+      - name: Nothing published since the repository was built
+        run: |
+          code=$(curl -sS -o now.txt -w '%{http_code}' "$PAGES_URL/repo/refs/heads/$REF" || echo 000)
+          if [ "$code" = 200 ]; then now=$(tr -d '[:space:]' < now.txt); elif [ "$code" = 404 ]; then now=none; else echo "Pages answered HTTP $code"; exit 1; fi
+          echo "published now: $now, built on: $BASE"
+          [ "$now" = "$BASE" ] || { echo "::error::another run published $now after this one fetched $BASE"; exit 1; }
       - id: deployment
         uses: actions/deploy-pages@v5
         with:
@@ -283,23 +326,41 @@ jobs:
   flatpak-repo-check:
     # What a user does on a fresh machine: install from the published .flatpakref, then run it.
     name: Install from the published repository
-    needs: flatpak-repo-publish
+    needs: [flatpak-repo, flatpak-repo-publish]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       PAGES_URL: https://domeshifter.github.io/Starbase
       APP_ID: io.github.DomeShifter.Starbase
+      REF: app/io.github.DomeShifter.Starbase/x86_64/stable
+      COMMIT: ${{ needs.flatpak-repo.outputs.commit }}
     steps:
       - name: Flatpak
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq flatpak
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-      - name: Install from starbase.flatpakref (runtime from Flathub)
+      - name: Pages serves the new version
         run: |
-          # Pages can take a minute to serve the new site everywhere.
-          for _ in 1 2 3 4 5 6; do curl -fsS -o /dev/null "$PAGES_URL/repo/summary" && break; sleep 20; done
+          # The Pages CDN can take a few minutes to serve the new site everywhere.
+          for _ in $(seq 1 15); do
+            now=$(curl -fsS "$PAGES_URL/repo/refs/heads/$REF" 2>/dev/null | tr -d '[:space:]' || true)
+            echo "published: ${now:-?}, want: $COMMIT"
+            [ "$now" = "$COMMIT" ] && exit 0
+            sleep 20
+          done
+          exit 1
+      - name: Install from starbase.flatpakref (runtime from Flathub), check commit and version
+        run: |
           flatpak install --user -y --noninteractive --from "$PAGES_URL/starbase.flatpakref"
           flatpak remote-list --user --show-details
+          flatpak info --user "$APP_ID"
+          got=$(flatpak info --user --show-commit "$APP_ID")
+          [ "$got" = "$COMMIT" ] || { echo "::error::installed commit $got, published $COMMIT"; exit 1; }
+          # A version tag must arrive as that version (the metainfo's newest <release>).
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            ver=$(flatpak info --user "$APP_ID" | awk -F': *' '/^ *Version:/{print $2; exit}')
+            [ "$ver" = "${GITHUB_REF_NAME#v}" ] || { echo "::error::installed version '$ver', tag $GITHUB_REF_NAME (add the <release> to the metainfo)"; exit 1; }
+          fi
           flatpak run "$APP_ID" --version
           flatpak run --command=stardocs "$APP_ID" --version
           flatpak update --user -y --noninteractive

@@ -16,7 +16,8 @@
 # Each release ADDS to the published repository: the current version is fetched from <public-url>
 # (signature checked against our key), the new commit is made on top of it, and the repository
 # keeps the newest two versions, with a static delta from the previous one, so an update
-# downloads only what changed. The very first run (nothing published yet) starts empty.
+# downloads only what changed. Starting an empty repository (nothing published yet, HTTP 404)
+# needs ALLOW_EMPTY=1, so a misconfigured URL or a vanished site cannot silently reset it.
 # PREVIOUS_REPO_URL overrides where the published repository is fetched from (tests).
 set -euo pipefail
 
@@ -50,8 +51,12 @@ if [ "$code" = 200 ]; then
   ostree pull --repo="$site/repo" --mirror --depth=1 published "app/$APP_ID/$arch/$BRANCH"
   ostree remote delete --repo="$site/repo" published
   echo "published version: $(ostree rev-parse --repo="$site/repo" "app/$APP_ID/$arch/$BRANCH")"
+elif [ "$code" = 404 ] && [ "${ALLOW_EMPTY:-0}" = 1 ]; then
+  echo "nothing published at $prev yet: starting an empty repository (ALLOW_EMPTY=1)"
 elif [ "$code" = 404 ]; then
-  echo "nothing published at $prev yet: starting an empty repository"
+  echo "nothing is published at $prev (HTTP 404). For the very first publish, rerun with ALLOW_EMPTY=1" >&2
+  echo "(Release > Run workflow > flatpak_repo_start_empty); otherwise check the URL and Pages." >&2
+  exit 1
 else
   echo "cannot tell whether $prev exists (HTTP $code): stopping rather than replacing it" >&2
   exit 1
