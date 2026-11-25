@@ -1,18 +1,26 @@
 //! Menu entries that GridCraft runs as one command but whose parameters depend on where you are:
-//! Sort sheet, Freeze rows/columns, Edit › Move, Randomise range and Trim whitespace. Each one
+//! Sort sheet, Freeze rows/columns, Edit › Move (rows and columns), Randomise range and Trim whitespace. Each one
 //! reads the spreadsheet and returns the GridCraft commands to run, so the menus, the test hook
 //! and the tests all go through the same code. Also decides which entries are greyed out.
 
 use gridcraft_engine::Session;
-use gridcraft_engine::core::{CellRef, MAX_COLS, RangeRef, Value, col_to_letters};
+use gridcraft_engine::core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, col_to_letters};
 use serde_json::{Value as Json, json};
 
 /// Commands to run, in order.
 pub type Steps = Vec<(&'static str, Json)>;
 
 /// The ids this module answers (`panel:` ids, so the command-id test leaves them alone).
-pub const IDS: &[&str] =
-    &["panel:sortSheet", "panel:freeze", "panel:moveColumnLeft", "panel:moveColumnRight", "panel:randomise", "panel:trimWhitespace"];
+pub const IDS: &[&str] = &[
+    "panel:sortSheet",
+    "panel:freeze",
+    "panel:moveRowUp",
+    "panel:moveRowDown",
+    "panel:moveColumnLeft",
+    "panel:moveColumnRight",
+    "panel:randomise",
+    "panel:trimWhitespace",
+];
 
 /// Whether `id` is one of ours.
 pub fn handles(id: &str) -> bool {
@@ -34,10 +42,13 @@ fn used_part(s: &Session) -> Option<RangeRef> {
 
 /// Fills `{col}` and `{row}` in a menu label with the active cell's column letter and row number,
 /// as Sheets' "Sort sheet by column B (A to Z)" and "Up to row 4" do. Create a filter reads
-/// Remove filter once the sheet has one, as in Sheets.
+/// Remove filter once the sheet has one, as in Sheets; Smart Fill's switch says what it will do.
 pub fn label(s: &Session, text: &str) -> String {
     if text == "Create a filter" && s.active().and_then(|d| d.wb.active()).is_some_and(|sh| sh.autofilter.is_some()) {
         return "Remove filter".to_string();
+    }
+    if text.ends_with("Turn off Smart Fill suggestions") && crate::smartfill::off() {
+        return text.replace("Turn off", "Turn on");
     }
     if !text.contains('{') {
         return text.to_string();
@@ -54,6 +65,8 @@ pub fn enabled(s: &Session, id: &str) -> Option<bool> {
     let Ok((sel, _, sh)) = here(s) else { return Some(false) };
     Some(match id {
         "panel:sortSheet" => sh.used_range().is_some(),
+        "panel:moveRowUp" => sel.start.row > 0,
+        "panel:moveRowDown" => sel.end.row + 1 < MAX_ROWS,
         "panel:moveColumnLeft" => sel.start.col > 0,
         "panel:moveColumnRight" => sel.end.col + 1 < MAX_COLS,
         "panel:randomise" => used_part(s).is_some_and(|r| r.height() > 1),
@@ -66,6 +79,8 @@ pub fn steps(s: &Session, id: &str, p: &Json) -> Result<Steps, String> {
     match id {
         "panel:sortSheet" => sort_sheet(s, p.get("desc").and_then(Json::as_bool).unwrap_or(false)),
         "panel:freeze" => freeze(s, p),
+        "panel:moveRowUp" => move_rows(s, true),
+        "panel:moveRowDown" => move_rows(s, false),
         "panel:moveColumnLeft" => move_columns(s, true),
         "panel:moveColumnRight" => move_columns(s, false),
         "panel:randomise" => randomise(s, p.get("seed").and_then(Json::as_u64).unwrap_or_else(seed)),
@@ -122,6 +137,27 @@ fn move_columns(s: &Session, left: bool) -> Result<Steps, String> {
     let after = RangeRef::new(moved(sel.start), moved(sel.end));
     Ok(vec![
         ("sheet.moveColumns", json!({"cols": RangeRef::cols(from, end).a1(), "before": before})),
+        ("selection.set", json!({"range": after.a1(), "active": moved(at).a1()})),
+    ])
+}
+
+/// Edit › Move › Row up / down: the selected rows swap places with their neighbour, and the
+/// selection follows them (GridCraft's `sheet.moveRows`, StarSheets 0096).
+fn move_rows(s: &Session, up: bool) -> Result<Steps, String> {
+    let (sel, at, _) = here(s)?;
+    let (from, end) = (sel.start.row, sel.end.row);
+    let (before, shift): (u32, i64) = if up {
+        (from.checked_sub(1).ok_or("These rows are already at the top.")?, -1)
+    } else {
+        if end + 1 >= MAX_ROWS {
+            return Err("These rows are already at the bottom.".into());
+        }
+        (end + 2, 1)
+    };
+    let moved = |c: CellRef| CellRef::new((i64::from(c.row) + shift) as u32, c.col);
+    let after = RangeRef::new(moved(sel.start), moved(sel.end));
+    Ok(vec![
+        ("sheet.moveRows", json!({"rows": RangeRef::rows(from, end).a1(), "before": before})),
         ("selection.set", json!({"range": after.a1(), "active": moved(at).a1()})),
     ])
 }
@@ -291,6 +327,22 @@ mod tests {
         assert_eq!(frozen(&s), Some((0, 2)));
         run(&mut s, "panel:freeze", json!({"cols": 0}));
         assert!(frozen(&s).is_none_or(|f| f == (0, 0)), "{:?}", frozen(&s));
+    }
+
+    #[test]
+    fn move_row_up_and_down_swaps_with_the_neighbour() {
+        let mut s = sheet(&[("A1", "a"), ("A2", "b"), ("A3", "c"), ("B3", "=A1")]);
+        select(&mut s, "A2");
+        assert_eq!(enabled(&s, "panel:moveRowUp"), Some(true));
+        run(&mut s, "panel:moveRowUp", json!({}));
+        assert_eq!([input(&s, "A1"), input(&s, "A2"), input(&s, "A3")], ["b", "a", "c"]);
+        assert_eq!(input(&s, "B3"), "=A2", "a formula follows the row it points at");
+        assert_eq!(s.active().unwrap().selection.active, CellRef::parse("A1").unwrap());
+        assert_eq!(enabled(&s, "panel:moveRowUp"), Some(false), "row 1 can't move up");
+        run(&mut s, "panel:moveRowDown", json!({}));
+        run(&mut s, "panel:moveRowDown", json!({}));
+        assert_eq!([input(&s, "A1"), input(&s, "A2"), input(&s, "A3")], ["a", "c", "b"]);
+        assert_eq!(s.active().unwrap().selection.active, CellRef::parse("A3").unwrap());
     }
 
     #[test]
