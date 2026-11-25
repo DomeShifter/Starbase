@@ -78,7 +78,7 @@
 - [x] Home screen with a folder tree, cards or list, drag to move, upload
 - [x] A "Move to…" folder picker and a Details panel (owner, who changed it last, who has access)
 - [x] Sort menu; copy a sheet to another spreadsheet; choose where files are kept
-- [x] Backups (prototype): daily, encrypted, in restic's format to any folder the server can reach; keep 7 days / 4 weeks / 12 months; restore your own files into a new folder
+- [x] Backups (prototype): daily, encrypted, in restic's format to any folder the server can reach; keep 7 days / 4 weeks / 12 months; restore anyone's files (owner) or your own into a new folder
 - [ ] Backups next: S3 / Backblaze B2 targets, restore everything onto a new server from the app, choose the keep rules
 
 The full Sheets feature list with a phase per item is in [docs/sheets-reference.md](docs/sheets-reference.md).

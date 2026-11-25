@@ -211,6 +211,8 @@ enum Reply {
     Backup(Json),
     /// The backups kept (GET /api/backup/list).
     BackupList(Vec<Json>),
+    /// Whose folders the backups hold (GET /api/backup/people).
+    BackupPeople(Vec<Json>),
     BackupKey(String),
     /// Settings saved, a backup started or a restore done: say so and look again.
     BackupDone(String),
@@ -447,6 +449,10 @@ pub struct Account {
     backup_has_old: bool,
     backup_armed: Option<String>,
     backup_polled: f64,
+    /// Whose files a restore brings back (owner, sign-in on): the people the backups hold
+    /// ({name, account}), and the choice (0 = your own, then each other person, then everyone).
+    backup_people: Vec<Json>,
+    backup_whose: usize,
 }
 
 fn me_from(v: &Json) -> Option<Me> {
@@ -615,9 +621,15 @@ impl Account {
                         call(&self.inbox, ctx, Method::Get, "api/backup/list", None, |v| {
                             Reply::BackupList(v.as_array().cloned().unwrap_or_default())
                         });
+                        if self.auth {
+                            call(&self.inbox, ctx, Method::Get, "api/backup/people", None, |v| {
+                                Reply::BackupPeople(v.as_array().cloned().unwrap_or_default())
+                            });
+                        }
                     }
                 }
                 Reply::BackupList(l) => self.backup_list = Some(l),
+                Reply::BackupPeople(p) => self.backup_people = p,
                 Reply::BackupKey(k) => self.backup_key = Some(k),
                 Reply::BackupDone(msg) => {
                     self.done = Some(msg);
@@ -660,6 +672,8 @@ impl Account {
                     self.backup_list = None;
                     self.backup_key = None;
                     self.backup_armed = None;
+                    self.backup_people.clear();
+                    self.backup_whose = 0;
                     call(&self.inbox, ctx, Method::Get, "api/backup", None, Reply::Backup);
                 }
                 "people" => {
@@ -953,6 +967,22 @@ impl Account {
             }
         }
         let (list, key) = (self.backup_list.clone(), self.backup_key.clone());
+        // "Whose files" (sign-in on): your own, each other person the backups hold, everyone's.
+        let mine = me().map(|m| m.username).unwrap_or_default();
+        let mut whose: Vec<(String, Option<String>)> = vec![("Your own files".into(), None)];
+        if self.auth && !self.backup_people.is_empty() {
+            for p in &self.backup_people {
+                let name = p["name"].as_str().unwrap_or("");
+                if name != mine && !name.is_empty() {
+                    let label = if p["account"].as_bool().unwrap_or(false) { name.to_string() } else { format!("{name} (no account now)") };
+                    whose.push((label, Some(name.to_string())));
+                }
+            }
+            whose.push(("Everyone's files".into(), Some(String::new())));
+        }
+        if self.backup_whose >= whose.len() {
+            self.backup_whose = 0;
+        }
         let when = |iso: &str| format!("{} UTC", iso.replace('T', " ").chars().take(16).collect::<String>());
         house::dialog(ctx, "starsheets_backups", 560.0, "Backups", Some(&mut close), |ui| {
             house::note(
@@ -1032,8 +1062,16 @@ impl Account {
                 house::label(
                     ui,
                     "Backups kept",
-                    "The last 7 days, 4 weeks and 12 months. Restore copies your files from then into a new folder; nothing is overwritten.",
+                    "The last 7 days, 4 weeks and 12 months. Restore copies files from then into a new folder; nothing is overwritten.",
                 );
+                if whose.len() > 1 {
+                    ui.horizontal(|ui| {
+                        house::text(ui, "Whose files");
+                        let labels: Vec<&str> = whose.iter().map(|(l, _)| l.as_str()).collect();
+                        house::select(ui, "backup_whose", 260.0, &mut self.backup_whose, &labels, &[0, labels.len() - 2]);
+                    });
+                    house::note(ui, "Someone else's come back beside their own folder; if they have no account here, into yours, named after them.");
+                }
                 match &list {
                     None => house::note(ui, "Loading…"),
                     Some(l) if l.is_empty() => house::note(ui, "None yet."),
@@ -1098,9 +1136,13 @@ impl Account {
             self.error = None;
             self.backup_armed = None;
             self.done = Some("Restoring…".into());
-            call(&self.inbox, ctx, Method::Post, "api/backup/restore", Some(json!({ "id": id })), |v| {
+            let mut body = json!({ "id": id });
+            if let Some((_, Some(w))) = whose.get(self.backup_whose) {
+                body["whose"] = json!(w);
+            }
+            call(&self.inbox, ctx, Method::Post, "api/backup/restore", Some(body), |v| {
                 Reply::BackupDone(format!(
-                    "Copied {} files into the folder \"{}\" in your files.",
+                    "Copied {} files into the folder \"{}\".",
                     v["files"].as_u64().unwrap_or(0),
                     v["folder"].as_str().unwrap_or("")
                 ))
