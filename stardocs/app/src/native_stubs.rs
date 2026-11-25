@@ -25,3 +25,21 @@ pub mod share {
         pub fn ui(&mut self, _ctx: &egui::Context) {}
     }
 }
+
+/// The desktop program's stand-in for the browser-only `filedlg` module (File › Move, Move to bin,
+/// Details): they need the Starbase server's files.
+pub mod filedlg {
+    use crate::server::Link;
+    use wordcraft_ui_egui::WordApp;
+
+    #[derive(Default)]
+    pub struct FileDlg;
+
+    impl FileDlg {
+        pub fn ask(&mut self, _kind: &str, app: &mut WordApp, _link: Option<&Link>, _ctx: &egui::Context) {
+            app.status("This needs a Starbase server: open the document from the home screen");
+        }
+        pub fn logic(&mut self, _link: Option<&Link>, _ctx: &egui::Context) {}
+        pub fn ui(&mut self, _ctx: &egui::Context) {}
+    }
+}

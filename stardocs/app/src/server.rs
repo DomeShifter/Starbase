@@ -424,6 +424,15 @@ impl Link {
         go_home(&folder);
     }
 
+    /// The header's Files button: the home screen in a new tab, at this document's folder.
+    pub fn files_tab(&self) {
+        let folder = self.state.borrow().folder.clone();
+        let url = if folder.is_empty() { "../".to_string() } else { format!("../?dir={}", enc(&folder)) };
+        if let Some(w) = web_sys::window() {
+            let _ = w.open_with_url_and_target(&url, "_blank");
+        }
+    }
+
     /// File › New document: a new tab, in this document's folder.
     pub fn new_document(&self) {
         let folder = self.state.borrow().folder.clone();
@@ -759,7 +768,7 @@ impl Link {
         });
     }
 
-    fn news(&self, msg: String) {
+    pub(crate) fn news(&self, msg: String) {
         self.state.borrow_mut().news.push(msg);
     }
 
