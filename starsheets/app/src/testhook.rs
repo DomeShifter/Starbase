@@ -199,7 +199,10 @@ fn run(ctx: &egui::Context, app: &mut SheetApp, home: &mut Home, id: &str, param
     }
     if entry {
         // Panels, dialogs and the clipboard: the menus' own path (they answer nothing back).
-        if !crate::shell::entry_ids().contains(&id) && !id.starts_with("edit.") {
+        // The filter view bar's ✕ and the Data › Filter views list are not menu table rows but
+        // run through the same path (shell/filterviews.rs).
+        let bar = crate::shell::filterviews::handles(id);
+        if !bar && !crate::shell::entry_ids().contains(&id) && !id.starts_with("edit.") {
             return Err(format!("`{id}` is not on any menu or toolbar"));
         }
         crate::shell::run_entry_with(app, ctx, id, params);
@@ -327,8 +330,7 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
         None => (Value::Null, Value::Null),
     };
     // The words the save symbol shows (files.rs / live.rs set them; shell.rs falls back the same way).
-    let status = ctx.data(|m| m.get_temp::<String>(egui::Id::unique(crate::files::STATUS))).filter(|s| !s.is_empty());
-    let saving = status.unwrap_or_else(|| (if doc.is_dirty() { "Not saved" } else { "Saved" }).to_string());
+    let saving = crate::shell::save_status(ctx, doc.is_dirty());
     let linked = p.files.linked().filter(|(uid, _)| *uid == doc.uid);
     json!({
         "screen": "sheet",
@@ -342,10 +344,11 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
         "selection": ranges.join(","),
         "freeze": wb.active().and_then(|s| s.freeze).map(|(r, c)| json!({ "rows": r, "cols": c })),
         "filterView": crate::shell::filterviews::state(&*p.app),
+        "history": p.files.history_state(),
         "cell": cell,
         "format": format,
-        "saved": saving == "Saved",
-        "saveStatus": saving,
+        "saved": saving.state == crate::shell::SaveState::Saved,
+        "saveStatus": saving.text,
         "dirty": doc.is_dirty(),
         "canUndo": !doc.undo.is_empty(),
         "canRedo": !doc.redo.is_empty(),

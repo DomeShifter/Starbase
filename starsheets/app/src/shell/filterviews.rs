@@ -208,18 +208,34 @@ impl Bar {
             }
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let close_icon = icons::icon("close").map(|i| i.tint(house::VIEW_BAR_TEXT));
-            let close_button = match close_icon {
-                Some(img) => egui::Button::image(img.fit_to_exact_size(vec2(20.0, 20.0))),
-                None => egui::Button::new(RichText::new("✕").size(house::LABEL).color(house::VIEW_BAR_TEXT)),
+            // White icons with a faint light circle on hover and no frame, as on Google's dark bar.
+            let w = &mut ui.visuals_mut().widgets;
+            for (state, fill) in [
+                (&mut w.inactive, egui::Color32::TRANSPARENT),
+                (&mut w.hovered, house::VIEW_BAR_HOVER),
+                (&mut w.active, house::VIEW_BAR_HOVER),
+                (&mut w.open, house::VIEW_BAR_HOVER),
+            ] {
+                state.weak_bg_fill = fill;
+                state.bg_fill = fill;
+                state.bg_stroke = egui::Stroke::NONE;
+                state.corner_radius = egui::CornerRadius::same(16);
+                state.expansion = 0.0;
+            }
+            let icon_button = |name: &str, fallback: &str| {
+                match icons::icon_in(name, house::VIEW_BAR_TEXT) {
+                    Some(img) => egui::Button::image(img.fit_to_exact_size(vec2(20.0, 20.0))),
+                    None => egui::Button::new(RichText::new(fallback).size(house::LABEL).color(house::VIEW_BAR_TEXT)),
+                }
+                .frame_when_inactive(false)
+                .min_size(vec2(32.0, 32.0))
             };
-            if ui.add(close_button.frame(false).min_size(vec2(32.0, 32.0))).on_hover_text("Close filter view").clicked() {
+            if ui.add(icon_button("close", "✕")).on_hover_text("Close filter view").clicked() {
                 close(app);
             }
-            let more = icons::icon("more_vert").map(|i| i.tint(house::VIEW_BAR_TEXT).fit_to_exact_size(vec2(20.0, 20.0)));
             let options = |ui: &mut Ui| {
                 house::menu(ui, 220.0);
-                if house::menu_row(ui, None, "Duplicate", "", true) {
+                if house::menu_row(ui, Some("content_copy"), "Duplicate", "", true) {
                     if let Ok(made) = app.run("data.createFilterView", json!({ "copyOf": view.id }))
                         && let Some(id) = made.get("id").and_then(Value::as_u64).and_then(|v| u32::try_from(v).ok())
                     {
@@ -227,17 +243,13 @@ impl Bar {
                     }
                     ui.close();
                 }
-                if house::menu_row(ui, None, "Delete", "", true) {
+                if house::menu_row(ui, Some("delete"), "Delete", "", true) {
                     app.run_or_alert("data.deleteFilterView", json!({ "view": view.id }));
                     close(app);
                     ui.close();
                 }
             };
-            let r = match more {
-                Some(img) => ui.menu_button(img, options).response,
-                None => ui.menu_button(RichText::new("⋮").color(house::VIEW_BAR_TEXT), options).response,
-            };
-            r.on_hover_text("Filter view options");
+            egui::containers::menu::MenuButton::from_button(icon_button("more_vert", "⋮")).ui(ui, options).0.on_hover_text("Filter view options");
         });
     }
 }

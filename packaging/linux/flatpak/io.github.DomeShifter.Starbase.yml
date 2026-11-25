@@ -93,7 +93,7 @@ modules:
       # starsheets/scripts/fetch-upstream.sh fetches). pin-engines.sh keeps the two equal.
       - type: git
         url: https://github.com/DomeShifter/gridcraft.git
-        commit: 40a57de8da5244e98165c1be67185445dc91f363
+        commit: 118e7eb1c0b9a18a345e9aa82f3c7320032b1626
         dest: starsheets/upstream/gridcraft
       - cargo-sources-starsheets.json
 

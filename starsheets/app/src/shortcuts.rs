@@ -1,7 +1,8 @@
 //! Help › Keyboard shortcuts (Ctrl+/) and Help › Search the menus (Alt+/), as in Google Sheets.
 //! Both read the menu table (`shell::MENUS`), so a new menu entry shows up in them by itself.
 //! The shortcuts window mirrors StarDocs' (stardocs/app/src/shortcuts.rs): a search box, then
-//! every shortcut grouped by menu, keys drawn as small grey caps.
+//! every shortcut grouped by menu under bold headings, keys as plain grey text ("Ctrl + B") in a
+//! list about 80% of the window tall.
 
 use egui::{Align, Layout, RichText, Ui, vec2};
 use gridcraft_ui_egui::SheetApp;
@@ -50,28 +51,19 @@ fn keys_of(keys: &str) -> Vec<&str> {
     out
 }
 
-/// One key in a small grey rounded box.
-fn key_cap(ui: &mut Ui, key: &str) {
-    egui::Frame::new().fill(theme::PAGE).stroke(egui::Stroke::new(1.0, theme::DIVIDER)).corner_radius(4.0).inner_margin(vec2(6.0, 2.0)).show(
-        ui,
-        |ui| {
-            ui.label(RichText::new(key).size(house::NOTE).monospace().color(theme::TEXT_DIM));
-        },
-    );
+/// Keys as Google writes them: plain grey text, "Ctrl + Shift + V".
+fn keys_text(keys: &str) -> String {
+    keys_of(keys).join(" + ")
 }
 
+/// One shortcut: its name at the left, the keys in grey at the right, a 32 px row.
 fn key_row(ui: &mut Ui, label: &str, keys: &str) {
-    ui.horizontal(|ui| {
-        ui.set_min_height(26.0);
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), house::ROW_HEIGHT), egui::Sense::hover());
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect).layout(Layout::left_to_right(Align::Center)), |ui| {
         ui.label(RichText::new(label).size(house::BODY).color(theme::TEXT));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            for (i, k) in keys_of(keys).iter().rev().enumerate() {
-                if i > 0 {
-                    ui.label(RichText::new("+").size(house::NOTE).color(theme::TEXT_DIM));
-                }
-                key_cap(ui, k);
-            }
+            ui.add_space(house::S);
+            ui.label(RichText::new(keys_text(keys)).size(house::BODY).color(theme::TEXT_DIM));
         });
     });
 }
@@ -155,17 +147,20 @@ impl Help {
             }
             ui.add_space(house::S);
             let list = groups(filter);
-            egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(380.0).show(ui, |ui| {
+            // A tall list, as in Sheets: about 80% of the window, less the title, search box and
+            // the dialog's padding, so the last row is never cut off.
+            let height = (ctx.content_rect().height() * 0.8 - 140.0).max(160.0);
+            egui::ScrollArea::vertical().auto_shrink([false, false]).max_height(height).show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
                 for (i, (menu, rows)) in list.iter().enumerate() {
-                    if i > 0 {
-                        ui.add_space(house::S);
-                    }
-                    ui.label(RichText::new(menu).size(house::BODY).strong().color(theme::TEXT));
-                    ui.separator();
+                    ui.add_space(if i > 0 { house::L } else { house::XS });
+                    ui.label(RichText::new(menu).font(gridcraft_ui_egui::theme::ui_bold(house::BODY + 2.0)).color(theme::TEXT));
+                    ui.add_space(house::XS);
                     for (label, keys) in rows {
                         key_row(ui, label, keys);
                     }
                 }
+                ui.add_space(house::S);
                 if list.is_empty() {
                     ui.add_space(house::M);
                     house::note(ui, "No shortcuts match your search.");
@@ -275,5 +270,7 @@ mod tests {
             assert!(!is_keys(k), "{k}");
         }
         assert_eq!(keys_of("Ctrl++"), ["Ctrl", "+"]);
+        assert_eq!(keys_text("Ctrl+Shift+V"), "Ctrl + Shift + V");
+        assert_eq!(keys_text("F2"), "F2");
     }
 }
