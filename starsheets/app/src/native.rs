@@ -657,7 +657,10 @@ impl eframe::App for NativeShell {
         // Files dropped on the window: uploaded into the folder shown on the home screen; on a
         // spreadsheet, opened (here if it's blank, else in a window of its own).
         for f in std::mem::take(&mut raw.dropped_files) {
-            let Some(p) = f.path.clone() else { continue };
+            let p = f.path().to_path_buf();
+            if p.as_os_str().is_empty() {
+                continue;
+            }
             if self.home.is_some() {
                 if let Ok(bytes) = std::fs::read(&p) {
                     let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();

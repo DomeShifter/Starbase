@@ -94,6 +94,7 @@ pub(crate) fn enc(s: &str) -> String {
 }
 
 /// Undoes [`enc`] (and `+` as a space, as in a form-encoded query).
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn dec(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());

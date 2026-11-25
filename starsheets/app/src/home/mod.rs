@@ -826,8 +826,9 @@ impl Home {
                     ui.add(search);
                 });
             });
+            // Who is signed in (the server's accounts; none in the desktop app's local mode).
+            #[cfg(target_arch = "wasm32")]
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                #[cfg(target_arch = "wasm32")]
                 crate::account::me_ui(ui);
             });
         });
