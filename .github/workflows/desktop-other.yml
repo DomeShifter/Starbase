@@ -8,16 +8,27 @@ on:
   push:
     branches: [main]
     paths: ["starsheets/**", "stardocs/**", "packaging/**", ".github/workflows/desktop.yml", ".github/workflows/desktop-other.yml"]
+  # The slowest workflow (17-25 min): on pull requests only when platform-specific code changes.
+  # Otherwise main, once a week (Monday 04:00 UTC) and by hand.
   pull_request:
-    paths: [".github/workflows/desktop-other.yml"]
+    paths:
+      - ".github/workflows/desktop-other.yml"
+      - "starsheets/crates/connect/**"
+      - "**/localstore.rs"
+      - "**/localfile.rs"
+      - "packaging/windows/**"
+      - "packaging/macos/**"
+  schedule:
+    - cron: "0 4 * * 1"
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# A newer push to a pull request cancels the older run; runs on main always finish.
 concurrency:
   group: desktop-other-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -71,7 +82,8 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          key: desktop-other-${{ matrix.app }}
+          # One cache per app and OS (the OS is part of rust-cache's key), saved only on main.
+          shared-key: desktop-other-${{ matrix.app }}
           workspaces: ${{ matrix.app }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
       # Our code only, warnings as errors: cfg(unix)-only code that leaves something unused on
