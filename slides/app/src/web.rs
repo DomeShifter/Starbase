@@ -14,7 +14,7 @@ use crate::server::Link;
 use crate::shell::{Drive, Shell};
 
 const PRESENTATION_EXTS: &[&str] = &["pptx", "potx", "ppsx", "txt", "md"];
-const PICTURE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff"];
+const PICTURE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp"];
 const AUDIO_EXTS: &[&str] = &["wav", "mp3", "m4a", "aac", "flac", "ogg", "opus", "aif", "aiff"];
 const VIDEO_EXTS: &[&str] = &["mp4", "m4v", "mov", "webm"];
 const CANVAS_ID: &str = "starslides_canvas";
@@ -45,12 +45,8 @@ pub fn start() {
         {
             log::error!("no unsaved-changes guard: {e}");
         }
-        let mut options = eframe::WebOptions::default();
-        if query_has("webgl")
-            && let eframe::egui_wgpu::WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup
-        {
-            create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
-        }
+        // WebGL2 through glow: no WebGPU path, a smaller download (docs/research/wordcraft-trim.md).
+        let options = eframe::WebOptions::default();
         let result = eframe::WebRunner::new()
             .start(
                 canvas,
@@ -113,7 +109,7 @@ pub fn start() {
             match result {
                 Ok(()) => el.remove(),
                 Err(e) => {
-                    el.set_inner_html(&format!("<p>Starbase Slides failed to start: {e:?}</p><p>A browser with WebGPU or WebGL2 is required.</p>"))
+                    el.set_inner_html(&format!("<p>Starbase Slides failed to start: {e:?}</p><p>A browser with WebGL2 is required.</p>"))
                 }
             }
         }
