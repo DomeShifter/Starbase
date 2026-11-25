@@ -1631,6 +1631,7 @@ impl Shell {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // Your avatar at the far right, as in Starbase Sheets and Slides: a small menu
                 // with who you are and the way back to the home screen.
+                #[cfg(target_arch = "wasm32")]
                 if let Some((name, username, colour)) = link.and_then(Link::me) {
                     ui.add_space(8.0);
                     let r = crate::share::avatar(ui, &name, &colour, 32.0).on_hover_text(format!("{name} ({username})"));
@@ -1691,6 +1692,7 @@ impl Shell {
             None if link.is_some() => {
                 // A new document has no name until its first save: Docs' "Untitled document",
                 // which the first save keeps as the file's name unless it is renamed here.
+                #[cfg(target_arch = "wasm32")]
                 if app.session.file_name.is_none() && app.session.path.is_none() && app.session.doc.core.title.is_empty() {
                     app.session.file_name = Some(UNTITLED.to_string());
                 }
@@ -1766,6 +1768,7 @@ impl Shell {
 }
 
 /// What Docs calls a document that has no name yet.
+#[cfg(target_arch = "wasm32")]
 pub const UNTITLED: &str = "Untitled document";
 
 /// Docs' menu rows: 32 px tall whatever they hold, 16 px from the sides.
