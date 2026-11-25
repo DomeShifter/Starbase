@@ -23,6 +23,8 @@ number goes up for new features and the last one for fixes.
   while the window is in the background (2 s later, then waiting longer each time, at most 30 s),
   and the save status shows the result straight away. It used to wait until the window was
   raised again.
+- Starbase Docs: the desktop program's saving and server messages beside the document's name
+  showed their tooltip twice.
 
 ## [0.1.0] - 2026-11-25
 
