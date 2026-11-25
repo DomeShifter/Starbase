@@ -143,7 +143,9 @@ pub fn menu_list(app: &mut SheetApp, ui: &mut Ui, width: f32) {
     let names: Vec<String> = views.iter().map(|v| v.name.clone()).collect();
     let current = views.iter().position(|v| Some(v.id) == open_now);
     // Choosing the open one closes it, as in Sheets.
-    match super::pick_rows(ui, width, &names, current).and_then(|i| views.get(i)) {
+    // In line with the labels of the two rows above, which have icons.
+    let text_x = f32::from(house::MENU_INSET) + 18.0 + 14.0;
+    match super::pick_rows_from(ui, width, &names, current, text_x).and_then(|i| views.get(i)) {
         Some(v) if open_now == Some(v.id) => close(app),
         Some(v) => open(app, v.id),
         None => {}

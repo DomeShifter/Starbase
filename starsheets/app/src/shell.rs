@@ -1071,17 +1071,20 @@ pub const SAVE_STATUS: &str = "starsheets_save_status";
 
 /// Sets the save symbol's status; `None` leaves it to the workbook's own changed flag.
 pub fn set_save_status(ctx: &egui::Context, status: Option<SaveStatus>) {
-    ctx.data_mut(|m| match status {
-        Some(s) => m.insert_temp(egui::Id::unique(SAVE_STATUS), s),
-        None => m.remove::<SaveStatus>(egui::Id::unique(SAVE_STATUS)),
+    let id = egui::Id::unique(SAVE_STATUS);
+    ctx.data_mut(|m| {
+        if let Some(s) = status {
+            m.insert_temp(id, s);
+        } else {
+            m.remove::<SaveStatus>(id);
+        }
     });
 }
 
 /// The save symbol's status: what was set, else saved or not by the workbook's changed flag.
 pub fn save_status(ctx: &egui::Context, dirty: bool) -> SaveStatus {
-    ctx.data(|m| m.get_temp::<SaveStatus>(egui::Id::unique(SAVE_STATUS))).unwrap_or_else(|| {
-        if dirty { SaveStatus::new(SaveState::Problem, "Not saved") } else { SaveStatus::new(SaveState::Saved, "Saved") }
-    })
+    let set = ctx.data(|m| m.get_temp::<SaveStatus>(egui::Id::unique(SAVE_STATUS)));
+    set.unwrap_or_else(|| if dirty { SaveStatus::new(SaveState::Problem, "Not saved") } else { SaveStatus::new(SaveState::Saved, "Saved") })
 }
 
 /// The save and change-tracking symbol left of Files (to-do 3 row 8; replaces the "Saved" text
@@ -1184,6 +1187,11 @@ pub const MENU_ICONS: &[(&str, &str)] = &[
     ("Rotation", "text_rotation_angleup"),
     ("Font size", "format_size"),
     ("Sort range", "sort"),
+    ("Sort sheet", "sort_by_alpha"),
+    ("Remove filter", "filter_alt"),
+    ("Filter views", "filter_list"),
+    ("Create new filter view", "add"),
+    ("Save as filter view", "filter_alt"),
     ("Data clean-up", "cleaning_services"),
     ("Calculation controls", "functions"),
     ("Tick box", "check_box"),
@@ -1265,8 +1273,14 @@ pub fn menu_style_width(ui: &mut Ui, width: f32) {
 /// A toolbar drop-down list in the house style (docs/house-style.md, "Drop-down lists"): 32 px
 /// rows, 16 px side padding, a ✓ by the current entry. Closes the menu on a pick.
 pub fn pick_rows(ui: &mut Ui, width: f32, items: &[String], current: Option<usize>) -> Option<usize> {
+    pick_rows_from(ui, width, items, current, 40.0)
+}
+
+/// [`pick_rows`] with the labels starting `text_x` from the left: 48 lines them up with the
+/// labels of a menu with icons (Data › Filter views lists its views under two such rows).
+pub fn pick_rows_from(ui: &mut Ui, width: f32, items: &[String], current: Option<usize>, text_x: f32) -> Option<usize> {
     menu_style_width(ui, width);
-    ui.spacing_mut().button_padding.x = 40.0;
+    ui.spacing_mut().button_padding.x = text_x;
     let mut hit = None;
     for (i, label) in items.iter().enumerate() {
         let r = ui.add(
@@ -1359,7 +1373,7 @@ fn list_item(ui: &mut Ui, it: &gridcraft_ui_egui::ListItem<'_>) -> egui::Respons
     } else {
         p.text(egui::pos2(x, rect.center().y), egui::Align2::LEFT_CENTER, it.text, font, theme::TEXT);
     }
-    r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, it.ticked.unwrap_or(it.selected), it.text));
+    r.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, it.ticked.unwrap_or(it.selected), it.text));
     r
 }
 

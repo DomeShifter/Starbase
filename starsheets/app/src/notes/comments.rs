@@ -47,6 +47,9 @@ pub struct Comments {
     /// The card shown last frame (cell, rect): it stays while the pointer is over it, so its
     /// buttons and Reply box can be reached after leaving the cell.
     last: Option<(CellRef, Rect)>,
+    /// The selected cell whose card was closed (Esc, or a click elsewhere): it stays closed
+    /// until another cell is selected, as in Sheets.
+    dismissed: Option<(u64, CellRef)>,
 }
 
 /// Whether `c` is a comment (GridCraft keeps notes and comments in one map).
@@ -114,8 +117,16 @@ impl Comments {
         let over_card = self.last.filter(|(c, r)| has(c) && pointer.is_some_and(|p| r.contains(p))).map(|l| l.0);
         self.last = None;
         let hovered = app.grid.hover_cell.filter(&has);
-        let selected = Some(d.selection.active).filter(|c| has(c) && app.editor.is_none());
+        if self.dismissed.is_some_and(|x| x != (uid, d.selection.active)) {
+            self.dismissed = None;
+        }
+        let selected = Some(d.selection.active).filter(|c| has(c) && app.editor.is_none() && self.dismissed != Some((uid, *c)));
+        // No card over a dialog (Keyboard shortcuts, Custom currency…): it would sit on top of it.
+        if crate::input::modal_showing(ui.ctx()) {
+            return;
+        }
         let Some(cell) = drafting.or(over_card).or(hovered).or(selected) else { return };
+        let from_selection = drafting.is_none() && over_card.is_none() && hovered.is_none();
         let thread = sh.comments.get(&cell).filter(|c| is_comment(c)).cloned();
         let Some(cell_rect) = crate::linkcard::cell_rect(app, cell) else { return };
         if app.grid.cells_rect.is_some_and(|r| !r.intersects(cell_rect)) {
@@ -133,6 +144,8 @@ impl Comments {
             .show(ui.ctx(), |ui| {
                 house::card_frame().show(ui, |ui| {
                     ui.set_width(WIDTH);
+                    // The house's fields: a thin grey outline, 2 px blue while typing.
+                    house::form_style(ui);
                     ui.spacing_mut().item_spacing = vec2(house::S, house::S);
                     if let Some(c) = &thread {
                         let resolved = c.resolved;
@@ -198,7 +211,9 @@ impl Comments {
                         };
                         let mut send = send_keys && ready;
                         ui.allocate_ui_with_layout(vec2(WIDTH, house::BUTTON_HEIGHT), Layout::right_to_left(Align::Center), |ui| {
-                            send |= ui.add_enabled(ready, house::primary_in(main, house::BLUE)).clicked();
+                            // Not ready: Google's grey, not a faded blue.
+                            let button = if ready { house::primary_in(main, house::BLUE) } else { house::primary_off(main) };
+                            send |= ui.add_enabled(ready, button).clicked();
                             if ui.add(house::secondary_in("Cancel", house::BLUE)).clicked() {
                                 cancel = true;
                             }
@@ -225,6 +240,13 @@ impl Comments {
         let pressed_away = ui.input(|i| i.pointer.any_pressed() && i.pointer.press_origin().is_some_and(|p| !card.contains(p)));
         if pressed_away && self.draft.as_ref().is_some_and(|d| d.3.trim().is_empty()) {
             cancel = true;
+        }
+        // Esc, or a click away from both the card and its cell, closes a card shown because its
+        // cell is selected.
+        let away_from_cell = ui.input(|i| i.pointer.any_pressed() && i.pointer.press_origin().is_some_and(|p| !card.contains(p) && !cell_rect.contains(p)));
+        let escape = ui.input(|i| i.key_pressed(egui::Key::Escape));
+        if from_selection && self.draft.is_none() && (escape || away_from_cell) {
+            self.dismissed = Some((uid, cell));
         }
         if cancel {
             self.draft = None;

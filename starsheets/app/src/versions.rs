@@ -179,11 +179,13 @@ impl History {
                         Some(img) => egui::Button::image(img.fit_to_exact_size(vec2(24.0, 24.0))),
                         None => egui::Button::new(RichText::new("←").size(20.0)),
                     };
-                    if ui.add(back.frame_when_inactive(false).corner_radius(20.0).min_size(vec2(40.0, 40.0))).on_hover_text("Back to editing").clicked() {
+                    let back = back.frame_when_inactive(false).corner_radius(20.0).min_size(vec2(40.0, 40.0));
+                    if ui.add(back).on_hover_text("Back to editing").clicked() {
                         self.close();
                     }
                     ui.add_space(house::S);
-                    ui.label(RichText::new(if shown.is_empty() { "Version history".to_string() } else { shown }).size(house::TITLE).color(theme::TEXT));
+                    let title = if shown.is_empty() { "Version history".to_string() } else { shown };
+                    ui.label(RichText::new(title).size(house::TITLE).color(theme::TEXT));
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if self.selected != CURRENT && ui.add(house::primary_in("Restore this version", house::BLUE)).clicked() {
                             self.asks.push(Ask::Restore(self.selected.clone()));
@@ -314,7 +316,7 @@ impl History {
             resp.on_hover_text("More actions");
         }
         let r = r.on_hover_cursor(egui::CursorIcon::PointingHand);
-        r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, v.title()));
+        r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, v.title()));
         if r.clicked() && !on_menu {
             self.select(&v.id);
         }

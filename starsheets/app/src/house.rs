@@ -416,6 +416,16 @@ pub fn primary_in(text: &str, accent: Color32) -> egui::Button<'static> {
         .min_size(vec2(88.0, BUTTON_HEIGHT))
 }
 
+/// A main button that can't be used yet, as Google greys it: near-black at 12% behind, the text
+/// at 38% (not a faded accent colour). Add it with `add_enabled(false, …)`.
+pub fn primary_off(text: &str) -> egui::Button<'static> {
+    egui::Button::new(RichText::new(text.to_string()).size(BODY).color(Color32::from_rgba_unmultiplied(0x1F, 0x1F, 0x1F, 97)))
+        .fill(Color32::from_rgba_unmultiplied(0x1F, 0x1F, 0x1F, 31))
+        .stroke(Stroke::NONE)
+        .corner_radius(CornerRadius::same(BUTTON_RADIUS))
+        .min_size(vec2(88.0, BUTTON_HEIGHT))
+}
+
 /// Any other button: a white pill with a grey outline and green text.
 pub fn secondary(text: &str) -> egui::Button<'static> {
     secondary_in(text, GREEN)
