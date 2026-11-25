@@ -186,13 +186,17 @@ impl Bar {
         ui.spacing_mut().item_spacing.x = house::S;
         let label = |ui: &mut Ui, text: &str| ui.label(RichText::new(text).size(house::LABEL).color(house::VIEW_BAR_TEXT));
         label(ui, "Name");
-        let name = ui.add(house::field(&mut self.name, house::BODY).desired_width(200.0).text_color(house::VIEW_BAR_TEXT).background_color(house::VIEW_BAR_FIELD));
+        let name = ui.add(
+            house::field(&mut self.name, house::BODY).desired_width(200.0).text_color(house::VIEW_BAR_TEXT).background_color(house::VIEW_BAR_FIELD),
+        );
         if name.lost_focus() && self.name.trim() != view.name && !self.name.trim().is_empty() {
             app.run_or_alert("data.updateFilterView", json!({ "view": view.id, "name": self.name.trim() }));
         }
         ui.add_space(house::M);
         label(ui, "Range");
-        let range = ui.add(house::field(&mut self.range, house::BODY).desired_width(120.0).text_color(house::VIEW_BAR_TEXT).background_color(house::VIEW_BAR_FIELD));
+        let range = ui.add(
+            house::field(&mut self.range, house::BODY).desired_width(120.0).text_color(house::VIEW_BAR_TEXT).background_color(house::VIEW_BAR_FIELD),
+        );
         if range.lost_focus() && self.range.trim() != view.range.a1() {
             if gridcraft_engine::core::RangeRef::parse(self.range.trim()).is_some() {
                 app.run_or_alert("data.updateFilterView", json!({ "view": view.id, "range": self.range.trim() }));
