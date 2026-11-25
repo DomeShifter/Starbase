@@ -17,7 +17,7 @@ impl Home {
                     .clicked()
                 {
                     if sure {
-                        call(&self.inbox, ui.ctx(), Method::Delete, "api/bin".into(), None, refresh_after);
+                        call(&self.store, &self.inbox, ui.ctx(), Method::Delete, "api/bin".into(), None, refresh_after);
                         self.confirm_purge = None;
                     } else {
                         self.confirm_purge = Some(None);
@@ -38,7 +38,7 @@ impl Home {
                 let p = ui.painter().clone();
                 if let Some(img) = crate::icons::icon(if b.folder {
                     "folder"
-                } else if crate::files::is_doc(&b.original) {
+                } else if crate::store::is_doc(&b.original) {
                     "stardocs"
                 } else {
                     "starsheets"
@@ -62,7 +62,7 @@ impl Home {
                 let restore = Rect::from_min_size(r.right_top() + vec2(-260.0, 6.0), vec2(96.0, ROW - 6.0));
                 let purge = Rect::from_min_size(r.right_top() + vec2(-156.0, 6.0), vec2(150.0, ROW - 6.0));
                 if ui.put(restore, house::secondary_in("Restore", ACCENT)).clicked() {
-                    call(&self.inbox, ui.ctx(), Method::Post, format!("api/bin/restore?name={}", enc(&b.name)), None, refresh_after);
+                    call(&self.store, &self.inbox, ui.ctx(), Method::Post, format!("api/bin/restore?name={}", enc(&b.name)), None, refresh_after);
                 }
                 let sure = self.confirm_purge.as_ref() == Some(&Some(b.name.clone()));
                 if ui
@@ -73,7 +73,7 @@ impl Home {
                     .clicked()
                 {
                     if sure {
-                        call(&self.inbox, ui.ctx(), Method::Delete, format!("api/bin?name={}", enc(&b.name)), None, refresh_after);
+                        call(&self.store, &self.inbox, ui.ctx(), Method::Delete, format!("api/bin?name={}", enc(&b.name)), None, refresh_after);
                         self.confirm_purge = None;
                     } else {
                         self.confirm_purge = Some(Some(b.name.clone()));

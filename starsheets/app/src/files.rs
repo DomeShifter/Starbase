@@ -15,6 +15,8 @@ use gridcraft_ui_egui::SheetApp;
 use serde_json::{Value as Json, json};
 use wasm_bindgen::JsCast as _;
 
+pub(crate) use crate::store::{has_data, xlsx};
+
 /// Asks for the Open dialog, the version list, or another file action (menus set it in egui memory).
 pub const REQUEST: &str = "starsheets_files_request";
 /// The title-bar status line ("Saving…", "Saved to the server", …), in egui memory.
@@ -845,29 +847,8 @@ impl Files {
     }
 }
 
-/// Whether any sheet has anything in it.
-/// Whether a workbook holds anything worth a file: a value or formula, a note, a chart or a
-/// picture. Formatting alone (a format previewed on a blank sheet) doesn't count.
-/// The workbook as .xlsx bytes, with Google Sheets' Clip put back in StarSheets' section of the
-/// file (cells carry it while open: the server's and this tab's copies are read the same way).
-pub(crate) fn xlsx(wb: &Workbook, name: &str) -> Result<Vec<u8>, String> {
-    let mut wb = wb.clone();
-    starsheets_sync::clip_into_host(&mut wb);
-    gridcraft_engine::io::save_bytes(&wb, name).map_err(|e| e.to_string())
-}
-
 /// Files from this size on show "Opening …" before they are read (smaller ones open at once).
 const OPENING_NOTICE_FROM: usize = 512 * 1024;
-
-fn has_data(wb: &Workbook) -> bool {
-    wb.sheets.iter().any(|s| {
-        s.cells.iter().any(|(_, c)| c.formula.is_some() || !matches!(c.value, gridcraft_engine::core::Value::Empty))
-            || !s.comments.is_empty()
-            || !s.charts.is_empty()
-            || !s.images.is_empty()
-            || !s.shapes.is_empty()
-    })
-}
 
 /// A name without its spreadsheet extension (only known ones: "Budget v1.2" keeps its ".2").
 fn stem(name: &str) -> String {
@@ -946,10 +927,7 @@ fn go_to(id: &str) {
 }
 
 /// Whether a file name is a StarDocs document (.docx, .odt): it opens in StarDocs, not here.
-pub fn is_doc(name: &str) -> bool {
-    let lower = name.to_lowercase();
-    lower.ends_with(".docx") || lower.ends_with(".odt")
-}
+pub use crate::store::is_doc;
 
 /// StarDocs' page, which sits in `docs/` beside this one: `""` for a new document, else the
 /// file with that id. Extra query text (`&folder=…`) follows as given.
@@ -992,13 +970,7 @@ fn set_unsaved_flag(on: bool) {
     }
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum Method {
-    Get,
-    Post,
-    Put,
-    Delete,
-}
+pub(crate) use crate::store::Method;
 
 /// Sends a request and turns the answer into a Reply (network and server errors become Failed).
 fn send(

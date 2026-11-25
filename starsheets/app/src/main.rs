@@ -1,7 +1,8 @@
 //! StarSheets: a spreadsheet for the web that looks and works like Google Sheets, built on
 //! GridCraft's engine and grid (see README.md and docs/architecture.md).
 //!
-//! Build with `trunk build --release` from `app/` after `scripts/fetch-upstream.sh`.
+//! Build the web app with `trunk build --release` from `app/` after `scripts/fetch-upstream.sh`.
+//! `cargo build -p starsheets` builds the desktop program instead (native.rs).
 
 #[cfg(target_arch = "wasm32")]
 mod account;
@@ -26,7 +27,6 @@ mod filebrowser;
 mod files;
 mod findreplace;
 mod fonts;
-#[cfg(target_arch = "wasm32")]
 mod home;
 mod hostdata;
 mod house;
@@ -37,10 +37,14 @@ mod input;
 mod linkcard;
 #[cfg(target_arch = "wasm32")]
 mod live;
+#[cfg(not(target_arch = "wasm32"))]
+mod localstore;
 mod menuactions;
 mod merge;
 mod messages;
 mod namespanel;
+#[cfg(not(target_arch = "wasm32"))]
+mod native;
 mod notes;
 mod panels;
 #[cfg(target_arch = "wasm32")]
@@ -54,6 +58,7 @@ mod sheets_formulas;
 mod shell;
 mod shortcuts;
 mod spelling;
+mod store;
 #[cfg(target_arch = "wasm32")]
 mod testhook;
 mod theme;
@@ -66,6 +71,6 @@ fn main() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn main() {
-    eprintln!("starsheets only runs in the browser: build it with `trunk build --release` in app/");
+fn main() -> eframe::Result<()> {
+    native::main()
 }

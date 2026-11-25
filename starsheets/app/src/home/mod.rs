@@ -17,8 +17,8 @@ use std::rc::Rc;
 use egui::{Align2, Color32, FontId, Key, Rect, RichText, Sense, Stroke, Ui, vec2};
 use serde_json::Value as Json;
 
-use crate::files::{Method, enc, fetch};
 use crate::house;
+use crate::store::{Backend, Method, enc};
 use crate::theme;
 
 mod actions;
@@ -26,6 +26,7 @@ mod bin;
 mod input;
 mod items;
 mod sidebar;
+#[cfg(target_arch = "wasm32")]
 mod test;
 
 const LEFT: f32 = 256.0;
@@ -135,6 +136,8 @@ struct PendingMove {
 
 #[derive(Default)]
 pub struct Home {
+    /// Where the files are: the server, or a folder on disk in the desktop app (store.rs).
+    store: Backend,
     /// Shown instead of a spreadsheet (the page was opened without ?file=, ?new or ?folder=).
     pub active: bool,
     booted: bool,
@@ -200,34 +203,20 @@ fn under(path: &str, top: &str) -> bool {
     path == top || path.starts_with(&format!("{top}/"))
 }
 
+#[cfg(target_arch = "wasm32")]
 fn query(name: &str) -> Option<String> {
     let search = web_sys::window()?.location().search().ok()?;
     web_sys::UrlSearchParams::new_with_str(&search).ok()?.get(name)
 }
 
 /// Whether this page should be the home screen: no file, new spreadsheet or folder asked for.
+#[cfg(target_arch = "wasm32")]
 pub fn wanted() -> bool {
     query("file").is_none() && query("new").is_none() && query("folder").is_none()
 }
 
-fn page(path_and_query: &str) -> String {
-    let path = web_sys::window().and_then(|w| w.location().pathname().ok()).unwrap_or_else(|| "/".into());
-    format!("{path}{path_and_query}")
-}
-
-fn go(url: &str) {
-    if let Some(w) = web_sys::window() {
-        let _ = w.location().set_href(url);
-    }
-}
-
-fn new_tab(url: &str) {
-    if let Some(w) = web_sys::window() {
-        let _ = w.open_with_url_and_target(url, "_blank");
-    }
-}
-
 fn call(
+    store: &Backend,
     inbox: &Rc<RefCell<Vec<Reply>>>,
     ctx: &egui::Context,
     method: Method,
@@ -235,23 +224,30 @@ fn call(
     body: Option<Vec<u8>>,
     then: impl FnOnce(Vec<u8>) -> Reply + 'static,
 ) {
-    let (inbox, ctx) = (inbox.clone(), ctx.clone());
-    wasm_bindgen_futures::spawn_local(async move {
-        let reply = match fetch(method, &url, body, None).await {
-            Ok((s, _, bytes)) if s < 400 => then(bytes),
-            Ok((401, _, _)) => {
-                crate::account::ask_sign_in();
-                Reply::Error(String::new())
-            }
-            Ok((s, _, bytes)) => {
-                let v: Json = serde_json::from_slice(&bytes).unwrap_or_default();
-                Reply::Error(v["error"].as_str().map_or(format!("The server said {s}."), str::to_string))
-            }
-            Err(e) => Reply::Error(e),
-        };
-        inbox.borrow_mut().push(reply);
-        ctx.request_repaint();
-    });
+    let (inbox2, ctx2) = (inbox.clone(), ctx.clone());
+    store.call(
+        ctx,
+        method,
+        &url,
+        body,
+        Box::new(move |answer| {
+            let reply = match answer {
+                Ok((s, bytes)) if s < 400 => then(bytes),
+                Ok((401, _)) => {
+                    #[cfg(target_arch = "wasm32")]
+                    crate::account::ask_sign_in();
+                    Reply::Error(String::new())
+                }
+                Ok((s, bytes)) => {
+                    let v: Json = serde_json::from_slice(&bytes).unwrap_or_default();
+                    Reply::Error(v["error"].as_str().map_or(format!("The server said {s}."), str::to_string))
+                }
+                Err(e) => Reply::Error(e),
+            };
+            inbox2.borrow_mut().push(reply);
+            ctx2.request_repaint();
+        }),
+    );
 }
 
 fn refresh_after(_: Vec<u8>) -> Reply {
@@ -274,24 +270,38 @@ fn decode_png(bytes: &[u8]) -> Option<egui::ColorImage> {
 }
 
 fn ago(unix: i64) -> String {
-    crate::files::date_text(unix)
+    #[cfg(target_arch = "wasm32")]
+    {
+        crate::files::date_text(unix)
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::localstore::date_text(unix)
+    }
 }
 
 impl Home {
+    #[cfg(target_arch = "wasm32")]
     pub fn new() -> Home {
         Home { active: wanted(), ..Default::default() }
     }
 
+    /// The home screen over another store (the desktop app's local folder).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn with_store(store: Backend) -> Home {
+        Home { active: true, store, ..Default::default() }
+    }
+
     fn refresh(&mut self, ctx: &egui::Context) {
         self.loading = true;
-        call(&self.inbox, ctx, Method::Get, "api/files".into(), None, |b| Reply::Listed(serde_json::from_slice(&b).unwrap_or_default()));
+        call(&self.store, &self.inbox, ctx, Method::Get, "api/files".into(), None, |b| Reply::Listed(serde_json::from_slice(&b).unwrap_or_default()));
         if self.view == Some(View::Bin) {
             self.load_bin(ctx);
         }
     }
 
     fn load_bin(&mut self, ctx: &egui::Context) {
-        call(&self.inbox, ctx, Method::Get, "api/bin".into(), None, |b| {
+        call(&self.store, &self.inbox, ctx, Method::Get, "api/bin".into(), None, |b| {
             let v: Json = serde_json::from_slice(&b).unwrap_or_default();
             Reply::Bin(
                 v.as_array()
@@ -365,7 +375,7 @@ impl Home {
         // Forget pictures of files that went away. A document's picture is sent by StarDocs just
         // after it saves, so one not there yet is asked for again at the next listing.
         let ids: HashSet<&String> = self.files.iter().map(|f| &f.id).collect();
-        let docs: HashSet<&String> = self.files.iter().filter(|f| crate::files::is_doc(&f.name)).map(|f| &f.id).collect();
+        let docs: HashSet<&String> = self.files.iter().filter(|f| crate::store::is_doc(&f.name)).map(|f| &f.id).collect();
         self.thumbs.retain(|k, (_, t)| ids.contains(k) && !(docs.contains(k) && matches!(t, Thumb::None)));
     }
 
@@ -382,6 +392,13 @@ impl Home {
 
     fn file(&self, id: &str) -> Option<&FileRow> {
         self.files.iter().find(|f| f.id == id)
+    }
+
+    /// A new spreadsheet or document in `folder` (it opens in its own tab or window).
+    fn new_file(&mut self, folder: &str, document: bool) {
+        if let Err(e) = self.store.new_file(folder, document) {
+            self.error = Some(e);
+        }
     }
 
     /// Goes somewhere, remembering where you were for Back.
@@ -555,7 +572,7 @@ impl Home {
     }
 
     fn save_sort(&self) {
-        store("starsheets_home_sort", &format!("{}{}{}", self.sort_by, u8::from(self.descending), u8::from(self.mixed)));
+        self.store.set_setting("starsheets_home_sort", &format!("{}{}{}", self.sort_by, u8::from(self.descending), u8::from(self.mixed)));
     }
 
     /// The Sort menu: Sort by, Sort direction, Folders at top.
@@ -647,16 +664,17 @@ impl Home {
     pub fn logic(&mut self, ctx: &egui::Context) {
         if !self.booted {
             self.booted = true;
-            self.list = stored("starsheets_home_list") == Some("1".into());
-            if let Some(s) = stored("starsheets_home_sort").filter(|s| s.len() == 3) {
+            self.list = self.store.setting("starsheets_home_list") == Some("1".into());
+            if let Some(s) = self.store.setting("starsheets_home_sort").filter(|s| s.len() == 3) {
                 let b = s.as_bytes();
                 self.sort_by = (b[0] - b'0').min(2);
                 self.descending = b[1] == b'1';
                 self.mixed = b[2] == b'1';
             }
-            self.open_dir = query("dir").filter(|d| !d.is_empty());
+            self.open_dir = self.store.start_dir();
             self.refresh(ctx);
         }
+        self.store.poll();
         let replies: Vec<Reply> = std::mem::take(&mut *self.inbox.borrow_mut());
         for r in replies {
             match r {
@@ -688,7 +706,7 @@ impl Home {
                     }
                 }
                 Reply::Download(name, bytes) => {
-                    if let Err(e) = crate::web::download_file(&name, &bytes) {
+                    if let Err(e) = self.store.download(&name, &bytes) {
                         self.error = Some(e);
                     }
                 }
@@ -708,7 +726,15 @@ impl Home {
     /// Files dropped on the page or picked with Upload: saved into the folder shown.
     pub fn upload(&mut self, ctx: &egui::Context, name: String, bytes: Vec<u8>) {
         let folder = self.here().unwrap_or_else(|| self.space.clone());
-        call(&self.inbox, ctx, Method::Post, format!("api/files?name={}&folder={}", enc(&name), enc(&folder)), Some(bytes), refresh_after);
+        call(
+            &self.store,
+            &self.inbox,
+            ctx,
+            Method::Post,
+            format!("api/files?name={}&folder={}", enc(&name), enc(&folder)),
+            Some(bytes),
+            refresh_after,
+        );
     }
 
     fn want_thumb(&mut self, ctx: &egui::Context, f: &FileRow) {
@@ -723,15 +749,22 @@ impl Home {
         }
         self.fetching += 1;
         let (id, version) = (f.id.clone(), f.version.clone());
-        let (inbox, ctx) = (self.inbox.clone(), ctx.clone());
-        wasm_bindgen_futures::spawn_local(async move {
-            let img = match fetch(Method::Get, &format!("api/files/{id}/thumb"), None, None).await {
-                Ok((200, _, bytes)) => decode_png(&bytes),
-                _ => None,
-            };
-            inbox.borrow_mut().push(Reply::Thumb(id, version, img));
-            ctx.request_repaint();
-        });
+        let (inbox, ctx2) = (self.inbox.clone(), ctx.clone());
+        let url = format!("api/files/{id}/thumb");
+        self.store.call(
+            ctx,
+            Method::Get,
+            &url,
+            None,
+            Box::new(move |answer| {
+                let img = match answer {
+                    Ok((200, bytes)) => decode_png(&bytes),
+                    _ => None,
+                };
+                inbox.borrow_mut().push(Reply::Thumb(id, version, img));
+                ctx2.request_repaint();
+            }),
+        );
     }
 
     // ------------------------------------------------------------ drawing
@@ -793,6 +826,8 @@ impl Home {
                     ui.add(search);
                 });
             });
+            // Who is signed in (the server's accounts; none in the desktop app's local mode).
+            #[cfg(target_arch = "wasm32")]
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 crate::account::me_ui(ui);
             });
@@ -809,17 +844,6 @@ fn folder_icon(ui: &Ui, f: &FolderRow, rect: Rect) {
     };
     if let Some(img) = img {
         img.paint_at(ui, rect);
-    }
-}
-
-/// A per-browser convenience (grid or list); missing storage just means the default.
-fn stored(key: &str) -> Option<String> {
-    web_sys::window()?.local_storage().ok()??.get_item(key).ok()?
-}
-
-fn store(key: &str, value: &str) {
-    if let Some(s) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
-        let _ = s.set_item(key, value);
     }
 }
 
