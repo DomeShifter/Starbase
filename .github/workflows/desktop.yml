@@ -43,6 +43,10 @@ jobs:
         working-directory: starsheets
     steps:
       - uses: actions/checkout@v7
+      # The scripts use tomllib (Python 3.11+); ubuntu-22.04 ships 3.10.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
       - name: Fetch GridCraft at the pinned commit of our fork
         run: scripts/fetch-upstream.sh
       - name: System libraries for egui's native backends
@@ -77,6 +81,10 @@ jobs:
         working-directory: /
         run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
       - uses: actions/checkout@v7
+      # The scripts use tomllib (Python 3.11+); ubuntu-22.04 ships 3.10.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
       - name: Fetch WordCraft at the pinned commit of our fork
         run: scripts/fetch-upstream.sh
       - name: System libraries for egui's native backends
