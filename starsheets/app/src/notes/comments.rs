@@ -60,9 +60,10 @@ fn my_name() -> Option<String> {
     crate::account::me().map(|m| if m.name.trim().is_empty() { m.username } else { m.name })
 }
 
+/// The desktop app's local mode has no accounts: the name of this computer's user.
 #[cfg(not(target_arch = "wasm32"))]
 fn my_name() -> Option<String> {
-    None
+    Some(crate::localstore::os_user_name())
 }
 
 /// Who wrote it, as the card shows it.
@@ -323,6 +324,18 @@ mod tests {
     fn names_get_steady_colours() {
         assert_eq!(colour_for("Ann"), colour_for("Ann"));
         assert_eq!(shown_name(""), "Unknown");
-        assert_eq!(signed(json!({ "text": "x" }))["author"], serde_json::Value::Null, "no sign-in: GridCraft's default name");
+    }
+
+    /// The desktop app signs comments with the computer user's name, never GridCraft's default.
+    #[test]
+    fn local_comments_are_signed_with_the_users_name() {
+        let me = crate::localstore::os_user_name();
+        assert_eq!(signed(json!({ "text": "x" }))["author"], json!(me));
+        let mut s = gridcraft_engine::Session::new();
+        s.execute("file.new", json!({})).unwrap();
+        s.execute("review.newComment", signed(json!({ "cell": "A1", "text": "Hi" }))).unwrap();
+        let c = s.active().unwrap().wb.active().unwrap().comments.get(&CellRef::new(0, 0)).cloned().unwrap();
+        assert_eq!(c.author, me);
+        assert_ne!(c.author, gridcraft_engine::Prefs::default().user_name);
     }
 }

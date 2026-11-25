@@ -113,7 +113,10 @@ pub fn main() -> eframe::Result<()> {
     let mut viewport = egui::ViewportBuilder::default()
         .with_title(&title)
         .with_app_id(app_id)
-        .with_inner_size([1440.0, 900.0])
+        // Until the screen's size is known (first frames): then `first_size`, unless the last
+        // size and place were remembered (eframe's persistence, per program: Drive and Sheets
+        // keep their own, under their app ids).
+        .with_inner_size([1180.0, 740.0])
         .with_min_inner_size([640.0, 420.0])
         .with_drag_and_drop(true);
     if let Some(i) = icon_data(icon) {
@@ -149,9 +152,21 @@ pub fn main() -> eframe::Result<()> {
             if app.session.documents().is_empty() {
                 app.session.new_workbook();
             }
-            Ok(Box::new(NativeShell::new(app, home, files)))
+            let remembered = cc.storage.is_some_and(|s| s.get_string("window").is_some());
+            let mut shell = NativeShell::new(app, home, files);
+            shell.fit_window = if remembered { 0 } else { FIT_FRAMES };
+            Ok(Box::new(shell))
         }),
     )
+}
+
+/// Frames to wait for the screen's size before giving up on sizing a first window to it.
+const FIT_FRAMES: u8 = 30;
+
+/// A first window's size: about 80% of the screen, at least 960 x 600 where the screen has
+/// room, never bigger than the screen.
+fn first_size(monitor: egui::Vec2) -> egui::Vec2 {
+    (monitor * 0.8).max(egui::vec2(960.0, 600.0)).min(monitor)
 }
 
 /// Log messages to stderr at warning level and above (RUST_LOG-free; GridCraft's own logger
@@ -196,6 +211,11 @@ fn starsheets_defaults(app: &mut SheetApp) {
     app.ui.paste_pictures_in_cell = true;
     app.ui.menu_look = Some(crate::shell::MENU_LOOK);
     crate::settings::Prefs::load().apply(app);
+    // New files' author (File › Properties): this computer's user, not GridCraft's default name.
+    let name = &mut app.session.prefs.user_name;
+    if name.trim().is_empty() || *name == gridcraft_engine::Prefs::default().user_name {
+        *name = crate::localstore::os_user_name();
+    }
 }
 
 // ------------------------------------------------------------ system services
@@ -245,7 +265,9 @@ fn open_with_system(target: &str) {
     } else {
         "xdg-open"
     };
-    if let Err(e) = std::process::Command::new(cmd).arg(target.as_str()).spawn() {
+    let mut command = std::process::Command::new(cmd);
+    command.arg(target.as_str());
+    if let Err(e) = crate::localstore::start_detached(command) {
         log::warn!("{cmd} {target}: {e}");
     }
 }
@@ -338,10 +360,11 @@ impl LocalFiles {
         }
         if let Some(p) = d.path.clone() {
             let lower = p.to_ascii_lowercase();
+            let path = PathBuf::from(&p);
+            // The name without its extension, as Sheets shows it ("Budget", not "Budget.csv").
+            d.title = stem_of(&path);
             if lower.ends_with(".xlsx") || lower.ends_with(".xlsm") {
-                let path = PathBuf::from(&p);
                 crate::localstore::note_opened(&crate::localstore::data_dir(), &path);
-                d.title = stem_of(&path);
                 self.links.insert(d.uid, Linked { disk: OnDisk::open(path), saved: Arc::as_ptr(&d.saved) as usize });
             }
         } else if d.title.strip_prefix("Book").is_some_and(|n| n.chars().all(|c| c.is_ascii_digit())) {
@@ -438,7 +461,7 @@ impl LocalFiles {
         if !self.links.contains_key(&doc) {
             // The first save: next to the file it came from (csv, ods…), else in the folder.
             let (dir, stem) = match d.path.as_deref().map(PathBuf::from) {
-                Some(p) => (p.parent().map_or_else(|| self.folder(), Path::to_path_buf), stem_of(&p)),
+                Some(p) => (p.parent().map_or_else(|| self.folder(), Path::to_path_buf), d.title.clone()),
                 None => (self.folder(), d.title.clone()),
             };
             match OnDisk::create(&dir, &stem) {
@@ -579,6 +602,8 @@ struct NativeShell {
     spell: crate::spelling::Suggest,
     edit_menu: crate::editmenu::EditMenu,
     error_tip: crate::errortip::ErrorTip,
+    /// Frames left to size a first window to the screen (0: done, or the size was remembered).
+    fit_window: u8,
 }
 
 impl NativeShell {
@@ -607,6 +632,7 @@ impl NativeShell {
             spell: Default::default(),
             edit_menu: Default::default(),
             error_tip: crate::errortip::ErrorTip,
+            fit_window: 0,
         }
     }
 
@@ -617,15 +643,22 @@ impl NativeShell {
 
     /// "<file> - Starbase Sheets", or "Starbase Drive".
     fn set_title(&mut self, ctx: &egui::Context) {
-        let title = match (&self.home, self.app.session.active()) {
-            (Some(_), _) => "Starbase Drive".to_string(),
-            (None, Some(d)) => format!("{} - Starbase Sheets", d.title),
-            (None, None) => "Starbase Sheets".to_string(),
-        };
+        let title = window_title(self.home.is_some(), &self.app);
         if title != self.title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.title = title;
         }
+    }
+}
+
+/// "<name> - Starbase Sheets" (the name as the title row shows it), or "Starbase Drive".
+fn window_title(home: bool, app: &SheetApp) -> String {
+    if home {
+        "Starbase Drive".into()
+    } else if app.session.active().is_some() {
+        format!("{} - Starbase Sheets", crate::shell::header_name(app))
+    } else {
+        "Starbase Sheets".into()
     }
 }
 
@@ -634,8 +667,22 @@ impl eframe::App for NativeShell {
         crate::theme::PAGE.to_normalized_gamma_f32()
     }
 
+    fn persist_egui_memory(&self) -> bool {
+        // Only the window's size and place are remembered, not open menus or scroll positions.
+        false
+    }
+
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.set_title(ctx);
+        if self.fit_window > 0 {
+            self.fit_window -= 1;
+            if let Some(m) = ctx.input(|i| i.viewport().monitor_size).filter(|m| m.x > 0.0 && m.y > 0.0) {
+                let size = first_size(m);
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+                ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(((m - size) / 2.0).to_pos2()));
+                self.fit_window = 0;
+            }
+        }
         if let Some(home) = &mut self.home {
             home.logic(ctx);
             let dropped: Vec<(String, Vec<u8>)> = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(|e| e.into_inner()));
@@ -749,6 +796,13 @@ mod tests {
     }
 
     #[test]
+    fn a_first_window_fits_the_screen() {
+        assert_eq!(first_size(egui::vec2(2000.0, 1000.0)), egui::vec2(1600.0, 800.0));
+        assert_eq!(first_size(egui::vec2(1024.0, 600.0)), egui::vec2(960.0, 600.0), "at least 960 x 600");
+        assert_eq!(first_size(egui::vec2(800.0, 500.0)), egui::vec2(800.0, 500.0), "never bigger than the screen");
+    }
+
+    #[test]
     fn command_line() {
         assert_eq!(parse_args(&[]), Start::Home);
         assert_eq!(parse_args(&s(&["--home"])), Start::Home);
@@ -795,6 +849,9 @@ mod tests {
         files.look(&mut app);
         assert_eq!(files.path(&app).as_deref(), Some(path.as_path()));
         assert_eq!(app.session.active().unwrap().title, "Budget");
+        assert_eq!(crate::shell::header_name(&app), "Budget", "no extension in the title row");
+        assert_eq!(window_title(false, &app), "Budget - Starbase Sheets");
+        assert_eq!(window_title(true, &app), "Starbase Drive");
         app.run("cell.set", json!({"cell": "A1", "input": "Food"})).unwrap();
         assert!(files.needs_save(app.session.active().unwrap()));
         files.save_active(&mut app);
@@ -802,6 +859,24 @@ mod tests {
         let mut again = self::app();
         again.open_path(&path.to_string_lossy());
         assert_eq!(a1(&again), "Food", "the change is in the file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_csv_shows_its_name_without_extension_and_saves_next_to_it() {
+        let dir = temp("csv");
+        let path = dir.join("Data.csv");
+        std::fs::write(&path, "Rent,100\n").unwrap();
+        let mut app = app();
+        app.open_path(&path.to_string_lossy());
+        let mut files = LocalFiles { new_folder: dir.clone(), ..Default::default() };
+        files.look(&mut app);
+        assert_eq!(crate::shell::header_name(&app), "Data");
+        assert_eq!(window_title(false, &app), "Data - Starbase Sheets");
+        app.run("cell.set", json!({"cell": "A1", "input": "Food"})).unwrap();
+        files.save_active(&mut app);
+        assert_eq!(files.path(&app), Some(dir.join("Data.xlsx")));
+        assert_eq!(crate::shell::header_name(&app), "Data");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

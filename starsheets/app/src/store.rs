@@ -19,6 +19,8 @@ use gridcraft_engine::model::Workbook;
 pub(crate) enum Method {
     Get,
     Post,
+    /// Only the web app's spreadsheet saves (files.rs); the desktop app writes files itself.
+    #[cfg(target_arch = "wasm32")]
     Put,
     Delete,
 }

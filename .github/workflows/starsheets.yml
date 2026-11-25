@@ -143,11 +143,10 @@ jobs:
         with:
           key: desktop
           workspaces: starsheets
-      # dead_code is allowed here only: helpers of the web app's server features (accounts,
-      # sharing, web fonts, the spelling list download) aren't used by the desktop app yet. The
-      # web app's clippy (lint job) still catches truly unused code.
+      # Web-only helpers (accounts, sharing, web fonts, the spelling list download) are behind
+      # cfg(target_arch = "wasm32"), so the desktop build has no unused code either.
       - name: Clippy (desktop app)
-        run: cargo clippy -p starsheets -- -D warnings -A dead_code
+        run: cargo clippy -p starsheets -- -D warnings
       - name: Tests
         run: cargo test -p starsheets
       - name: Build

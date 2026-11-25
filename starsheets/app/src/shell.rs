@@ -935,8 +935,19 @@ fn is_merge(id: &str) -> bool {
     matches!(id, "home.mergeCells" | "home.mergeDown" | "home.mergeAcross" | "home.unmergeCells")
 }
 
+/// The name in the title row: the file's name without its extension ("Budget", not
+/// "Budget.xlsx"), as Sheets shows it; Drive's details are where the extension shows.
+pub(crate) fn header_name(app: &SheetApp) -> String {
+    let Some(d) = app.session.active() else { return "Untitled spreadsheet".into() };
+    if !d.title.trim().is_empty() {
+        return d.title.clone();
+    }
+    let shown = d.display_title();
+    std::path::Path::new(&shown).file_stem().map_or(shown.clone(), |s| s.to_string_lossy().into_owned())
+}
+
 fn title_and_menus(app: &mut SheetApp, ui: &mut Ui, title_draft: &mut Option<String>) {
-    let name = app.session.active().map(|d| d.display_title().to_string()).unwrap_or_else(|| "Untitled spreadsheet".into());
+    let name = header_name(app);
     let dirty = app.session.active().is_some_and(|d| d.is_dirty());
     ui.horizontal(|ui| {
         // Our own mark (a sheet with a star on a green tile; the favicon is a simplified copy).
@@ -1275,19 +1286,19 @@ fn rename_box(app: &mut SheetApp, ui: &mut Ui, name: &str, draft: &mut Option<St
     }
 }
 
-/// Renames the active spreadsheet: a file keeps its extension (the download uses the new name).
+/// Renames the active spreadsheet: the title, and a file keeps its folder and extension (the
+/// download uses the new name; the desktop app renames the file on disk, native.rs).
 fn rename_doc(app: &mut SheetApp, new: &str) {
     let Some(d) = app.session.active_mut() else { return };
-    match d.path.as_deref() {
-        Some(p) => {
-            let ext = std::path::Path::new(p).extension().map(|e| e.to_string_lossy().to_string());
-            let has_ext = std::path::Path::new(new).extension().is_some();
-            d.path = Some(match ext {
-                Some(e) if !has_ext => format!("{new}.{e}"),
-                _ => new.to_string(),
-            });
-        }
-        None => d.title = new.to_string(),
+    d.title = new.to_string();
+    if let Some(p) = d.path.as_deref() {
+        let p = std::path::Path::new(p);
+        let has_ext = std::path::Path::new(new).extension().is_some();
+        let file = match p.extension() {
+            Some(e) if !has_ext => format!("{new}.{}", e.to_string_lossy()),
+            _ => new.to_string(),
+        };
+        d.path = Some(p.with_file_name(file).to_string_lossy().into_owned());
     }
 }
 

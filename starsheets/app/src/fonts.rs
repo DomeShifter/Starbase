@@ -30,6 +30,7 @@ pub static WEB_FONTS: std::sync::LazyLock<Vec<(&'static str, &'static str)>> = s
 });
 
 /// The folder a web font's files are served from (as scripts/fetch-fonts.py names it).
+#[cfg(target_arch = "wasm32")]
 pub fn slug(menu: &str) -> String {
     let mut out = String::new();
     for c in menu.to_lowercase().chars() {
@@ -98,6 +99,7 @@ impl WebFontLoader {
 static PREVIEW_SCALE: std::sync::RwLock<Vec<(String, f32)>> = std::sync::RwLock::new(Vec::new());
 
 /// Roboto's cap height over its em (1456 / 2048).
+#[cfg(any(target_arch = "wasm32", test))]
 const ROBOTO_CAP: f32 = 0.711;
 
 /// The font to draw `menu` in, in the font menu, at about `size` px; `None` until it has loaded.
@@ -114,6 +116,7 @@ fn preview_family(menu: &str) -> String {
 
 /// How much to scale a font so its capitals stand as tall as Roboto's (1.0 when the font doesn't
 /// say), kept between 0.8 and 1.4 so nothing ends up tiny or huge.
+#[cfg(any(target_arch = "wasm32", test))]
 fn cap_scale(ttf: &[u8]) -> f32 {
     let be16 = |o: usize| ttf.get(o..o + 2).map(|b| u16::from_be_bytes([b[0], b[1]]));
     let be32 = |o: usize| ttf.get(o..o + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize);
