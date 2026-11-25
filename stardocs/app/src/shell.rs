@@ -504,6 +504,9 @@ pub struct Shell {
     custom: Option<Color32>,
     /// File › Version history's panel and naming dialog (`versions.rs`).
     history: crate::versions::History,
+    /// The mode the document was in when the history opened: the history shows it read-only,
+    /// and closing it gives this back.
+    history_mode: Option<Mode>,
     /// The number typed in the Restart numbering dialog, while it is open.
     restart: Option<String>,
     /// The dialog has just opened: its box takes the keyboard.
@@ -963,6 +966,12 @@ impl Shell {
             .frame(egui::Frame::NONE.fill(PAGE).inner_margin(egui::Margin { left: 12, right: 16, top: 8, bottom: 6 }))
             .show(ui, |ui| {
                 self.share.logic(link, ui.ctx());
+                // Version history is a mode of its own, as in Google Docs: its bar replaces the
+                // title, menus and toolbar until ← goes back to the document.
+                if self.history.open {
+                    self.history.top_bar(ui);
+                    return;
+                }
                 if !self.flags.compact {
                     self.title_and_menus(app, ui, link);
                     ui.add_space(6.0);
@@ -1034,6 +1043,18 @@ impl Shell {
                 Ask::Name(v, name) => link.name_version(&v, &name),
                 Ask::Close => link.end_preview(),
             }
+        }
+        // While the history shows, the document is read-only (whichever version is shown).
+        match (self.history.open, self.history_mode) {
+            (true, None) => {
+                self.history_mode = Some(Mode::of(app));
+                set_mode(app, Mode::Viewing);
+            }
+            (false, Some(mode)) => {
+                self.history_mode = None;
+                set_mode(app, mode);
+            }
+            _ => {}
         }
     }
 
@@ -1698,8 +1719,31 @@ fn has_icons(items: &[Item]) -> bool {
 /// A menu row: the icon column (an icon, a tick, or the same space blank), the label, and the
 /// shortcut in grey at the right.
 fn menu_row(icon: Option<&str>, column: bool, label: &str, keys: &str, width: f32) -> Button<'static> {
+    let b = row_start(icon, column, label);
+    // The shortcut's stretch keeps the label at the left; without one an empty growing space
+    // does (an empty shortcut text would add a space to the entry's name).
+    let b =
+        if keys.is_empty() { b.right_text(egui::Atom::grow()) } else { b.shortcut_text(RichText::new(keys.to_string()).size(13.0).color(KEYS_GREY)) };
+    b.min_size(vec2(width, ROW))
+}
+
+/// A row that opens a submenu: Docs' `arrow_right` at the right edge (a picture, so the entry is
+/// still named just by its wording). One stretch only before the arrow: with a second (an empty
+/// shortcut's) the space was shared and each arrow stopped at its own distance from the label,
+/// so a menu's arrows stood in two columns.
+fn sub_row(icon: Option<&str>, column: bool, label: &str, width: f32) -> Button<'static> {
+    let b = row_start(icon, column, label);
+    let b = match icons::icon_px("arrow_right", ICON) {
+        Some(arrow) => b.right_text(arrow),
+        None => b.right_text(egui::containers::menu::SubMenuButton::arrow_atom(Some(KEYS_GREY))),
+    };
+    b.min_size(vec2(width, ROW))
+}
+
+/// A menu row's icon column (an icon, a tick, or the same space blank) and label.
+fn row_start(icon: Option<&str>, column: bool, label: &str) -> Button<'static> {
     let text = RichText::new(label.to_string()).size(14.0).color(TEXT);
-    let b = match icon.and_then(|n| icons::icon_px(n, ICON)) {
+    match icon.and_then(|n| icons::icon_px(n, ICON)) {
         Some(img) if column => Button::image_and_text(img, text),
         // Keeps the label lined up with its iconed neighbours.
         _ if column => match icons::icon_px("check", ICON) {
@@ -1707,12 +1751,7 @@ fn menu_row(icon: Option<&str>, column: bool, label: &str, keys: &str, width: f3
             None => Button::new(text),
         },
         _ => Button::new(text),
-    };
-    // The shortcut's stretch keeps the label at the left; without one an empty growing space
-    // does (an empty shortcut text would add a space to the entry's name).
-    let b =
-        if keys.is_empty() { b.right_text(egui::Atom::grow()) } else { b.shortcut_text(RichText::new(keys.to_string()).size(13.0).color(KEYS_GREY)) };
-    b.min_size(vec2(width, ROW))
+    }
 }
 
 /// How wide a menu is: its longest label plus shortcut, the icon column and the padding (at
@@ -1741,7 +1780,13 @@ fn menu_sep(ui: &mut Ui, width: f32) {
 fn menu_items(app: &mut WordApp, ui: &mut Ui, flags: &mut Flags, items: &[Item], link: Option<&Link>) {
     menu_look(ui);
     let column = has_icons(items);
-    let width = menu_width(app, ui, flags, items, column);
+    // Every row takes the menu's full width, so the arrows and shortcuts stand in one column at
+    // its right edge. The measured width can come out a little short of what a row really needs;
+    // the menu then grew under the rows after it, and their arrows stood further right than the
+    // ones before (looks review 2, item 6). So the width the menu really took is remembered and
+    // used from the next frame on.
+    let grown = ui.scope_id().with("stardocs_menu_width");
+    let width = menu_width(app, ui, flags, items, column).max(ui.data(|d| d.get_temp::<f32>(grown)).unwrap_or(0.0));
     ui.set_min_width(width);
     ui.set_max_width(width);
     for item in items {
@@ -1787,17 +1832,16 @@ fn menu_items(app: &mut WordApp, ui: &mut Ui, flags: &mut Flags, items: &[Item],
                 ui.add_space(4.0);
             }
             Sub(_, sub) => {
-                // Docs' submenu arrow: `arrow_right` the size of the icons (a picture, so the
-                // entry is still named just by its wording).
-                let b = menu_row(icons::menu_icon_name(label), column, label, "", width);
-                let b = match icons::icon_px("arrow_right", ICON) {
-                    Some(arrow) => b.right_text(arrow),
-                    None => b.right_text(egui::containers::menu::SubMenuButton::arrow_atom(Some(KEYS_GREY))),
-                };
+                let b = sub_row(icons::menu_icon_name(label), column, label, width);
                 egui::containers::menu::SubMenuButton::from_button(b).ui(ui, |ui| menu_items(app, ui, flags, sub, link));
             }
             Sep => menu_sep(ui, width),
         }
+    }
+    let used = ui.min_rect().width().ceil();
+    if used > width + 0.5 {
+        ui.data_mut(|d| d.insert_temp(grown, used));
+        ui.ctx().request_repaint();
     }
 }
 
@@ -1805,11 +1849,7 @@ fn menu_items(app: &mut WordApp, ui: &mut Ui, flags: &mut Flags, items: &[Item],
 #[cfg(not(target_arch = "wasm32"))]
 fn recent_menu(ui: &mut Ui, link: &Link, width: f32, column: bool) {
     let recent = link.recent();
-    let b = menu_row(None, column, "Open recent", "", width);
-    let b = match icons::icon_px("arrow_right", ICON) {
-        Some(arrow) => b.right_text(arrow),
-        None => b.right_text(egui::containers::menu::SubMenuButton::arrow_atom(Some(KEYS_GREY))),
-    };
+    let b = sub_row(None, column, "Open recent", width);
     if recent.is_empty() {
         ui.add_enabled(false, b);
         return;

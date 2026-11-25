@@ -52,7 +52,8 @@ pub fn install(ctx: &egui::Context) {
 fn after_pass(ctx: &egui::Context) {
     let canvas = Tokens::light().canvas;
     let tip_fill = ctx.global_style().visuals.window_fill;
-    let mut layers: Vec<egui::LayerId> = ctx.memory(|m| m.layer_ids().filter(|l| matches!(l.order, Order::Background | Order::Tooltip)).collect());
+    let mut layers: Vec<egui::LayerId> =
+        ctx.memory(|m| m.layer_ids().filter(|l| matches!(l.order, Order::Background | Order::Middle | Order::Foreground | Order::Tooltip)).collect());
     if !layers.contains(&egui::LayerId::background()) {
         layers.push(egui::LayerId::background());
     }
@@ -62,12 +63,15 @@ fn after_pass(ctx: &egui::Context) {
             let Some(list) = g.get_mut(l) else { continue };
             for i in 0..list.next_idx().0 {
                 list.mutate_shape(egui::layers::ShapeIdx(i), |cs| {
-                    if l.order == Order::Tooltip {
-                        if restyle_tip(&mut cs.shape, tip_fill) {
-                            cs.clip_rect = cs.clip_rect.expand2(vec2(8.0, 4.0));
+                    match l.order {
+                        Order::Tooltip => {
+                            if restyle_tip(&mut cs.shape, tip_fill) {
+                                cs.clip_rect = cs.clip_rect.expand2(vec2(8.0, 4.0));
+                            }
                         }
-                    } else {
-                        drawn += recolour_surround(&mut cs.shape, canvas);
+                        Order::Background => drawn += recolour_surround(&mut cs.shape, canvas),
+                        // Dialogs and pop-ups: Google's small grey drop-down arrow.
+                        _ => material_arrow(&mut cs.shape),
                     }
                 });
             }
@@ -85,6 +89,29 @@ fn recolour_surround(shape: &mut egui::Shape, canvas: Color32) -> usize {
         }
         egui::Shape::Vec(v) => v.iter_mut().map(|s| recolour_surround(s, canvas)).sum(),
         _ => 0,
+    }
+}
+
+/// Google's `arrow_drop_down`: a 10 x 5 grey triangle.
+pub const ARROW: Color32 = Color32::from_rgb(0x44, 0x47, 0x46);
+
+/// egui draws a drop-down's arrow as a big filled triangle in the text colour (WordCraft's
+/// dialogs: Paper size, Vertical alignment …); Google's is a small grey one. Each downward
+/// triangle of a drop-down's size becomes Google's, about the same centre.
+fn material_arrow(shape: &mut egui::Shape) {
+    match shape {
+        egui::Shape::Path(p) if p.closed && p.points.len() == 3 && p.fill.a() > 0 => {
+            let [a, b, c] = [p.points[0], p.points[1], p.points[2]];
+            let w = (b.x - a.x).abs();
+            let down = (a.y - b.y).abs() < 0.5 && (c.x - (a.x + b.x) / 2.0).abs() < 0.5 && c.y > a.y;
+            if down && (6.0..=24.0).contains(&w) {
+                let centre = egui::pos2((a.x + b.x) / 2.0, (a.y + c.y) / 2.0);
+                p.points = vec![centre + vec2(-5.0, -2.5), centre + vec2(5.0, -2.5), centre + vec2(0.0, 2.5)];
+                p.fill = ARROW;
+            }
+        }
+        egui::Shape::Vec(v) => v.iter_mut().for_each(material_arrow),
+        _ => {}
     }
 }
 

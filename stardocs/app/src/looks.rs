@@ -5,12 +5,17 @@
 
 use egui::{Color32, CornerRadius, Frame, Margin, Shadow, Stroke, vec2};
 use wordcraft_ui_egui::theme::{medium, regular};
-use wordcraft_ui_egui::{ButtonLook, CommentsLook, DialogLook, HostLook, WordApp};
+use wordcraft_ui_egui::{ButtonLook, CommentsLook, DialogLook, HostLook, MarginLook, WordApp};
 
 const BLUE: Color32 = Color32::from_rgb(0x0B, 0x57, 0xD0);
 const TEXT: Color32 = Color32::from_rgb(0x1F, 0x1F, 0x1F);
 const TEXT_DIM: Color32 = Color32::from_rgb(0x44, 0x47, 0x46);
 const META: Color32 = Color32::from_rgb(0x5F, 0x63, 0x68);
+/// Field outlines: Google's grey at rest, near-black under the pointer.
+pub const FIELD: Color32 = Color32::from_rgb(0x74, 0x77, 0x75);
+/// Behind commented text, and behind the selected comment's text (Google Docs' yellows).
+const HIGHLIGHT: Color32 = Color32::from_rgb(0xFE, 0xF2, 0xCD);
+const HIGHLIGHT_ACTIVE: Color32 = Color32::from_rgb(0xFC, 0xD6, 0x63);
 
 /// Gives WordCraft's dialogs and Comments pane our look.
 pub fn apply(app: &mut WordApp) {
@@ -48,7 +53,11 @@ pub fn look() -> HostLook {
         body_size: 14.0,
         heading_font: medium(14.0),
         item_spacing: vec2(10.0, 10.0),
-        row_height: 28.0,
+        row_height: 36.0,
+        field_stroke: Stroke::new(1.0, FIELD),
+        field_hover: Stroke::new(1.0, TEXT),
+        field_focus: Stroke::new(2.0, BLUE),
+        field_radius: 4,
         min_width: 420.0,
         close_color: TEXT_DIM,
         buttons: buttons(),
@@ -72,8 +81,62 @@ pub fn look() -> HostLook {
         text_font: regular(14.0),
         icon_color: TEXT_DIM,
         buttons: buttons(),
+        // Cards beside the page, level with their text, as Docs shows comments.
+        margin: Some(MarginLook {
+            card_width: 280.0,
+            gap: 20.0,
+            highlight: HIGHLIGHT,
+            highlight_active: HIGHLIGHT_ACTIVE,
+            active_card: Frame::NONE
+                .fill(Color32::WHITE)
+                .corner_radius(CornerRadius::same(8))
+                .shadow(Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(70) })
+                .stroke(Stroke::NONE)
+                .inner_margin(Margin::same(12)),
+            icon_color: TEXT_DIM,
+        }),
     };
     HostLook { dialog: Some(dialog), comments: Some(comments) }
+}
+
+/// Our own dialogs (Name version, Keyboard shortcuts) in the same look as WordCraft's under
+/// [`look`]: a white card with 8 px corners, a soft shadow and 24 px inside.
+pub fn dialog_frame() -> Frame {
+    Frame::NONE.fill(Color32::WHITE).corner_radius(CornerRadius::same(8)).shadow(shadow(24, 60)).inner_margin(Margin::same(24))
+}
+
+/// A dialog's title: Google's 22 px.
+pub fn title(ui: &mut egui::Ui, text: &str) {
+    ui.label(egui::RichText::new(text).font(regular(22.0)).color(TEXT));
+}
+
+/// Text fields the Google way: 14 px text, 40 px tall, a grey outline with 4 px corners, 2 px
+/// blue while typing.
+pub fn field_style(ui: &mut egui::Ui) {
+    let st = ui.style_mut();
+    st.spacing.interact_size.y = 40.0;
+    st.spacing.button_padding = vec2(12.0, 10.0);
+    st.text_styles.insert(egui::TextStyle::Body, regular(14.0));
+    let w = &mut st.visuals.widgets;
+    for (state, stroke) in [(&mut w.inactive, FIELD), (&mut w.hovered, TEXT), (&mut w.active, BLUE), (&mut w.open, BLUE)] {
+        state.bg_stroke = Stroke::new(1.0, stroke);
+        state.corner_radius = CornerRadius::same(4);
+        state.expansion = 0.0;
+    }
+    st.visuals.selection.stroke = Stroke::new(2.0, BLUE);
+}
+
+/// A dialog button: the default action filled blue, the others blue text, both pill-shaped and
+/// 36 px tall.
+pub fn pill(ui: &mut egui::Ui, text: &str, filled: bool) -> egui::Response {
+    let b = buttons();
+    let (fill, colour) = if filled { (b.fill, b.on_fill) } else { (Color32::TRANSPARENT, b.text) };
+    let button = egui::Button::new(egui::RichText::new(text).font(b.font.clone()).color(colour))
+        .fill(fill)
+        .stroke(Stroke::NONE)
+        .corner_radius(CornerRadius::same(255))
+        .min_size(vec2(72.0, b.height));
+    ui.add(button)
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
@@ -115,6 +178,24 @@ mod tests {
         h.get_by_label("Close").click();
         h.run_steps(3);
         assert!(h.query_all_by_label("Page Setup").next().is_none(), "the round ✕ closes the dialog");
+    }
+
+    /// Comments show as Google's cards beside the page (fork StarDocs 0009): no markup column
+    /// beside the page, a card per thread, and a new comment opens its card there, not the
+    /// Comments pane.
+    #[test]
+    fn comments_show_as_cards_beside_the_page() {
+        let mut h = window();
+        let new = h.state_mut().run("review.newComment", json!({"text": "Is the hall free?"})).unwrap();
+        h.run_steps(6);
+        assert!(!h.state().session.view.comments_pane, "the pane stays closed");
+        assert_eq!(wordcraft_ui_egui::canvas::markup_width(h.state()), 0.0, "no Word-style markup column");
+        let id = new["id"].as_u64().unwrap();
+        let cards = &h.state().canvas.balloon_rects;
+        assert!(cards.iter().any(|(c, _)| u64::from(*c) == id), "the new comment has a card: {cards:?}");
+        let page = h.state().canvas.page_rects[0];
+        let card = cards[0].1;
+        assert!(card.left() >= page.right(), "the card {card:?} is beside the page {page:?}, not over it");
     }
 
     /// The Comments pane under our look: our header, the empty message, and a card with
