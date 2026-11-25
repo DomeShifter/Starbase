@@ -14,8 +14,14 @@ pub(super) struct Filters {
     pub when: u8,
 }
 
-pub(super) const KINDS: [(&str, &str); 6] =
-    [("folder", "Folders"), ("sheet", "Spreadsheets"), ("doc", "Documents"), ("slides", "Presentations"), ("image", "Photos & images"), ("pdf", "PDFs")];
+pub(super) const KINDS: [(&str, &str); 6] = [
+    ("folder", "Folders"),
+    ("sheet", "Spreadsheets"),
+    ("doc", "Documents"),
+    ("slides", "Presentations"),
+    ("image", "Photos & images"),
+    ("pdf", "PDFs"),
+];
 const WHO: [&str; 3] = ["Anyone", "Owned by me", "Owned by others"];
 const WHEN: [&str; 5] = ["Any time", "Today", "Last 7 days", "Last 30 days", "This year"];
 
@@ -131,16 +137,22 @@ impl Home {
     pub(super) fn filter_chips(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
             let kind_label = KINDS.iter().find(|(k, _)| Some(*k) == self.filters.kind).map_or("Type", |(_, l)| *l);
-            chip(ui, kind_label, self.filters.kind.is_some(), |ui, f| {
-                let mut hit = false;
-                for (k, l) in KINDS {
-                    if house::menu_row(ui, Some(if f.kind == Some(k) { "check" } else { "" }), l, "", true) {
-                        f.kind = if f.kind == Some(k) { None } else { Some(k) };
-                        hit = true;
+            chip(
+                ui,
+                kind_label,
+                self.filters.kind.is_some(),
+                |ui, f| {
+                    let mut hit = false;
+                    for (k, l) in KINDS {
+                        if house::menu_row(ui, Some(if f.kind == Some(k) { "check" } else { "" }), l, "", true) {
+                            f.kind = if f.kind == Some(k) { None } else { Some(k) };
+                            hit = true;
+                        }
                     }
-                }
-                hit
-            }, &mut self.filters);
+                    hit
+                },
+                &mut self.filters,
+            );
             if self.accounts {
                 let l = if self.filters.who == 0 { "People" } else { WHO[self.filters.who as usize] };
                 chip(ui, l, self.filters.who != 0, |ui, f| pick(ui, &WHO, &mut f.who), &mut self.filters);
@@ -170,7 +182,13 @@ fn pick(ui: &mut Ui, names: &[&str], value: &mut u8) -> bool {
 /// One chip: a rounded button (tinted when it filters) that opens its menu.
 fn chip(ui: &mut Ui, label: &str, on: bool, menu: impl FnOnce(&mut Ui, &mut Filters) -> bool, f: &mut Filters) -> bool {
     let text = RichText::new(format!("{label} ▾")).size(house::NOTE).color(theme::TEXT);
-    let r = ui.add(egui::Button::new(text).fill(if on { theme::SHARE } else { Color32::WHITE }).stroke(Stroke::new(1.0, theme::BOX)).corner_radius(14).min_size(vec2(0.0, 28.0)));
+    let r = ui.add(
+        egui::Button::new(text)
+            .fill(if on { theme::SHARE } else { Color32::WHITE })
+            .stroke(Stroke::new(1.0, theme::BOX))
+            .corner_radius(14)
+            .min_size(vec2(0.0, 28.0)),
+    );
     let mut hit = false;
     egui::Popup::menu(&r).show(|ui| {
         house::menu(ui, 220.0);

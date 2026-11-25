@@ -57,7 +57,12 @@ impl Home {
                     self.navigate(v);
                 }
             }
-            if searching && ui.add(egui::Button::new(RichText::new("×").size(22.0).color(theme::TEXT_DIM)).frame(false)).on_hover_text("Clear search").clicked() {
+            if searching
+                && ui
+                    .add(egui::Button::new(RichText::new("×").size(22.0).color(theme::TEXT_DIM)).frame(false))
+                    .on_hover_text("Clear search")
+                    .clicked()
+            {
                 self.search.clear();
                 self.filters = Default::default();
             }
