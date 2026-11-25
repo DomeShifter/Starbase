@@ -58,6 +58,7 @@ mod share;
 mod sheets_formulas;
 mod shell;
 mod shortcuts;
+mod smartfill;
 mod spelling;
 mod store;
 #[cfg(target_arch = "wasm32")]

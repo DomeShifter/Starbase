@@ -42,10 +42,13 @@ fn used_part(s: &Session) -> Option<RangeRef> {
 
 /// Fills `{col}` and `{row}` in a menu label with the active cell's column letter and row number,
 /// as Sheets' "Sort sheet by column B (A to Z)" and "Up to row 4" do. Create a filter reads
-/// Remove filter once the sheet has one, as in Sheets.
+/// Remove filter once the sheet has one, as in Sheets; Smart Fill's switch says what it will do.
 pub fn label(s: &Session, text: &str) -> String {
     if text == "Create a filter" && s.active().and_then(|d| d.wb.active()).is_some_and(|sh| sh.autofilter.is_some()) {
         return "Remove filter".to_string();
+    }
+    if text.ends_with("Turn off Smart Fill suggestions") && crate::smartfill::off() {
+        return text.replace("Turn off", "Turn on");
     }
     if !text.contains('{') {
         return text.to_string();

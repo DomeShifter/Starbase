@@ -309,6 +309,10 @@ pub const MENUS: &[(&str, &[Item])] = &[
         "Tools",
         &[
             Sub("Spelling", &[Cmd("Spell check", "review.spelling", "")]),
+            Sub(
+                "Suggestion controls",
+                &[Cmd("Smart Fill", "panel:smartFill", "Ctrl+Shift+Y"), Cmd("Turn off Smart Fill suggestions", "panel:smartFillToggle", "")],
+            ),
             Sub("Calculation controls", &[CmdWith("Calculate now", "formulas.calculateNow", "", "{}")]),
             Sep,
             Cmd("Accessibility", "review.checkAccessibility", ""),
@@ -529,6 +533,8 @@ pub struct Shell {
     currency: crate::currency::CustomCurrency,
     /// Help › Keyboard shortcuts and Help › Search the menus.
     help: crate::shortcuts::Help,
+    /// Smart Fill's suggestion card under the next empty cell of a column being typed.
+    smart: crate::smartfill::SmartFill,
     /// The bar of the filter view open in this tab (Data › Filter views).
     views: filterviews::Bar,
     /// Borders menu: the colour and line style the next border is drawn with (to-do row 66).
@@ -621,6 +627,7 @@ impl Shell {
             run_found(app, &ctx, &found);
         }
         sheets_keys(app, &ctx);
+        self.smart.ui(app, &ctx);
         // Ctrl+Shift+F: hide/show the menus (taken before the grid sees it).
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::F)) {
             self.compact = !self.compact;
@@ -1454,6 +1461,8 @@ pub fn run_entry_with(app: &mut SheetApp, ctx: &egui::Context, id: &str, params:
         return filterviews::run(app, id, &params);
     }
     match id {
+        "panel:smartFill" => return crate::smartfill::accept(app),
+        "panel:smartFillToggle" => return crate::smartfill::set_off(!crate::smartfill::off()),
         // With parameters (the test hook) it applies them; from the menu it opens the panel.
         "panel:alternatingColours" if params.as_object().is_some_and(|o| !o.is_empty()) => {
             if let Err(e) = crate::altcolours::run(app, &params) {
@@ -1520,17 +1529,21 @@ pub fn run_entry_with(app: &mut SheetApp, ctx: &egui::Context, id: &str, params:
 }
 
 /// Sheets' keys that GridCraft doesn't have, taken before the grid sees them: Ctrl+/ (keyboard
-/// shortcuts), Alt+/ (search the menus), Ctrl+Alt+M (comment) and Ctrl+Shift+V (paste values
-/// only).
+/// shortcuts), Alt+/ (search the menus), Ctrl+Alt+M (comment), Ctrl+Shift+Y (Smart Fill) and
+/// Ctrl+Shift+V (paste values only).
 fn sheets_keys(app: &mut SheetApp, ctx: &egui::Context) {
     use egui::{Key, KeyboardShortcut, Modifiers};
-    let (help, search, comment) = ctx.input_mut(|i| {
+    let (help, search, comment, smart) = ctx.input_mut(|i| {
         (
             i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND, Key::Slash)),
             i.consume_shortcut(&KeyboardShortcut::new(Modifiers::ALT, Key::Slash)),
             i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::ALT, Key::M)),
+            i.consume_shortcut(&KeyboardShortcut::new(Modifiers::COMMAND | Modifiers::SHIFT, Key::Y)),
         )
     });
+    if smart && app.editor.is_none() {
+        run_entry(app, ctx, "panel:smartFill");
+    }
     if comment {
         run_entry(app, ctx, "panel:comment");
     }
