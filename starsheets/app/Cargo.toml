@@ -38,6 +38,8 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 zip = { version = "3", default-features = false, features = ["deflate"] }
 # "Connect to a server…" (remote.rs): device sign-in, the token in the system keyring, the files API.
 starbase-connect = { path = "../crates/connect" }
+# Photos (home/photos.rs): the desktop decodes pictures itself (the browser does on the web).
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit"] }
@@ -45,4 +47,4 @@ rfd = { workspace = true }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "Event", "EventTarget", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "HtmlIFrameElement", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration", "Clipboard", "ClipboardItem", "Navigator", "MessageEvent", "UrlSearchParams", "AddEventListenerOptions", "Storage", "CustomEvent", "CustomEventInit", "Request", "RequestInit", "Response", "Headers", "History", "WebSocket", "BinaryType", "CloseEvent"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "Event", "EventTarget", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "HtmlIFrameElement", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration", "Clipboard", "ClipboardItem", "Navigator", "MessageEvent", "UrlSearchParams", "AddEventListenerOptions", "Storage", "CustomEvent", "CustomEventInit", "Request", "RequestInit", "Response", "Headers", "History", "WebSocket", "BinaryType", "CloseEvent", "ImageBitmap", "ImageBitmapOptions", "ResizeQuality", "OffscreenCanvas", "OffscreenCanvasRenderingContext2d", "ImageData"] }

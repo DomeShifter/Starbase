@@ -628,6 +628,7 @@ impl Shell {
         }
         sheets_keys(app, &ctx);
         self.smart.ui(app, &ctx);
+        crate::formulaimages::fetch_wanted(&ctx);
         // Ctrl+Shift+F: hide/show the menus (taken before the grid sees it).
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::F)) {
             self.compact = !self.compact;

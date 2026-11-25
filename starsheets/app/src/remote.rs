@@ -74,6 +74,10 @@ impl RemoteStore {
 }
 
 impl Store for RemoteStore {
+    fn has_photos(&self) -> bool {
+        true
+    }
+
     fn server(&self) -> Option<Server> {
         Some(self.server.server())
     }

@@ -1,0 +1,2 @@
+### Added
+- Windows installer preview (unsigned): a per-user MSI (`starbase-<version>-x64-setup.msi`, no administrator needed) with Start menu entries for Starbase Drive, Sheets and Docs, and "Open with" entries for spreadsheets and documents that never change your default apps. Uninstalling keeps your files; a newer version replaces the old one in place. Built and tested (install, start, upgrade, uninstall) on Windows in CI; why MSI: `docs/research/windows-installer.md`.
