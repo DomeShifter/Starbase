@@ -32,7 +32,8 @@ impl Home {
     /// leaving the page: index.html stops the browser's own handling while the home screen is up
     /// (`__ssHomeActive`) and counts the presses (`__ssHomeUp` = back, `__ssHomeFwd`);
     /// `__ssAtTop` (nothing to go back to) lets the browser's back button leave.
-    pub(super) fn mouse_buttons(&mut self) {
+    #[cfg(target_arch = "wasm32")]
+    pub(super) fn mouse_buttons(&mut self, _ctx: &egui::Context) {
         let Some(w) = web_sys::window() else { return };
         let get = |k: &str| js_sys::Reflect::get(&w, &k.into()).ok().and_then(|v| v.as_f64()).unwrap_or(0.0) as usize;
         let set = |k: &str, v: wasm_bindgen::JsValue| {
@@ -57,12 +58,29 @@ impl Home {
 
     /// A browser that still went back (the history fallback in index.html) gives no input event,
     /// so the home screen looks once a second; a real button press wakes it at once.
+    #[cfg(target_arch = "wasm32")]
     pub(super) fn keep_listening(ctx: &egui::Context) {
         ctx.request_repaint_after(std::time::Duration::from_secs(1));
     }
 
+    /// The desktop app gets the mouse's back and forward buttons as input events.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn mouse_buttons(&mut self, ctx: &egui::Context) {
+        let (back, fwd) =
+            ctx.input(|i| (i.pointer.button_pressed(egui::PointerButton::Extra1), i.pointer.button_pressed(egui::PointerButton::Extra2)));
+        if back {
+            self.go_back();
+        }
+        if fwd {
+            self.go_forward();
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn keep_listening(_ctx: &egui::Context) {}
+
     pub(super) fn keys(&mut self, ctx: &egui::Context) {
-        self.mouse_buttons();
+        self.mouse_buttons(ctx);
         Self::keep_listening(ctx);
         if self.renaming.is_some()
             || ctx.memory(|m| m.focused()).is_some()

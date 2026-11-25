@@ -13,3 +13,10 @@ gridcraft-engine = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = { workspace = true }
 flate2 = "1"
+# Preview pictures (thumb.rs) for the server and the desktop app's local Drive; off for the web app.
+tiny-skia = { version = "0.11", optional = true }
+ab_glyph = { version = "0.2", optional = true }
+png = { version = "0.18", optional = true }
+
+[features]
+thumbs = ["dep:tiny-skia", "dep:ab_glyph", "dep:png"]

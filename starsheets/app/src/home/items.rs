@@ -68,11 +68,11 @@ impl Home {
                 };
                 if toggle(ui, "grid_view", !self.list, "Grid") {
                     self.list = false;
-                    store("starsheets_home_list", "0");
+                    self.store.set_setting("starsheets_home_list", "0");
                 }
                 if toggle(ui, "view_list", self.list, "List") {
                     self.list = true;
-                    store("starsheets_home_list", "1");
+                    self.store.set_setting("starsheets_home_list", "1");
                 }
                 ui.add_space(house::S);
                 self.sort_menu(ui);
@@ -173,16 +173,16 @@ impl Home {
                 let here = self.here();
                 let into = here.clone().unwrap_or_else(|| self.space.clone());
                 if house::menu_row(ui, Some("note_add"), "New spreadsheet", "", true) {
-                    go(&page(&format!("?folder={}", enc(&into))));
+                    self.new_file(&into, false);
                 }
                 if house::menu_row(ui, Some("description"), "New document", "", true) {
-                    go(&crate::files::docs_url("", &format!("&folder={}", enc(&into))));
+                    self.new_file(&into, true);
                 }
                 if house::menu_row(ui, Some("create_new_folder"), "New folder", "", true) {
                     if here.is_none() {
                         self.navigate(View::Mine(self.space.clone()));
                     }
-                    call(&self.inbox, ui.ctx(), Method::Post, format!("api/folders?path={}&name=New%20folder", enc(&into)), None, |b| {
+                    call(&self.store, &self.inbox, ui.ctx(), Method::Post, format!("api/folders?path={}&name=New%20folder", enc(&into)), None, |b| {
                         let v: Json = serde_json::from_slice(&b).unwrap_or_default();
                         Reply::NewFolder(v["path"].as_str().unwrap_or("").to_string())
                     });
@@ -331,7 +331,7 @@ impl Home {
 
     pub(super) fn file_card(&mut self, ui: &mut Ui, ctx: &egui::Context, f: &FileRow, clicked_item: &mut bool) {
         let item = Item::File(f.id.clone());
-        let kind = if crate::files::is_doc(&f.name) { "stardocs" } else { "starsheets" };
+        let kind = if crate::store::is_doc(&f.name) { "stardocs" } else { "starsheets" };
         let (r, resp) = ui.allocate_exact_size(vec2(CARD_W, CARD_H), Sense::click_and_drag());
         if ui.is_rect_visible(r) {
             self.want_thumb(ctx, f);
@@ -430,7 +430,7 @@ impl Home {
                 Item::File(id) => self.file(id).map(|f| ListRow {
                     item: item.clone(),
                     name: f.name.clone(),
-                    icon: if crate::files::is_doc(&f.name) { "stardocs" } else { "starsheets" },
+                    icon: if crate::store::is_doc(&f.name) { "stardocs" } else { "starsheets" },
                     owner: f.owner.clone(),
                     modified: f.modified,
                     size: Some(f.size),
@@ -520,7 +520,7 @@ impl Home {
                     Item::File(id) => format!("api/files/{id}/rename?name={}", enc(&text)),
                     Item::Folder(p) => format!("api/folders/rename?path={}&name={}", enc(p), enc(&text)),
                 };
-                call(&self.inbox, ui.ctx(), Method::Post, url, None, refresh_after);
+                call(&self.store, &self.inbox, ui.ctx(), Method::Post, url, None, refresh_after);
             }
         }
         true
@@ -550,7 +550,9 @@ impl Home {
             // where it was (to-do 2 row 5; the separate "Open in new tab" entry went with it).
             Item::File(id) => {
                 let name = self.file(id).map(|f| f.name.clone()).unwrap_or_default();
-                new_tab(&crate::files::file_url(id, &name));
+                if let Err(e) = self.store.open(id, &name) {
+                    self.error = Some(e);
+                }
             }
         }
     }

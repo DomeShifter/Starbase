@@ -773,6 +773,9 @@ pub fn fingerprint(wb: &Workbook) -> String {
 #[cfg(test)]
 mod tests;
 
+#[cfg(feature = "thumbs")]
+pub mod thumb;
+
 /// Copies sheet `index` of `src` to the end of `dst` (another workbook): cell, row and column
 /// formats are added to `dst`'s own style list, the copy gets a free name ("Name (2)" when taken),
 /// a new id, and table names that don't clash. Formulas that point at other sheets keep their

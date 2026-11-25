@@ -63,9 +63,9 @@ python3 flatpak-cargo-generator.py stardocs/Cargo.lock   -o packaging/linux/flat
 
 ## Still missing
 
-1. **Native entry points.** The app crates are web-only today (plan jobs D1a/D1b), so no
-   `starsheets`/`stardocs` desktop executables exist yet. The programs also need to accept
-   `--home` (Starbase Sheets), `--new` and file paths (both).
+1. **Native entry points.** `starsheets` is a desktop program since plan job D1a
+   (`starsheets/app/src/native.rs`: file paths, `--new [DIR]`, `--home`, `--version`; CI's
+   "Desktop app (Linux)" job builds it). `stardocs` (D1b) is still web-only.
 2. **Starbase Drive icon.** `icons.sh` and the Flatpak data module expect
    `starsheets/app/stardrive.svg`, which is on the `icons` branch. Until that branch is merged,
    the Starbase Sheets icon stands in (with a warning). Add the file as a source in the Flatpak data

@@ -15,7 +15,7 @@ path = "src/main.rs"
 [dependencies]
 axum = { version = "0.8", features = ["ws"] }
 gridcraft-engine = { workspace = true }
-starsheets-sync = { path = "../sync" }
+starsheets-sync = { path = "../sync", features = ["thumbs"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs", "net", "time"] }
 serde_json = { workspace = true }
 rand = "0.10"
