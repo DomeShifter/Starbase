@@ -25,6 +25,7 @@ mod actions;
 mod bin;
 mod input;
 mod items;
+mod photo_edit;
 mod photos;
 mod sidebar;
 #[cfg(target_arch = "wasm32")]

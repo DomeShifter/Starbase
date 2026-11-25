@@ -24,6 +24,8 @@ serde = { version = "1", features = ["derive"] }
 regex = "1"
 # Preview pictures on the home screen (decoding them).
 png = "0.18"
+# The photo editor's pictures (home/photo_edit.rs), in the browser too (no decoders: the browser decodes).
+image = { version = "0.25", default-features = false }
 
 # The desktop app (native.rs): GridCraft's own native window setup, local mode over a folder on
 # disk (localstore.rs), the system's file dialogs and Trash; persistence remembers each
@@ -48,3 +50,7 @@ wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "Event", "EventTarget", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "HtmlIFrameElement", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration", "Clipboard", "ClipboardItem", "Navigator", "MessageEvent", "UrlSearchParams", "AddEventListenerOptions", "Storage", "CustomEvent", "CustomEventInit", "Request", "RequestInit", "Response", "Headers", "History", "WebSocket", "BinaryType", "CloseEvent", "ImageBitmap", "ImageBitmapOptions", "ResizeQuality", "OffscreenCanvas", "OffscreenCanvasRenderingContext2d", "ImageData", "HtmlTextAreaElement", "PointerEvent", "MouseEvent", "KeyboardEvent", "FocusEvent", "FocusOptions", "DomRect"] }
+
+# Native tests of the photo editor (home/photo_edit.rs): egui_kittest's accessibility tree, no GPU.
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+egui_kittest = { version = "0.37" }

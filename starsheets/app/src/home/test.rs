@@ -68,7 +68,8 @@ impl Home {
         Ok(json!({ "done": id }))
     }
 
-    /// `home:photos` {on}, `home:photos:enable`, `home:photos:sub` {on}, `home:photos:order`
+    /// `home:photos` {on}, `home:photos:edit` {open} (on the picture the viewer shows),
+    /// `home:photos:edit:<what>` (photo_edit.rs `test_run`),, `home:photos:enable`, `home:photos:sub` {on}, `home:photos:order`
     /// {newest}, `home:photos:open` {index}, `home:photos:key` {key: next, prev, close, zoomin,
     /// zoomout, fit, play, pause}, `home:photos:slideshow` {every, shuffle, play}.
     fn photos_test(&mut self, ctx: &egui::Context, id: &str, params: &Json) -> Result<Json, String> {
@@ -92,6 +93,20 @@ impl Home {
                     pm.pics.clear();
                     pm.list(ctx, &self.store, &f);
                 }
+            }
+            "home:photos:edit" => {
+                if params.get("open").and_then(Json::as_bool).unwrap_or(true) {
+                    if pm.viewer.is_none() {
+                        return Err("the viewer isn't open".into());
+                    }
+                    super::photo_edit::open(pm, ctx, &self.store);
+                } else {
+                    pm.editor = None;
+                }
+            }
+            id if id.starts_with("home:photos:edit:") => {
+                let ed = pm.editor.as_mut().ok_or("the editor isn't open")?;
+                ed.test_run(ctx, &self.store, &id["home:photos:edit:".len()..], params)?;
             }
             "home:photos:open" => {
                 let i = params.get("index").and_then(Json::as_u64).unwrap_or(0) as usize;
