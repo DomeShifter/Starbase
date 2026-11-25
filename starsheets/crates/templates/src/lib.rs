@@ -53,7 +53,13 @@ pub const ALL: &[Template] = &[
     Template { key: "cv", name: "CV", kind: Kind::Document, icon: "description", blurb: "Profile, experience, education, skills" },
     Template { key: "letter", name: "Letter", kind: Kind::Document, icon: "description", blurb: "A formal letter with both addresses" },
     Template { key: "meeting-notes", name: "Meeting notes", kind: Kind::Document, icon: "description", blurb: "Agenda, notes and action items" },
-    Template { key: "monthly-budget", name: "Monthly budget", kind: Kind::Spreadsheet, icon: "note_add", blurb: "Planned against actual, with totals" },
+    Template {
+        key: "monthly-budget",
+        name: "Monthly budget",
+        kind: Kind::Spreadsheet,
+        icon: "note_add",
+        blurb: "Planned against actual, with totals",
+    },
     Template { key: "todo-tracker", name: "To-do tracker", kind: Kind::Spreadsheet, icon: "note_add", blurb: "Tasks, who, due date and status" },
     Template { key: "plain-deck", name: "Plain deck", kind: Kind::Presentation, icon: "slideshow", blurb: "Title, two points slides, questions" },
 ];
