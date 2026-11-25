@@ -1,6 +1,8 @@
 //! The Share dialog for a document, as in Google Docs: who has access (owner, can edit, can
-//! view), adding people with an account on this server, and general access (restricted, or anyone
-//! with the link, signed in here, can view or edit).
+//! comment, can view), adding people with an account on this server, and general access
+//! (restricted, or anyone with the link, signed in here, can view, comment or edit). A commenter
+//! may read the document and add, reply to and resolve comments, not change its text (the server
+//! checks their saves: starsheets/crates/server/src/commenting.rs).
 //!
 //! Same server API and same choices as StarSheets' Share dialog (StarSheets `app/src/share.rs`),
 //! so a document shared from the home screen and one shared from here behave the same:
@@ -34,8 +36,21 @@ enum Reply {
     Error(String),
 }
 
-const ROLES: [&str; 3] = ["Viewer", "Editor", "Remove access"];
-const LINKS: [&str; 3] = ["Restricted: only people added can open it", "Anyone with the link can view", "Anyone with the link can edit"];
+const ROLES: [&str; 4] = ["Viewer", "Commenter", "Editor", "Remove access"];
+/// What each of ROLES is called on the server.
+const ROLE_NAMES: [&str; 4] = ["view", "comment", "edit", "remove"];
+const LINKS: [&str; 4] = [
+    "Restricted: only people added can open it",
+    "Anyone with the link can view",
+    "Anyone with the link can comment",
+    "Anyone with the link can edit",
+];
+const LINK_NAMES: [&str; 4] = ["none", "view", "comment", "edit"];
+
+/// A role's index in ROLES (an unknown one shows as Viewer).
+fn role_index(role: &str) -> usize {
+    ROLE_NAMES.iter().position(|n| *n == role).unwrap_or(0)
+}
 
 #[derive(Default)]
 pub struct Share {
@@ -194,13 +209,9 @@ impl Share {
             self.busy = false;
             match r {
                 Reply::Loaded { people, link, you } => {
-                    self.picks = people.iter().map(|p| usize::from(p.role == "edit")).collect();
+                    self.picks = people.iter().map(|p| role_index(&p.role)).collect();
                     self.people = people;
-                    self.link = match link.as_str() {
-                        "view" => 1,
-                        "edit" => 2,
-                        _ => 0,
-                    };
+                    self.link = LINK_NAMES.iter().position(|n| *n == link).unwrap_or(0);
                     self.you = you;
                     self.loaded = true;
                 }
@@ -270,7 +281,7 @@ impl Share {
                     let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
                     self.add = self.add.min(refs.len() - 1);
                     pick(ui, "stardocs_share_add", 250.0, &mut self.add, &refs);
-                    pick(ui, "stardocs_share_add_role", 100.0, &mut self.add_role, &ROLES[..2]);
+                    pick(ui, "stardocs_share_add_role", 100.0, &mut self.add_role, &ROLES[..3]);
                     let h = ui.spacing().interact_size.y;
                     let add = egui::Button::new(RichText::new("Add").size(14.0).color(BLUE))
                         .fill(Color32::WHITE)
@@ -279,7 +290,7 @@ impl Share {
                     if ui.add(add).clicked()
                         && let Some(u) = others.get(self.add)
                     {
-                        self.people.push(Person { role: if self.add_role == 1 { "edit".into() } else { "view".into() }, ..u.clone() });
+                        self.people.push(Person { role: ROLE_NAMES[self.add_role.min(2)].into(), ..u.clone() });
                         self.picks.push(self.add_role);
                     }
                 });
@@ -300,7 +311,7 @@ impl Share {
                         } else if owner {
                             pick(ui, &format!("stardocs_share_role_{i}"), 130.0, &mut self.picks[i], &ROLES);
                         } else {
-                            note(ui, if p.role == "edit" { "Editor" } else { "Viewer" });
+                            note(ui, ROLES[role_index(&p.role).min(2)]);
                         }
                     });
                 });
@@ -359,10 +370,10 @@ impl Share {
             let mut people = serde_json::Map::new();
             for (p, pick) in self.people.iter().zip(&self.picks) {
                 if p.role != "owner" {
-                    people.insert(p.username.clone(), json!(["view", "edit", "remove"][(*pick).min(2)]));
+                    people.insert(p.username.clone(), json!(ROLE_NAMES[(*pick).min(3)]));
                 }
             }
-            let general = ["none", "view", "edit"][self.link.min(2)];
+            let general = LINK_NAMES[self.link.min(3)];
             let body = json!({ "people": people, "link": general });
             call(&self.inbox, ctx, "POST", api(&format!("api/files/{}/sharing", self.id)), Some(body), |_| Reply::Saved);
         }

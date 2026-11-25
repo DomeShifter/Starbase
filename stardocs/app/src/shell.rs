@@ -765,6 +765,9 @@ fn run_menu(app: &mut WordApp, ctx: &egui::Context, flags: &mut Flags, link: Opt
         ("stardocs.resetStyles", _) => crate::mystyles::reset(app),
         // Someone who may only view the document stays in Viewing.
         ("stardocs.editing" | "stardocs.suggesting", Some(link)) if link.view_only() => app.status("You can view this document but not change it"),
+        ("stardocs.editing" | "stardocs.suggesting", Some(link)) if link.comment_only() => {
+            app.status("You can comment on this document but not change it");
+        }
         ("stardocs.editing", _) => set_mode(app, Mode::Editing),
         ("stardocs.suggesting", _) => set_mode(app, Mode::Suggesting),
         ("stardocs.viewing", _) => set_mode(app, Mode::Viewing),
@@ -931,9 +934,11 @@ impl Shell {
             "saved": saved,
             "notice": link.and_then(Link::notice),
             "viewOnly": link.is_some_and(Link::view_only),
+            "commentOnly": link.is_some_and(Link::comment_only),
             "mode": match Mode::of(app) {
                 _ if link.is_some_and(Link::view_only) => "viewing",
                 Mode::Viewing => "viewing",
+                _ if app.session.view.commenting => "commenting",
                 Mode::Suggesting => "suggesting",
                 Mode::Editing => "editing",
             },
@@ -999,7 +1004,7 @@ impl Shell {
                 }
                 // A view-only document, or Viewing chosen: the toolbar is shown greyed, like
                 // Google Docs' viewer. Only someone who may edit can leave Viewing.
-                let may_edit = !link.is_some_and(Link::view_only);
+                let may_edit = !link.is_some_and(Link::view_only) && !app.session.view.commenting;
                 self.toolbar(app, ui, may_edit);
             });
         self.version_history(app, ui, link);
@@ -1531,10 +1536,13 @@ impl Tools<'_> {
 }
 
 /// Docs' mode box at the right of the toolbar: Editing, Suggesting or Viewing ([`set_mode`]),
-/// or a fixed "Viewing" for someone who may only view the document.
+/// or a fixed "Viewing" for someone who may only view the document ("Commenting" for someone
+/// who may comment on it: WordCraft's `view.commenting`, fork change StarDocs 0010).
 fn mode_switch(app: &mut WordApp, ui: &mut Ui, may_edit: bool) {
+    let commenting = app.session.view.commenting;
     let mode = if may_edit { Mode::of(app) } else { Mode::Viewing };
     let (icon, label) = match mode {
+        _ if commenting => ("add_comment", "Commenting"),
         Mode::Viewing => ("visibility", "Viewing"),
         Mode::Suggesting => ("rate_review", "Suggesting"),
         Mode::Editing => ("edit", "Editing"),
@@ -1545,7 +1553,8 @@ fn mode_switch(app: &mut WordApp, ui: &mut Ui, may_edit: bool) {
         None => Button::new(text),
     };
     if !may_edit {
-        ui.add_enabled(false, button).on_disabled_hover_text("You can view this document but not change it");
+        let why = if commenting { "You can comment on this document but not change it" } else { "You can view this document but not change it" };
+        ui.add_enabled(false, button).on_disabled_hover_text(why);
         return;
     }
     let r = ui.add(button.corner_radius(4.0).min_size(vec2(116.0, 28.0)));

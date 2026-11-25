@@ -1574,15 +1574,17 @@ fn sheets_keys(app: &mut SheetApp, ctx: &egui::Context) {
     }
 }
 
-/// Edit › Paste special › Values only for text from the system clipboard: our own last copy
-/// pastes its values; anything else pastes as plain text (no formatting comes with it).
-fn paste_values(app: &mut SheetApp, text: &str) {
-    let ours = app.session.clipboard.as_ref().is_some_and(|c| c.text.replace("\r\n", "\n").trim_end() == text.replace("\r\n", "\n").trim_end());
-    if ours {
-        app.run_or_alert("edit.pasteSpecial", json!({"what": "values"}));
-    } else {
-        app.run_or_alert("edit.paste", json!({"text": text}));
+/// Ctrl+Shift+V, Google's "paste values only": the copied cells' results, without their
+/// formulas, formatting or validation; the destination keeps its own formatting and rules. A copy
+/// made here, or in another Starbase Sheets tab (its data rides in the clipboard's HTML), pastes
+/// its values; anything else pastes as plain text. The engine's `edit.paste` decides which.
+pub(crate) fn paste_values(app: &mut SheetApp, text: &str) {
+    let html = app.services.paste_html.as_mut().and_then(|read| read());
+    let mut params = json!({"text": text, "what": "values"});
+    if let Some(html) = html {
+        params["html"] = json!(html);
     }
+    app.run_or_alert("edit.paste", params);
 }
 
 /// Runs one of menuactions' entries: its commands in order, stopping at the first that fails.
@@ -1890,5 +1892,62 @@ mod tests {
         assert!(on(&s, "edit.pasteSpecial") && on(&s, "panel:moveColumnLeft") && on(&s, "panel:sortSheet"));
         s.execute("edit.pasteSpecial", json!({"what": "values", "at": "D4"})).unwrap();
         assert_eq!(s.active().unwrap().wb.active().unwrap().input_text(gridcraft_engine::core::CellRef::new(3, 3)), "x");
+    }
+
+    /// To-do row 21: Ctrl+V pastes the cells whole (formula, bold, drop-down rule); Ctrl+Shift+V
+    /// pastes only their results and leaves the destination's formatting and rules alone, for a
+    /// copy made here and one from another tab (its cells come in the clipboard's HTML).
+    #[test]
+    fn ctrl_v_pastes_whole_and_ctrl_shift_v_pastes_values() {
+        let new_app = |html: Option<String>| {
+            let services = gridcraft_ui_egui::Services { paste_html: Some(Box::new(move || html.clone())), ..Default::default() };
+            let mut app = SheetApp::new(gridcraft_engine::Session::new(), services);
+            app.session.execute("file.new", json!({})).unwrap();
+            app
+        };
+        let get = |app: &mut SheetApp, c: &str| app.session.execute("cell.get", json!({"cell": c})).unwrap();
+        let rules = |app: &SheetApp| app.session.active().unwrap().wb.active().unwrap().validations.len();
+        let covered = |app: &SheetApp, row: u32| {
+            let at = gridcraft_engine::core::CellRef::new(row, 0);
+            app.session.active().unwrap().wb.active().unwrap().validations.iter().any(|dv| dv.ranges.iter().any(|r| r.contains(at)))
+        };
+        let mut a = new_app(None);
+        a.session.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+        a.session.execute("cell.set", json!({"cell": "B1", "input": "=A1+1"})).unwrap();
+        a.session.execute("home.bold", json!({"range": "A1:B1"})).unwrap();
+        a.session.execute("data.validation", json!({"range": "A1", "type": "list", "formula1": "\"5,6\""})).unwrap();
+        a.session.execute("selection.set", json!({"range": "A1:B1"})).unwrap();
+        let copied = a.session.execute("edit.copy", json!({"html": true})).unwrap();
+        let (text, html) = (copied["text"].as_str().unwrap().to_string(), copied["html"].as_str().unwrap().to_string());
+        // Same tab, Ctrl+V: everything.
+        a.session.execute("selection.set", json!({"range": "A3"})).unwrap();
+        a.paste_external(text.clone());
+        assert_eq!(get(&mut a, "B3")["formula"], json!("=A3+1"));
+        assert_eq!(get(&mut a, "A3")["style"]["font"]["bold"], json!(true));
+        assert!(covered(&a, 2), "A3 gets the drop-down rule");
+        // Same tab, Ctrl+Shift+V: results only.
+        a.session.execute("selection.set", json!({"range": "A5"})).unwrap();
+        paste_values(&mut a, &text);
+        let (a5, b5) = (get(&mut a, "A5"), get(&mut a, "B5"));
+        assert_eq!(
+            (b5["formula"].clone(), b5["value"].clone(), a5["style"]["font"]["bold"].clone()),
+            (serde_json::Value::Null, json!(6.0), json!(false))
+        );
+        assert!(!covered(&a, 4), "values only brings no rule");
+        // Another tab, Ctrl+V: the HTML brings the cells.
+        let mut b = new_app(Some(html.clone()));
+        b.paste_external(text.clone());
+        assert_eq!(get(&mut b, "B1")["formula"], json!("=A1+1"));
+        assert_eq!(get(&mut b, "A1")["style"]["font"]["bold"], json!(true));
+        assert!(covered(&b, 0));
+        // Another tab, Ctrl+Shift+V.
+        let mut c = new_app(Some(html));
+        paste_values(&mut c, &text);
+        let (a1, b1) = (get(&mut c, "A1"), get(&mut c, "B1"));
+        assert_eq!(
+            (b1["formula"].clone(), b1["value"].clone(), a1["style"]["font"]["bold"].clone()),
+            (serde_json::Value::Null, json!(6.0), json!(false))
+        );
+        assert_eq!(rules(&c), 0);
     }
 }

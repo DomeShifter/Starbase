@@ -11,6 +11,7 @@ on:
   # The slowest workflow (17-25 min): on pull requests only when platform-specific code changes.
   # Otherwise main, once a week (Monday 04:00 UTC) and by hand.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - ".github/workflows/desktop-other.yml"
       - "starsheets/crates/connect/**"
@@ -36,6 +37,7 @@ env:
 jobs:
   build:
     name: ${{ matrix.app }} (${{ matrix.os }})
+    if: ${{ github.event.pull_request.draft != true }}
     strategy:
       fail-fast: false
       matrix:
@@ -125,7 +127,7 @@ jobs:
     name: Windows portable zip (unsigned)
     needs: build
     # Also when only a macOS build failed (a missing Windows artifact still fails it).
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && github.event.pull_request.draft != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -177,6 +179,7 @@ jobs:
     # The Start menu and file-type icons, rendered from the apps' own SVGs (packaging/linux/icons.sh)
     # and packed into .ico files (packaging/windows/make-ico.py) for the installer.
     name: Windows icons
+    if: ${{ github.event.pull_request.draft != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -203,7 +206,7 @@ jobs:
     # on a clean runner (packaging/windows/test-msi.ps1). Kept as an artifact only.
     name: Windows installer (unsigned MSI)
     needs: [build, windows-icons]
-    if: ${{ !cancelled() }}
+    if: ${{ !cancelled() && github.event.pull_request.draft != true }}
     runs-on: windows-latest
     timeout-minutes: 30
     defaults:
