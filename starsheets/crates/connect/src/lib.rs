@@ -46,6 +46,9 @@ pub struct Reply {
     pub status: u16,
     /// The file's version (ETag), for saving over exactly that version (`If-Match`).
     pub etag: Option<String>,
+    /// A file's name and folder on the server (`GET api/files/<id>`: X-File-Name, X-Folder).
+    pub name: Option<String>,
+    pub folder: Option<String>,
     pub body: Vec<u8>,
 }
 
@@ -97,9 +100,13 @@ fn send(agent: &ureq::Agent, method: &str, url: &str, token: Option<&str>, body:
     let req = req.body(body.unwrap_or_default().to_vec()).map_err(|e| e.to_string())?;
     let resp = agent.run(req).map_err(|e| format!("The server can't be reached ({e})."))?;
     let status = resp.status().as_u16();
-    let etag = resp.headers().get("etag").and_then(|v| v.to_str().ok()).map(str::to_string);
+    let header = |n: &str| resp.headers().get(n).and_then(|v| v.to_str().ok()).map(str::to_string);
+    let etag = header("etag");
+    // Sent as JSON strings (ASCII only).
+    let name = header("x-file-name").and_then(|v| serde_json::from_str::<String>(&v).ok());
+    let folder = header("x-folder").and_then(|v| serde_json::from_str::<String>(&v).ok());
     let body = resp.into_body().with_config().limit(MAX_BODY).read_to_vec().map_err(|e| e.to_string())?;
-    Ok(Reply { status, etag, body })
+    Ok(Reply { status, etag, name, folder, body })
 }
 
 impl Server {

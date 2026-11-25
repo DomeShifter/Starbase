@@ -6201,6 +6201,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "starbase-connect",
  "starsheets-sync",
  "trash",
  "wasm-bindgen",

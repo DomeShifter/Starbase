@@ -36,6 +36,8 @@ trash = "5"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 # A new, empty document for Starbase Docs (already in the build through GridCraft).
 zip = { version = "3", default-features = false, features = ["deflate"] }
+# "Connect to a server…" (remote.rs): device sign-in, the token in the system keyring, the files API.
+starbase-connect = { path = "../crates/connect" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit"] }

@@ -50,6 +50,12 @@ pub(crate) trait Store {
     fn start_dir(&self) -> Option<String> {
         None
     }
+    /// The Starbase server the desktop app is connected to (remote.rs); None on this computer's
+    /// own files.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn server(&self) -> Option<starbase_connect::Server> {
+        None
+    }
 }
 
 /// The store the home screen uses (cheap to clone).

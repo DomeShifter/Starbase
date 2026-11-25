@@ -186,6 +186,9 @@ pub struct Home {
     error: Option<String>,
     /// A folder to open once the list arrives (?dir= in the address).
     open_dir: Option<String>,
+    /// The desktop app's "Connect to a server…" (remote.rs).
+    #[cfg(not(target_arch = "wasm32"))]
+    connect: crate::remote::Connect,
 }
 
 fn name_of(path: &str) -> &str {
@@ -797,6 +800,12 @@ impl Home {
         self.details_ui(&ctx);
         self.pending_move_ui(&ctx);
         self.keys(&ctx);
+        // Connected to a server, or disconnected: the Drive starts again over the new files.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(store) = self.connect.ui(&ctx) {
+            *self = Home { store, connect: std::mem::take(&mut self.connect), ..Default::default() };
+            ctx.request_repaint();
+        }
     }
 
     fn top_ui(&mut self, ui: &mut Ui) {
@@ -831,6 +840,11 @@ impl Home {
             #[cfg(target_arch = "wasm32")]
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 crate::account::me_ui(ui);
+            });
+            // The desktop app: "Connect to a server…", or who is signed in on the server.
+            #[cfg(not(target_arch = "wasm32"))]
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                self.connect.menu_ui(ui, &self.store);
             });
         });
     }
