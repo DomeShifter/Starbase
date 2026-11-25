@@ -199,3 +199,43 @@ async fn a_commenters_saves_share_one_version_for_ten_minutes() {
     assert_eq!(versions(&app, &boss, &id).await, before + 1, "the editor's version is kept");
     let _ = std::fs::remove_dir_all(&app.store.root);
 }
+
+/// Review of PR #56: new comments get the server's ids (the reply asks the program to open the
+/// document again when they differ), an edited own comment stays theirs, and the record of
+/// whose comments are whose goes with the account.
+#[tokio::test]
+async fn server_ids_edits_stay_yours_and_the_record_goes_with_the_account() {
+    let (app, boss, ann, _vic, id, _sheet) = setup().await;
+    let v = send(&app, "GET", &format!("/api/files/{id}"), &ann, None, vec![]).await.etag;
+    // Sent as comment 7: the server's first id is 0, and the program is asked to open it again.
+    let g = send(&app, "PUT", &format!("/api/files/{id}"), &ann, Some(&v), commented(7, "Nice")).await;
+    assert_eq!(g.status, 200, "{:?}", g.json);
+    assert_eq!(g.json["reopen"], true);
+    let now = send(&app, "GET", &format!("/api/files/{id}"), &boss, None, vec![]).await;
+    let c = part(&now.bytes, "word/comments.xml");
+    assert!(c.contains(r#"w:id="0""#) && !c.contains(r#"w:id="7""#), "{c}");
+    // Opened again: edited twice, still hers each time, no reopen needed.
+    let mut v = now.etag;
+    for text in ["Nicer", "Nicest"] {
+        let g = send(&app, "PUT", &format!("/api/files/{id}"), &ann, Some(&v), commented(0, text)).await;
+        assert_eq!(g.status, 200, "{:?}", g.json);
+        assert!(g.json.get("reopen").is_none(), "{:?}", g.json);
+        v = g.json["version"].as_str().unwrap().to_string();
+        let c = part(&send(&app, "GET", &format!("/api/files/{id}"), &boss, None, vec![]).await.bytes, "word/comments.xml");
+        assert!(c.contains(&format!(">{text}<")), "{text}: {c}");
+    }
+    let log = || app.store.load_json(&app.store.meta().join("commenting.json"));
+    assert!(log()["owned"][&id].get("ann").is_some());
+    // Her account goes: so does the record of her comments.
+    let g = send(&app, "DELETE", "/api/users?username=ann", &boss, None, vec![]).await;
+    assert_eq!(g.status, 200, "{:?}", g.json);
+    assert!(log().get("owned").and_then(|o| o.get(&id)).and_then(|f| f.get("ann")).is_none(), "{:?}", log());
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[test]
+fn format_characters_leave_display_names() {
+    assert_eq!(clean_name("Ann\u{202E} Lee\u{200B}"), "Ann Lee");
+    assert_eq!(clean_name(" \u{2066}\u{FEFF} "), "");
+    assert_eq!(clean_name("Zoë  Ng"), "Zoë Ng");
+}

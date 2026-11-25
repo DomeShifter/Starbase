@@ -767,6 +767,15 @@ impl Link {
         let why = match r {
             Ok((200 | 201, _, body)) => {
                 self.took(&body);
+                // A commenter's new comments got other ids on the server (commenting.rs): the
+                // document is opened again, so the next save names them as the server does.
+                let reopen = serde_json::from_slice::<serde_json::Value>(&body).is_ok_and(|v| v["reopen"] == true);
+                if reopen && self.comment_only() {
+                    let inbox = self.state.borrow().inbox.clone();
+                    if let Some(inbox) = inbox {
+                        self.open(inbox);
+                    }
+                }
                 return Ok(());
             }
             // A commenter can't keep a copy beside it (it isn't their folder), and their comments

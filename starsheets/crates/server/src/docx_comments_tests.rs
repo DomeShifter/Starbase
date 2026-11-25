@@ -134,16 +134,23 @@ fn a_new_comment_lands_on_the_servers_text_with_the_servers_author() {
     let s = server(PLAIN, &[]);
     let u = sent(MARKED, &comment(5, "Ann (forged)", "Nice", "10000001"), r#"<w15:commentEx w15:paraId="10000001" w15:done="0"/>"#, &[]);
     let out = merged(&s, &u);
+    assert!(merge(&s, &u, &me()).unwrap().unwrap().renumbered, "sent as 5, the server's first id is 0");
     let d = part(&out, "word/document.xml");
     // The run is split where the comment starts, both halves keep their bold.
-    assert!(d.contains(r#"<w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">Hello </w:t></w:r><w:commentRangeStart w:id="5"/><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">world</w:t></w:r><w:commentRangeEnd w:id="5"/><w:r><w:commentReference w:id="5"/></w:r>"#), "{d}");
+    assert!(d.contains(r#"<w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">Hello </w:t></w:r><w:commentRangeStart w:id="0"/><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve">world</w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r>"#), "{d}");
     let c = part(&out, "word/comments.xml");
     assert!(c.contains(r#"w:author="Mal""#) && c.contains(r#"w:initials="M""#) && c.contains(">Nice<") && !c.contains("forged"), "{c}");
     assert!(part(&out, "word/_rels/document.xml.rels").contains("relationships/comments\" Target=\"comments.xml\""));
     assert!(part(&out, "[Content_Types].xml").contains("/word/comments.xml"));
     assert!(part(&out, "word/commentsExtended.xml").contains("w15:done=\"0\""));
-    // Nothing to do: nothing written.
-    assert_eq!(merge(&out, &u, &me()).unwrap(), None, "the same comment again is not new");
+    // Opened again (the server's ids) and saved unchanged: nothing written.
+    let again = sent(
+        &MARKED.replace("w:id=\"5\"", "w:id=\"0\""),
+        &comment(0, "Mal", "Nice", "10000001"),
+        r#"<w15:commentEx w15:paraId="10000001" w15:done="0"/>"#,
+        &[],
+    );
+    assert_eq!(merge(&out, &again, &me()).unwrap(), None, "the same comment again is not new");
 }
 
 #[test]
@@ -157,7 +164,7 @@ fn comment_marks_at_a_paragraphs_end_and_in_an_empty_paragraph() {
     );
     let out = merged(&s, &u);
     let d = part(&out, "word/document.xml");
-    assert!(d.contains(r#"<w:t>One</w:t></w:r><w:commentRangeStart w:id="1"/></w:p><w:p><w:commentRangeEnd w:id="1"/>"#), "{d}");
+    assert!(d.contains(r#"<w:t>One</w:t></w:r><w:commentRangeStart w:id="0"/></w:p><w:p><w:commentRangeEnd w:id="0"/>"#), "{d}");
 }
 
 /// Each attack goes with a real new comment, so the save is otherwise accepted.
@@ -376,7 +383,7 @@ fn threads_paragraphs_math_and_spaces() {
         &[],
     );
     let d = part(&merged(&s2, &u2), "word/document.xml");
-    assert!(d.contains(r#"<w:p><w:commentRangeStart w:id="1"/><m:oMath>"#), "{d}");
+    assert!(d.contains(r#"<w:p><w:commentRangeStart w:id="0"/><m:oMath>"#), "{d}");
     // Without xml:space="preserve" Word drops the text's outer spaces: the halves do too.
     let spaced = r#"<w:p><w:r><w:t> Hello world </w:t></w:r></w:p>"#;
     let s3 = server(spaced, &[]);
@@ -388,7 +395,104 @@ fn threads_paragraphs_math_and_spaces() {
     );
     let d = part(&merged(&s3, &u3), "word/document.xml");
     assert!(
-        d.contains(r#"<w:t xml:space="preserve">Hello </w:t></w:r><w:commentRangeStart w:id="1"/><w:r><w:t xml:space="preserve">world</w:t>"#),
+        d.contains(r#"<w:t xml:space="preserve">Hello </w:t></w:r><w:commentRangeStart w:id="0"/><w:r><w:t xml:space="preserve">world</w:t>"#),
         "{d}"
     );
+}
+
+/// Review of PR #56 (M1): a new comment gets the server's id, one past the largest used in any
+/// part (marks without a comment, a header's marks), so it can't take or touch anyone else's.
+#[test]
+fn new_comments_get_the_servers_ids() {
+    let marked_ann = r#"<w:p><w:commentRangeStart w:id="3"/><w:r><w:t>Hello world</w:t></w:r><w:commentRangeEnd w:id="3"/><w:r><w:commentReference w:id="3"/></w:r></w:p><w:p><w:r><w:t>Second</w:t></w:r></w:p>"#;
+    let ann = comment(3, "Ann", "Ann says", "00000AAA");
+    let rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/></Relationships>"#;
+    let comments = format!("<w:comments {NS}>{ann}</w:comments>");
+    // A header holding marks of comment 9 (no such comment): new ids go past it.
+    let header = format!(r#"<w:hdr {NS}><w:p><w:commentRangeStart w:id="9"/><w:r><w:t>Head</w:t></w:r><w:commentRangeEnd w:id="9"/></w:p></w:hdr>"#);
+    let s = server(marked_ann, &[("word/comments.xml", &comments), ("word/_rels/document.xml.rels", rels), ("word/header1.xml", &header)]);
+    // Two new comments sent as 3 (Ann's id: not new, ignored) and 4 and 9.
+    let body = marked_ann.replace(
+        "<w:r><w:t>Second</w:t></w:r>",
+        r#"<w:commentRangeStart w:id="4"/><w:commentRangeStart w:id="9"/><w:r><w:t>Second</w:t></w:r><w:commentRangeEnd w:id="4"/><w:commentRangeEnd w:id="9"/>"#,
+    );
+    let u = sent(
+        &body,
+        &format!("{}{}{}", comment(3, "Ann", "EVIL", "10000001"), comment(4, "Mal", "Four", "10000002"), comment(9, "Mal", "Nine", "10000003")),
+        "",
+        &[],
+    );
+    let m = merge(&s, &u, &me()).unwrap().unwrap();
+    assert!(m.renumbered);
+    let mut own: Vec<u32> = m.own.keys().copied().collect();
+    own.sort_unstable();
+    assert_eq!(own, vec![10, 11], "the server's ids are Mal's");
+    let out = merged(&s, &u);
+    let c = part(&out, "word/comments.xml");
+    assert!(c.contains(r#"w:id="10""#) && c.contains(r#"w:id="11""#) && c.contains("Ann says") && !c.contains("EVIL"), "{c}");
+    assert!(!c.contains(r#"w:id="4""#) && !c.contains(r#"w:id="9""#), "{c}");
+    let d = part(&out, "word/document.xml");
+    assert!(d.contains(r#"<w:commentRangeStart w:id="10"/>"#) && d.contains(r#"<w:commentRangeStart w:id="11"/>"#), "{d}");
+    assert_eq!(d.matches(r#"w:id="3""#).count(), 3, "Ann's marks as they were: {d}");
+    assert_eq!(part(&out, "word/header1.xml"), header, "the header as it was");
+    // A file that already uses the largest id: refused, never wrapped round to 0.
+    let full = server(PLAIN, &[("word/header1.xml", &header.replace("w:id=\"9\"", "w:id=\"4294967295\""))]);
+    assert!(merge(&full, &sent(MARKED, &comment(5, "Mal", "Nice", "10000001"), "", &[]), &me()).is_err());
+}
+
+/// Review of PR #56 (M2): editing your own comment keeps its date, so it stays yours, saved
+/// again and again; a line break in it is a w:br.
+#[test]
+fn an_edited_comment_keeps_its_date_and_stays_yours() {
+    let s = server(PLAIN, &[]);
+    let first = Me { date: "2026-11-25T09:00:00Z".into(), ..me() };
+    let m = merge(&s, &sent(&MARKED.replace("w:id=\"5\"", "w:id=\"0\""), &comment(0, "Mal", "One", "10000001"), "", &[]), &first).unwrap().unwrap();
+    assert_eq!(m.own.get(&0).map(String::as_str), Some("2026-11-25T09:00:00Z"));
+    let mut doc = m.bytes;
+    let mut own = m.own;
+    for (i, text) in ["Two", "Three"].iter().enumerate() {
+        let later = Me { date: format!("2026-11-25T1{i}:00:00Z"), own: own.clone(), ..me() };
+        let u = sent(&MARKED.replace("w:id=\"5\"", "w:id=\"0\""), &comment(0, "Mal", text, "10000001"), "", &[]);
+        let m = merge(&doc, &u, &later).unwrap().expect("an edit of Mal's own comment");
+        let c = part(&m.bytes, "word/comments.xml");
+        assert!(c.contains(&format!(">{text}<")) && c.contains(r#"w:date="2026-11-25T09:00:00Z""#), "{c}");
+        assert_eq!(m.own.get(&0).map(String::as_str), Some("2026-11-25T09:00:00Z"), "still his");
+        (doc, own) = (m.bytes, m.own);
+    }
+    // A line break.
+    let later = Me { own: own.clone(), ..me() };
+    let br = r#"<w:comment w:id="0" w:author="Mal"><w:p w14:paraId="10000001"><w:r><w:t>Line</w:t><w:br/><w:t>next</w:t></w:r></w:p></w:comment>"#;
+    let m = merge(&doc, &sent(&MARKED.replace("w:id=\"5\"", "w:id=\"0\""), br, "", &[]), &later).unwrap().unwrap();
+    let c = part(&m.bytes, "word/comments.xml");
+    assert!(c.contains(r#"Line</w:t><w:br/><w:t xml:space="preserve">next"#), "{c}");
+}
+
+/// Review of PR #56 (low): a deleted comment's entries in commentsIds, commentsExtensible and
+/// (its author having no comment left) people.xml go with it.
+#[test]
+fn a_deleted_comment_leaves_no_entries_behind() {
+    let marked = MARKED.replace("w:id=\"5\"", "w:id=\"0\"");
+    let rels = r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/><Relationship Id="rId3" Type="http://schemas.microsoft.com/office/2016/09/relationships/commentsIds" Target="commentsIds.xml"/><Relationship Id="rId4" Type="http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible" Target="commentsExtensible.xml"/><Relationship Id="rId5" Type="http://schemas.microsoft.com/office/2011/relationships/people" Target="people.xml"/></Relationships>"#;
+    let mine =
+        r#"<w:comment w:id="0" w:author="Mal" w:date="2026-11-25T10:00:00Z"><w:p w14:paraId="0000000A"><w:r><w:t>Mine</w:t></w:r></w:p></w:comment>"#;
+    let ids = r#"<w16cid:commentsIds xmlns:w16cid="http://schemas.microsoft.com/office/word/2016/wordml/cid"><w16cid:commentId w16cid:paraId="0000000A" w16cid:durableId="1111AAAA"/><w16cid:commentId w16cid:paraId="0000000B" w16cid:durableId="2222BBBB"/></w16cid:commentsIds>"#;
+    let ext = r#"<w16cex:commentsExtensible xmlns:w16cex="http://schemas.microsoft.com/office/word/2018/wordml/cex"><w16cex:commentExtensible w16cex:durableId="1111AAAA" w16cex:dateUtc="2026-11-25T10:00:00Z"/><w16cex:commentExtensible w16cex:durableId="2222BBBB"/></w16cex:commentsExtensible>"#;
+    let people = r#"<w15:people xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"><w15:person w15:author="Mal"/><w15:person w15:author="Ann"/></w15:people>"#;
+    let comments = format!("<w:comments {NS}>{mine}</w:comments>");
+    let s = server(
+        &marked,
+        &[
+            ("word/comments.xml", &comments),
+            ("word/_rels/document.xml.rels", rels),
+            ("word/commentsIds.xml", ids),
+            ("word/commentsExtensible.xml", ext),
+            ("word/people.xml", people),
+        ],
+    );
+    let out = merge(&s, &sent(PLAIN, "", "", &[]), &me_owning(&[0])).unwrap().unwrap().bytes;
+    let (i, x, p) = (part(&out, "word/commentsIds.xml"), part(&out, "word/commentsExtensible.xml"), part(&out, "word/people.xml"));
+    assert!(!i.contains("0000000A") && i.contains("0000000B"), "{i}");
+    assert!(!x.contains("1111AAAA") && x.contains("2222BBBB"), "{x}");
+    assert!(!p.contains("\"Mal\"") && p.contains("\"Ann\""), "{p}");
+    assert!(!part(&out, "word/comments.xml").contains("Mine"));
 }

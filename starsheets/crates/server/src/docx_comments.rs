@@ -16,7 +16,15 @@
 //!   files, else the save is refused. A reply without marks of its own goes beside its parent's.
 //! - **The commenter's own comments** (ones the server recorded them adding this way, still
 //!   under their name; a display name alone could be copied): new text, resolved or not, or
-//!   deleted (with their marks), unless a reply that stays hangs on it.
+//!   deleted (with their marks, their entries in commentsIds / commentsExtensible, and the
+//!   author's entry in people.xml once they have no comment left), unless a reply that stays
+//!   hangs on it. An edited comment keeps its date, which is part of how the server knows it is
+//!   theirs (commenting.rs).
+//! - **Ids**: the server gives every new comment its own id, one past the largest comment id
+//!   used anywhere in the document (any part, marks included), whatever id the commenter's file
+//!   gave it, so a new comment can never take or touch someone else's. When the ids differ from
+//!   the sent ones, [`Merged::renumbered`] says so (the commenter's program opens the document
+//!   again, so its ids match the server's).
 //!
 //! Everything else in the sent file is ignored, including changes to other people's comments.
 //! After building, the server's text is checked to be unchanged (a guard against a mistake here).
@@ -35,6 +43,11 @@ const REL_COMMENTS: &str = "http://schemas.openxmlformats.org/officeDocument/200
 const REL_COMMENTS_EX: &str = "http://schemas.microsoft.com/office/2011/relationships/commentsExtended";
 const CT_COMMENTS: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml";
 const CT_COMMENTS_EX: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml";
+const REL_COMMENTS_IDS: &str = "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds";
+const REL_COMMENTS_EXT: &str = "http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible";
+const REL_PEOPLE: &str = "http://schemas.microsoft.com/office/2011/relationships/people";
+const W16CID: &str = "http://schemas.microsoft.com/office/word/2016/wordml/cid";
+const W16CEX: &str = "http://schemas.microsoft.com/office/word/2018/wordml/cex";
 
 /// Limits on what is read: parts in a file, bytes in one part, XML nodes, nesting, comments.
 const MAX_ENTRIES: usize = 10_000;
@@ -69,6 +82,8 @@ pub struct Merged {
     pub bytes: Vec<u8>,
     /// This person's comments in the result: id → date (the new record of whose they are).
     pub own: HashMap<u32, String>,
+    /// A new comment got a different id from the one in the sent file.
+    pub renumbered: bool,
 }
 
 /// The server's document with the commenter's comment changes from `sent`, or `None` when there
@@ -93,6 +108,14 @@ pub fn merge(server: &[u8], sent: &[u8], me: &Me) -> Result<Option<Merged>, Stri
         Some(n) => read(&mut szip, n)?,
         None => None,
     };
+    // The largest comment id used anywhere in the server's document (new ones go after it).
+    let mut used_max: Option<u32> = None;
+    let xml_parts: Vec<String> = szip.file_names().filter(|n| n.to_lowercase().ends_with(".xml")).map(str::to_string).collect();
+    for n in &xml_parts {
+        if let Some(b) = read(&mut szip, n)? {
+            used_max = used_max.max(max_comment_id(&b));
+        }
+    }
     // The sent file, as Starbase Docs writes it.
     let u_doc = read(&mut uzip, "word/document.xml")?.ok_or("not a document")?;
     let u_com = read(&mut uzip, "word/comments.xml")?;
@@ -249,11 +272,21 @@ pub fn merge(server: &[u8], sent: &[u8], me: &Me) -> Result<Option<Merged>, Stri
             _ => {}
         }
     }
+    // The server's ids for the new comments: one past the largest used anywhere, in order.
+    let mut sid_of: HashMap<u32, u32> = HashMap::new();
+    let mut next = used_max.map_or(Some(0), |m| m.checked_add(1));
+    for id in &keep {
+        let n = next.ok_or("no free comment id")?;
+        sid_of.insert(*id, n);
+        next = n.checked_add(1);
+    }
+    let sid = |id: u32| sid_of.get(&id).copied().unwrap_or(id);
     let mut cuts: Vec<Cut> = Vec::new();
     for (seq, id) in keep.iter().enumerate() {
         if let Some((a, b)) = places.get(id) {
-            cuts.push(Cut { para: a.0, off: a.1, seq: (0, seq), xml: format!("<{w}:commentRangeStart {w}:id=\"{id}\"/>") });
-            cuts.push(Cut { para: b.0, off: b.1, seq: (1, seq), xml: end_marks(&w, *id) });
+            let n = sid(*id);
+            cuts.push(Cut { para: a.0, off: a.1, seq: (0, seq), xml: format!("<{w}:commentRangeStart {w}:id=\"{n}\"/>") });
+            cuts.push(Cut { para: b.0, off: b.1, seq: (1, seq), xml: end_marks(&w, n) });
         }
     }
     let mut edits = place(&doc1, &d1_paras, &cuts)?;
@@ -278,8 +311,9 @@ pub fn merge(server: &[u8], sent: &[u8], me: &Me) -> Result<Option<Merged>, Stri
     for (seq, (id, parent)) in beside.iter().enumerate() {
         if let (Some(s), Some(r)) = (starts.get(parent), refruns.get(parent)) {
             let seq = 1000 + seq as u32;
-            edits.push(Edit { at: s.range().end..s.range().end, seq, text: format!("<{w}:commentRangeStart {w}:id=\"{id}\"/>") });
-            edits.push(Edit { at: r.range().end..r.range().end, seq, text: end_marks(&w, *id) });
+            let n = sid(*id);
+            edits.push(Edit { at: s.range().end..s.range().end, seq, text: format!("<{w}:commentRangeStart {w}:id=\"{n}\"/>") });
+            edits.push(Edit { at: r.range().end..r.range().end, seq, text: end_marks(&w, n) });
             placed_beside.insert(*id);
         }
     }
@@ -321,11 +355,12 @@ pub fn merge(server: &[u8], sent: &[u8], me: &Me) -> Result<Option<Merged>, Stri
             need_pid.insert(*id);
         }
     }
-    let new_comment = |w: &str, w14: &str, id: u32, paras: &[String], pid: &str| -> String {
+    // An edited comment keeps its date (part of how the server knows it is theirs).
+    let new_comment = |w: &str, w14: &str, id: u32, paras: &[String], pid: &str, date: &str| -> String {
         let mut s = format!(
             "<{w}:comment {w}:id=\"{id}\" {w}:author=\"{}\" {w}:date=\"{}\" {w}:initials=\"{}\">",
             esc(&me.name),
-            esc(&me.date),
+            esc(date),
             esc(&me.initials)
         );
         let paras: Vec<String> = if paras.is_empty() { vec![String::new()] } else { paras.to_vec() };
@@ -364,7 +399,8 @@ pub fn merge(server: &[u8], sent: &[u8], me: &Me) -> Result<Option<Merged>, Stri
                     edits.push(Edit { at: c.range(), seq: 0, text: String::new() });
                 } else if let Some(paras) = edited.get(&id) {
                     let pid = pid_of.get(&id).cloned().unwrap_or_else(&mut fresh);
-                    edits.push(Edit { at: c.range(), seq: 0, text: new_comment(&cw, &w14, id, paras, &pid) });
+                    let date = s_comments.get(&id).map_or(me.date.as_str(), |c| c.date.as_str());
+                    edits.push(Edit { at: c.range(), seq: 0, text: new_comment(&cw, &w14, id, paras, &pid, date) });
                 } else if need_pid.contains(&id)
                     && let Some(last) = c.children().rfind(|n| is(n, W, "p"))
                     && let Some(pid) = pid_of.get(&id)
@@ -374,8 +410,10 @@ pub fn merge(server: &[u8], sent: &[u8], me: &Me) -> Result<Option<Merged>, Stri
                 }
             }
             let close = close_tag_start(t, &root).ok_or("the comments part is damaged")?;
-            let added: String =
-                keep.iter().map(|id| new_comment(&cw, &w14, *id, &u_comments[id].paras, pid_of.get(id).map_or("", String::as_str))).collect();
+            let added: String = keep
+                .iter()
+                .map(|id| new_comment(&cw, &w14, sid(*id), &u_comments[id].paras, pid_of.get(id).map_or("", String::as_str), &me.date))
+                .collect();
             edits.push(Edit { at: close..close, seq: 1, text: added });
             new_comments_part = false;
             apply(t, edits)?
@@ -389,7 +427,7 @@ pub fn merge(server: &[u8], sent: &[u8], me: &Me) -> Result<Option<Merged>, Stri
                 let mut s =
                     format!("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<w:comments xmlns:w=\"{W}\" xmlns:w14=\"{W14}\">");
                 for id in &keep {
-                    s.push_str(&new_comment("w", "w14", *id, &u_comments[id].paras, pid_of.get(id).map_or("", String::as_str)));
+                    s.push_str(&new_comment("w", "w14", sid(*id), &u_comments[id].paras, pid_of.get(id).map_or("", String::as_str), &me.date));
                 }
                 s.push_str("</w:comments>");
                 s
@@ -541,6 +579,10 @@ pub fn merge(server: &[u8], sent: &[u8], me: &Me) -> Result<Option<Merged>, Stri
         parse(&out)?;
         replace.insert("[Content_Types].xml".into(), out.into_bytes());
     }
+    // ---- Deleted comments' entries in commentsIds, commentsExtensible and people.xml.
+    if !deleted.is_empty() {
+        prune(&mut szip, doc_rels.as_deref(), &dir, &deleted, &s_pid, &s_comments, (!keep.is_empty()).then_some(me.name.as_str()), &mut replace)?;
+    }
     drop(uzip);
     let bytes = write_zip(&mut szip, &replace, &add)?;
     if bytes.len() > server.len().saturating_add(MAX_GROWTH) {
@@ -548,8 +590,67 @@ pub fn merge(server: &[u8], sent: &[u8], me: &Me) -> Result<Option<Merged>, Stri
     }
     // Whose comments these are now: the recorded ones still there, and the new ones.
     let mut own: HashMap<u32, String> = me.own.iter().filter(|(id, _)| mine(id) && !deleted.contains(id)).map(|(i, d)| (*i, d.clone())).collect();
-    own.extend(keep.iter().map(|id| (*id, me.date.clone())));
-    Ok(Some(Merged { bytes, own }))
+    own.extend(keep.iter().map(|id| (sid(*id), me.date.clone())));
+    let renumbered = keep.iter().any(|id| sid(*id) != *id);
+    Ok(Some(Merged { bytes, own, renumbered }))
+}
+
+/// Takes the `deleted` comments out of commentsIds.xml and commentsExtensible.xml, and their
+/// authors out of people.xml when no comment of theirs is left (`adding`: the author of new
+/// comments in this save).
+#[allow(clippy::too_many_arguments, reason = "the merge's state, passed through once")]
+fn prune(
+    szip: &mut zip::ZipArchive<Cursor<&[u8]>>,
+    doc_rels: Option<&[u8]>,
+    dir: &str,
+    deleted: &BTreeSet<u32>,
+    s_pid: &HashMap<u32, String>,
+    s_comments: &BTreeMap<u32, Comment>,
+    adding: Option<&str>,
+    replace: &mut HashMap<String, Vec<u8>>,
+) -> Result<(), String> {
+    let gone_pids: HashSet<&str> = deleted.iter().filter_map(|id| s_pid.get(id)).map(String::as_str).collect();
+    let mut gone_durable: HashSet<String> = HashSet::new();
+    let mut drop_from = |szip: &mut zip::ZipArchive<Cursor<&[u8]>>,
+                         rel: &str,
+                         ns: &str,
+                         name: &str,
+                         attr: &str,
+                         gone: &dyn Fn(&str) -> bool,
+                         found: &mut Vec<String>|
+     -> Result<(), String> {
+        let Some(n) = doc_rels.and_then(|r| target_of(r, dir, rel)) else { return Ok(()) };
+        let Some(b) = read(szip, &n)? else { return Ok(()) };
+        let t = text(&b)?;
+        let d = parse(&t)?;
+        let mut edits = Vec::new();
+        for e in d.root_element().children().filter(|e| is(e, ns, name)) {
+            if e.attribute((ns, attr)).is_some_and(gone) {
+                if ns == W16CID {
+                    found.extend(e.attribute((W16CID, "durableId")).map(str::to_uppercase));
+                }
+                edits.push(Edit { at: e.range(), seq: 0, text: String::new() });
+            }
+        }
+        if !edits.is_empty() {
+            replace.insert(n, apply(&t, edits)?.into_bytes());
+        }
+        Ok(())
+    };
+    let mut durable = Vec::new();
+    drop_from(szip, REL_COMMENTS_IDS, W16CID, "commentId", "paraId", &|p| gone_pids.contains(p.to_uppercase().as_str()), &mut durable)?;
+    gone_durable.extend(durable);
+    if !gone_durable.is_empty() {
+        drop_from(szip, REL_COMMENTS_EXT, W16CEX, "commentExtensible", "durableId", &|x| gone_durable.contains(&x.to_uppercase()), &mut Vec::new())?;
+    }
+    let mut left: HashSet<&str> = s_comments.iter().filter(|(id, _)| !deleted.contains(id)).map(|(_, c)| c.author.as_str()).collect();
+    left.extend(adding);
+    let gone_authors: HashSet<&str> =
+        deleted.iter().filter_map(|id| s_comments.get(id)).map(|c| c.author.as_str()).filter(|a| !left.contains(a)).collect();
+    if !gone_authors.is_empty() {
+        drop_from(szip, REL_PEOPLE, W15, "person", "author", &|a| gone_authors.contains(a), &mut Vec::new())?;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------- the package
@@ -694,19 +795,57 @@ fn close_tag_start(src: &str, n: &Node) -> Option<usize> {
     body.rfind("</").map(|i| r.start + i)
 }
 
-/// A run (or several, around tabs) holding plain `text`.
+/// A run holding plain `text` (tabs as w:tab, line breaks as w:br).
 fn runs(w: &str, text: &str) -> String {
     let mut s = format!("<{w}:r>");
-    for (i, part) in text.split('\t').enumerate() {
-        if i > 0 {
-            s.push_str(&format!("<{w}:tab/>"));
+    for (l, line) in text.split('\n').enumerate() {
+        if l > 0 {
+            s.push_str(&format!("<{w}:br/>"));
         }
-        if !part.is_empty() {
-            s.push_str(&format!("<{w}:t xml:space=\"preserve\">{}</{w}:t>", esc(part)));
+        for (i, part) in line.split('\t').enumerate() {
+            if i > 0 {
+                s.push_str(&format!("<{w}:tab/>"));
+            }
+            if !part.is_empty() {
+                s.push_str(&format!("<{w}:t xml:space=\"preserve\">{}</{w}:t>", esc(part)));
+            }
         }
     }
     s.push_str(&format!("</{w}:r>"));
     s
+}
+
+/// The largest comment id in a part: on any comment, commentRangeStart, commentRangeEnd or
+/// commentReference element, read from the raw text whatever the prefix (one too many read is
+/// harmless: new ids only go higher).
+fn max_comment_id(part: &[u8]) -> Option<u32> {
+    let t = String::from_utf8_lossy(part);
+    let mut best: Option<u32> = None;
+    let mut rest: &str = &t;
+    while let Some(i) = rest.find('<') {
+        rest = &rest[i + 1..];
+        let end = rest.find('>').unwrap_or(rest.len());
+        let tag = &rest[..end];
+        let name_end = tag.find(|c: char| c.is_whitespace() || c == '/').unwrap_or(tag.len());
+        let local = tag[..name_end].rsplit(':').next().unwrap_or("");
+        if matches!(local, "comment" | "commentRangeStart" | "commentRangeEnd" | "commentReference") {
+            let mut attrs = &tag[name_end..];
+            while let Some(eq) = attrs.find('=') {
+                let key = attrs[..eq].trim().rsplit(':').next().unwrap_or("");
+                let after = attrs[eq + 1..].trim_start();
+                let Some(q) = after.chars().next().filter(|c| *c == '"' || *c == '\'') else { break };
+                let val_end = after[1..].find(q).map_or(after.len(), |k| k + 1);
+                if key == "id"
+                    && let Ok(v) = after[1..val_end].trim().parse::<u32>()
+                {
+                    best = best.max(Some(v));
+                }
+                attrs = after.get(val_end + 1..).unwrap_or("");
+            }
+        }
+        rest = &rest[end..];
+    }
+    best
 }
 
 fn end_marks(w: &str, id: u32) -> String {
@@ -757,6 +896,7 @@ fn apply(src: &str, mut edits: Vec<Edit>) -> Result<String, String> {
 // ---------------------------------------------------------------- comments
 
 struct Comment {
+    author: String,
     /// The w:date the comment carries (the server's, for comments added by commenters).
     date: String,
     /// The text, paragraph by paragraph (tabs as '\t', breaks as '\n').
@@ -786,7 +926,15 @@ fn comments(d: &Document) -> BTreeMap<u32, Comment> {
             texts.push(s);
         }
         let para_id = paras.last().and_then(|p| p.attribute((W14, "paraId"))).map(str::to_uppercase);
-        out.insert(id, Comment { date: c.attribute((W, "date")).unwrap_or("").to_string(), paras: texts, para_id });
+        out.insert(
+            id,
+            Comment {
+                author: c.attribute((W, "author")).unwrap_or("").to_string(),
+                date: c.attribute((W, "date")).unwrap_or("").to_string(),
+                paras: texts,
+                para_id,
+            },
+        );
     }
     out
 }

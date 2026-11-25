@@ -18,8 +18,14 @@
 //!   `STORE/.starsheets/commenting.json` ("owned": id and the date the server gave it); only
 //!   those, still carrying that date, may they change or delete. A display name could be copied,
 //!   and an id can be used again for someone else's comment after an editor deletes one.
+//!   The record is per account (username) and goes when the account is removed ([`forget_person`])
+//!   or the file is deleted for good ([`forget_file`]), so a new account of the same name or a
+//!   new file can't inherit it.
+//! - New comments get the server's ids (docx_comments.rs); when those differ from the ones sent,
+//!   the reply says `"reopen": true` and the commenter's program opens the document again.
 //! - A comment's author is the commenter's name with their username, so nobody can comment as
-//!   someone else by taking their display name.
+//!   someone else by taking their display name. Invisible format characters (Unicode Cf, such as
+//!   U+202E, which turns text around) are taken out of the name.
 //! - Versions: commenters' saves within 10 minutes of the first of them, with no editor's save
 //!   in between, replace each other instead of each keeping a version, so many small comment
 //!   saves can't push real versions out of the history (KEEP).
@@ -61,6 +67,20 @@ impl Drop for Turn {
 
 fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+}
+
+/// Unicode's format characters (category Cf): invisible, and some reorder the text around them.
+fn is_format_char(c: char) -> bool {
+    matches!(c as u32,
+        0x00AD | 0x0600..=0x0605 | 0x061C | 0x06DD | 0x070F | 0x0890..=0x0891 | 0x08E2 | 0x180E
+        | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F | 0xFEFF
+        | 0xFFF9..=0xFFFB | 0x110BD | 0x110CD | 0x13430..=0x1343F | 0x1BCA0..=0x1BCA3
+        | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
+}
+
+/// A display name as a comment's author shows it: without format characters, spaces tidied.
+fn clean_name(name: &str) -> String {
+    name.chars().filter(|c| !is_format_char(*c)).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// The initials Word shows on a comment: the first letter of each word, at most three.
@@ -125,11 +145,9 @@ pub(crate) async fn put(app: &Shared, me: Option<auth::User>, file: String, if_m
     }
     // Read and rebuilt outside the store lock, a few at a time.
     let Some(turn) = Turn::take() else { return Some(error(503, "The server is busy saving comments: trying again shortly.")) };
-    let name = if me.name.trim().is_empty() || me.name.trim() == me.username {
-        me.username.clone()
-    } else {
-        format!("{} ({})", me.name.trim(), me.username)
-    };
+    let shown = clean_name(&me.name);
+    let user = clean_name(&me.username);
+    let name = if shown.is_empty() || shown == user { user } else { format!("{shown} ({user})") };
     let who = crate::docx_comments::Me { initials: initials(&name), name, date: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(), own };
     let merged = tokio::task::spawn_blocking(move || crate::docx_comments::merge(&old, &body, &who)).await;
     drop(turn);
@@ -179,10 +197,54 @@ pub(crate) async fn put(app: &Shared, me: Option<auth::User>, file: String, if_m
         all.insert("owned".into(), Value::Object(owned));
         let _ = a.store.save_json(&log, &Value::Object(all));
         let _ = spaces::note_changed(&a.store, &file, &me.username);
+        if merged.renumbered {
+            return send_json(&json!({"version": version, "name": name, "folder": folder, "reopen": true}), 200);
+        }
         send_json(&json!({"version": version, "name": name, "folder": folder}), 200)
     })
     .await;
     Some(r.unwrap_or_else(|| error(500, "server error")))
+}
+
+/// Takes `keep` out of the record (under the store lock), and saves it if anything went.
+fn forget_where(store: &store::Store, keep: impl Fn(&str, &str) -> bool) {
+    let path = store.meta().join("commenting.json");
+    if !path.is_file() {
+        return;
+    }
+    let mut all = store.load_json(&path);
+    let mut changed = false;
+    if let Some(Value::Object(owned)) = all.get_mut("owned") {
+        for (file, people) in owned.iter_mut() {
+            if let Value::Object(people) = people {
+                let before = people.len();
+                people.retain(|who, _| keep(file, who));
+                changed |= people.len() != before;
+            }
+        }
+        let before = owned.len();
+        owned.retain(|file, people| keep(file, "") && people.as_object().is_some_and(|p| !p.is_empty()));
+        changed |= owned.len() != before;
+    }
+    if let Some(Value::Object(runs)) = all.get_mut("runs") {
+        let before = runs.len();
+        runs.retain(|file, run| keep(file, "") && keep(file, run["by"].as_str().unwrap_or("")));
+        changed |= runs.len() != before;
+    }
+    if changed {
+        let _ = store.save_json(&path, &Value::Object(all));
+    }
+}
+
+/// `username`'s account was removed: which comments were theirs is forgotten (a new account of
+/// the same name owns none of them).
+pub(crate) fn forget_person(store: &store::Store, username: &str) {
+    forget_where(store, |_, who| who != username);
+}
+
+/// File `id` was deleted for good: its record goes.
+pub(crate) fn forget_file(store: &store::Store, id: &str) {
+    forget_where(store, |file, _| file != id);
 }
 
 #[cfg(test)]
