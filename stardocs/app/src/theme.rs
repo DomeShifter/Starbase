@@ -51,6 +51,7 @@ pub fn install(ctx: &egui::Context) {
 /// them in the menu frame, so only the tooltip layer is changed.
 fn after_pass(ctx: &egui::Context) {
     let canvas = Tokens::light().canvas;
+    let shadow = Tokens::light().page_shadow;
     let tip_fill = ctx.global_style().visuals.window_fill;
     let mut layers: Vec<egui::LayerId> =
         ctx.memory(|m| m.layer_ids().filter(|l| matches!(l.order, Order::Background | Order::Middle | Order::Foreground | Order::Tooltip)).collect());
@@ -69,9 +70,15 @@ fn after_pass(ctx: &egui::Context) {
                                 cs.clip_rect = cs.clip_rect.expand2(vec2(8.0, 4.0));
                             }
                         }
-                        Order::Background => drawn += recolour_surround(&mut cs.shape, canvas),
+                        Order::Background => {
+                            drawn += recolour_surround(&mut cs.shape, canvas);
+                            soften_page_shadow(&mut cs.shape, shadow);
+                        }
                         // Dialogs and pop-ups: Google's small grey drop-down arrow.
-                        _ => material_arrow(&mut cs.shape),
+                        _ => {
+                            material_arrow(&mut cs.shape);
+                            soften_page_shadow(&mut cs.shape, shadow);
+                        }
                     }
                 });
             }
@@ -89,6 +96,19 @@ fn recolour_surround(shape: &mut egui::Shape, canvas: Color32) -> usize {
         }
         egui::Shape::Vec(v) => v.iter_mut().map(|s| recolour_surround(s, canvas)).sum(),
         _ => 0,
+    }
+}
+
+/// WordCraft draws a page's shadow as a hard 2 px offset rectangle; Docs' is a faint, soft glow
+/// round the page. Blurs that rectangle (found by its colour) and thins it.
+fn soften_page_shadow(shape: &mut egui::Shape, shadow: Color32) {
+    match shape {
+        egui::Shape::Rect(r) if r.fill == shadow && r.corner_radius == CornerRadius::same(1) => {
+            r.fill = Color32::from_black_alpha(0x1C);
+            r.blur_width = 6.0;
+        }
+        egui::Shape::Vec(v) => v.iter_mut().for_each(|s| soften_page_shadow(s, shadow)),
+        _ => {}
     }
 }
 
