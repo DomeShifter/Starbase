@@ -69,6 +69,8 @@ modules:
         CARGO_HOME: /run/build/starsheets/cargo
         CARGO_NET_OFFLINE: 'true'
     build-commands:
+      # Unused [patch] entries break the vendored build; see prune-patches.py.
+      - python3 ../packaging/linux/flatpak/prune-patches.py Cargo.toml Cargo.lock
       - cargo --offline build --release --locked -p starsheets
       - install -Dm755 target/release/starsheets /app/bin/starsheets
     sources:
@@ -101,6 +103,8 @@ modules:
         CARGO_HOME: /run/build/stardocs/cargo
         CARGO_NET_OFFLINE: 'true'
     build-commands:
+      # Unused [patch] entries break the vendored build; see prune-patches.py.
+      - python3 ../packaging/linux/flatpak/prune-patches.py Cargo.toml Cargo.lock
       - cargo --offline build --release --locked -p stardocs
       - install -Dm755 target/release/stardocs /app/bin/stardocs
     sources:
