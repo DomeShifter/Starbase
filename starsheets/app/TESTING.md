@@ -19,7 +19,7 @@ A `panel:` or `ui:` id answers `{"opened": id}`: the panel shows on the frame af
 
 **The snapshot.** On a spreadsheet: `screen: "sheet"`, `file` (its name), `fileId`, `folder`,
 `sheet`, `sheetIndex`, `sheets`, `active` (A1), `selection` (`A1:B3,D4`), `freeze` (`{rows, cols}` or null), `cell` (`value` as
-shown, `number`, `input`, `formula` or null), `format` (`bold`, `italic`, `underline`, `strike`,
+shown, `number`, `input`, `formula` or null, `note` text or null, `comment` `{author, text, replies, resolved}` or null), `format` (`bold`, `italic`, `underline`, `strike`,
 `font`, `size`, `numberFormat`, `hAlign`, `wrap`), `saved` and `saveStatus` (the words the save
 symbol shows), `dirty`, `canUndo`, `canRedo`, `live`, `peers` (other people in the file) and
 `people`, `compact`. On the home screen: `screen: "home"` and `home` with `view`, `loading`,

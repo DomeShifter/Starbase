@@ -284,12 +284,19 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
                 _ => None,
             };
             let st = wb.styles.get(sheet.style_id(active));
+            let remark = sheet.comments.get(&active);
+            let comment = remark.filter(|c| c.threaded).map(|c| {
+                let replies: Vec<Value> = c.replies.iter().map(|(a, t)| json!({ "author": a, "text": t })).collect();
+                json!({ "author": c.author, "text": c.text, "replies": replies, "resolved": c.resolved })
+            });
             (
                 json!({
                     "value": gridcraft_engine::display::value_text(wb, sheet, active),
                     "number": number,
                     "input": input,
                     "formula": input.starts_with('=').then_some(&input),
+                    "note": remark.filter(|c| !c.threaded).map(|c| &c.text),
+                    "comment": comment,
                 }),
                 json!({
                     "bold": st.font.bold,

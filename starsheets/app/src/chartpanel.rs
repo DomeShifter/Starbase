@@ -5,7 +5,7 @@
 //! chosen from its right-click menu, and follows the selected chart.
 
 use egui::{Color32, RichText, Stroke, Ui, vec2};
-use gridcraft_engine::model::{Chart, ChartKind, LegendPos, ObjKind, ObjRef};
+use gridcraft_engine::model::{Chart, ChartKind, LegendPos, ObjKind, ObjRef, Trendline, TrendlineKind};
 use gridcraft_ui_egui::SheetApp;
 use serde_json::json;
 
@@ -46,6 +46,54 @@ const TYPES: &[(&str, &str, &str)] = &[
 ];
 /// Dividers in the type list: after the lines, areas, columns, bars, pies and scatters.
 const TYPE_GROUPS: &[usize] = &[2, 5, 8, 11, 13, 16, 22];
+
+/// Google's trendline types (label, the engine's `type`).
+const TREND_TYPES: &[(&str, &str)] = &[
+    ("Linear", "linear"),
+    ("Exponential", "exponential"),
+    ("Polynomial", "polynomial"),
+    ("Logarithmic", "logarithmic"),
+    ("Power series", "power"),
+    ("Moving average", "movingAverage"),
+];
+/// Polynomial degrees and moving-average periods offered (Sheets offers the same ranges).
+const DEGREES: &[&str] = &["2", "3", "4", "5", "6"];
+const PERIODS: &[&str] = &["2", "3", "4", "5", "6", "7", "8", "9", "10"];
+const TREND_LABELS: &[&str] = &["None", "Use equation"];
+
+/// A trendline's settings as the editor shows them: type index, polynomial degree, moving-average
+/// period, equation label, R².
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TrendChoice {
+    kind: usize,
+    degree: u8,
+    period: u32,
+    equation: bool,
+    r_squared: bool,
+}
+
+impl TrendChoice {
+    fn of(t: &Trendline) -> Self {
+        let (kind, degree, period) = match t.kind {
+            TrendlineKind::Linear => (0, 2, 2),
+            TrendlineKind::Exponential => (1, 2, 2),
+            TrendlineKind::Polynomial(d) => (2, d, 2),
+            TrendlineKind::Logarithmic => (3, 2, 2),
+            TrendlineKind::Power => (4, 2, 2),
+            TrendlineKind::MovingAverage(n) => (5, 2, n),
+        };
+        TrendChoice { kind, degree, period, equation: t.display_equation, r_squared: t.display_r_squared }
+    }
+
+    /// `chart.addElement`'s parameters for this trendline on series `i`.
+    fn params(&self, chart: u32, i: usize) -> serde_json::Value {
+        json!({
+            "chart": chart, "element": "trendline", "series": i, "on": true,
+            "type": TREND_TYPES[self.kind].1, "order": self.degree, "period": self.period,
+            "displayEquation": self.equation, "displayRSquared": self.r_squared,
+        })
+    }
+}
 
 const LEGEND: &[(&str, &str)] = &[("Bottom", "bottom"), ("Top", "top"), ("Left", "left"), ("Right", "right"), ("None", "none")];
 /// Colour schemes: two fixed ones, then one per theme accent colour, named after the colour it
@@ -501,6 +549,10 @@ impl ChartPanel {
                         app.run_or_alert("chart.addElement", json!({ "chart": id, "element": "trendline", "series": i, "on": trend }));
                     }
                 }
+                let now = targets.iter().find_map(|i| c.series.get(*i).and_then(|s| s.trendlines.first())).map(TrendChoice::of);
+                if let (true, Some(now)) = (trend, now) {
+                    trendline_options(app, ui, id, &targets, now);
+                }
             }
             let mut labels_on = c.data_labels;
             if ui.checkbox(&mut labels_on, "Data labels").changed() {
@@ -528,6 +580,44 @@ impl ChartPanel {
             if ui.checkbox(&mut on, "Major gridlines").changed() {
                 app.run_or_alert("chart.set", json!({ "chart": id, "gridlines": on }));
             }
+        }
+    }
+}
+
+/// Sheets' trendline options under the Trendline tick: type, degree or period, label, R².
+/// A change replaces the series' trendline (the engine adds one at a time).
+fn trendline_options(app: &mut SheetApp, ui: &mut Ui, id: u32, targets: &[usize], now: TrendChoice) {
+    let mut want = now;
+    house::label(ui, "Type", "");
+    let types: Vec<&str> = TREND_TYPES.iter().map(|t| t.0).collect();
+    house::select(ui, "chart_trend_type", PANEL_W, &mut want.kind, &types, &[]);
+    if want.kind == 2 {
+        house::label(ui, "Polynomial degree", "");
+        let mut k = usize::from(want.degree.clamp(2, 6) - 2);
+        if house::select(ui, "chart_trend_degree", PANEL_W, &mut k, DEGREES, &[]) {
+            want.degree = k as u8 + 2;
+        }
+    }
+    if want.kind == 5 {
+        house::label(ui, "Average of", "How many points each average covers.");
+        let mut k = (want.period.clamp(2, 10) - 2) as usize;
+        if house::select(ui, "chart_trend_period", PANEL_W, &mut k, PERIODS, &[]) {
+            want.period = k as u32 + 2;
+        }
+    }
+    house::label(ui, "Label", "");
+    let mut k = usize::from(want.equation);
+    if house::select(ui, "chart_trend_label", PANEL_W, &mut k, TREND_LABELS, &[]) {
+        want.equation = k == 1;
+    }
+    // Moving averages have no equation or R² (as in Sheets).
+    if want.kind != 5 {
+        ui.checkbox(&mut want.r_squared, "Show R²");
+    }
+    if want != now {
+        for i in targets {
+            app.run_or_alert("chart.addElement", json!({ "chart": id, "element": "trendline", "series": i, "on": false }));
+            app.run_or_alert("chart.addElement", want.params(id, *i));
         }
     }
 }
@@ -689,6 +779,27 @@ mod tests {
         // A colour scheme colours every slice.
         s.execute("chart.changeColors", json!({ "chart": id, "palette": "monochrome" })).unwrap();
         assert_eq!(s.active().unwrap().wb.active().unwrap().charts[0].point_colors.len(), 3);
+    }
+
+    #[test]
+    fn trendline_options_round_trip() {
+        let mut s = gridcraft_engine::Session::new();
+        s.execute("file.new", json!({})).unwrap();
+        for (c, v) in [("A1", "x"), ("B1", "y"), ("A2", "1"), ("B2", "1"), ("A3", "2"), ("B3", "4"), ("A4", "3"), ("B4", "9")] {
+            s.execute("cell.set", json!({ "cell": c, "input": v })).unwrap();
+        }
+        s.execute("insert.chart", json!({ "range": "A1:B4", "type": "scatter" })).unwrap();
+        let id = s.active().unwrap().wb.active().unwrap().charts[0].id;
+        let want = TrendChoice { kind: 2, degree: 3, period: 2, equation: true, r_squared: true };
+        s.execute("chart.addElement", want.params(id, 0)).unwrap();
+        let t = s.active().unwrap().wb.active().unwrap().charts[0].series[0].trendlines[0].clone();
+        assert_eq!(TrendChoice::of(&t), want);
+        let avg = TrendChoice { kind: 5, degree: 2, period: 4, equation: false, r_squared: false };
+        s.execute("chart.addElement", json!({ "chart": id, "element": "trendline", "series": 0, "on": false })).unwrap();
+        s.execute("chart.addElement", avg.params(id, 0)).unwrap();
+        let series = &s.active().unwrap().wb.active().unwrap().charts[0].series[0];
+        assert_eq!(series.trendlines.len(), 1, "a change replaces the trendline");
+        assert_eq!(TrendChoice::of(&series.trendlines[0]), avg);
     }
 
     fn test_chart() -> Chart {
