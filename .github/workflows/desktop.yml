@@ -63,7 +63,7 @@ jobs:
         # (docs/privacy.md); other builds say 0.0.0-dev.
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then export STARBASE_VERSION="${GITHUB_REF_NAME#v}"; fi
-          cargo build --release -p starsheets
+          cargo build --release -p starsheets -p starbase-open
       - name: Version and the C library it needs
         run: |
           target/release/starsheets --version
@@ -71,7 +71,9 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: desktop-starsheets
-          path: starsheets/target/release/starsheets
+          path: |
+            starsheets/target/release/starsheets
+            starsheets/target/release/starbase-open
           retention-days: 3
 
   stardocs:
@@ -147,8 +149,8 @@ jobs:
         env:
           DIST: ${{ github.workspace }}/dist
         run: |
-          chmod +x bin/starsheets bin/stardocs
-          packaging/linux/appimage.sh --starsheets bin/starsheets --stardocs bin/stardocs
+          chmod +x bin/starsheets bin/stardocs bin/starbase-open
+          packaging/linux/appimage.sh --starsheets bin/starsheets --stardocs bin/stardocs --starbase-open bin/starbase-open
           ls -la dist
           {
             echo "### Starbase AppImage $STARBASE_VERSION"
@@ -200,10 +202,11 @@ jobs:
           "$app" --version
           "$app" stardocs --version | grep '^stardocs '
           "$app" starsheets --version
+          "$app" starbase-open --explain "$PWD/x.xlsx"
           # The runtime reads its own --appimage-* options only without APPIMAGE_EXTRACT_AND_RUN.
           env -u APPIMAGE_EXTRACT_AND_RUN "$app" --appimage-extract >/dev/null
           ls squashfs-root squashfs-root/usr/bin
-          if ldd squashfs-root/usr/bin/starsheets squashfs-root/usr/bin/stardocs | grep 'not found'; then exit 1; fi
+          if ldd squashfs-root/usr/bin/starsheets squashfs-root/usr/bin/stardocs squashfs-root/usr/bin/starbase-open | grep 'not found'; then exit 1; fi
           env -u APPIMAGE_EXTRACT_AND_RUN "$app" --appimage-updateinformation; echo
       - name: Starbase Drive (the home) stays up for 15 s
         run: |

@@ -202,6 +202,7 @@ jobs:
         run: |
           flatpak run "$APP_ID" --version
           flatpak run --command=stardocs "$APP_ID" --version | grep '^stardocs '
+          flatpak run --command=starbase-open "$APP_ID" --explain /tmp/x.xlsx
           flatpak run --command=ls "$APP_ID" /app/bin /app/share/applications /app/share/icons/hicolor
       # The sandbox resolves xdg-documents from the user-dirs file, as on a desktop.
       - name: Documents folder (as a desktop session has it)
