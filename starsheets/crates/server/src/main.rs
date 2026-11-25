@@ -14,7 +14,9 @@
 
 mod auth;
 mod backup;
+mod commenting;
 mod devices;
+mod docx_comments;
 mod findpath;
 mod guard;
 mod live;
@@ -1071,6 +1073,8 @@ async fn gate(
                 Err(error(403, "You don't have access to that."))
             } else if want == Role::Owner {
                 Err(error(403, "Only its owner can do that."))
+            } else if have == Role::Comment {
+                Err(error(403, "You can only comment on that."))
             } else {
                 Err(error(403, "You can only view that."))
             }
@@ -1850,6 +1854,20 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
     }
     if m == "GET" && p.len() == 3 && p[0] == "files" && p[2] == "thumb" {
         return thumb(&app, me, p[1].clone(), &headers).await;
+    }
+    if m == "PUT"
+        && p.len() == 2
+        && p[0] == "files"
+        && let Some(resp) = commenting::put(
+            &app,
+            me.clone(),
+            p[1].clone(),
+            headers.get(header::IF_MATCH).and_then(|v| v.to_str().ok()).map(str::to_string),
+            body.clone(),
+        )
+        .await
+    {
+        return resp;
     }
     if m == "PUT" && p.len() == 3 && p[0] == "files" && p[2] == "thumb" {
         return put_thumb(&app, me, p[1].clone(), &q, body).await;

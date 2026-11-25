@@ -6240,6 +6240,7 @@ dependencies = [
  "percent-encoding",
  "png 0.18.1",
  "rand 0.10.3",
+ "roxmltree",
  "rsa",
  "rustic_backend",
  "rustic_core",
@@ -6251,6 +6252,7 @@ dependencies = [
  "tokio",
  "tower",
  "ureq",
+ "zip 3.0.0",
 ]
 
 [[package]]

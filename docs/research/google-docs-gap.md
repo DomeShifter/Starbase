@@ -15,8 +15,8 @@ _Research only, 2026-11-24. Sources: `stardocs/app/src/shell.rs` (MENUS + toolba
 |---|---|---|---|---|---|
 | New / open / rename | File | Has | High | – | `file.new`, `file.open`, `stardocs.rename` |
 | Make a copy | File › Make a copy | Has | High | – | The server's `POST api/files/<id>/copy` ("Copy of <name>" beside it, or in your own folder), opened in a new tab; desktop: beside the local file, or the server's copy (gap batch 4) |
-| Share (people, link access) | Share button | Has | High | – | `share.rs` (owner/edit/view, link access). No **commenter** role, which Docs has |
-| Commenter role | Share dialog | Missing | Med | S–M | Server role and view-only-plus-comments mode. WordCraft's Commenting state exists (fork StarDocs 0010, unused); the server side must rebuild a commenter's save from the server's file, never only check it (security review of PR #44) |
+| Share (people, link access) | Share button | Has | High | – | `share.rs` (owner/edit/comment/view, link access) |
+| Commenter role | Share dialog | Has | Med | – | Server role `comment`; WordCraft's Commenting state (fork StarDocs 0010); the server rebuilds a commenter's save from its own copy, taking only their new comments and replies and changes to their own (`commenting.rs`, `docx_comments.rs`). Not yet: suggesting as a commenter, resolving other people's threads |
 | Download .docx / .pdf | File › Download | Has | High | – | `stardocs.download`, `file.exportPdf` |
 | Download .odt / .rtf / .txt / .html / .md / .epub | File › Download | Has (not epub) | Med | – | `download.rs` through the `formats` crate: a browser download, or the desktop's Save dialog. No EPUB |
 | Import other formats on open | File › Open | Engine (docx/odt/rtf/txt/md…) | Med | S | Wire the home-screen upload to accept them |
@@ -123,7 +123,7 @@ _Research only, 2026-11-24. Sources: `stardocs/app/src/shell.rs` (MENUS + toolba
 12. ~~**Version history kept on the server**: snapshots on save, named versions, restore, make a copy.~~ Done: File › Version history.
 13. **Checklists**: tick boxes that strike through, Ctrl+Shift+9. Needs engine work; content-control check boxes are a possible base.
 14. **Smart chips, first set**: `@date` (date picker), `@person` (server users), dropdown chip. Engine base: `insert.dateField`, `developer.datePicker`, `developer.dropDown`.
-15. ~~**Make a copy** (File menu + server)~~ Done (gap batch 4). A **commenter** share role: still to do (see the table).
+15. ~~**Make a copy** (File menu + server) and a **commenter** share role.~~ Done: File › Make a copy (gap batch 4) and the Commenter role (its own pull request, after a security review).
 
 _After these, the next big job is **live co-editing** (L). It's the main thing Docs users expect and we lack, but it's far bigger than all fifteen above put together; plan it as its own project, building on StarSheets' live-sync server._
 

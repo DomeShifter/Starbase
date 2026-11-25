@@ -52,11 +52,20 @@ enum Reply {
     Error(String),
 }
 
-const ROLES: [&str; 3] = ["Viewer", "Editor", "Remove access"];
-const LINKS: [&str; 3] = ["Restricted: only people added can open it", "Anyone with the link can view", "Anyone with the link can edit"];
+/// Commenter is for documents (Starbase Docs); a spreadsheet treats a commenter as a viewer.
+const ROLES: [&str; 4] = ["Viewer", "Commenter", "Editor", "Remove access"];
+/// What each of ROLES is called on the server.
+const ROLE_NAMES: [&str; 4] = ["view", "comment", "edit", "remove"];
+const LINKS: [&str; 4] = [
+    "Restricted: only people added can open it",
+    "Anyone with the link can view",
+    "Anyone with the link can comment",
+    "Anyone with the link can edit",
+];
+const LINK_NAMES: [&str; 4] = ["none", "view", "comment", "edit"];
 
 fn role_index(r: &str) -> usize {
-    if r == "edit" { 1 } else { 0 }
+    ROLE_NAMES.iter().position(|n| *n == r).unwrap_or(0)
 }
 
 #[derive(Default)]
@@ -172,11 +181,7 @@ impl Share {
                 Reply::Loaded { people, link, you } => {
                     self.picks = people.iter().map(|p| role_index(&p.role)).collect();
                     self.people = people;
-                    self.link = match link.as_str() {
-                        "view" => 1,
-                        "edit" => 2,
-                        _ => 0,
-                    };
+                    self.link = LINK_NAMES.iter().position(|n| *n == link).unwrap_or(0);
                     self.you = you;
                     self.loaded = true;
                 }
@@ -227,7 +232,7 @@ impl Share {
                     let refs: Vec<&str> = labels.iter().map(String::as_str).collect();
                     self.add = self.add.min(refs.len().saturating_sub(1));
                     house::select(ui, "starsheets_share_add", 250.0, &mut self.add, &refs, &[]);
-                    house::select(ui, "starsheets_share_add_role", 110.0, &mut self.add_role, &ROLES[..2], &[]);
+                    house::select(ui, "starsheets_share_add_role", 110.0, &mut self.add_role, &ROLES[..3], &[]);
                     if ui.add(house::secondary_in("Add", house::BLUE)).clicked()
                         && let Some(u) = others.get(self.add)
                     {
@@ -235,7 +240,7 @@ impl Share {
                             username: u.username.clone(),
                             name: u.name.clone(),
                             colour: u.colour.clone(),
-                            role: if self.add_role == 1 { "edit".into() } else { "view".into() },
+                            role: ROLE_NAMES[self.add_role.min(2)].into(),
                         });
                         self.picks.push(self.add_role);
                     }
@@ -257,9 +262,9 @@ impl Share {
                         if p.role == "owner" {
                             house::note(ui, "Owner");
                         } else if owner {
-                            house::select(ui, &format!("starsheets_share_role_{i}"), 150.0, &mut self.picks[i], &ROLES, &[1]);
+                            house::select(ui, &format!("starsheets_share_role_{i}"), 150.0, &mut self.picks[i], &ROLES, &[2]);
                         } else {
-                            house::note(ui, if p.role == "edit" { "Editor" } else { "Viewer" });
+                            house::note(ui, ROLES[role_index(&p.role).min(2)]);
                         }
                     });
                 });
@@ -307,10 +312,10 @@ impl Share {
             let mut people = serde_json::Map::new();
             for (p, pick) in self.people.iter().zip(&self.picks) {
                 if p.role != "owner" {
-                    people.insert(p.username.clone(), json!(["view", "edit", "remove"][(*pick).min(2)]));
+                    people.insert(p.username.clone(), json!(ROLE_NAMES[(*pick).min(3)]));
                 }
             }
-            let link = ["none", "view", "edit"][self.link.min(2)];
+            let link = LINK_NAMES[self.link.min(3)];
             let body = json!({ "people": people, "link": link });
             call(&self.inbox, ctx, Method::Post, self.url.clone(), Some(body), |_| Reply::Saved);
         }

@@ -105,6 +105,10 @@ struct State {
     /// in read-only mode once (`view_applied`).
     view_only: bool,
     view_applied: bool,
+    /// The signed-in person may comment on this document but not change it (a commenter): the
+    /// editor is kept in WordCraft's Commenting state (`view.commenting`, fork change StarDocs
+    /// 0010), and the server keeps a save only if its text is unchanged.
+    comment_only: bool,
     /// File › Make a copy waits for the save on its way (the copy is made from the server's file).
     copy_pending: bool,
     /// Where opened documents go (the app's inbox), kept from [`Link::open`] for version history.
@@ -205,8 +209,12 @@ impl Link {
         wasm_bindgen_futures::spawn_local(async move {
             if let Ok((200, _, body)) = fetch("GET", &url, None, None).await {
                 let v: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
-                if v["you"].as_str() == Some("view") {
-                    link.state.borrow_mut().view_only = true;
+                match v["you"].as_str() {
+                    Some("view") => link.state.borrow_mut().view_only = true,
+                    Some("comment") => link.state.borrow_mut().comment_only = true,
+                    _ => {}
+                }
+                if matches!(v["you"].as_str(), Some("view" | "comment")) {
                     link.ctx.request_repaint();
                     return;
                 }
@@ -225,6 +233,11 @@ impl Link {
     /// Whether the signed-in person may only view this document.
     pub fn view_only(&self) -> bool {
         self.state.borrow().view_only
+    }
+
+    /// Whether the signed-in person may only comment on this document.
+    pub fn comment_only(&self) -> bool {
+        self.state.borrow().comment_only
     }
 
     /// File › Make a copy: once what is on screen is saved, the server copies the file ("Copy of
@@ -433,6 +446,11 @@ impl Link {
             self.save(&name, bytes);
         }
         self.copy_when_saved(app);
+        // A commenter: only comments can change (WordCraft refuses the rest), every frame in case
+        // the document was opened again (opening ends it).
+        if self.comment_only() && !app.session.view.commenting {
+            crate::shell::run(app, "view.commenting", serde_json::json!({ "value": true }));
+        }
         // Version history shows an earlier version: read-only, and nothing of it is saved. Once
         // the document itself is back, editing is too.
         let (previewing, was_applied) = {
@@ -749,6 +767,19 @@ impl Link {
         let why = match r {
             Ok((200 | 201, _, body)) => {
                 self.took(&body);
+                return Ok(());
+            }
+            // A commenter can't keep a copy beside it (it isn't their folder), and their comments
+            // are matched to the version they were made on: the document is opened again.
+            Ok((409, ..)) if self.comment_only() => {
+                self.news(
+                    "Someone changed this document while you were commenting, so it was opened again. Add any comment that is missing once more."
+                        .to_string(),
+                );
+                let inbox = self.state.borrow().inbox.clone();
+                if let Some(inbox) = inbox {
+                    self.open(inbox);
+                }
                 return Ok(());
             }
             Ok((409, ..)) => {

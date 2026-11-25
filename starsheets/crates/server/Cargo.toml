@@ -46,6 +46,9 @@ ureq = { version = "3.5", default-features = false, features = ["rustls", "platf
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
+# A commenter's save of a document is read to check only its comments changed (commenting.rs).
+zip = { version = "3", default-features = false, features = ["deflate"] }
+roxmltree = "0.20"
 
 [dev-dependencies]
 # Already in the build through axum; lets the tests send requests through the router.

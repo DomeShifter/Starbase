@@ -862,3 +862,26 @@ fn file_make_a_copy_without_a_server_downloads_one() {
     assert!(back.plain_text(wordcraft_doc::StoryRef::Body).contains("Copied words"));
     assert!(h.state().app.session.dirty, "still the same document, still to be saved");
 }
+
+/// A commenter's window (WordCraft's Commenting, fork change StarDocs 0010): comments work;
+/// typing, formatting and the other modes don't, and the mode box says so.
+#[test]
+fn commenting_allows_comments_only() {
+    let mut h = window(1400.0);
+    type_text(&mut h, "Shared words");
+    run(&mut h, "view.commenting", json!({ "value": true }));
+    assert_eq!(h.state_mut().state()["mode"], "commenting");
+    assert!(h.query_by_label("Commenting").is_some(), "the mode box says Commenting");
+    type_text(&mut h, " more");
+    assert_eq!(body_text(&mut h), "Shared words", "typing is refused");
+    run(&mut h, "select.all", json!({}));
+    menu(&mut h, &["Format", "Text"]);
+    assert!(is_greyed(&h, "Bold"), "formatting is greyed");
+    close_menus(&mut h);
+    close_menus(&mut h);
+    menu(&mut h, &["Insert", "Comment"]);
+    let id = *h.state().app.session.doc.comments.keys().next().expect("Insert › Comment works");
+    type_text(&mut h, "Nice");
+    assert_eq!(comment_text(&mut h, id), "Nice");
+    assert_eq!(body_text(&mut h), "Shared words");
+}
