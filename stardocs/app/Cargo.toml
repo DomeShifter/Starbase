@@ -33,8 +33,9 @@ egui_extras = { workspace = true, features = ["svg"] }
 # through glow as the web build draws with WebGL2; the system's file dialogs (rfd, waited for on
 # a thread with pollster, as WordCraft's desktop app does); local time for copy names.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-# `persistence`: the window's size and place are kept for the next start.
-eframe = { workspace = true, features = ["default_fonts", "glow", "accesskit", "clipboard", "wayland", "x11", "persistence"] }
+# `persistence`: the window's size and place are kept for the next start. `wgpu`: the second try
+# when OpenGL 2.0+ is missing (native.rs; software rendering through WARP on Windows).
+eframe = { workspace = true, features = ["default_fonts", "glow", "wgpu", "accesskit", "clipboard", "wayland", "x11", "persistence"] }
 rfd = { workspace = true }
 pollster = "1"
 chrono = { workspace = true, features = ["clock"] }

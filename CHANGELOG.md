@@ -5,6 +5,9 @@ version (tag `vX.Y.Z`) is one Docker image, `ghcr.io/domeshifter/starbase`, hold
 Starbase Docs, Starbase Drive and the file server; the release notes are this file's section for that version.
 Details of each app: [Starbase Sheets' changelog](starsheets/CHANGELOG.md).
 
+New entries are not written here: each pull request adds a file to [changes/](changes/), and a
+release gathers them into its section (see [CONTRIBUTING.md](CONTRIBUTING.md#changelog)).
+
 Versions follow [semantic versioning](https://semver.org): while we're below 1.0, the middle
 number goes up for new features and the last one for fixes.
 

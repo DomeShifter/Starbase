@@ -555,7 +555,10 @@ impl Home {
             // download.
             Item::File(id) => {
                 let name = self.file(id).map(|f| f.name.clone()).unwrap_or_default();
-                match opens_as(&name) {
+                // This computer's own files open where they belong: Sheets, Docs, else the
+                // system's default app (localstore.rs).
+                let editor = opens_as(&name) == Opens::Editor || self.store.opens_any_file();
+                match if editor { Opens::Editor } else { opens_as(&name) } {
                     Opens::Editor => {
                         if let Err(e) = self.store.open(id, &name) {
                             self.error = Some(e);
