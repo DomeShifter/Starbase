@@ -298,3 +298,68 @@ fn what_we_write_reads_back_through_the_fixtures_rules() {
     );
     assert!(read(newer.as_bytes()).unwrap().newer);
 }
+
+/// Runs `f` on a thread with a 256 KB stack: a parse that still recursed per nesting level
+/// would overflow it (and abort the test process) on the hostile inputs below.
+fn on_small_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new().stack_size(256 * 1024).spawn(f).unwrap().join().unwrap()
+}
+
+#[test]
+fn deep_nesting_is_refused_quickly_on_a_small_stack() {
+    for n in [5_000usize, 100_000] {
+        let t = std::time::Instant::now();
+        let err = on_small_stack(move || {
+            let bomb = format!("<rdf:RDF xmlns:rdf=\"{RDF}\">{}{}</rdf:RDF>", "<a>".repeat(n), "</a>".repeat(n));
+            parse(&bomb).err()
+        });
+        assert!(err.unwrap().contains("nested too deeply"), "{n}");
+        assert!(t.elapsed() < std::time::Duration::from_millis(500), "{n}: {:?}", t.elapsed());
+    }
+    // Self-closing elements, comments and closed siblings don't count as depth.
+    let ok = format!("<rdf:RDF xmlns:rdf=\"{RDF}\">{}{}<!-- {} --></rdf:RDF>", "<a/>".repeat(10_000), "<b></b>".repeat(10_000), "<c>".repeat(1000));
+    assert!(on_small_stack(move || parse(&ok).is_ok()));
+    // The most allowed still parses on the small stack.
+    let deepest = format!("<rdf:RDF xmlns:rdf=\"{RDF}\">{}{}</rdf:RDF>", "<a>".repeat(MAX_DEPTH - 1), "</a>".repeat(MAX_DEPTH - 1));
+    assert!(on_small_stack(move || parse(&deepest).is_ok()));
+}
+
+#[test]
+fn many_namespaces_are_refused_quickly_on_a_small_stack() {
+    let t = std::time::Instant::now();
+    // 9 000 nested elements each declaring one prefix: took 170 s before the cap.
+    let nested: String = (0..9_000).map(|i| format!("<p{i}:a xmlns:p{i}=\"u{i}\">")).collect();
+    let flat: String = (0..9_000).map(|i| format!("<a xmlns:p{i}=\"u{i}\"/>")).collect();
+    let wide: String = (0..MAX_NS_PER_ELEMENT + 1).map(|i| format!(" xmlns:p{i}=\"u{i}\"")).collect();
+    // Within the depth cap: 60 nested elements declaring 20 each.
+    let decl = |e: usize| -> String { (0..20).map(|i| format!(" xmlns:q{e}x{i}=\"u\"")).collect() };
+    let shallow: String = (0..60).map(|e| format!("<a{}>", decl(e))).collect();
+    for (bomb, why) in [
+        (nested, "nested too deeply"),
+        (flat, "too many namespaces"),
+        (format!("<a{wide}/>"), "too many namespaces"),
+        (shallow, "too many namespaces"),
+    ] {
+        let doc = format!("<rdf:RDF xmlns:rdf=\"{RDF}\">{bomb}</rdf:RDF>");
+        assert!(doc.len() as u64 <= MAX_SIDECAR);
+        let err = on_small_stack(move || parse(&doc).err());
+        assert!(err.as_deref().unwrap_or("").contains(why), "{err:?}");
+    }
+    // The most allowed, nested as deep as allowed: roxmltree copies them quickly.
+    let most: String = (0..MAX_DEPTH - 1)
+        .map(|e| format!("<a{}>", if e < MAX_NS / 4 - 1 { (0..4).map(|i| format!(" xmlns:r{e}x{i}=\"u\"")).collect() } else { String::new() }))
+        .collect();
+    let most = format!("<rdf:RDF xmlns:rdf=\"{RDF}\">{most}{}</rdf:RDF>", "</a>".repeat(MAX_DEPTH - 1));
+    assert!(on_small_stack(move || parse(&most).is_ok()));
+    assert!(t.elapsed() < std::time::Duration::from_millis(500), "{:?}", t.elapsed());
+    // A wide but allowed set, and xmlns inside a value or text, are fine.
+    let ok_wide: String = (0..MAX_NS_PER_ELEMENT - 1).map(|i| format!(" xmlns:p{i}=\"u{i}\"")).collect();
+    let ok = format!("<rdf:RDF xmlns:rdf=\"{RDF}\"><a{ok_wide} v=\"{}\"> {} </a></rdf:RDF>", " xmlns".repeat(500), " xmlns".repeat(500));
+    assert!(on_small_stack(move || parse(&ok).is_ok()));
+}
+
+#[test]
+fn a_dtd_is_refused_by_the_prescan() {
+    let doc = format!("<!DOCTYPE x [<!ENTITY a \"b\">]><rdf:RDF xmlns:rdf=\"{RDF}\"/>");
+    assert!(parse(&doc).unwrap_err().contains("DTD"));
+}
