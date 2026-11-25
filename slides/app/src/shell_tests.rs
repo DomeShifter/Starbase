@@ -123,7 +123,9 @@ fn our_commands_set_the_drawing_tool() {
 }
 
 #[test]
-fn light_and_dark_follow_the_theme_choice_in_both_halves() {
+fn light_is_the_default_and_dark_still_switches_both_halves() {
+    assert_eq!(Mode::default(), Mode::Light, "light-only like Drive, Sheets and Docs");
+    assert_eq!(Mode::parse("system"), Mode::Light);
     let mut h = harness();
     assert!(!h.state().app.ui.brightness.eq(&deckcraft_ui_egui::theme::Brightness::Dark), "light to start");
     {

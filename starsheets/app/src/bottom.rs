@@ -176,8 +176,10 @@ impl Bottom {
                     {
                         self.renaming = Some((tab.index, tab.name.clone()));
                     }
+                    // A new sheet goes right after the open one, as in Google Sheets (the engine's
+                    // default; Insert › Sheet and Shift+F11 do the same).
                     if icon_button(ui, "add", "Add sheet (Shift+F11)").clicked() {
-                        app.run_or_alert("home.insertSheet", json!({ "before": list.len() }));
+                        app.run_or_alert("home.insertSheet", json!({}));
                     }
                     let all = match icons::icon("menu") {
                         Some(img) => ui.menu_button(img, |ui| self.all_sheets(app, ui, &list, active)).response,

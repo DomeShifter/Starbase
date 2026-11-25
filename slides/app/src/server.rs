@@ -15,7 +15,7 @@
 //!   is on its way waits, and only the newest waiting one is sent.
 //! - Changed elsewhere (409): the server's file is never overwritten. This version is kept as a
 //!   new file beside it, "<name> (conflicted copy).pptx", and the page carries on with that copy.
-//! - Not signed in (401): the page goes to the home screen, which asks to sign in.
+//! - Not signed in (401): the page goes to the home screen's sign-in, which comes back to this link.
 //! - Exports (PDF, pictures, outlines) still download in the browser.
 //!
 //! The page saves by itself ([`Link::tick`]) a couple of seconds after the last change, and the
@@ -39,6 +39,10 @@ const QUIET_MS: f64 = 2000.0;
 /// How long after a failed save it is tried again (milliseconds).
 const RETRY_MS: f64 = 15_000.0;
 /// The name a new presentation gets (the server makes it free: "… (2).pptx").
+/// The home screen's preview picture: the first slide, this wide (the server takes up to 1440 x 960).
+const THUMB_W: f64 = 720.0;
+/// At most one new picture this often while someone keeps editing (milliseconds).
+const THUMB_MS: f64 = 30_000.0;
 pub const NEW_NAME: &str = "Untitled presentation.pptx";
 
 thread_local! {
@@ -82,12 +86,17 @@ struct State {
     view_only: bool,
     /// Files read from the server, waiting to open in the app on the next frame.
     opened: Vec<(String, Vec<u8>)>,
+    /// When the first-slide preview picture is due (ms), and when the last one went.
+    thumb_due: Option<f64>,
+    thumb_last: f64,
 }
 
 #[derive(Clone)]
 pub struct Link {
     state: Rc<RefCell<State>>,
     ctx: egui::Context,
+    /// The Share and Version history dialogs.
+    dialogs: Rc<RefCell<(crate::dialogs::Share, crate::dialogs::History)>>,
 }
 
 fn query_param(key: &str) -> Option<String> {
@@ -96,11 +105,11 @@ fn query_param(key: &str) -> Option<String> {
 }
 
 /// The server's address for `path` (`api/…`): Starbase Slides sits in `slides/` beside the home page.
-fn api(path: &str) -> String {
+pub(crate) fn api(path: &str) -> String {
     format!("../{path}")
 }
 
-fn enc(s: &str) -> String {
+pub(crate) fn enc(s: &str) -> String {
     js_sys::encode_uri_component(s).as_string().unwrap_or_default()
 }
 
@@ -125,7 +134,7 @@ impl Link {
         let folder = query_param("folder").unwrap_or_default();
         let state = Rc::new(RefCell::new(State { id, make_new, folder, ..Default::default() }));
         CURRENT.with(|c| *c.borrow_mut() = Some(state.clone()));
-        let link = Self { state, ctx };
+        let link = Self { state, ctx, dialogs: Rc::default() };
         link.ask_who();
         Some(link)
     }
@@ -155,6 +164,61 @@ impl Link {
                     link.state.borrow_mut().view_only = true;
                     link.ctx.request_repaint();
                 }
+            }
+        });
+    }
+
+    /// A presentation without a preview picture (made elsewhere, or never pictured) gets one now.
+    fn ask_thumb(&self, id: &str) {
+        let link = self.clone();
+        let url = api(&format!("api/files/{id}/thumb"));
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Ok((404, ..)) = fetch("GET", &url, None, None).await {
+                link.state.borrow_mut().thumb_due = Some(now());
+                link.ctx.request_repaint();
+            }
+        });
+    }
+
+    /// Sends the preview picture (the first slide) once it is due and everything is saved, drawn
+    /// from what is open, which then matches the version the server has.
+    fn maybe_thumb(&self, app: &SlideApp, ctx: &egui::Context, t: f64) {
+        let (id, version) = {
+            let s = self.state.borrow();
+            let Some(due) = s.thumb_due else { return };
+            if s.view_only {
+                return;
+            }
+            if due > t || s.busy || s.waiting.is_some() || s.retry.is_some() || s.dirty {
+                ctx.request_repaint_after(std::time::Duration::from_secs(1));
+                return;
+            }
+            match &s.id {
+                Some(id) if !s.version.is_empty() => (id.clone(), s.version.clone()),
+                _ => return,
+            }
+        };
+        {
+            let mut s = self.state.borrow_mut();
+            s.thumb_due = None;
+            s.thumb_last = t;
+        }
+        let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return };
+        if doc.slides.is_empty() {
+            return;
+        }
+        let scale = THUMB_W / doc.slide_size.width.max(1.0);
+        let png = deckcraft_render::render_slide(&doc, 0, &deckcraft_render::RenderOpts { scale, ..Default::default() }).to_png();
+        if png.is_empty() {
+            return;
+        }
+        let url = api(&format!("api/files/{id}/thumb?version={}", enc(&version)));
+        wasm_bindgen_futures::spawn_local(async move {
+            // 409: a newer save got there first; its own picture follows.
+            match fetch("PUT", &url, None, Some(&png)).await {
+                Ok((200 | 409, ..)) => {}
+                Ok((code, _, body)) => log::warn!("preview picture not kept: {}", reason(code, &body)),
+                Err(e) => log::warn!("preview picture not sent: {e}"),
             }
         });
     }
@@ -209,7 +273,7 @@ impl Link {
                 self.state.borrow_mut().opened.push((name, bytes));
                 self.state.borrow_mut().saved = Saved::Done;
             }
-            Ok((401, ..)) => go_home(""),
+            Ok((401, ..)) => sign_in_and_return(),
             Ok((code, _, body)) => self.fail(&format!("Couldn't make the presentation ({})", reason(code, &body))),
             Err(e) => self.fail(&format!("Couldn't reach the server: {e}")),
         }
@@ -232,8 +296,9 @@ impl Link {
                 }
                 set_title(&name);
                 self.ask_role(id);
+                self.ask_thumb(id);
             }
-            Ok((401, ..)) => go_home(""),
+            Ok((401, ..)) => sign_in_and_return(),
             Ok((code, _, body)) => {
                 self.state.borrow_mut().view_only = true;
                 self.fail(&format!("Couldn't open the presentation ({})", reason(code, &body)));
@@ -289,8 +354,12 @@ impl Link {
             self.save(bytes);
         }
         let dirty = app.session.documents().iter().any(|d| d.is_dirty());
+        {
+            let mut s = self.state.borrow_mut();
+            s.dirty = dirty && !s.view_only;
+        }
+        self.maybe_thumb(app, ctx, t);
         let mut s = self.state.borrow_mut();
-        s.dirty = dirty && !s.view_only;
         if !dirty || s.view_only || s.id.is_none() || app.show.is_some() {
             s.dirty_since = None;
             return;
@@ -422,6 +491,7 @@ impl Link {
                 let _ = h.replace_state_with_url(&wasm_bindgen::JsValue::NULL, "", Some(&format!("?file={id}")));
             }
         }
+        s.thumb_due = Some((s.thumb_last + THUMB_MS).max(now()));
         if let Saved::Failed(_) = s.saved {
             s.saved = Saved::Saving;
         }
@@ -432,6 +502,29 @@ impl Link {
 }
 
 impl crate::shell::Drive for Link {
+    fn file_id(&self) -> Option<String> {
+        self.id()
+    }
+
+    fn share(&self) {
+        if let Some(id) = self.id() {
+            let name = self.name();
+            self.dialogs.borrow_mut().0.start(&id, &name, &self.ctx);
+        }
+    }
+
+    fn history(&self) {
+        if let Some(id) = self.id() {
+            self.dialogs.borrow_mut().1.start(&id, &self.ctx);
+        }
+    }
+
+    fn dialogs(&self, ctx: &egui::Context) {
+        let mut d = self.dialogs.borrow_mut();
+        d.0.ui(ctx);
+        d.1.ui(ctx);
+    }
+
     fn name(&self) -> String {
         self.state.borrow().name.clone()
     }
@@ -493,6 +586,16 @@ fn set_title(name: &str) {
     if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
         let stem = name.rsplit_once('.').map_or(name, |(s, _)| s);
         doc.set_title(&format!("{stem} - Starbase Slides"));
+    }
+}
+
+/// Not signed in: the home screen's sign-in page, which brings the person back to this link
+/// (`?next=`, as Docs does) instead of leaving them on the file list.
+fn sign_in_and_return() {
+    if let Some(w) = web_sys::window() {
+        let loc = w.location();
+        let here = format!("{}{}", loc.pathname().unwrap_or_default(), loc.search().unwrap_or_default());
+        let _ = loc.replace(&format!("../?next={}", enc(&here)));
     }
 }
 
