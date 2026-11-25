@@ -1,0 +1,217 @@
+# Starbase Flatpak (docs/research/desktop-plan.md, P2 + P5): builds
+# packaging/linux/flatpak/io.github.DomeShifter.Starbase.yml with flatpak-builder exactly as Flathub
+# would (offline, from pinned sources), checks it with Flathub's linter, and runs the installed
+# bundle on a clean runner. The bundle is kept as the `starbase-flatpak` artifact.
+#
+# Three jobs:
+#   sources: generates the two cargo-sources-*.json files from the lockfiles (they are not
+#            committed; see the manifest header) and checks the engine commits in the manifest
+#            equal the upstream.pin files.
+#   build:   flatpak-builder (Flathub's own org.flatpak.Builder app, which also carries
+#            flatpak-builder-lint and appstreamcli), then a .flatpak bundle.
+#   smoke:   installs the bundle the way a user would, and checks --version, that each program
+#            stays up for 15 s under a headless X server, and that the sandbox can create, write
+#            and read ~/Documents/Starbase but sees nothing else in ~/Documents.
+name: Flatpak
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths: ["starsheets/**", "stardocs/**", "packaging/**", ".github/workflows/flatpak.yml"]
+  pull_request:
+    paths: ["packaging/**", ".github/workflows/flatpak.yml"]
+  workflow_dispatch:
+  workflow_call: # from release.yml (later)
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flatpak-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_ID: io.github.DomeShifter.Starbase
+  MANIFEST: packaging/linux/flatpak/io.github.DomeShifter.Starbase.yml
+  # flatpak-builder-tools at a fixed commit, checked by SHA-256 before it runs.
+  GENERATOR_URL: https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/9d86d336a39b9af38b86f114b6ce5820fe260f91/cargo/flatpak-cargo-generator.py
+  GENERATOR_SHA256: 0a2db6be87d75910facef28ab46d4d6460802e8419ab850d0caa6a364d26b380
+
+jobs:
+  sources:
+    name: Cargo sources and engine pins
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Engine commits in the manifest equal upstream.pin
+        run: |
+          for ws in starsheets stardocs; do
+            pin=$(sed -n 's/^commit = "\(.*\)"/\1/p' "$ws/upstream.pin")
+            grep -q "commit: $pin\$" "$MANIFEST" || { echo "::error::$MANIFEST does not pin $ws's engine at $pin ($ws/upstream.pin)"; exit 1; }
+            echo "$ws engine: $pin"
+          done
+      - name: Generate cargo-sources-*.json
+        run: |
+          pip install -q 'aiohttp>=3.9.5,<4' 'tomlkit>=0.13.3,<1' 'PyYAML>=6.0.2,<7'
+          mkdir -p "$RUNNER_TEMP/gen" out
+          curl -fsSL -o "$RUNNER_TEMP/gen/flatpak-cargo-generator.py" "$GENERATOR_URL"
+          echo "$GENERATOR_SHA256  $RUNNER_TEMP/gen/flatpak-cargo-generator.py" | sha256sum -c -
+          for ws in starsheets stardocs; do
+            python3 "$RUNNER_TEMP/gen/flatpak-cargo-generator.py" "$ws/Cargo.lock" -o "out/cargo-sources-$ws.json"
+            echo "$ws: $(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' "out/cargo-sources-$ws.json") sources"
+          done
+          ls -la out
+      - uses: actions/upload-artifact@v7
+        with:
+          name: flatpak-cargo-sources
+          path: out/*.json
+          retention-days: 7
+          if-no-files-found: error
+
+  build:
+    name: Build the Flatpak (x86_64)
+    needs: sources
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Make disk space (both engines build in one job)
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL && df -h /
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: flatpak-cargo-sources
+          path: packaging/linux/flatpak
+      - name: Flatpak and Flathub's builder
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq flatpak
+          # Ubuntu 24.04 stops unprivileged user namespaces, which bubblewrap (the sandbox) needs.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user -y --noninteractive flathub org.flatpak.Builder
+          flatpak info --user org.flatpak.Builder | grep -E 'Version|Commit'
+      - name: Version
+        env:
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0-dev+${SHA::7}"; fi
+          echo "STARBASE_VERSION=$v" >> "$GITHUB_ENV"
+          sed -i "s/version=0.0.0-dev;/version=$v;/" "$MANIFEST"
+          grep -n "version=$v;" "$MANIFEST"
+      - name: Lint the manifest (Flathub's flatpak-builder-lint, informational)
+        run: |
+          set +e
+          flatpak run --command=flatpak-builder-lint org.flatpak.Builder manifest "$MANIFEST" | tee lint-manifest.json
+          echo "exit code $?"
+      - name: Build (offline, as Flathub builds)
+        run: |
+          flatpak run org.flatpak.Builder --user --install-deps-from=flathub --force-clean \
+            --disable-rofiles-fuse --repo=repo build-flatpak "$MANIFEST"
+          df -h /
+      - name: Check the metainfo (appstreamcli)
+        run: |
+          flatpak run --command=appstreamcli org.flatpak.Builder validate --no-net --explain \
+            "build-flatpak/files/share/metainfo/$APP_ID.metainfo.xml"
+      - name: Lint the build and repo (Flathub's flatpak-builder-lint, informational)
+        run: |
+          set +e
+          flatpak run --command=flatpak-builder-lint org.flatpak.Builder builddir build-flatpak | tee lint-builddir.json
+          flatpak run --command=flatpak-builder-lint org.flatpak.Builder repo repo | tee lint-repo.json
+          {
+            echo "### flatpak-builder-lint"
+            for f in lint-manifest.json lint-builddir.json lint-repo.json; do
+              echo "**$f**"; echo '```'; cat "$f"; echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Bundle
+        run: |
+          mkdir -p dist
+          flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
+            repo "dist/starbase-$STARBASE_VERSION-x86_64.flatpak" "$APP_ID"
+          ls -la dist
+          {
+            echo "### Starbase Flatpak $STARBASE_VERSION"
+            echo '```'; ls -la dist; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      # SIGNING PLACEHOLDER (desktop-plan.md P5): the release job signs SHA256SUMS with the
+      # project's release key once it exists as a repository secret.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: starbase-flatpak
+          path: dist/*.flatpak
+          retention-days: 30
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: flatpak-lint
+          path: lint-*.json
+          retention-days: 7
+          if-no-files-found: ignore
+
+  smoke:
+    name: Smoke test (install the bundle)
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # Runners have no GPU: the runtime's Mesa (llvmpipe for GL, lavapipe for Vulkan, from the
+      # org.freedesktop.Platform.GL.default extension) stands in.
+      - name: Flatpak and a headless X server
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq flatpak xvfb dbus
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+      - uses: actions/download-artifact@v8
+        with:
+          name: starbase-flatpak
+          path: dist
+      - name: Install the bundle (runtime from Flathub)
+        run: |
+          flatpak install --user -y --noninteractive dist/*.flatpak
+          flatpak list --user --columns=application,version,branch,runtime
+          flatpak info --user --show-permissions "$APP_ID"
+      - name: Version
+        run: |
+          flatpak run "$APP_ID" --version
+          flatpak run --command=stardocs "$APP_ID" --version | grep '^stardocs '
+          flatpak run --command=ls "$APP_ID" /app/bin /app/share/applications /app/share/icons/hicolor
+      # The sandbox resolves xdg-documents from the user-dirs file, as on a desktop.
+      - name: Documents folder (as a desktop session has it)
+        run: |
+          mkdir -p "$HOME/.config" "$HOME/Documents"
+          echo 'XDG_DOCUMENTS_DIR="$HOME/Documents"' > "$HOME/.config/user-dirs.dirs"
+          echo "not for Starbase" > "$HOME/Documents/outside.txt"
+          test ! -e "$HOME/Documents/Starbase"
+      - name: The sandbox creates, writes and reads ~/Documents/Starbase and sees nothing else
+        run: |
+          flatpak run --command=sh "$APP_ID" -c '
+            set -e
+            test -d "$HOME/Documents/Starbase"
+            echo hello > "$HOME/Documents/Starbase/probe.txt"
+            test "$(cat "$HOME/Documents/Starbase/probe.txt")" = hello
+            ls -la "$HOME/Documents"
+            if test -e "$HOME/Documents/outside.txt"; then echo "sandbox can see ~/Documents/outside.txt" >&2; exit 1; fi
+            if ls "$HOME/.config/user-dirs.dirs" 2>/dev/null; then echo "sandbox can see the host home" >&2; exit 1; fi'
+          test "$(cat "$HOME/Documents/Starbase/probe.txt")" = hello
+          rm "$HOME/Documents/Starbase/probe.txt"
+      - name: Starbase Drive (the home) stays up for 15 s
+        run: |
+          set +e; timeout -k 10 15 dbus-run-session -- xvfb-run -a flatpak run --command=starsheets "$APP_ID" --home; code=$?; set -e
+          echo "exit code $code (124: still running when stopped, as it should be)"
+          test "$code" = 124
+      - name: A spreadsheet opens in Starbase Sheets
+        run: |
+          printf 'a,b\n1,2\n' > "$HOME/Documents/Starbase/sample.csv"
+          set +e; timeout -k 10 15 dbus-run-session -- xvfb-run -a flatpak run "$APP_ID" "$HOME/Documents/Starbase/sample.csv"; code=$?; set -e
+          echo "exit code $code"
+          test "$code" = 124
+      - name: Starbase Docs stays up
+        run: |
+          set +e; timeout -k 10 15 dbus-run-session -- xvfb-run -a flatpak run --command=stardocs "$APP_ID"; code=$?; set -e
+          echo "exit code $code"
+          test "$code" = 124
+          ls -la "$HOME/Documents/Starbase"

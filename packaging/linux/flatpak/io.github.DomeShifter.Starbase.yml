@@ -2,26 +2,34 @@
 # entries. Adapted from WordCraft's packaging/linux/flatpak/ai.storyteller.wordcraft.yml
 # (storytold/wordcraft, MIT OR Apache-2.0).
 #
-# NOT BUILDABLE YET: the app crates are web-only today. The build commands below assume the
-# native entry points (plan jobs D1a/D1b) exist, i.e. `cargo build -p starsheets` and
-# `cargo build -p stardocs` produce desktop executables.
+# Built and smoke-tested by .github/workflows/flatpak.yml (artifact `starbase-flatpak`).
 #
-# Flatpak builds run offline, so crate sources must be vendored first, one file per Cargo
-# workspace (starsheets/ and stardocs/ each have their own Cargo.lock). From the repo root, after
-# both scripts/fetch-upstream.sh have run (the lockfiles reference the engines' path crates):
+# Flatpak builds run offline: everything is downloaded by flatpak-builder before the build starts,
+# from the sources listed here. That means:
+#   - Crates: one generated cargo-sources-<workspace>.json per Cargo workspace (starsheets/ and
+#     stardocs/ each have their own Cargo.lock). They are NOT committed here: they are
+#     regenerated from the lockfiles on every CI run, so they can never go stale after a lockfile
+#     change, and this repository does not carry thousands of lines of generated JSON. Flathub
+#     cannot run the generator, so for a Flathub submission they are generated once per release
+#     and committed in the Flathub manifest repository next to this manifest.
+#   - Engines: GridCraft and WordCraft come from our forks as `git` sources pinned to the commits
+#     in starsheets/upstream.pin and stardocs/upstream.pin. CI fails if these drift apart.
+#   - Fonts: the desktop programs only embed fonts that are committed (starsheets/app/fonts,
+#     stardocs/app/fonts). The web fonts and the word list that starsheets/scripts/fetch-*.py
+#     download are used by the web build only, so they are not sources here. If a native build
+#     ever embeds them, add them as `file` sources (url + sha256).
 #
-#   curl -fsSLO https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py
+# Local build (needs ~30 GB of disk and a long time; CI does this):
+#
 #   python3 flatpak-cargo-generator.py starsheets/Cargo.lock -o packaging/linux/flatpak/cargo-sources-starsheets.json
 #   python3 flatpak-cargo-generator.py stardocs/Cargo.lock   -o packaging/linux/flatpak/cargo-sources-stardocs.json
-#   flatpak-builder --user --install --force-clean build-flatpak packaging/linux/flatpak/io.github.DomeShifter.Starbase.yml
-#   flatpak run io.github.DomeShifter.Starbase                 # Starbase Drive home
-#   flatpak run --command=stardocs io.github.DomeShifter.Starbase
+#   flatpak run org.flatpak.Builder --user --install --install-deps-from=flathub --force-clean \
+#     build-flatpak packaging/linux/flatpak/io.github.DomeShifter.Starbase.yml
+#   flatpak run --command=starsheets io.github.DomeShifter.Starbase --home   # Starbase Drive
+#   flatpak run --command=stardocs io.github.DomeShifter.Starbase           # Starbase Docs
 #
-# The two generated cargo-sources-*.json files are not committed yet (they are regenerated on
-# every lockfile change; the release job decides whether to commit them or generate them in CI).
-# Each module sets its own CARGO_HOME, so the two vendored trees never mix.
-#
-# For Flathub, replace the `dir` sources with a `git` source pinned to a release tag and commit.
+# For Flathub, the `dir` sources become one `git` source pinned to a release tag and commit, and
+# the two generated JSON files are committed in the Flathub manifest repository.
 id: io.github.DomeShifter.Starbase
 runtime: org.freedesktop.Platform
 runtime-version: '25.08'
@@ -41,8 +49,7 @@ finish-args:
   - --share=network
   # Local mode works on one folder, ~/Documents/Starbase, created on first run. Files anywhere
   # else are opened through the file-chooser portal and drag and drop through the document
-  # portal, so no broader filesystem access is needed. (If the local-mode scope becomes "all of
-  # Documents", this becomes --filesystem=xdg-documents.)
+  # portal, so no broader filesystem access is needed.
   - --filesystem=xdg-documents/Starbase:create
   # Deliberately not granted: home/host filesystem access, org.freedesktop.Flatpak (Flathub does
   # the updating), WordCraft's xdg-data/ArtCraft/versions. Printing (upstream's cups-client
@@ -57,6 +64,7 @@ modules:
     subdir: starsheets
     build-options:
       env:
+        # flatpak-cargo-generator's sources unpack into <module build dir>/cargo.
         CARGO_HOME: /run/build/starsheets/cargo
         CARGO_NET_OFFLINE: 'true'
     build-commands:
@@ -66,20 +74,22 @@ modules:
       - type: dir
         path: ../../..
         skip:
-          - target
-          - dist
-          - build-flatpak
-          - .flatpak-builder
           - .git
-      # GridCraft, our fork's branch at the commit in starsheets/upstream.pin (what
-      # starsheets/scripts/fetch-upstream.sh fetches). Keep the two equal.
+          - .github
+          - .flatpak-builder
+          - build-flatpak
+          - repo
+          - dist
+          - docs
+          - stardocs
+          - starsheets/target
+          - starsheets/upstream
+      # GridCraft: our fork's `starsheets` branch at the commit in starsheets/upstream.pin (what
+      # starsheets/scripts/fetch-upstream.sh fetches). Keep the two equal (CI checks).
       - type: git
         url: https://github.com/DomeShifter/gridcraft.git
-        commit: ad4b590f0e6faba09383d7601ab3d67749467af9
+        commit: 7b74c02cc5586585236b4b7f16f9e93572c3203e
         dest: starsheets/upstream/gridcraft
-      # TODO: fonts and the en-GB word list that starsheets/scripts/fetch-fonts.py and
-      # fetch-dictionary.py download need to be listed here as `file` sources (url + sha256),
-      # if the native build embeds them as the web build does.
       - cargo-sources-starsheets.json
 
   - name: stardocs
@@ -96,15 +106,21 @@ modules:
       - type: dir
         path: ../../..
         skip:
-          - target
-          - dist
-          - build-flatpak
-          - .flatpak-builder
           - .git
-      # WordCraft, our fork's branch at the commit in stardocs/upstream.pin. Keep the two equal.
+          - .github
+          - .flatpak-builder
+          - build-flatpak
+          - repo
+          - dist
+          - docs
+          - starsheets
+          - stardocs/target
+          - stardocs/upstream
+      # WordCraft: our fork's `stardocs` branch at the commit in stardocs/upstream.pin. Keep the
+      # two equal (CI checks). stardocs/Cargo.toml is committed, so gen-cargo.py need not run.
       - type: git
         url: https://github.com/DomeShifter/wordcraft.git
-        commit: 85e98f33b47bb7b9a1c2231a224cd949ebfe1f45
+        commit: f0726a5c2faeabdd29e7ca30b647891910117088
         dest: stardocs/upstream/wordcraft
       - cargo-sources-stardocs.json
 
@@ -117,8 +133,8 @@ modules:
         install -Dm644 packaging/linux/$entry.desktop /app/share/applications/$entry.desktop; done
       - install -Dm644 packaging/linux/io.github.DomeShifter.Starbase.mime.xml /app/share/mime/packages/io.github.DomeShifter.Starbase.xml
       - packaging/linux/icons.sh /app/share/icons
-      # TODO (release job): Starbase has no package version of its own yet (the two workspaces
-      # are versioned separately). Substitute the release tag here, as appimage.sh does.
+      # Starbase has no package version of its own yet (the two workspaces are versioned
+      # separately). CI replaces 0.0.0-dev below with the same version the AppImage gets.
       - >-
         version=0.0.0-dev;
         install -d /app/share/metainfo;
@@ -129,11 +145,13 @@ modules:
       - type: dir
         path: ../../..
         skip:
-          - target
-          - dist
-          - build-flatpak
-          - .flatpak-builder
           - .git
+          - .github
+          - .flatpak-builder
+          - build-flatpak
+          - repo
+          - dist
+          - docs
           - starsheets
           - stardocs
       # icons.sh reads the apps' SVGs; only these files are needed from the app folders.
@@ -141,6 +159,8 @@ modules:
         path: ../../../starsheets/app/favicon.svg
         dest: starsheets/app
       - type: file
+        path: ../../../starsheets/app/stardrive.svg
+        dest: starsheets/app
+      - type: file
         path: ../../../stardocs/app/icons/stardocs_logo.svg
         dest: stardocs/app/icons
-      # Once the `icons` branch is merged, add starsheets/app/stardrive.svg here too.
