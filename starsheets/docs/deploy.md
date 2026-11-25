@@ -47,7 +47,9 @@ and sets it up. Once a day, at the hour chosen, the server copies every file, ve
 account there, encrypted with a recovery key. It keeps the last 7 days, 4 weeks and 12 months.
 The settings and the key are kept in `/data/.starsheets-backup.json`. **Keep a copy of the key
 somewhere else**, because the backups can't be opened without it. Restore (in the same dialog)
-copies your own files from a backup into a new folder, so nothing is overwritten.
+copies files from a backup into a new folder, so nothing is overwritten. "Whose files" chooses
+your own, another person's (they come back beside their folder, or into yours, named after them,
+if they have no account here) or everyone's. Accounts and versions come back only the restic way.
 
 The backups are a [restic](https://restic.net) repository, so if the server itself is lost, any
 restic or rustic program can get everything back, with the recovery key as the password:

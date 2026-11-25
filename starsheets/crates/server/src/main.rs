@@ -810,8 +810,10 @@ async fn storage(app: &Shared, m: &str, me: Option<auth::User>, body: &[u8], q: 
 /// GET backup: settings and how the last one went. GET backup/key: the recovery key.
 /// GET backup/list: the backups kept. POST backup {to, on, hour, key?}: choose the folder (an empty
 /// one is set up; one with backups in it opens with the key given, or this server's key).
-/// POST backup/run: one now. POST backup/restore {id}: copies the asker's own folder (everything,
-/// with sign-in off) out of backup ID into a new folder "Restored from backup <when>" beside it.
+/// POST backup/run: one now. GET backup/people: whose folders the backups hold. POST
+/// backup/restore {id, whose?}: copies a folder out of backup ID into a new folder "Restored from
+/// backup <when>" (backup::whose_folder, restore_into): the asker's own, or (the owner) anyone's
+/// or "" everyone's.
 async fn backup_api(app: &Shared, m: &str, p: &[String], me: Option<auth::User>, body: &[u8]) -> Response<Body> {
     if app.auth && !me.as_ref().is_some_and(|u| u.owner) {
         return error(403, "Only the owner of this server can look after backups.");
@@ -888,19 +890,20 @@ async fn backup_api(app: &Shared, m: &str, p: &[String], me: Option<auth::User>,
                     let Some(snap) = list.iter().find(|s| s["id"].as_str() == Some(id.as_str())) else {
                         return Err(bad("That backup isn't there any more.".into()));
                     };
-                    // Into the asker's own folder (sign-in on: only their own files come back).
-                    let space = me.as_ref().map(|u| u.username.clone()).unwrap_or_default();
-                    let stem = format!("Restored from backup {}", snap["label"].as_str().unwrap_or(""));
-                    let mut name = stem.clone();
-                    let mut n = 2;
-                    while app.store.full(&store::join(&space, &name)).exists() {
-                        name = format!("{stem} ({n})");
-                        n += 1;
-                    }
-                    let rel = store::join(&space, &name);
-                    let files = backup::restore(&base, &id, &space, &app.store.full(&rel)).map_err(bad)?;
+                    let asker = me.as_ref().map(|u| u.username.as_str());
+                    let owner = me.as_ref().is_none_or(|u| u.owner);
+                    let whose = backup::whose_folder(asker, owner, json.get("whose").and_then(Value::as_str)).map_err(|e| (403, e))?;
+                    let label = snap["label"].as_str().unwrap_or("");
+                    let rel = backup::restore_into(label, &whose, asker, |p| app.store.full(p).exists());
+                    let files = backup::restore(&base, &id, &whose, &app.store.full(&rel)).map_err(bad)?;
                     log::note(&app.store, &format!("backup {}: restored {files} files into {rel:?}", snap["short"].as_str().unwrap_or("")));
-                    Ok(json!({ "ok": true, "folder": name, "files": files }))
+                    Ok(json!({ "ok": true, "folder": rel, "files": files }))
+                }
+                // Whose files the backups hold (one folder each), and which of them have an account.
+                ("GET", "people") => {
+                    let have: Vec<String> = auth::users(&app.store).into_iter().map(|u| u.username).collect();
+                    let people = backup::people(&base).map_err(bad)?;
+                    Ok(json!(people.iter().map(|p| json!({ "name": p, "account": have.contains(p) })).collect::<Vec<_>>()))
                 }
                 _ => Err((404, "not found".into())),
             }
