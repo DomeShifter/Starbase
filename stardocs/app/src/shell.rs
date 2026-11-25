@@ -869,8 +869,28 @@ fn params(text: &str) -> Value {
     serde_json::from_str(text).unwrap_or_else(|_| json!({}))
 }
 
+/// With exactly one object (picture, shape, chart, drawing) selected, puts the caret at the end
+/// of its paragraph, so a page break typed next goes after the object instead of replacing it.
+pub fn caret_off_object(app: &mut WordApp) {
+    let (a, b) = app.session.sel.ordered();
+    if a.story != b.story || a.path != b.path || b.off != a.off + wordcraft_doc::para::OBJ.len_utf8() {
+        return;
+    }
+    let Some(para) = app.session.doc.para_at(&a) else { return };
+    if para.object_at(a.off).is_none() {
+        return;
+    }
+    let end = wordcraft_doc::Pos { off: para.len(), ..a.clone() };
+    if let Err(e) = app.run("caret.set", json!({ "pos": end })) {
+        log::warn!("caret.set: {e}");
+    }
+}
+
 /// Runs a command; a refusal goes to the app's status line instead of vanishing.
 pub fn run(app: &mut WordApp, id: &str, p: Value) {
+    if matches!(id, "insert.pageBreak" | "text.pageBreak") {
+        caret_off_object(app);
+    }
     let r = match id.strip_prefix("ui.dialog:") {
         Some(name) => app.run("ui.dialog", json!({ "name": name })),
         None => app.run(id, p),
@@ -1164,6 +1184,17 @@ impl Shell {
         // would otherwise match it too (egui ignores an extra Shift).
         if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(ctrl_alt | Modifiers::SHIFT, Key::H))) {
             self.flags.history = true;
+        }
+        // Ctrl+Enter on a selected picture, shape or chart: Docs keeps the object and breaks the
+        // page after it. WordCraft would type the break over the selection (deleting the object),
+        // so move the caret off it first; WordCraft's own Ctrl+Enter then inserts the break.
+        let brk = ctx.input(|i| {
+            i.events
+                .iter()
+                .any(|e| matches!(e, egui::Event::Key { key: Key::Enter, pressed: true, modifiers: m, .. } if m.command && !m.shift && !m.alt))
+        });
+        if brk && app.dialog.is_none() {
+            caret_off_object(app);
         }
         let (menus, outline, help, count) = ctx.input_mut(|i| {
             (
