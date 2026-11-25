@@ -36,6 +36,13 @@ Step-by-step guides: [Docker and Compose](docs/install/docker.md) ·
 [Proxmox](docs/install/proxmox.md) · [TrueNAS SCALE](docs/install/truenas.md) ·
 [Unraid](docs/install/unraid.md). Changes: [CHANGELOG.md](CHANGELOG.md).
 
+## Privacy and code signing
+
+Starbase connects to nothing by default: no telemetry, and the desktop programs check for
+updates only if you turn that on. Every connection it can make is listed in
+[docs/privacy.md](docs/privacy.md). How the Windows downloads are signed:
+[Code signing policy](docs/code-signing-policy.md).
+
 ## Building
 
 Every push builds both apps on GitHub Actions (workflows `StarSheets` and `StarDocs`, named after the folders' old app names); the built

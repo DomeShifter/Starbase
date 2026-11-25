@@ -492,9 +492,66 @@ impl Renewing {
     }
 }
 
+// ------------------------------------------------------------ update checks (docs/privacy.md)
+
+/// Where Starbase's desktop releases are published: the only place "Check for updates" asks
+/// (`api.github.com/repos/<this>/releases`), never WordCraft's or GridCraft's.
+pub const RELEASES_REPO: &str = "DomeShifter/Starbase";
+
+/// The Starbase version this program is, which a check compares releases with: the release
+/// build sets `STARBASE_VERSION` (the tag without its "v"); any other build is "0.0.0-dev".
+pub const VERSION: &str = match option_env!("STARBASE_VERSION") {
+    Some(v) if !v.is_empty() => v,
+    _ => "0.0.0-dev",
+};
+
+/// The file that keeps Help › Check for updates, shared by Starbase Docs, Sheets and Drive.
+const UPDATES_FILE: &str = "updates.json";
+
+/// Whether the desktop apps look for a newer Starbase release when they start: off unless the
+/// person turned it on (Help › Check for updates). Starbase makes no connection by default.
+pub fn update_check_on() -> bool {
+    config_dir().is_some_and(|d| update_check_on_in(&d))
+}
+
+/// [`update_check_on`] for the settings folder `dir`.
+pub fn update_check_on_in(dir: &std::path::Path) -> bool {
+    std::fs::read(dir.join(UPDATES_FILE))
+        .ok()
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+        .is_some_and(|v| v.get("check") == Some(&Value::Bool(true)))
+}
+
+/// Turns the check at start on or off for every Starbase desktop app on this computer.
+pub fn set_update_check(on: bool) -> Result<(), String> {
+    let dir = config_dir().ok_or("There's no settings folder to keep this setting in.")?;
+    set_update_check_in(&dir, on)
+}
+
+/// [`set_update_check`] in the settings folder `dir`.
+pub fn set_update_check_in(dir: &std::path::Path, on: bool) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(&json!({ "check": on })).unwrap_or_default();
+    write_private(&dir.join(UPDATES_FILE), &bytes).map_err(|e| format!("The setting couldn't be kept: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_checks_are_off_until_turned_on() {
+        let dir = std::env::temp_dir().join(format!("starbase-updates-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!update_check_on_in(&dir), "off with no settings at all");
+        set_update_check_in(&dir, true).unwrap();
+        assert!(update_check_on_in(&dir));
+        set_update_check_in(&dir, false).unwrap();
+        assert!(!update_check_on_in(&dir));
+        std::fs::write(dir.join(UPDATES_FILE), b"not json").unwrap();
+        assert!(!update_check_on_in(&dir), "an unreadable file is off");
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(RELEASES_REPO, "DomeShifter/Starbase");
+    }
 
     #[test]
     fn addresses_are_made_whole() {

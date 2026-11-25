@@ -198,6 +198,25 @@ fn there_is_no_share_button_for_a_local_document() {
     assert!(h.query_by_label("Share").is_none());
 }
 
+/// Starbase makes no connection by default (docs/privacy.md): launching starts no update check,
+/// and Help offers the check (off) and Check for updates now.
+#[test]
+fn no_update_check_starts_at_launch() {
+    use egui_kittest::kittest::Queryable;
+    let dir = temp_dir("updates");
+    let clock = Clock::default();
+    let mut h = window(&dir, None, &clock);
+    steps(&mut h, 10);
+    assert_eq!(h.state().app.update_checks_started(), 0, "no update check at launch");
+    h.get_by_label("Help").click();
+    steps(&mut h, 3);
+    let by = egui_kittest::kittest::By::new();
+    let rows: Vec<String> = h.query_all(by).filter_map(|n| n.accesskit_node().label().map(|l| l.trim().to_string())).collect();
+    assert!(rows.iter().any(|l| l == "Check for updates"), "{rows:?}");
+    assert!(rows.iter().any(|l| l == "Check for updates now"), "{rows:?}");
+    assert_eq!(h.state().app.update_checks_started(), 0, "opening Help starts nothing");
+}
+
 /// WordCraft names the window "<name> - WordCraft" whenever its title changes (opening, the
 /// first change after a save); the window keeps ours, sent after it in the same frame.
 #[test]

@@ -156,6 +156,8 @@ fn creator(start: Start) -> eframe::AppCreator<'static> {
         let mut app = SheetApp::new(Session::new(), services());
         load_prefs(&mut app);
         starsheets_defaults(&mut app);
+        // Update checks ask for Starbase's releases, and only when the person turned them on.
+        crate::updates::setup(&mut app, starbase_connect::update_check_on());
         gridcraft_ui_egui::spelling::set(crate::spelling::known);
         SheetApp::setup_context_for_language(&cc.egui_ctx, false, app.ui.language);
         crate::theme::install(&cc.egui_ctx);
