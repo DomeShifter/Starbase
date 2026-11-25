@@ -25,9 +25,11 @@ mod actions;
 mod bin;
 mod input;
 mod items;
+mod photos;
 mod sidebar;
 #[cfg(target_arch = "wasm32")]
 mod test;
+mod viewer;
 
 const LEFT: f32 = 256.0;
 const TOP: f32 = 64.0;
@@ -183,6 +185,8 @@ pub struct Home {
     move_to: Option<MoveTo>,
     thumbs: HashMap<String, (String, Thumb)>,
     fetching: usize,
+    /// "View as photos" (photos.rs, viewer.rs).
+    photos: photos::PhotoMode,
     error: Option<String>,
     /// A folder to open once the list arrives (?dir= in the address).
     open_dir: Option<String>,
@@ -518,6 +522,19 @@ impl Home {
         self.navigate(v);
     }
 
+    /// The folder shown as photos, when "View as photos" is on and a folder is shown (not
+    /// Recent, Starred, the bin, or search results).
+    fn photo_folder(&self) -> Option<String> {
+        if !self.photos.on || !self.store.has_photos() || !self.search.trim().is_empty() {
+            return None;
+        }
+        match self.view.as_ref()? {
+            View::Mine(p) | View::Shared(Some(p)) => Some(p.clone()),
+            View::Everyone(p) if !p.is_empty() => Some(p.clone()),
+            _ => None,
+        }
+    }
+
     /// The folder new things go into from here (None: nowhere here, e.g. Recent).
     fn here(&self) -> Option<String> {
         match self.view.as_ref()? {
@@ -722,6 +739,7 @@ impl Home {
                 self.mixed = b[2] == b'1';
             }
             self.open_dir = self.store.start_dir();
+            self.photos.boot(&self.store);
             self.refresh(ctx);
         }
         self.store.poll();
@@ -733,6 +751,8 @@ impl Home {
         }
         #[cfg(not(target_arch = "wasm32"))]
         ctx.request_repaint_after(std::time::Duration::from_millis(RELIST_MS as u64));
+        let folder = self.photo_folder();
+        self.photos.logic(ctx, &self.store, folder);
         let replies: Vec<Reply> = std::mem::take(&mut *self.inbox.borrow_mut());
         for r in replies {
             match r {
@@ -861,7 +881,10 @@ impl Home {
         self.move_to_ui(&ctx);
         self.details_ui(&ctx);
         self.pending_move_ui(&ctx);
-        self.keys(&ctx);
+        // The photo viewer covers everything and takes the keys while it's open.
+        if !viewer::ui(&mut self.photos, &ctx, &self.store) {
+            self.keys(&ctx);
+        }
         // Connected to a server, or disconnected: the Drive starts again over the new files.
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(store) = self.connect.ui(&ctx) {
