@@ -4,8 +4,8 @@
 //! and the tests all go through the same code. Also decides which entries are greyed out.
 
 use gridcraft_engine::Session;
-use gridcraft_engine::model::Visibility;
 use gridcraft_engine::core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, col_to_letters};
+use gridcraft_engine::model::Visibility;
 use serde_json::{Value as Json, json};
 
 /// Commands to run, in order.
