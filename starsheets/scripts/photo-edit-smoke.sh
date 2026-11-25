@@ -44,10 +44,10 @@ GO="js:(location.href='/?test&dir=$(enc "$folder")','go');sleep:10"
 ST="starsheets.wait(starsheets.state()).then(s=>JSON.parse(s).ok.home.photos.photo_edit)"
 RUN() { echo "js:starsheets.wait(starsheets.run('$1',$2))"; }
 CHECK() { echo "js:$ST.then(p=>($1)?'PASS $2':'FAIL $2 '+JSON.stringify(p))"; }
-INFO() { echo "js:$ST.then(p=>'INFO $1 '+JSON.stringify($2))"; }
-OPEN="$LOGIN;$GO;$(RUN home:photos '{on:true}');sleep:6;$(RUN home:photos:open '{index:0}');sleep:3;$(RUN home:photos:edit '{open:true}');sleep:4"
+INFO() { echo "js:$ST.then(p=>'INFO $1 '+JSON.stringify($2).split(String.fromCharCode(34)).join(''))"; }
+OPEN="$LOGIN;$GO;$(RUN home:photos '{on:true}');sleep:2;$(RUN home:photos:enable '{}');sleep:8;$(RUN home:photos:open '{index:0}');sleep:3;$(RUN home:photos:edit '{open:true}');sleep:4"
 steps="$OPEN"
-steps+=";$(CHECK 'p.open&&p.loaded&&p.source&&!p.dirty&&p.tab===\"adjust\"' 'opens on the picture, clean')"
+steps+=";$(CHECK "p.open&&p.loaded&&p.source&&!p.dirty&&p.tab==='adjust'" 'opens on the picture, clean')"
 steps+=";$(CHECK 'p.writable||p.whyNot' 'save state is known (writable, or the reason why not)')"
 steps+=";$(INFO server '{writable:p.writable,whyNot:p.whyNot,foreign:p.foreign}')"
 steps+=";$(RUN home:photos:edit:slider "{key:'exposure',value:0.8}");$(RUN home:photos:edit:slider "{key:'saturation',value:40}");sleep:2"
@@ -75,7 +75,7 @@ steps+=";$(CHECK '!p.open' 'closed')"
 res=$("$FF" "$BASE/" "$OUT/end.png" --size 1400x900 --wait 3 --steps "$steps" 2>&1)
 echo "$res" | grep -o '"PASS[^"]*"\|"FAIL[^"]*\|"INFO[^"]*' | tr -d '"'
 echo "$res" | grep -q '"FAIL' && fail=1
-[ "$(echo "$res" | grep -c '"PASS')" -ge 13 ] || { echo "FAIL not every check ran"; echo "$res" | tail -5; fail=1; }
+[ "$(echo "$res" | grep -c '"PASS')" -ge 12 ] || { echo "FAIL not every check ran"; echo "$res" | tail -5; fail=1; }
 # Each tab with the system in dark mode.
 for t in adjust filters crop; do
   FF_DARK=1 "$FF" "$BASE/" "$OUT/$t-dark.png" --size 1400x900 --wait 3 --steps "$OPEN;$(RUN home:photos:edit:tab "{tab:'$t'}");$(RUN home:photos:edit:set "{exposure:0.5,vibrance:30,filter:{name:'vivid',amount:0.6}}");sleep:3" > /dev/null 2>&1

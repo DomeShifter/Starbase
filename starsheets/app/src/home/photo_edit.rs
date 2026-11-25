@@ -179,6 +179,8 @@ pub(super) struct Editor {
     /// Hold to compare: the original is shown.
     pub comparing: bool,
     compare_button: bool,
+    /// Compare held by the test hook (`compare {on}`); the button's state is re-read every frame.
+    compare_held: bool,
     inbox: Arc<Mutex<Vec<Got>>>,
     src: Option<RgbaImage>,
     coarse: Option<RgbaImage>,
@@ -241,6 +243,7 @@ impl Editor {
             max_side: None,
             comparing: false,
             compare_button: false,
+            compare_held: false,
             inbox: Arc::default(),
             src: None,
             coarse: None,
@@ -708,7 +711,7 @@ impl Editor {
             }
             held_compare = i.key_down(Key::Backslash);
         });
-        self.comparing = held_compare || self.compare_button;
+        self.comparing = held_compare || self.compare_button || self.compare_held;
         let dragging = ctx.input(|i| i.pointer.any_down());
         self.update_preview(ctx, dragging);
         if self.tab == Tab::Filters {
@@ -1340,7 +1343,7 @@ impl Editor {
             "undo" => self.do_undo(),
             "redo" => self.do_redo(),
             "reset" => self.reset(),
-            "compare" => self.compare_button = params.get("on").and_then(Json::as_bool).unwrap_or(true),
+            "compare" => self.compare_held = params.get("on").and_then(Json::as_bool).unwrap_or(true),
             "cancel" => self.cancel(),
             "save" => self.save(ctx, store),
             "copy" => {
