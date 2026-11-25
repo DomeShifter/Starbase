@@ -58,6 +58,10 @@ echo "==> Starbase $VERSION AppImage for $ARCH"
 # ---- stage the AppDir ---------------------------------------------------------------------------
 install -Dm755 "$SHEETS_BIN" "$APPDIR/usr/bin/starsheets"
 install -Dm755 "$DOCS_BIN" "$APPDIR/usr/bin/stardocs"
+# STARBASE-OPEN HANDLER (reserved, enable when the starbase-open program is on main): take a
+# --starbase-open <path> argument, then
+#   install -Dm755 "$OPEN_BIN" "$APPDIR/usr/bin/starbase-open"
+# and add "$ID.Open" to the desktop-file loop below.
 strip "$APPDIR/usr/bin/starsheets" "$APPDIR/usr/bin/stardocs" 2>/dev/null || true
 for entry in "$ID" "$ID.Sheets" "$ID.Docs"; do
   install -Dm644 "$HERE/$entry.desktop" "$APPDIR/usr/share/applications/$entry.desktop"

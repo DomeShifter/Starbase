@@ -141,10 +141,15 @@ modules:
         for entry in io.github.DomeShifter.Starbase io.github.DomeShifter.Starbase.Sheets io.github.DomeShifter.Starbase.Docs; do
         install -Dm644 packaging/linux/$entry.desktop /app/share/applications/$entry.desktop; done
       # ---- STARBASE-OPEN HANDLER (reserved) -------------------------------------------------------
-      # The `starbase-open` handler (its own .desktop file and MIME/URL registration) is being added
-      # in a separate change. Install its files here, next to the other menu entries, once they
-      # exist. Its desktop file name must start with io.github.DomeShifter.Starbase so Flatpak
-      # exports it, and it needs NoDisplay=true so it does not show up as a fourth menu entry.
+      # The `starbase-open` handler ("Open in Starbase" in the file manager) is added in a separate
+      # change. Enable once it is on main:
+      #   in the starsheets module (or its own module), after the starsheets build:
+      #     cargo --offline build --release --locked -p starbase-open
+      #     install -Dm755 target/release/starbase-open /app/bin/starbase-open
+      #   here:
+      #     install -Dm644 -t /app/share/applications packaging/linux/io.github.DomeShifter.Starbase.Open.desktop
+      # Its desktop file name starts with the app ID, so Flatpak exports it. If it is a menu-less
+      # handler (NoDisplay=true), the metainfo keeps its single launchable (Flathub allows one).
       # ---- end STARBASE-OPEN HANDLER ---------------------------------------------------------------
       - install -Dm644 packaging/linux/io.github.DomeShifter.Starbase.mime.xml /app/share/mime/packages/io.github.DomeShifter.Starbase.xml
       - packaging/linux/icons.sh /app/share/icons

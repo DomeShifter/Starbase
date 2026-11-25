@@ -91,7 +91,8 @@ tag once it exists.
 
 1. Decide whether to submit now, given the two blockers above (recommended: wait).
 2. Optional: replace the screenshots with desktop-window captures (see Quality notes).
-3. Merge this branch; add the `starbase-open` files at the marked spot in the manifest when that
+3. Merge this branch; enable the `starbase-open` lines at the marked spots (manifest, `AppRun`,
+   `appimage.sh`) when that
    work lands; tag the release to submit; check the Flatpak CI run on the tag is green
    (lint included).
 4. Decide on aarch64: add a CI build, or plan an `only-arches` `flathub.json`.
