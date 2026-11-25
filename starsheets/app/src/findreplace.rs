@@ -64,12 +64,26 @@ impl FindReplace {
         }
     }
 
-    /// Ctrl+F (before the grid sees it): the find bar.
-    pub fn keys(&mut self, app: &SheetApp, ctx: &egui::Context) {
-        if app.editor.is_none() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F)) {
+    /// Ctrl+F and Ctrl+H (before the grid or the cell editor sees them, editing or not): the find
+    /// bar and Find and replace. egui's text box would read Ctrl+H as Backspace, so the app takes it.
+    /// Ctrl+W (delete the word before) is dropped too: no app uses it and a browser closes the tab.
+    pub fn keys(&mut self, _app: &SheetApp, ctx: &egui::Context) {
+        self.take_keys(ctx);
+    }
+
+    fn take_keys(&mut self, ctx: &egui::Context) {
+        use egui::{Key, Modifiers};
+        let take = |ctx: &egui::Context, key| ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, key) | i.consume_key(Modifiers::CTRL, key));
+        if take(ctx, Key::F) {
             self.bar = true;
             self.bar_focus = true;
         }
+        if take(ctx, Key::H) {
+            self.open = true;
+            self.focus = true;
+            self.status.clear();
+        }
+        take(ctx, Key::W);
     }
 
     /// This sheet's cells that show `bar_text` (any case), row by row.
@@ -412,6 +426,28 @@ fn label_cell(ui: &mut egui::Ui, label: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ctrl+H/Ctrl+F/Ctrl+W are taken by the app, whether or not a cell is being edited; the text
+    /// box never sees them (it would delete a character or a word).
+    #[test]
+    fn find_keys_are_consumed_before_the_text_box() {
+        use egui::{Event, Key, Modifiers};
+        let press = |key| {
+            let ctx = egui::Context::default();
+            let mut f = FindReplace::default();
+            let mut left = true;
+            let mut raw = egui::RawInput::default();
+            raw.events.push(Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers: Modifiers::CTRL });
+            ctx.begin_pass(raw);
+            f.take_keys(&ctx);
+            left = ctx.input(|i| i.events.iter().any(|e| matches!(e, Event::Key { key: k, .. } if *k == key)));
+            (f.open, f.bar, left)
+        };
+        assert_eq!(press(Key::H), (true, false, false));
+        assert_eq!(press(Key::F), (false, true, false));
+        assert_eq!(press(Key::W), (false, false, false));
+        assert_eq!(press(Key::K), (false, false, true), "Ctrl+K is left alone");
+    }
 
     #[test]
     fn matching_follows_the_options() {
