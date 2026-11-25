@@ -30,6 +30,8 @@ use crate::store::{Answer, Done, Method, Store, dec, enc};
 const SHEETS: &[&str] = &["xlsx", "xlsm", "xls", "xlsb", "ods", "csv", "tsv"];
 /// Documents: open in Starbase Docs (the list AppRun uses).
 const DOCS: &[&str] = &["docx", "docm", "dotx", "dotm", "doc", "odt", "rtf"];
+/// Presentations: open in Starbase Slides (the list AppRun uses).
+const SLIDES: &[&str] = &["pptx", "potx", "ppsx"];
 /// Never handed to the system's default app from the Drive: it would run them (programs,
 /// scripts, launchers). They are listed; open them from the file manager if meant.
 const RUNS: &[&str] = &[
@@ -389,7 +391,11 @@ pub(crate) fn program(name: &str) -> Option<PathBuf> {
 /// Starts `name` with `args` in its own window (and process); says why when it can't.
 pub(crate) fn launch(name: &str, args: &[&std::ffi::OsStr]) -> Result<(), String> {
     let Some(mut cmd) = program_command(name, std::env::var_os("APPIMAGE").map(PathBuf::from)) else {
-        let app = if name == "stardocs" { "Starbase Docs" } else { "Starbase Sheets" };
+        let app = match name {
+            "stardocs" => "Starbase Docs",
+            "starslides" => "Starbase Slides",
+            _ => "Starbase Sheets",
+        };
         return Err(format!("{app} isn't installed next to Starbase Drive, so this can't be opened here."));
     };
     let exe = PathBuf::from(cmd.get_program());
@@ -466,8 +472,8 @@ fn passwd_name(passwd: &str, uid: u32) -> Option<String> {
 pub(crate) enum OpensWith {
     Sheets,
     Docs,
-    /// The system's default app for its type (pictures, PDFs, presentations: there is no Slides
-    /// program on the desktop yet).
+    Slides,
+    /// The system's default app for its type (pictures, PDFs…).
     System,
     /// Not from the Drive: a program, script or launcher (or a file marked runnable).
     Refused,
@@ -480,6 +486,8 @@ pub(crate) fn opens_with(name: &str, runnable: bool) -> OpensWith {
         OpensWith::Sheets
     } else if DOCS.contains(&ext.as_str()) {
         OpensWith::Docs
+    } else if SLIDES.contains(&ext.as_str()) {
+        OpensWith::Slides
     } else if runnable || RUNS.contains(&ext.as_str()) {
         OpensWith::Refused
     } else {
@@ -502,7 +510,7 @@ fn runnable(m: &fs::Metadata) -> bool {
 }
 
 /// Opens a file in the right program: spreadsheets in Starbase Sheets, documents in Starbase Docs,
-/// anything else in the system's default app for it (never a program or script, never through a
+/// presentations in Starbase Slides, anything else in the system's default app for it (never a program or script, never through a
 /// link).
 pub(crate) fn open_in_program(path: &Path) -> Result<(), String> {
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -513,6 +521,7 @@ pub(crate) fn open_in_program(path: &Path) -> Result<(), String> {
     match opens_with(&name, runnable(&m)) {
         OpensWith::Sheets => launch("starsheets", &[path.as_os_str()]),
         OpensWith::Docs => launch("stardocs", &[path.as_os_str()]),
+        OpensWith::Slides => launch("starslides", &[path.as_os_str()]),
         OpensWith::Refused => {
             Err(format!("{name} is a program or script, so Starbase doesn't open it. Open it from your file manager if you meant to."))
         }
@@ -631,6 +640,16 @@ impl Store for LocalStore {
         } else {
             launch("starsheets", &["--new".as_ref(), dir.as_os_str()])
         }
+    }
+
+    fn has_slides(&self) -> bool {
+        program("starslides").is_some() || std::env::var_os("APPIMAGE").is_some()
+    }
+
+    /// Starbase Slides makes "Untitled presentation.pptx" in the folder on its first change.
+    fn new_presentation(&self, folder: &str) -> Result<(), String> {
+        let dir = rel(&self.root, folder).map_err(|(_, e)| e)?;
+        launch("starslides", &["--new".as_ref(), dir.as_os_str()])
     }
 
     fn pick_files(&self, got: Box<dyn Fn(String, Vec<u8>)>) {
@@ -1055,7 +1074,8 @@ mod tests {
             ("old.xlsb", Sheets),
             ("Letter.docx", Docs),
             ("notes.rtf", Docs),
-            ("Talk.pptx", System),
+            ("Talk.pptx", Slides),
+            ("Theme.POTX", Slides),
             ("Photo.jpg", System),
             ("scan.pdf", System),
             ("README", System),

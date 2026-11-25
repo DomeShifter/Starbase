@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Starbase Slides
+GenericName=Presentation
+Comment=Make and show presentations; open and save PowerPoint files
+Exec=starslides %F
+TryExec=starslides
+Icon=io.github.DomeShifter.Starbase.Slides
+Terminal=false
+StartupNotify=true
+StartupWMClass=io.github.DomeShifter.Starbase.Slides
+Categories=Office;Presentation;
+Keywords=starbase;slides;slideshow;pptx;powerpoint;deck;talk;
+MimeType=application/vnd.openxmlformats-officedocument.presentationml.presentation;application/vnd.openxmlformats-officedocument.presentationml.template;application/vnd.openxmlformats-officedocument.presentationml.slideshow;

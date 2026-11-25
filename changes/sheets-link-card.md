@@ -1,0 +1,2 @@
+### Added
+- Sheets: resting the pointer on a cell with a link (Insert › Link, a `=HYPERLINK(…)` formula, or a web or e-mail address typed as text) shows a link card after half a second, as in Google Sheets: the site's name, the address (shortened in the middle when long), Open, Copy link, and Edit/Remove link for people who may edit. Esc, scrolling or moving away closes it. The card fetches nothing: no page preview and no site icon. `javascript:`, `data:` and other kinds of address show without Open.

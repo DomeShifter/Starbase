@@ -188,8 +188,11 @@ impl Home {
                 if house::menu_row(ui, Some("description"), "New document", "", true) {
                     self.new_file(&into, true);
                 }
-                if self.store.has_slides() && house::menu_row(ui, Some("slideshow"), "New presentation", "", true) {
-                    self.store.new_presentation(&into);
+                if self.store.has_slides()
+                    && house::menu_row(ui, Some("slideshow"), "New presentation", "", true)
+                    && let Err(e) = self.store.new_presentation(&into)
+                {
+                    self.error = Some(e);
                 }
                 if house::menu_row(ui, Some("create_new_folder"), "New folder", "", true) {
                     if here.is_none() {

@@ -2,7 +2,7 @@
 <!-- AppStream metadata (software centres, Flathub) for the whole Starbase package. One
      component, because Flathub has one app ID per package; the three menu entries are listed
      Flathub allows one launchable, so only Starbase Drive (the home screen) is listed; the
-     Sheets and Docs menu entries are still installed and exported (their IDs start with the app
+     Sheets, Docs and Slides menu entries are still installed and exported (their IDs start with the app
      ID). Releases are written out by hand, newest first, from the root CHANGELOG.md; development
      builds carry no release entry of their own. Checked against Flathub's MetaInfo and quality
      guidelines (packaging/linux/flathub-submission.md). -->
@@ -18,7 +18,8 @@
   <description>
     <p>
       Starbase is an open-source office suite: Starbase Sheets for spreadsheets, Starbase Docs for
-      documents, and Starbase Drive, a home screen that lists your files and folders.
+      documents, Starbase Slides for presentations, and Starbase Drive, a home screen that lists
+      your files and folders.
     </p>
     <p>
       Keep your files in a Starbase folder inside Documents, or connect to your own
@@ -26,7 +27,8 @@
     </p>
     <p>
       Starbase Sheets opens and saves Excel (.xlsx), OpenDocument (.ods) and CSV files. Starbase Docs
-      opens and saves Word (.docx), OpenDocument (.odt) and RTF files.
+      opens and saves Word (.docx), OpenDocument (.odt) and RTF files. Starbase Slides opens and saves
+      PowerPoint (.pptx) files.
     </p>
   </description>
   <launchable type="desktop-id">io.github.DomeShifter.Starbase.desktop</launchable>
@@ -78,6 +80,7 @@
   <provides>
     <binary>starsheets</binary>
     <binary>stardocs</binary>
+    <binary>starslides</binary>
     <mediatype>application/vnd.openxmlformats-officedocument.spreadsheetml.sheet</mediatype>
     <mediatype>application/vnd.ms-excel.sheet.macroEnabled.12</mediatype>
     <mediatype>application/vnd.ms-excel.sheet.binary.macroEnabled.12</mediatype>
@@ -91,6 +94,9 @@
     <mediatype>application/msword</mediatype>
     <mediatype>application/vnd.oasis.opendocument.text</mediatype>
     <mediatype>application/rtf</mediatype>
+    <mediatype>application/vnd.openxmlformats-officedocument.presentationml.presentation</mediatype>
+    <mediatype>application/vnd.openxmlformats-officedocument.presentationml.template</mediatype>
+    <mediatype>application/vnd.openxmlformats-officedocument.presentationml.slideshow</mediatype>
   </provides>
   <!-- OARS: no violence, drugs, gambling, ads, purchases or chat with strangers. Sharing and
        comments only reach people on a Starbase server the user chose to connect to. -->
