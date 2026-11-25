@@ -6,6 +6,7 @@
 #   Starbase.AppImage starsheets [args]    -> starsheets [args]
 #   Starbase.AppImage report.docx          -> stardocs report.docx   (by the first file's extension)
 #   Starbase.AppImage budget.xlsx          -> starsheets budget.xlsx
+#   Starbase.AppImage --version            -> the package version, then each program's
 #   Starbase.AppImage --anything           -> starsheets --anything (e.g. the menu entry's --home)
 #
 # A symlink to the AppImage named stardocs or starsheets also picks that program ($ARGV0 is
@@ -21,6 +22,11 @@ esac
 
 case "${1:-}" in
   "") exec "$BIN/starsheets" --home ;;
+  --version | -V)
+    echo "Starbase $(cat "$HERE/usr/share/starbase/version" 2>/dev/null || echo unknown)"
+    "$BIN/starsheets" --version
+    exec "$BIN/stardocs" --version
+    ;;
   stardocs | starsheets)
     prog="$1"
     shift

@@ -1,0 +1,220 @@
+# Starbase desktop package (docs/research/desktop-plan.md, P2 + P5): builds both desktop programs
+# (starsheets: Starbase Drive + Starbase Sheets; stardocs: Starbase Docs), packs them into one
+# AppImage with packaging/linux/appimage.sh, and checks that it starts on a clean machine.
+# The AppImage and its .zsync are kept as the `starbase-appimage` artifact.
+#
+# Why ubuntu-22.04: an executable only runs on systems whose C library (glibc) is at least as new
+# as the one it was built against. 22.04 has glibc 2.35, so the AppImage runs on Debian 12,
+# Ubuntu 22.04, Fedora 36 and anything newer. It is a free GitHub runner, so no build container
+# (manylinux-style) is needed; the smoke test then runs on both 22.04 and the newest Ubuntu.
+#
+# Version: a vX.Y.Z tag gives X.Y.Z. Starbase has no release yet (CHANGELOG.md: Unreleased),
+# so other builds are 0.0.0-dev+<short commit>.
+name: Desktop
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths: ["starsheets/**", "stardocs/**", "packaging/**", ".github/workflows/desktop.yml"]
+  # Pull requests only when the packaging changes: the apps' own workflows already build and test
+  # the desktop programs on every app change.
+  pull_request:
+    paths: ["packaging/**", ".github/workflows/desktop.yml"]
+  workflow_dispatch:
+  workflow_call: # from release.yml (later)
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  starsheets:
+    name: Build starsheets (ubuntu-22.04)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: starsheets
+    steps:
+      - uses: actions/checkout@v7
+      # The scripts use tomllib (Python 3.11+); ubuntu-22.04 ships 3.10.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Fetch GridCraft at the pinned commit of our fork
+        run: scripts/fetch-upstream.sh
+      - name: System libraries for egui's native backends
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-dev libxkbcommon-dev libwayland-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: desktop-2204
+          workspaces: starsheets
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build
+        run: cargo build --release -p starsheets
+      - name: Version and the C library it needs
+        run: |
+          target/release/starsheets --version
+          objdump -T target/release/starsheets | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-starsheets
+          path: starsheets/target/release/starsheets
+          retention-days: 3
+
+  stardocs:
+    name: Build stardocs (ubuntu-22.04)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: stardocs
+    steps:
+      - name: Make disk space (WordCraft's build needs more than the runner leaves free)
+        working-directory: /
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+      - uses: actions/checkout@v7
+      # The scripts use tomllib (Python 3.11+); ubuntu-22.04 ships 3.10.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Fetch WordCraft at the pinned commit of our fork
+        run: scripts/fetch-upstream.sh
+      - name: System libraries for egui's native backends
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-dev libxkbcommon-dev libwayland-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: desktop-2204
+          workspaces: stardocs
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build
+        run: cargo build --release -p stardocs
+      - name: Version and the C library it needs
+        run: |
+          target/release/stardocs --version
+          objdump -T target/release/stardocs | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-stardocs
+          path: stardocs/target/release/stardocs
+          retention-days: 3
+
+  appimage:
+    name: AppImage (x86_64)
+    needs: [starsheets, stardocs]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tools (icons, checks, delta updates)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq librsvg2-bin desktop-file-utils appstream zsync
+      - uses: actions/download-artifact@v8
+        with:
+          name: desktop-starsheets
+          path: bin
+      - uses: actions/download-artifact@v8
+        with:
+          name: desktop-stardocs
+          path: bin
+      - name: Version
+        env:
+          # A pull request's own commit, not the merge commit GitHub tests it as.
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF_NAME#v}"; else v="0.0.0-dev+${SHA::7}"; fi
+          echo "STARBASE_VERSION=$v" >> "$GITHUB_ENV"
+          echo "version $v"
+      - name: Build the AppImage
+        env:
+          DIST: ${{ github.workspace }}/dist
+        run: |
+          chmod +x bin/starsheets bin/stardocs
+          packaging/linux/appimage.sh --starsheets bin/starsheets --stardocs bin/stardocs
+          ls -la dist
+          {
+            echo "### Starbase AppImage $STARBASE_VERSION"
+            echo '```'
+            ls -la dist
+            du -h dist/*.AppImage
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      # SIGNING PLACEHOLDER (desktop-plan.md P5): SHA256SUMS + a detached GPG signature with the
+      # project's release key go here, once that key exists as a repository secret (the owner
+      # creates it). Until then the AppImage is unsigned.
+      - name: Sign (not yet, needs the project's release key)
+        if: false
+        run: echo "gpg --detach-sign --armor SHA256SUMS"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: starbase-appimage
+          path: |
+            dist/*.AppImage
+            dist/*.AppImage.zsync
+          retention-days: 30
+          if-no-files-found: error
+
+  smoke:
+    # On a clean runner (no build libraries), as a user would: the AppImage runs without FUSE
+    # through --appimage-extract-and-run's environment switch, the dispatcher picks the right
+    # program, the libraries it needs are there, and each window stays up under a headless X
+    # server until stopped (exit 124 from timeout) instead of crashing.
+    name: Smoke test (${{ matrix.os }})
+    needs: appimage
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      APPIMAGE_EXTRACT_AND_RUN: 1
+    steps:
+      # Starbase Sheets draws with wgpu (Vulkan, or OpenGL ES through EGL), Starbase Docs with
+      # OpenGL. Runners have no GPU: Mesa's software drivers (lavapipe for Vulkan, llvmpipe for
+      # GL) stand in, as on a desktop with no GPU driver installed.
+      - name: Headless X server, software Vulkan and OpenGL
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb libgl1-mesa-dri libegl1 libegl-mesa0 libvulkan1 mesa-vulkan-drivers libxkbcommon-x11-0
+      - uses: actions/download-artifact@v8
+        with:
+          name: starbase-appimage
+          path: dist
+      - name: Version, dispatcher and contents
+        run: |
+          app="$(ls dist/*.AppImage)"; chmod +x "$app"
+          ls -la dist
+          "$app" --version
+          "$app" stardocs --version | grep '^stardocs '
+          "$app" starsheets --version
+          # The runtime reads its own --appimage-* options only without APPIMAGE_EXTRACT_AND_RUN.
+          env -u APPIMAGE_EXTRACT_AND_RUN "$app" --appimage-extract >/dev/null
+          ls squashfs-root squashfs-root/usr/bin
+          if ldd squashfs-root/usr/bin/starsheets squashfs-root/usr/bin/stardocs | grep 'not found'; then exit 1; fi
+          env -u APPIMAGE_EXTRACT_AND_RUN "$app" --appimage-updateinformation; echo
+      - name: Starbase Drive (the home) stays up for 15 s
+        run: |
+          export HOME="$RUNNER_TEMP/home-drive"; mkdir -p "$HOME"
+          set +e; timeout 15 xvfb-run -a "$(ls "$GITHUB_WORKSPACE"/dist/*.AppImage)"; code=$?; set -e
+          echo "exit code $code (124: still running when stopped, as it should be)"
+          test "$code" = 124
+      - name: A spreadsheet opens in Starbase Sheets
+        run: |
+          export HOME="$RUNNER_TEMP/home-sheets"; mkdir -p "$HOME"
+          printf 'a,b\n1,2\n' > "$RUNNER_TEMP/sample.csv"
+          set +e; timeout 15 xvfb-run -a "$(ls "$GITHUB_WORKSPACE"/dist/*.AppImage)" "$RUNNER_TEMP/sample.csv"; code=$?; set -e
+          echo "exit code $code"
+          test "$code" = 124
+      - name: Starbase Docs stays up
+        run: |
+          export HOME="$RUNNER_TEMP/home-docs"; mkdir -p "$HOME"
+          set +e; timeout 15 xvfb-run -a "$(ls "$GITHUB_WORKSPACE"/dist/*.AppImage)" stardocs; code=$?; set -e
+          echo "exit code $code"
+          test "$code" = 124
+          test -d "$HOME/Documents/Starbase"
