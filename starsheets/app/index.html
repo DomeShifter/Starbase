@@ -23,10 +23,15 @@
     /* Sign-in box (account.rs): a real HTML form, not drawn on the canvas, so password managers
        (Keeper, Bitwarden, the browser's own) can see and fill it. House style (docs/house-style.md). */
     @font-face { font-family: "SS Roboto"; src: url("Roboto-Regular.ttf"); }
-    #ss_signin_back { position: absolute; inset: 0; background: rgba(0,0,0,.39); display: none; align-items: center; justify-content: center; }
-    #ss_signin { width: 360px; padding: 24px; background: #fff; border-radius: 8px; box-shadow: 0 4px 24px rgba(0,0,0,.24);
+    /* A page of its own (not a box over Drive): nothing of Drive shows until you are signed in.
+       Light in a dark computer theme too, like the apps. */
+    #ss_signin_back { position: absolute; inset: 0; background: #F0F4F9; color-scheme: light; display: none; align-items: center;
+      justify-content: center; overflow: auto; }
+    #ss_signin { width: 400px; max-width: calc(100% - 32px); box-sizing: border-box; padding: 36px 40px 32px; background: #fff; border-radius: 28px;
       font: 14px "SS Roboto", Roboto, system-ui, sans-serif; color: #1F1F1F; display: flex; flex-direction: column; gap: 8px; }
-    #ss_signin h1 { font-size: 22px; font-weight: 400; margin: 0 0 8px; }
+    #ss_signin h1 { font-size: 28px; font-weight: 400; margin: 12px 0 0; }
+    #ss_signin .ss_logo { width: 48px; height: 48px; }
+    #ss_signin .ss_lead { font-size: 16px; color: #1F1F1F; margin: 0 0 16px; }
     #ss_signin input { height: 36px; box-sizing: border-box; padding: 0 12px; border: 1px solid #747775; border-radius: 4px;
       font: inherit; color: inherit; background: #fff; outline: none; }
     #ss_signin input:hover { border-color: #1F1F1F; }
@@ -52,7 +57,9 @@
   <div id="starsheets_loading">Loading Starbase&hellip;</div>
   <div id="ss_signin_back">
     <form id="ss_signin" method="post" action="api/login" autocomplete="on">
-      <h1>Sign in to Starbase</h1>
+      <img class="ss_logo" src="stardrive.svg" alt="">
+      <h1>Sign in</h1>
+      <p class="ss_lead">to continue to Starbase</p>
       <button type="button" class="ss_sso" id="ss_sso" hidden>Sign in with SSO</button>
       <div class="ss_or" id="ss_or" hidden>or with a username and password</div>
       <button type="button" class="ss_link" id="ss_password_link" hidden>Run this server? Sign in with your password</button>
@@ -130,7 +137,8 @@
       }
       var showPasswords = function (on) { pwParts.forEach(function (el) { el.hidden = !on; }); form.username.required = form.password.required = on; };
       ssoBtn.addEventListener('click', function () {
-        location.href = 'api/oidc/login?next=' + encodeURIComponent(location.pathname + location.search);
+        // Opened a link while signed out (?next=, checked by account.rs): come back there.
+        location.href = 'api/oidc/login?next=' + encodeURIComponent(window.__ssNext || (location.pathname + location.search));
       });
       pwLink.addEventListener('click', function () { pwLink.hidden = true; showPasswords(true); form.username.focus(); });
       window.__ssWantSignUp = false;
@@ -157,7 +165,9 @@
           body: JSON.stringify({ username: form.username.value, password: form.password.value }) })
           .then(function (r) { return r.json().catch(function () { return {}; }).then(function (v) { return [r.status, v]; }); })
           .then(function (sv) {
-            if (sv[0] < 400) { location.reload(); return; }
+            // Go on to the link that was opened while signed out (?next=, a path on this server
+            // only: account.rs checks it), else start Drive again.
+            if (sv[0] < 400) { if (window.__ssNext) location.replace(window.__ssNext); else location.reload(); return; }
             go.disabled = false;
             err.textContent = sv[1].error || ('The server said ' + sv[0] + '.');
             form.password.select();

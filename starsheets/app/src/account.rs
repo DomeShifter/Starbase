@@ -41,6 +41,15 @@ thread_local! {
     static HAS_PASSWORD: RefCell<bool> = const { RefCell::new(true) };
     /// The page is on its way to the provider to renew the session.
     static LEAVING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// The server said this tab may see Drive (signed in, or sign-in off). Until then nothing of
+    /// Drive or a file is drawn: the sign-in page (index.html) is a page of its own.
+    static APP_SHOWN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether Drive (or an open file) may be drawn: not before the server has said who is signed
+/// in, and not while signed out (web.rs draws only the sign-in page and its dialogs then).
+pub fn app_shown() -> bool {
+    APP_SHOWN.with(std::cell::Cell::get)
 }
 
 /// The person signed in in this tab (None with sign-in off).
@@ -113,6 +122,39 @@ pub fn avatar(ui: &mut Ui, name: &str, colour: &str, size: f32) -> egui::Respons
     r
 }
 
+/// The account menu's id (egui popup memory), so the test hook can open it and say if it's open.
+fn menu_id() -> egui::Id {
+    egui::Id::unique("starsheets_account_menu")
+}
+
+/// The test hook's `account` part of the snapshot: signed in or not, the sign-in page showing,
+/// the account menu open, and where signing in goes on to.
+pub fn test_state(ctx: &egui::Context) -> Json {
+    let page = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.get_element_by_id("ss_signin_back"))
+        .and_then(|e| e.dyn_into::<web_sys::HtmlElement>().ok())
+        .is_some_and(|e| e.style().get_property_value("display").is_ok_and(|v| v != "none" && !v.is_empty()));
+    json!({
+        "shown": app_shown(),
+        "signedIn": me().is_some(),
+        "user": me().map(|m| json!({ "username": m.username, "name": m.name })),
+        "signInPage": page,
+        "menuOpen": egui::Popup::is_id_open(ctx, menu_id()),
+        "next": crate::continueto::from_address(),
+    })
+}
+
+/// Opens the account menu as clicking your avatar does (the test hook's `account:menu`).
+pub fn open_menu(ctx: &egui::Context) -> Result<(), String> {
+    if me().is_none() {
+        return Err("not signed in: no account menu".into());
+    }
+    egui::Popup::open_id(ctx, menu_id());
+    ctx.request_repaint();
+    Ok(())
+}
+
 /// What the avatar menu asked for (in egui memory, picked up by `Account::logic`).
 const REQUEST: &str = "starsheets_account_request";
 
@@ -122,16 +164,28 @@ pub fn me_ui(ui: &mut Ui) {
     let Some(me) = me() else { return };
     let r = avatar(ui, &me.name, &me.colour, 32.0).on_hover_text(format!("{} ({})", me.name, me.username));
     let ask = |ui: &Ui, what: &str| ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(REQUEST), what.to_string()));
-    egui::Popup::menu(&r).show(|ui| {
-        house::menu(ui, 260.0);
+    // Google's account menu: who you are at the top (username, a big avatar, "Hi, name!") with
+    // the main account button under it, then the rest, then Sign out. Always the light house
+    // colours, whatever the computer's theme.
+    egui::Popup::menu(&r).id(menu_id()).show(|ui| {
+        house::menu(ui, 300.0);
         house::menu_inset(ui, |ui| {
-            ui.label(RichText::new(&me.name).size(house::BODY).strong().color(theme::TEXT));
-            house::note(ui, &me.username);
+            ui.vertical_centered(|ui| {
+                ui.add_space(house::S);
+                house::note(ui, &me.username);
+                ui.add_space(house::M);
+                avatar(ui, &me.name, &me.colour, 64.0);
+                ui.add_space(house::S);
+                ui.label(RichText::new(format!("Hi, {}!", me.name)).size(22.0).color(theme::TEXT));
+                ui.add_space(house::M);
+                if ui.add(house::secondary("Your name and colour")).clicked() {
+                    ask(ui, "profile");
+                    ui.close();
+                }
+                ui.add_space(house::S);
+            });
         });
         house::menu_sep(ui);
-        if house::menu_row(ui, Some("edit"), "Your name and colour…", "", true) {
-            ask(ui, "profile");
-        }
         // An account made through single sign-on has no password: setting one starts in "Your
         // name and colour", which first confirms who you are at the sign-in service.
         if HAS_PASSWORD.with(|p| *p.borrow()) {
@@ -195,6 +249,9 @@ enum Reply {
     },
     /// Signed in or out, or the password changed: start the page again.
     Reload,
+    /// Signed in (a new account): go on to the link that was opened (`?next=`), else start the
+    /// page again.
+    SignedIn,
     /// Signed out: go to the identity provider's sign-out page (single sign-on), or reload.
     SignedOut(Option<String>),
     Saved(Me),
@@ -279,7 +336,9 @@ fn renew_sso() {
         return;
     }
     let Some(w) = web_sys::window() else { return };
-    let here = format!("{}{}", w.location().pathname().unwrap_or_default(), w.location().search().unwrap_or_default());
+    // Signed out with a link to go on to (`?next=`): come back there, not to this page.
+    let here = crate::continueto::from_address()
+        .unwrap_or_else(|| format!("{}{}", w.location().pathname().unwrap_or_default(), w.location().search().unwrap_or_default()));
     if let Some(s) = session_storage() {
         let _ = s.set_item(RENEWING, &now_ms().to_string());
     }
@@ -356,7 +415,8 @@ fn people_from(v: Json) -> Reply {
 /// Sends the browser to the server's single sign-on, coming back to this page.
 fn go_sso_login() {
     let Some(w) = web_sys::window() else { return };
-    let here = format!("{}{}", w.location().pathname().unwrap_or_default(), w.location().search().unwrap_or_default());
+    let here = crate::continueto::from_address()
+        .unwrap_or_else(|| format!("{}{}", w.location().pathname().unwrap_or_default(), w.location().search().unwrap_or_default()));
     crate::files::clear_unsaved_flag();
     let _ = w.location().set_href(&format!("api/oidc/login?next={}", crate::files::enc(&here)));
 }
@@ -529,6 +589,11 @@ impl Account {
         if !self.booted {
             self.booted = true;
             self.after_fresh = take_after_fresh();
+            // The sign-in form (index.html) goes on to this after signing in.
+            if let Some(w) = web_sys::window() {
+                let next = crate::continueto::from_address().map_or(wasm_bindgen::JsValue::NULL, |n| n.into());
+                let _ = js_sys::Reflect::set(&w, &"__ssNext".into(), &next);
+            }
             self.last_input = now_ms();
             call(&self.inbox, ctx, Method::Get, "api/info", None, |v| Reply::Info {
                 auth: v["auth"].as_bool().unwrap_or(false),
@@ -550,6 +615,11 @@ impl Account {
                     self.signup_code = signup_code;
                     self.sso = sso;
                     ME.with(|m| *m.borrow_mut() = user);
+                    if !auth || signed_in {
+                        // Signed in already: `?next=` isn't followed (it is only for after signing in).
+                        APP_SHOWN.with(|s| s.set(true));
+                        crate::continueto::forget();
+                    }
                     HAS_PASSWORD.with(|p| *p.borrow_mut() = self.sso.as_ref().is_none_or(|s| s.password || !signed_in));
                     // Back from a renewal started before the session ended: if the provider
                     // couldn't do it without asking, the session simply carries on until it
@@ -602,6 +672,15 @@ impl Account {
                     }
                 }
                 Reply::Reload => reload(),
+                Reply::SignedIn => match crate::continueto::from_address() {
+                    Some(next) => {
+                        if let Some(w) = web_sys::window() {
+                            crate::files::clear_unsaved_flag();
+                            let _ = w.location().replace(&next);
+                        }
+                    }
+                    None => reload(),
+                },
                 Reply::SignedOut(to) => match (to, web_sys::window()) {
                     (Some(url), Some(w)) => {
                         crate::files::clear_unsaved_flag();
@@ -1270,7 +1349,7 @@ impl Account {
             self.busy = true;
             self.error = None;
             let body = json!({ "code": self.code.trim(), "name": self.name, "username": self.username, "password": self.password });
-            call(&self.inbox, ctx, Method::Post, "api/signup", Some(body), |_| Reply::Reload);
+            call(&self.inbox, ctx, Method::Post, "api/signup", Some(body), |_| Reply::SignedIn);
         }
     }
 
