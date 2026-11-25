@@ -4,6 +4,9 @@
 //! DeckCraft command by id (`SlideApp::run`), opens one of its dialogs (`app.dialog`), or is one of
 //! our own `slides.*` commands ([`Shell::own`]). DeckCraft's keyboard shortcuts keep working.
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use deckcraft_ui_egui::{SlideApp, ViewMode};
 use egui::{Align, Button, Color32, Layout, RichText, Stroke, Ui, vec2};
 use serde_json::{Value, json};
@@ -98,7 +101,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
         "View",
         &[
             Cmd("Slideshow", "show.fromStart", NO, "Ctrl+Shift+Enter"),
-            Check("Presenter view", "show.presenter", NO, "presenter"),
+            Cmd("Presenter view", "slides.presenter", NO, ""),
             Sep,
             Check("Normal", "view.normal", NO, "normal"),
             Check("Grid view", "view.sorter", NO, "sorter"),
@@ -297,6 +300,18 @@ pub struct Shell {
     renaming: Option<String>,
     /// DeckCraft's built-in themes, read once (`design.themes`).
     themes: Option<Vec<String>>,
+    /// View › Presenter view asked for this show's presenter window: the browser build's
+    /// `Services::displays` reads it (without it, DeckCraft opens that window only on a second
+    /// screen, as Google Slides' Slideshow shows just the slides).
+    presenter: Rc<Cell<bool>>,
+    /// A show has been seen since [`Self::presenter`] was set (it is cleared when that show ends).
+    presenting: bool,
+}
+
+/// Where the Slideshow button was drawn last (egui points, which are CSS pixels), in egui's
+/// temporary data: the browser build asks for full screen when a click lands there (`fullscreen`).
+pub fn slideshow_rect_id() -> egui::Id {
+    egui::Id::unique("starslides_slideshow_rect")
 }
 
 /// The parts of DeckCraft's window we draw ourselves.
@@ -307,6 +322,12 @@ pub fn chrome() -> deckcraft_ui_egui::HostChrome {
 impl Shell {
     pub fn new(mode: Mode) -> Self {
         Shell { mode, ..Default::default() }
+    }
+
+    /// Set while View › Presenter view starts a show (see [`Shell::presenter`]).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub fn presenter_flag(&self) -> Rc<Cell<bool>> {
+        self.presenter.clone()
     }
 
     /// The palette for this frame.
@@ -320,6 +341,12 @@ impl Shell {
         let ctx = ui.ctx().clone();
         let pal = self.palette(&ctx);
         crate::theme::sync(app, pal.dark);
+        if app.show.is_some() {
+            self.presenting = self.presenter.get();
+        } else if self.presenting {
+            self.presenting = false;
+            self.presenter.set(false);
+        }
         if app.show.is_some() {
             return;
         }
@@ -372,6 +399,8 @@ impl Shell {
                 .min_size(vec2(118.0, 36.0));
                 let r = ui.add_enabled(deckcraft_ui_egui::ribbon::enabled(app, "show.fromStart"), present);
                 named(ui, &r, "Slideshow");
+                // For the browser's full screen, which must be asked for in the click itself.
+                ui.ctx().data_mut(|d| d.insert_temp(slideshow_rect_id(), r.rect));
                 if r.on_hover_text("Present from the current slide (Ctrl+Enter); from the start: Ctrl+Shift+Enter").clicked() {
                     self.run(app, drive, "show.fromCurrent", json!({}));
                 }
@@ -618,7 +647,6 @@ impl Shell {
     /// Whether a ticked entry is on now.
     fn is_on(&self, app: &mut SlideApp, key: &str) -> bool {
         match key {
-            "presenter" => app.ui.presenter_view,
             "normal" => app.ui.view == ViewMode::Normal,
             "sorter" => app.ui.view == ViewMode::Sorter,
             "notes" => app.ui.notes,
@@ -679,6 +707,12 @@ impl Shell {
             "theme" => {
                 self.mode = Mode::parse(p.get("mode").and_then(Value::as_str).unwrap_or("system"));
                 crate::prefs::set(crate::theme::KEY, self.mode.name());
+            }
+            "presenter" => {
+                // The slides here, the presenter window (notes, next slide, timer) beside them.
+                self.presenter.set(true);
+                app.ui.presenter_view = true;
+                app.run("show.fromCurrent", json!({}))?;
             }
             "textBox" => app.session.set_tool(deckcraft_engine::ToolKind::TextBox),
             "shape" => {

@@ -9,10 +9,11 @@ profiles, [patch.crates-io]) except:
   and the engine crates it reaches); cargo warns about every other entry;
 - [patch.crates-io] keeps only the crates in the build (Cargo.lock), for the same reason;
 - release builds strip symbol names: wasm-bindgen then fits in the build machine's memory (as
-  for StarDocs) and the site is no bigger.
-Size trimming (StarDocs' wordcraft-trim recipe: opt-level, fewer codecs) is not applied yet
-(job S7). Run by fetch-upstream.sh; a changed Cargo.toml after a pin bump is expected and
-committed.
+  for StarDocs) and the site is no bigger;
+- release builds are optimised for size, as StarDocs' (docs/research/wordcraft-trim.md): opt-level
+  "s" and one codegen unit, with the crates that draw slides and lay out text kept at opt-level 3
+  ([HOT]); the image crate leaves out TIFF and the zip crate zopfli.
+Run by fetch-upstream.sh; a changed Cargo.toml after a pin bump is expected and committed.
 """
 import pathlib, re, tomllib
 
@@ -27,6 +28,26 @@ assert body.count(old_repo) == 1, "gen-cargo.py: upstream changed, repository li
 body = body.replace(old_repo, 'repository = "https://github.com/DomeShifter/Starbase"')
 assert body.count("[profile.release]\n") == 1, "gen-cargo.py: upstream changed, no [profile.release]"
 body = re.sub(r"(\[profile\.release\]\n)", r'\1strip = "symbols"\n', body, count=1)
+# Smaller download (docs/research/wordcraft-trim.md, measured for Slides in job S7): optimise
+# release code for size. "s", not "z" (StarDocs: "z" made typing ~3x slower); one codegen unit
+# costs only build time.
+rel = re.search(r"\[profile\.release\]\n(?:(?!\n\[).)*", body, flags=re.S)
+sect = re.sub(r'(?m)^opt-level = .*$', 'opt-level = "s"', rel.group(0))
+sect = re.sub(r'(?m)^codegen-units = .*$', 'codegen-units = 1', sect)
+assert 'opt-level = "s"' in sect and "codegen-units = 1" in sect, "gen-cargo.py: upstream's [profile.release] changed"
+# Except the crates drawing a slide and laying out its text spend their time in, kept at
+# opt-level 3 (only those in the build: cargo warns about a profile for a crate it doesn't use).
+HOT = ["deckcraft-render", "deckcraft-text", "vello_cpu", "vello_common", "fearless_simd", "peniko", "kurbo", "harfrust", "skrifa"]
+lock_text = (root / "Cargo.lock").read_text() if (root / "Cargo.lock").exists() else ""
+hot = [c for c in HOT if not lock_text or f'name = "{c}"' in lock_text]
+keys, _, rest = sect.partition("\n\n")
+sect = keys.rstrip("\n") + "\n" + "".join(f"\n[profile.release.package.{c}]\nopt-level = 3\n" for c in hot) + rest
+body = body[: rel.start()] + sect + body[rel.end():]
+# No TIFF decoder (Google Slides can't insert TIFF either) and no zopfli compressor: zip's
+# `deflate` adds zopfli, which only runs above level 9.
+for old, new in (('"tiff", "bmp"]', '"bmp"]'), ('features = ["deflate"]', 'features = ["deflate-flate2-zlib-rs"]')):
+    assert body.count(old) == 1, f"gen-cargo.py: upstream changed, {old} not found once"
+    body = body.replace(old, new)
 # Only the workspace dependencies something in the build takes (`workspace = true`): our app,
 # and the engine crates it reaches through path dependencies, which take theirs from this
 # workspace too. Cargo warns about every other entry ("unused workspace dependency"). An entry is
