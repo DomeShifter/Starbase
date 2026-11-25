@@ -11,6 +11,7 @@ number goes up for new features and the last one for fixes.
 ## [Unreleased]
 
 ### Added
+- Linux downloads on a release are signed with the Starbase release key: `SHA256SUMS`, `SHA256SUMS.asc` and a `.asc` per file (key: `packaging/linux/starbase-release-signing.asc`; how to check: `packaging/README.md`). The AppImage is now attached to the release too.
 - Starbase Docs: selecting a picture swaps the toolbar's text tools for the picture's, as in
   Google Docs: crop, image options, replace, reset, and the five ways of wrapping text.
 - Starbase Docs: **my default styles**, as in Google Docs (Format › Paragraph styles › Options,
