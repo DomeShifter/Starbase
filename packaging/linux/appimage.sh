@@ -67,6 +67,9 @@ mkdir -p "$APPDIR/usr/share/metainfo"
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$BUILD_DATE/g" \
   "$HERE/$ID.metainfo.xml.in" >"$APPDIR/usr/share/metainfo/$ID.metainfo.xml"
 "$HERE/icons.sh" "$APPDIR/usr/share/icons"
+# The package version, for `Starbase.AppImage --version` (AppRun).
+install -Dm644 /dev/null "$APPDIR/usr/share/starbase/version"
+printf '%s\n' "$VERSION" >"$APPDIR/usr/share/starbase/version"
 mkdir -p "$APPDIR/usr/share/doc/starbase"
 for f in README.md LICENSE-MIT LICENSE-APACHE NOTICE; do
   if [[ -f "$ROOT/$f" ]]; then cp "$ROOT/$f" "$APPDIR/usr/share/doc/starbase/"; fi

@@ -58,18 +58,22 @@ python3 flatpak-cargo-generator.py stardocs/Cargo.lock   -o packaging/linux/flat
   letters in the ID (`cid-contains-uppercase-letter`), which Flathub allows outside the domain.
 - `appimage.sh` with stub executables built a working AppImage. The dispatcher sent each case to
   the right program, the update information was embedded, and the icons were staged.
+- **CI builds the real AppImage** (`.github/workflows/desktop.yml`, artifact `starbase-appimage`):
+  both programs built on ubuntu-22.04 (glibc 2.35), packed with `appimage.sh`, then smoke-tested
+  on ubuntu-22.04 and the newest Ubuntu without FUSE (`APPIMAGE_EXTRACT_AND_RUN=1`): `--version`,
+  the dispatcher, no missing libraries, and Starbase Drive, a CSV in Starbase Sheets and Starbase
+  Docs each staying up for 15 s under Xvfb. Version: `X.Y.Z` from a `vX.Y.Z` tag, otherwise
+  `0.0.0-dev+<short commit>`. Not signed yet (marked placeholder step).
 - The Flatpak manifest has **not** been built: there are no native executables yet, and no
   `flatpak-builder` was available.
 
 ## Still missing
 
-1. **Native entry points.** `starsheets` is a desktop program since plan job D1a
-   (`starsheets/app/src/native.rs`: file paths, `--new [DIR]`, `--home`, `--version`; CI's
-   "Desktop app (Linux)" job builds it). `stardocs` (D1b) is still web-only.
-2. **Starbase Drive icon.** `icons.sh` and the Flatpak data module expect
-   `starsheets/app/stardrive.svg`, which is on the `icons` branch. Until that branch is merged,
-   the Starbase Sheets icon stands in (with a warning). Add the file as a source in the Flatpak data
-   module when it lands.
+1. **Mounted AppImage and child windows.** When Starbase Drive opens a file it starts another
+   process from inside the AppImage. With FUSE the image is unmounted when the first process
+   exits, so a window started from it could lose its files. Not seen yet; check on a desktop.
+2. **Starbase Drive icon in the Flatpak.** `starsheets/app/stardrive.svg` is merged and
+   `icons.sh` uses it; add it as a source in the Flatpak data module.
 3. **Package version.** Starbase has no version of its own: the workspaces are 0.4.0 and 0.18.1.
    `appimage.sh` takes `--version`, `$STARBASE_VERSION` or the latest git tag. The Flatpak
    manifest writes `0.0.0-dev` until the release job substitutes the tag.
