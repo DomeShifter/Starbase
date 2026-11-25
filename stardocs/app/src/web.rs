@@ -52,7 +52,7 @@ pub fn start() {
                 canvas,
                 options,
                 Box::new(move |cc| {
-                    add_bundled_fonts();
+                    crate::arimo::add();
                     // Fonts the user added on an earlier visit (#582); the app notices them arrive.
                     font_store::load_all(cc.egui_ctx.clone());
                     let inbox: Inbox = Inbox::default();
@@ -139,26 +139,6 @@ pub fn start() {
             }
         }
     });
-}
-
-/// Arimo's four faces (app/fonts, Apache License 2.0): drawn to Arial's widths.
-const ARIMO: [&[u8]; 4] = [
-    include_bytes!("../fonts/Arimo-Regular.ttf"),
-    include_bytes!("../fonts/Arimo-Bold.ttf"),
-    include_bytes!("../fonts/Arimo-Italic.ttf"),
-    include_bytes!("../fonts/Arimo-BoldItalic.ttf"),
-];
-
-/// Add Arimo to the font database before any text is laid out. A browser has no Arial, the
-/// default font of a new document (as in Google Docs); WordCraft draws a missing Arial in its
-/// first installed metric twin (Liberation Sans, Helvetica, Arimo), so with Arimo present Arial
-/// text keeps Arial's widths and breaks lines where Word and Google Docs do, with no warning in
-/// the font box. Added as a document's fonts are: for this run, not as a user font.
-fn add_bundled_fonts() {
-    let files = ARIMO.iter().map(|b| (b.to_vec(), "Arimo".to_string())).collect();
-    if wordcraft_fonts::FontDb::global().add_document_fonts(files) != ARIMO.len() {
-        log::warn!("Arimo (the bundled stand-in for Arial) didn't load fully");
-    }
 }
 
 fn query() -> String {

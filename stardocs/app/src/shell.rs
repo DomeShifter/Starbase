@@ -684,6 +684,7 @@ pub fn set_mode(app: &mut WordApp, mode: Mode) {
 }
 
 /// StarDocs' own menu commands, which [`run_menu`] handles itself.
+#[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code, reason = "the test hook's, browser and tests only"))]
 fn is_own(id: &str) -> bool {
     matches!(
         id,
@@ -846,6 +847,7 @@ impl Shell {
     /// Runs one of StarDocs' own commands (`stardocs.*`, as the menus do) for the test hook.
     /// `stardocs.rename` takes `{"name": …}` and renames at once; `stardocs.share` opens the
     /// Share dialog; `stardocs.customColour` opens the Custom colour dialog.
+    #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code, reason = "the test hook's, browser and tests only"))]
     pub fn test_command(&mut self, app: &mut WordApp, link: Option<&Link>, id: &str, params: Value) -> Result<Value, String> {
         let ctx = self.ctx.clone().ok_or("the window hasn't been drawn yet")?;
         match (id, link) {
@@ -863,6 +865,7 @@ impl Shell {
         Ok(json!(true))
     }
 
+    #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code, reason = "the test hook's, browser and tests only"))]
     pub fn test_state(&mut self, app: &mut WordApp, link: Option<&Link>) -> Value {
         let cur = current(app);
         let saved = link.map(|l| match l.saved() {
@@ -1381,7 +1384,7 @@ impl Shell {
             let logo = ui.add(icons::logo(36.0).sense(egui::Sense::click()));
             ui.add_space(6.0);
             if let Some(link) = link {
-                if logo.on_hover_text("Starbase home").clicked() {
+                if logo.on_hover_text(Link::HOME_TIP).clicked() {
                     link.home();
                 }
             } else {
@@ -1406,6 +1409,10 @@ impl Shell {
                     // Opening failed (or hasn't finished): nothing to share yet.
                     Some(link) if link.id().is_some() && link.name().is_empty() && !self.share.waiting() => {
                         ui.add_enabled(false, share).on_disabled_hover_text("The document isn't open");
+                    }
+                    // A document on this computer (the desktop program's local mode).
+                    Some(link) if !link.can_share() => {
+                        ui.add_enabled(false, share).on_disabled_hover_text("Sharing needs a Starbase server");
                     }
                     Some(link) => {
                         if ui.add(share).on_hover_text("Share this document with people on this server").clicked() {
@@ -1480,7 +1487,7 @@ impl Shell {
                 _ if link.view_only() => ("View only".to_string(), TEXT_DIM),
                 Saved::Nothing => (String::new(), TEXT_DIM),
                 Saved::Saving => ("Saving…".to_string(), TEXT_DIM),
-                Saved::Done => ("Saved to Starbase".to_string(), TEXT_DIM),
+                Saved::Done => (Link::SAVED.to_string(), TEXT_DIM),
                 Saved::Failed(why) => (why, Color32::from_rgb(0xb3, 0x26, 0x1e)),
             };
             if !text.is_empty() {
@@ -1625,6 +1632,13 @@ fn menu_items(app: &mut WordApp, ui: &mut Ui, flags: &mut Flags, items: &[Item],
                     run_menu(app, ui.ctx(), flags, link, id, params(p));
                     ui.close();
                 }
+                // The desktop program: File › Open recent, under Open.
+                #[cfg(not(target_arch = "wasm32"))]
+                if *id == "file.open"
+                    && let Some(link) = link
+                {
+                    recent_menu(ui, link, width, column);
+                }
             }
             Toggle(_, id, key, _) => {
                 // A tick in the icon column when it is on, as Docs' View menu shows.
@@ -1664,6 +1678,32 @@ fn menu_items(app: &mut WordApp, ui: &mut Ui, flags: &mut Flags, items: &[Item],
             Sep => menu_sep(ui, width),
         }
     }
+}
+
+/// File › Open recent (desktop): the files opened lately, each in a window of its own.
+#[cfg(not(target_arch = "wasm32"))]
+fn recent_menu(ui: &mut Ui, link: &Link, width: f32, column: bool) {
+    let recent = link.recent();
+    let b = menu_row(None, column, "Open recent", "", width);
+    let b = match icons::icon_px("arrow_right", ICON) {
+        Some(arrow) => b.right_text(arrow),
+        None => b.right_text(egui::containers::menu::SubMenuButton::arrow_atom(Some(KEYS_GREY))),
+    };
+    if recent.is_empty() {
+        ui.add_enabled(false, b);
+        return;
+    }
+    egui::containers::menu::SubMenuButton::from_button(b).ui(ui, |ui| {
+        menu_look(ui);
+        for path in recent {
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let row = menu_row(None, false, &name, "", width.max(280.0));
+            if ui.add(row).on_hover_text(path.display().to_string()).clicked() {
+                link.open_path(path);
+                ui.close();
+            }
+        }
+    });
 }
 
 /// Docs' Insert › Table grid: hover to choose rows × columns (up to 10 × 10), click to insert.

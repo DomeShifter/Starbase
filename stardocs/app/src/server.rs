@@ -132,6 +132,16 @@ fn now() -> f64 {
 }
 
 impl Link {
+    /// What the title row says once saved.
+    pub const SAVED: &str = "Saved to Starbase";
+    /// The logo's tooltip: it goes to the home screen.
+    pub const HOME_TIP: &str = "Starbase home";
+
+    /// Documents on the server can be shared (the desktop's local files can't).
+    pub fn can_share(&self) -> bool {
+        true
+    }
+
     /// The link for this page, or `None` when it wasn't opened from the home screen (no `?file=`
     /// and no `?new=`): then StarDocs is the plain app with downloads.
     pub fn detect(ctx: egui::Context) -> Option<Self> {

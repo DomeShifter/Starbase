@@ -1,6 +1,6 @@
 [package]
 name = "stardocs"
-description = "Starbase Docs: a Google Docs-style word processor for the web on WordCraft's engine"
+description = "Starbase Docs: a Google Docs-style word processor for the web and the desktop on WordCraft's engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -30,6 +30,15 @@ wordcraft-render = { workspace = true }
 kurbo = { workspace = true }
 # SVG loader for the toolbar icons (resvg).
 egui_extras = { workspace = true, features = ["svg"] }
+
+# The desktop program (native.rs): the same window in a native eframe window, drawn with OpenGL
+# through glow as the web build draws with WebGL2; the system's file dialogs (rfd, waited for on
+# a thread with pollster, as WordCraft's desktop app does); local time for copy names.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+eframe = { workspace = true, features = ["default_fonts", "glow", "accesskit", "clipboard", "wayland", "x11"] }
+rfd = { workspace = true }
+pollster = "1"
+chrono = { workspace = true, features = ["clock"] }
 
 # Native tests of the window (src/shell_tests.rs): egui_kittest's accessibility tree, no GPU.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
