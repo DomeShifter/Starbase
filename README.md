@@ -114,7 +114,7 @@ Here is where Starbase is heading. Nothing below has a date: it lands when it's 
 
 | What | Status |
 |---|---|
-| **Linux desktop app** (AppImage, Flatpak, then Flathub): work offline on local files, or connect to your server | In progress |
+| **Linux desktop app** (signed AppImage and our own Flatpak repository): work offline on local files, or connect to your server | In progress |
 | **Live co-editing in Starbase Docs**, as Sheets already has | Planned |
 | **Starbase Slides**: first version is on `main` (open, edit and save `.pptx`); next comes polish and **live co-editing** | In progress |
 | **Windows**, then **Mac** desktop apps | Planned |
@@ -125,8 +125,9 @@ Here is where Starbase is heading. Nothing below has a date: it lands when it's 
 ### Coming next
 
 The next big step is the **Linux desktop release**: one package with Starbase Drive, Sheets and
-Docs in your app menu, opening `.xlsx` and `.docx` files with a double-click, working without a
-server, and able to connect to yours when you want to share. After that, Flathub.
+Docs (and Slides) in your app menu, opening `.xlsx`, `.docx` and `.pptx` files with a double-click,
+working without a server, and able to connect to yours when you want to share. It will come as a
+signed AppImage and from our own Flatpak repository.
 
 ## Built on
 
@@ -142,6 +143,14 @@ Starbase stands on the shoulders of the excellent open-source engines by
 We keep our engine changes on forks (DomeShifter/gridcraft branch `starsheets`, DomeShifter/wordcraft
 branch `stardocs`, DomeShifter/deckcraft branch `starslides`) and offer useful fixes back upstream. The apps were called StarSheets, StarDocs
 and StarDrive until November 2026, which is why some folders and programs still use those names.
+
+### How Starbase is made
+
+Starbase is written mostly by an AI (Claude, by Anthropic), working as the lead developer under the
+direction of its human maintainer, who sets the goals, makes the decisions and reviews the results.
+Every change goes through automated tests and a pull request, and security-sensitive changes get an
+independent adversarial review before they are merged. We say this up front because you deserve to
+know how the software you run is built.
 
 ## Contributing
 
