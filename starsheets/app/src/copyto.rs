@@ -124,7 +124,7 @@ impl CopyTo {
                         .as_array()
                         .into_iter()
                         .flatten()
-                        .filter(|f| f["id"].as_str() != Some(this.as_str()) && crate::home::may_edit(f["role"].as_str().unwrap_or("")))
+                        .filter(|f| f["id"].as_str() != Some(this.as_str()) && f["role"].as_str() != Some("view"))
                         // Only types that hold several sheets.
                         .filter(|f| f["name"].as_str().is_some_and(|n| [".xlsx", ".xlsm", ".ods"].iter().any(|e| n.to_lowercase().ends_with(e))))
                         .map(|f| FileRow {

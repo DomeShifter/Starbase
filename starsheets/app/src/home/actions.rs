@@ -9,7 +9,7 @@ impl Home {
         let targets = if self.selected.contains(item) { self.selected.clone() } else { vec![item.clone()] };
         let single = targets.len() == 1;
         let role = self.role_of(item).to_string();
-        let can_edit = may_edit(&role);
+        let can_edit = role != "view";
         let is_space = matches!(item, Item::Folder(f) if !f.contains('/') && self.accounts);
         let row = |ui: &mut Ui, icon: &str, label: &str, keys: &str, enabled: bool| house::menu_row(ui, Some(icon), label, keys, enabled);
         if row(ui, "", "Open", "Enter", single) {
@@ -232,10 +232,10 @@ impl Home {
         };
         // Where things can go: folders you can edit, not into a folder being moved.
         let moving: Vec<String> = items.iter().filter_map(|i| if let Item::Folder(p) = i { Some(p.clone()) } else { None }).collect();
-        let ok = |path: &str, role: &str| may_edit(role) && !moving.iter().any(|m| under(path, m));
+        let ok = |path: &str, role: &str| role != "view" && !moving.iter().any(|m| under(path, m));
         let mut tops: Vec<(String, String)> = vec![(self.space.clone(), if self.accounts { "My files".into() } else { "All files".into() })];
         for t in &self.shared_folders {
-            if self.folder(t).is_some_and(|f| may_edit(&f.role)) {
+            if self.folder(t).is_some_and(|f| f.role != "view") {
                 tops.push((t.clone(), format!("{} (shared by {})", name_of(t), self.person(space_of(t)))));
             }
         }
@@ -387,7 +387,6 @@ impl Home {
                         match f.role.as_str() {
                             "owner" => "Owner",
                             "edit" => "Can edit",
-                            "comment" => "Can comment",
                             _ => "Can view",
                         }
                         .into(),
@@ -429,14 +428,12 @@ impl Home {
                 let role = match person["role"].as_str().unwrap_or("") {
                     "owner" => "owner",
                     "edit" => "can edit",
-                    "comment" => "can comment",
                     _ => "can view",
                 };
                 access_lines.push(format!("{} ({role})", person["name"].as_str().unwrap_or("")));
             }
             match a["link"].as_str().unwrap_or("none") {
                 "view" => access_lines.push("Anyone signed in with the link can view".into()),
-                "comment" => access_lines.push("Anyone signed in with the link can comment".into()),
                 "edit" => access_lines.push("Anyone signed in with the link can edit".into()),
                 _ => {}
             }

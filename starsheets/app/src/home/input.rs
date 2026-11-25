@@ -107,7 +107,7 @@ impl Home {
                     }
                     Key::F2 if self.selected.len() == 1 => {
                         let item = self.selected[0].clone();
-                        if super::may_edit(self.role_of(&item)) {
+                        if self.role_of(&item) != "view" {
                             self.start_rename(&item);
                         }
                     }

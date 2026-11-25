@@ -522,7 +522,7 @@ impl Home {
     fn here(&self) -> Option<String> {
         match self.view.as_ref()? {
             View::Mine(p) => Some(p.clone()),
-            View::Shared(Some(p)) => self.folder(p).filter(|f| may_edit(&f.role)).map(|_| p.clone()),
+            View::Shared(Some(p)) => self.folder(p).filter(|f| f.role != "view").map(|_| p.clone()),
             View::Everyone(p) if !p.is_empty() => Some(p.clone()),
             _ => None,
         }
@@ -941,10 +941,4 @@ fn size_text(n: u64) -> String {
         1024..=1_048_575 => format!("{:.0} KB", n as f64 / 1024.0),
         _ => format!("{:.1} MB", n as f64 / 1_048_576.0),
     }
-}
-
-/// Whether a role from the server may change a file or add to a folder: "comment" (documents
-/// only) and "view" may not.
-pub(crate) fn may_edit(role: &str) -> bool {
-    !matches!(role, "view" | "comment")
 }

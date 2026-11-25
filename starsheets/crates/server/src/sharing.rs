@@ -1,6 +1,6 @@
 //! Who may open which file or folder, as in Google Drive. Everyone has their own folder at the
 //! top (`<username>/`, see store.rs); what's in it is theirs. A file or a folder can be shared
-//! with people (can view, can comment or can edit) and have a general setting ("anyone with the link", meaning
+//! with people (can view or can edit) and have a general setting ("anyone with the link", meaning
 //! anyone signed in to this server who has the link). Sharing a folder shares everything in it,
 //! also what's added later. Kept in STORE/.starsheets/sharing.json by file id ("files") and
 //! folder id ("folders").
@@ -20,9 +20,6 @@ pub enum Role {
     #[default]
     None,
     View,
-    /// Can view, and add, reply to and resolve comments in a document, not change its text
-    /// (commenting.rs checks their saves). Spreadsheets treat a commenter as a viewer.
-    Comment,
     Edit,
     Owner,
 }
@@ -32,7 +29,6 @@ impl Role {
         match self {
             Role::None => "none",
             Role::View => "view",
-            Role::Comment => "comment",
             Role::Edit => "edit",
             Role::Owner => "owner",
         }
@@ -40,7 +36,6 @@ impl Role {
     fn parse(s: &str) -> Role {
         match s {
             "view" => Role::View,
-            "comment" => Role::Comment,
             "edit" => Role::Edit,
             _ => Role::None,
         }
@@ -316,8 +311,8 @@ pub fn describe(store: &Store, item: Item, relpath: &str, you: Role) -> Value {
     json!({ "people": people, "link": share.link.name(), "you": you.name(), "folder": matches!(item, Item::Folder(_)) })
 }
 
-/// Applies the Share dialog's changes: `people` maps username → "view", "comment", "edit" or
-/// "remove"; `link` is "none", "view", "comment" or "edit".
+/// Applies the Share dialog's changes: `people` maps username → "view", "edit" or "remove";
+/// `link` is "none", "view" or "edit".
 pub fn update(store: &Store, item: Item, relpath: &str, body: &Value) -> Result<(), String> {
     let mut share = get(store, item);
     let owner = owner_of(store, relpath);
@@ -335,7 +330,7 @@ pub fn update(store: &Store, item: Item, relpath: &str, body: &Value) -> Result<
                 }
                 let r = Role::parse(role);
                 if r == Role::None {
-                    return Err("A person can view, comment or edit.".into());
+                    return Err("A person can view or edit.".into());
                 }
                 share.people.push((username.clone(), r));
             }
