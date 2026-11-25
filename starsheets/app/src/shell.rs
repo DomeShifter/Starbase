@@ -124,6 +124,9 @@ pub const MENUS: &[(&str, &[Item])] = &[
                 ],
             ),
             Sub("Group", &[Cmd("Group", "data.group", "Alt+Shift+→"), Cmd("Ungroup", "data.ungroup", "Alt+Shift+←")]),
+            Cmd("Protected ranges", "panel:protect", ""),
+            Sep,
+            Sub("Hidden sheets", &[Cmd("Show all hidden sheets", "panel:unhideSheets", "")]),
             Sep,
             Sub(
                 "Zoom",
@@ -137,6 +140,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
                     CmdWith("200%", "view.zoom", "", r#"{"percent":200}"#),
                 ],
             ),
+            Cmd("Full screen", "panel:fullscreen", ""),
         ],
     ),
     (
@@ -149,6 +153,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Sep,
             Cmd("Chart", "panel:chart", ""),
             Cmd("Pivot table", "insert.pivotTable", ""),
+            Cmd("Sparkline", "panel:sparkline", ""),
             Sub("Image", &[Cmd("Insert image in cell", "panel:imageInCell", ""), Cmd("Insert image over cells", "panel:imageOverCells", "")]),
             Sep,
             Sub(
@@ -295,6 +300,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Cmd("Create a filter", "data.filter", ""),
             Sub("Filter views", &[Cmd("Create new filter view", "panel:filterViewNew", ""), Cmd("Save as filter view", "panel:filterViewSave", "")]),
             Cmd("Add a slicer", "insert.slicer", ""),
+            Cmd("Refresh pivot tables", "data.refreshAll", ""),
             Sep,
             Cmd("Protect sheets and ranges", "panel:protect", ""),
             Cmd("Named ranges", "ui:nameManager", ""),
@@ -1505,6 +1511,8 @@ pub fn run_entry_with(app: &mut SheetApp, ctx: &egui::Context, id: &str, params:
         ctx.data_mut(|m| m.insert_temp(egui::Id::unique(crate::protectpanel::REQUEST), -1i64));
     } else if id == "panel:customnumber" {
         ctx.data_mut(|m| m.insert_temp(egui::Id::unique(crate::customnumber::REQUEST), true));
+    } else if id == "panel:fullscreen" {
+        toggle_fullscreen();
     } else if id == "panel:chart" {
         ctx.data_mut(|m| m.insert_temp(egui::Id::unique(crate::chartpanel::REQUEST), true));
     } else if id == "panel:dropdown" {
@@ -1738,6 +1746,18 @@ fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[Item]) -> f32 {
     width
 }
 
+/// View › Full screen: the browser's own full screen for the whole page; the same entry leaves it.
+fn toggle_fullscreen() {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+        if doc.fullscreen_element().is_some() {
+            doc.exit_fullscreen();
+        } else if let Some(el) = doc.document_element() {
+            let _ = el.request_fullscreen();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1864,6 +1884,7 @@ mod tests {
             "panel:customnumber",
             "panel:customcurrency",
             "panel:protect",
+            "panel:fullscreen",
             "panel:shortcuts",
             "panel:searchMenus",
             "panel:alternatingColours",
