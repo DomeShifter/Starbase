@@ -140,6 +140,20 @@ impl Viewer {
         false
     }
 
+    /// Escape peels one layer, like Google Photos: the Open with menu, then the
+    /// Info panel, and only then the viewer itself. Returns false when the viewer
+    /// should close.
+    pub fn escape(&mut self) -> bool {
+        if self.menu {
+            self.menu = false;
+        } else if self.info {
+            self.info = false;
+        } else {
+            return false;
+        }
+        true
+    }
+
     fn zoom_by(&mut self, f: f32) {
         self.zoom = (self.zoom * f).clamp(1.0, MAX_ZOOM);
         if self.zoom == 1.0 {
@@ -171,11 +185,7 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
     // Keys first, so nothing behind the viewer gets them.
     ctx.input_mut(|i| {
         if i.consume_key(Modifiers::NONE, Key::Escape) {
-            if v.menu {
-                v.menu = false;
-            } else {
-                open = false;
-            }
+            open = v.escape();
         }
         if i.consume_key(Modifiers::NONE, Key::ArrowRight) || i.consume_key(Modifiers::NONE, Key::PageDown) {
             v.step(1);
@@ -546,6 +556,29 @@ mod tests {
         assert_eq!(order(5, false, 3, 9), vec![0, 1, 2, 3, 4]);
         v.set_shuffle(false, 0);
         assert_eq!(v.index(), 3);
+    }
+
+    #[test]
+    fn escape_peels_one_layer_at_a_time() {
+        // (menu, info) before → (menu, info) after, still open?
+        let table = [
+            ((false, false), (false, false), false),
+            ((false, true), (false, false), true),
+            ((true, false), (false, false), true),
+            ((true, true), (false, true), true),
+        ];
+        for ((menu, info), after, open) in table {
+            let mut v = Viewer::new(0, 3);
+            v.menu = menu;
+            v.info = info;
+            assert_eq!(v.escape(), open, "menu={menu} info={info}");
+            assert_eq!((v.menu, v.info), after, "menu={menu} info={info}");
+        }
+        // Info open: the first Escape closes only Info, the second closes the viewer.
+        let mut v = Viewer::new(0, 3);
+        v.info = true;
+        assert!(v.escape());
+        assert!(!v.escape());
     }
 
     #[test]
