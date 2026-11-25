@@ -28,9 +28,10 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request cancels the older run; runs on main always finish.
 concurrency:
   group: flatpak-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   APP_ID: io.github.DomeShifter.Starbase

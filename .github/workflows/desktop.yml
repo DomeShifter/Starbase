@@ -25,9 +25,10 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request cancels the older run; runs on main always finish.
 concurrency:
   group: desktop-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -53,7 +54,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: desktop-2204
+          # The same build as the StarSheets workflow's desktop job (main and tags): one cache.
+          shared-key: starsheets-native-release-2204
           workspaces: starsheets
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build
@@ -80,9 +82,10 @@ jobs:
       run:
         working-directory: stardocs
     steps:
-      - name: Make disk space (WordCraft's build needs more than the runner leaves free)
+      # WordCraft's build needs more disk than the runner leaves free; deleting runs in the background.
+      - name: Make disk space (in the background)
         working-directory: /
-        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+        run: sudo nohup rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL >/dev/null 2>&1 &
       - uses: actions/checkout@v7
       # The scripts use tomllib (Python 3.11+); ubuntu-22.04 ships 3.10.
       - uses: actions/setup-python@v6
@@ -95,7 +98,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: desktop-2204
+          # The same build as the StarDocs workflow's native job (main and tags): one cache.
+          shared-key: stardocs-native-release-2204
           workspaces: stardocs
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build

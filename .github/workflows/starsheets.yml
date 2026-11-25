@@ -15,9 +15,11 @@ on:
 permissions:
   contents: read
 
+# A newer push to a pull request cancels the older run. Runs on main always finish: each merge is
+# checked, and main's runs are the only ones that save build caches.
 concurrency:
   group: starsheets-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -41,10 +43,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+      # Caches: shared by key across jobs and workflows that build the same thing, saved only on
+      # main (GitHub keeps 10 GB per repository; pull-request caches used to push main's out).
       - uses: Swatinem/rust-cache@v2
         with:
-          key: web
+          shared-key: starsheets-wasm-release
           workspaces: starsheets
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install trunk
         run: |
           curl -sSfL "https://github.com/trunk-rs/trunk/releases/download/${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" | tar xz -C /usr/local/bin trunk
@@ -53,6 +58,11 @@ jobs:
         run: python3 scripts/fetch-fonts.py
       - name: Fetch the spelling word list (SCOWL)
         run: python3 scripts/fetch-dictionary.py
+      # wasm-opt only shrinks the file (~1.5 min); a pull request's build is never served.
+      - name: No wasm-opt on pull requests
+        if: github.event_name == 'pull_request'
+        working-directory: starsheets/app
+        run: sed -i 's/data-wasm-opt="z"/data-wasm-opt="0"/' index.html && grep -q 'data-wasm-opt="0"' index.html
       - name: Build
         working-directory: starsheets/app
         run: trunk build --release
@@ -74,7 +84,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Fetch GridCraft at the pinned commit of our fork
         run: scripts/fetch-upstream.sh
-      - uses: actions/cache@v6
+      - uses: actions/cache/restore@v6
         with:
           path: |
             ~/cargo-home/registry
@@ -97,6 +107,14 @@ jobs:
             cp target/aarch64-unknown-linux-gnu/release/starsheets-server server-bin/arm64/
             chown -R '"$(id -u):$(id -g)"' server-bin target /cargo-home'
           ls -la server-bin/*
+      - uses: actions/cache/save@v6
+        if: github.ref == 'refs/heads/main'
+        with:
+          path: |
+            ~/cargo-home/registry
+            ~/cargo-home/git
+            starsheets/target
+          key: server-${{ hashFiles('starsheets/Cargo.lock') }}
       - name: Same answers as the old Python server
         run: python3 crates/server/tests/parity.py server-bin/amd64/starsheets-server
       - uses: actions/upload-artifact@v7
@@ -106,28 +124,9 @@ jobs:
           retention-days: 30
 
   test:
+    # Also the desktop program's checks on every run (clippy on the native target, a debug build
+    # that starts); the release build is the desktop job below (main and tags).
     name: Tests (native)
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v7
-      - name: Fetch GridCraft at the pinned commit of our fork
-        run: scripts/fetch-upstream.sh
-      - name: System libraries for egui's native backends
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-dev libxkbcommon-dev libwayland-dev pkg-config libxkbcommon-x11-0
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: test
-          workspaces: starsheets
-      - name: Test
-        run: cargo test -p starsheets -p starsheets-server -p starsheets-sync -p starbase-connect -p starbase-open
-
-  desktop:
-    # The desktop program (app/src/native.rs, docs/research/desktop-plan.md D1a): built for
-    # Linux, its tests (local mode: open, autosave, conflicted copy, the local Drive), clippy on
-    # the native target, and a start-up check. The executable is kept for the packaging jobs.
-    name: Desktop app (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -141,14 +140,46 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          key: desktop
+          shared-key: starsheets-native-dev
           workspaces: starsheets
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Test
+        run: cargo test -p starsheets -p starsheets-server -p starsheets-sync -p starbase-connect -p starbase-open
       # Web-only helpers (accounts, sharing, web fonts, the spelling list download) are behind
       # cfg(target_arch = "wasm32"), so the desktop build has no unused code either.
       - name: Clippy (desktop app)
         run: cargo clippy -p starsheets -- -D warnings
-      - name: Tests
-        run: cargo test -p starsheets
+      - name: Desktop app builds and starts (debug build)
+        run: |
+          cargo build -p starsheets
+          target/debug/starsheets --version
+          target/debug/starsheets --help
+
+  desktop:
+    # The desktop program (app/src/native.rs, docs/research/desktop-plan.md D1a): the release build
+    # for Linux and a start-up check; the executable is kept as an artifact. Its tests and clippy
+    # run in the test job. Not on pull requests (the test job's debug build checks it compiles and
+    # starts). On ubuntu-22.04 with the same cache as the Desktop workflow's starsheets build.
+    name: Desktop app (Linux)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      # The scripts use tomllib (Python 3.11+); ubuntu-22.04 ships 3.10.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Fetch GridCraft at the pinned commit of our fork
+        run: scripts/fetch-upstream.sh
+      - name: System libraries for egui's native backends
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-dev libxkbcommon-dev libwayland-dev pkg-config libxkbcommon-x11-0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: starsheets-native-release-2204
+          workspaces: starsheets
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build
         run: cargo build --release -p starsheets
       - name: It starts
@@ -181,8 +212,9 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
         with:
-          key: lint
+          shared-key: starsheets-check
           workspaces: starsheets
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Formatting
         # Our packages only: GridCraft (upstream/) keeps its own formatting.
         run: cargo fmt -p starsheets -p starsheets-server -p starsheets-sync -p starbase-connect -p starbase-open --check
@@ -204,8 +236,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: speed
+          shared-key: starsheets-speed
           workspaces: starsheets
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Speed check
         run: cargo run --release -p starsheets-sync --example bench
 
@@ -225,8 +258,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          key: gridcraft
+          shared-key: gridcraft-native-dev
           workspaces: starsheets/upstream/gridcraft
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Test every GridCraft crate
         run: scripts/test-gridcraft.sh
 
