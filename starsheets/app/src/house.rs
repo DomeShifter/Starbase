@@ -580,6 +580,7 @@ pub fn toast(ctx: &egui::Context, text: &str) {
 }
 
 /// The toast showing now, if any (for the test hook; `show_toast` clears it once it has run out).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub fn toast_text() -> Option<String> {
     TOAST.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|(t, _)| t.clone())
 }
