@@ -296,7 +296,7 @@ def accounts():
         post("/api/login", {"username": "owner", "password": "longpassword"})
         files = json.loads(s.call("GET", "/api/files")[2])["files"]
         budget_id = [f["id"] for f in files if f["name"] == "Budget.xlsx"][0]
-        got.append(("the server's owner sees every file", len(files) == 3))
+        got.append(("the server's owner sees every file", len(files) == 4))  # notes.txt too (every file type is listed)
         got.append(("owner shares with bob to view", post(f"/api/files/{budget_id}/sharing", {"people": {"bob": "view"}})[0] == 200))
         s.call("POST", "/api/logout"); s.cookie = ""
         post("/api/login", {"username": "bob", "password": "bobspassword"})

@@ -410,6 +410,40 @@ impl Home {
         self.files.iter().find(|f| f.id == id)
     }
 
+    /// The address of file `id`'s preview page (crates/server/src/preview.rs), relative to the page.
+    #[cfg(target_arch = "wasm32")]
+    fn preview_url(id: &str) -> String {
+        format!("api/files/{id}/preview")
+    }
+
+    /// Opens file `id`'s preview in a new tab (a desktop app connected to a server downloads it).
+    fn preview(&mut self, ctx: &egui::Context, id: &str, name: &str) {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = (ctx, name);
+            if let Some(w) = web_sys::window() {
+                let _ = w.open_with_url_and_target(&Self::preview_url(id), "_blank");
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        self.download(ctx, id, name);
+    }
+
+    /// Downloads file `id`. In the browser the server sends it as an attachment (streamed, so a
+    /// big film doesn't sit in the page's memory); the desktop app saves it with a file dialog.
+    fn download(&mut self, ctx: &egui::Context, id: &str, name: &str) {
+        // Other files in the browser: the server names the download itself.
+        #[cfg(target_arch = "wasm32")]
+        if items::opens_as(name) != items::Opens::Editor {
+            if let Some(w) = web_sys::window() {
+                let _ = w.location().set_href(&format!("api/files/{id}"));
+            }
+            return;
+        }
+        let name = name.to_string();
+        call(&self.store, &self.inbox, ctx, Method::Get, format!("api/files/{id}"), None, move |b| Reply::Download(name, b));
+    }
+
     /// A new spreadsheet or document in `folder` (it opens in its own tab or window).
     fn new_file(&mut self, folder: &str, document: bool) {
         if let Err(e) = self.store.new_file(folder, document) {
@@ -750,7 +784,8 @@ impl Home {
         }
     }
 
-    /// Files dropped on the page or picked with Upload: saved into the folder shown.
+    /// Files dropped on the page or picked with Upload: saved into the folder shown, any type,
+    /// under their own name (`as_is`: photo.jpg stays photo.jpg).
     pub fn upload(&mut self, ctx: &egui::Context, name: String, bytes: Vec<u8>) {
         let folder = self.here().unwrap_or_else(|| self.space.clone());
         call(
@@ -758,13 +793,17 @@ impl Home {
             &self.inbox,
             ctx,
             Method::Post,
-            format!("api/files?name={}&folder={}", enc(&name), enc(&folder)),
+            format!("api/files?name={}&folder={}&as_is=1", enc(&name), enc(&folder)),
             Some(bytes),
             refresh_after,
         );
     }
 
     fn want_thumb(&mut self, ctx: &egui::Context, f: &FileRow) {
+        // Only spreadsheets and documents have a picture: other files show their type's icon.
+        if items::opens_as(&f.name) != items::Opens::Editor {
+            return;
+        }
         if self.thumbs.get(&f.id).is_some_and(|(v, _)| *v == f.version) || self.fetching >= THUMBS_AT_ONCE {
             return;
         }
