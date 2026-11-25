@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use serde_json::Value;
 use starbase_connect::Reply;
 
-use crate::localfile::{Store, WriteError};
+use crate::localfile::{Copied, Store, WriteError};
 
 /// One call to the server's API (a connected [`starbase_connect::Server`], or a fake in tests).
 pub trait Api {
@@ -168,6 +168,19 @@ impl Store for ServerDoc {
         "Saved to Starbase"
     }
 
+    /// The server's copy (`POST api/files/<id>/copy`): "Copy of <name>" beside it, or in your own
+    /// folder when you can't add files to its folder.
+    fn copy(&mut self) -> Result<Copied, String> {
+        let r = self.api.call("POST", &format!("api/files/{}/copy", enc(&self.id)), None, None)?;
+        if !r.ok() {
+            return Err(reason(&r));
+        }
+        let v = r.json();
+        let id = v.get("id").and_then(Value::as_str).ok_or("the server didn't say where the copy is")?.to_string();
+        let name = v.get("name").and_then(Value::as_str).unwrap_or("Copy").to_string();
+        Ok(Copied::Server { id, name })
+    }
+
     fn rename(&mut self, stem: &str) -> Result<(), String> {
         let r = self.api.call("POST", &format!("api/files/{}/rename?name={}", enc(&self.id), enc(stem)), None, None)?;
         if !r.ok() {
@@ -230,6 +243,22 @@ mod tests {
         assert_eq!(asked[3].1, "api/files?folder=Work&name=Report%20(copy).docx", "beside it, in its folder");
         assert_eq!(asked[4], ("PUT".into(), "api/files/new1".into(), Some("c1".into())), "carries on with the copy");
         assert!(d.location().is_none());
+    }
+
+    #[test]
+    fn make_a_copy_asks_the_server_for_one() {
+        let fake = Fake::default();
+        fake.answers.borrow_mut().extend([
+            reply(200, Some("v1"), "doc"),
+            reply(200, None, r#"{"id":"c9","name":"Copy of Report.docx"}"#),
+            reply(403, None, r#"{"error":"no"}"#),
+        ]);
+        let mut d = ServerDoc::new(Box::new(fake.clone()), "abc", "Report.docx");
+        d.read().unwrap();
+        assert_eq!(d.copy().unwrap(), Copied::Server { id: "c9".into(), name: "Copy of Report.docx".into() });
+        assert_eq!(fake.asked.borrow()[1], ("POST".into(), "api/files/abc/copy".into(), None));
+        assert!(d.copy().is_err(), "a refusal says why");
+        assert_eq!(d.name(), "Report.docx", "the window carries on with the document itself");
     }
 
     #[test]

@@ -73,10 +73,21 @@ pub trait Store {
     fn keep_copy(&mut self, name: &str, bytes: &[u8]) -> Result<(), String>;
     /// Gives the file a new name (`stem` plus its own extension).
     fn rename(&mut self, stem: &str) -> Result<(), String>;
+    /// File › Make a copy: copies the file as it is saved ("Copy of <name>", beside it).
+    fn copy(&mut self) -> Result<Copied, String>;
     /// What the title row says once saved.
     fn saved_text(&self) -> &'static str {
         Link::SAVED
     }
+}
+
+/// Where File › Make a copy put the copy.
+#[derive(Debug, PartialEq)]
+pub enum Copied {
+    /// A file on this computer.
+    Local(PathBuf),
+    /// A document on the Starbase server (its id and name).
+    Server { id: String, name: String },
 }
 
 /// A file's version on disk: its modification time and size.
@@ -171,6 +182,13 @@ impl Store for LocalFile {
         std::fs::rename(&old, &new).map_err(|e| e.to_string())?;
         self.path = Some(new);
         Ok(())
+    }
+
+    fn copy(&mut self) -> Result<Copied, String> {
+        let src = self.path.clone().ok_or("the document isn't saved yet")?;
+        let dest = unique(&self.dir, &format!("Copy of {}", self.name()));
+        std::fs::copy(&src, &dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+        Ok(Copied::Local(dest))
     }
 }
 
@@ -275,6 +293,8 @@ fn remember(folders: &Folders, path: &Path) {
 #[derive(Debug, PartialEq)]
 pub enum Request {
     Open(PathBuf),
+    /// A document on the connected Starbase server (its id and name), in a window of its own.
+    OpenServer(String, String),
     New,
     /// File › Connect to a server… / Disconnect from <server>.
     Connect,
@@ -400,6 +420,33 @@ impl Link {
     /// Never view-only in local mode (a read-only file fails to save, and says so).
     pub fn view_only(&self) -> bool {
         false
+    }
+
+    /// File › Make a copy: saves what isn't saved yet, then copies the file ("Copy of <name>",
+    /// beside it; on the server, beside it or in your own folder) and opens the copy in a window
+    /// of its own.
+    pub fn make_copy(&self, app: &mut WordApp) {
+        let new = || self.state.borrow().store.name().is_empty();
+        if self.unsaved(app) || new() {
+            self.save_now(app);
+        }
+        if self.unsaved(app) || new() {
+            self.news("Couldn't make a copy: the document isn't saved yet".into());
+            return;
+        }
+        let r = self.state.borrow_mut().store.copy();
+        match r {
+            Ok(Copied::Local(path)) => {
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                self.news(format!("Made \"{name}\""));
+                self.open_path(path);
+            }
+            Ok(Copied::Server { id, name }) => {
+                self.news(format!("Made \"{name}\""));
+                self.state.borrow_mut().requests.push(Request::OpenServer(id, name));
+            }
+            Err(e) => self.news(format!("Couldn't make a copy: {e}")),
+        }
     }
 
     /// Local documents have no one to share with yet: that comes with a server.

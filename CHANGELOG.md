@@ -18,12 +18,19 @@ number goes up for new features and the last one for fixes.
   and Options in the style box): save this document's paragraph styles as your defaults, use
   them in another document, or reset to Docs' own. New documents start with them. They are
   kept in your browser (in the desktop program, until it closes).
+- Starbase Docs: **File › Make a copy**: "Copy of <name>" beside the document (or in your own
+  folder when you can't add files to its folder), opened in a new tab; in the desktop program,
+  beside the file on this computer, or the server's copy.
+- Starbase Docs: File › Download in every format (Word, OpenDocument, Rich Text, PDF, plain
+  text, web page, Markdown), with a Save dialog in the desktop program.
 
 ### Fixed
 - Starbase Sheets on the desktop: a save to the server that failed is tried again by itself, even
   while the window is in the background (2 s later, then waiting longer each time, at most 30 s),
   and the save status shows the result straight away. It used to wait until the window was
   raised again.
+- Starbase Docs: the desktop program's saving and server messages beside the document's name
+  showed their tooltip twice.
 
 ## [0.1.0] - 2026-11-25
 

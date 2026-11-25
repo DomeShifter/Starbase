@@ -105,6 +105,8 @@ struct State {
     /// in read-only mode once (`view_applied`).
     view_only: bool,
     view_applied: bool,
+    /// File › Make a copy waits for the save on its way (the copy is made from the server's file).
+    copy_pending: bool,
     /// Where opened documents go (the app's inbox), kept from [`Link::open`] for version history.
     inbox: Option<Inbox>,
     /// An earlier version shown from version history (read-only, nothing saved), or the way back
@@ -223,6 +225,54 @@ impl Link {
     /// Whether the signed-in person may only view this document.
     pub fn view_only(&self) -> bool {
         self.state.borrow().view_only
+    }
+
+    /// File › Make a copy: once what is on screen is saved, the server copies the file ("Copy of
+    /// <name>", beside it, or in your own folder when you can't add files to its folder) and
+    /// the copy opens in a new tab.
+    pub fn make_copy(&self, app: &mut WordApp) {
+        self.state.borrow_mut().copy_pending = true;
+        if (app.session.dirty || self.id().is_none()) && !self.view_only() && !self.previewing() {
+            self.save_now(app);
+        }
+        self.ctx.request_repaint();
+    }
+
+    /// The copy, once nothing is left to save (see [`Self::make_copy`]).
+    fn copy_when_saved(&self, app: &WordApp) {
+        let go = {
+            let s = self.state.borrow();
+            if !s.copy_pending || s.busy || s.waiting.is_some() {
+                return;
+            }
+            s.retry.is_none() && s.id.is_some() && (!app.session.dirty || s.view_only || s.preview != Preview::None)
+        };
+        if !go {
+            // Not saved (a save that failed, or a new document never saved): say so, no copy.
+            let failing = self.state.borrow().retry.is_some();
+            if failing || !app.session.dirty {
+                self.state.borrow_mut().copy_pending = false;
+                self.news("Couldn't make a copy: the document isn't saved yet".to_string());
+            }
+            return;
+        }
+        self.state.borrow_mut().copy_pending = false;
+        let Some(id) = self.id() else { return };
+        let link = self.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            match fetch("POST", &api(&format!("api/files/{id}/copy")), None, None).await {
+                Ok((200 | 201, _, body)) => {
+                    let v: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+                    link.news(format!("Made \"{}\"", v["name"].as_str().unwrap_or("a copy")));
+                    if let (Some(new), Some(w)) = (v["id"].as_str(), web_sys::window()) {
+                        let _ = w.open_with_url_and_target(&format!("?file={}", enc(new)), "_blank");
+                    }
+                }
+                Ok((code, _, body)) => link.news(format!("Couldn't make a copy ({})", reason(code, &body))),
+                Err(e) => link.news(format!("Couldn't reach the server: {e}")),
+            }
+            link.ctx.request_repaint();
+        });
     }
 
     /// The signed-in person's name, once, when the server has said it (see [`Self::ask_who`]).
@@ -382,6 +432,7 @@ impl Link {
         if let Some((name, bytes)) = again {
             self.save(&name, bytes);
         }
+        self.copy_when_saved(app);
         // Version history shows an earlier version: read-only, and nothing of it is saved. Once
         // the document itself is back, editing is too.
         let (previewing, was_applied) = {
