@@ -58,13 +58,20 @@ echo "==> Starbase $VERSION AppImage for $ARCH"
 # ---- stage the AppDir ---------------------------------------------------------------------------
 install -Dm755 "$SHEETS_BIN" "$APPDIR/usr/bin/starsheets"
 install -Dm755 "$DOCS_BIN" "$APPDIR/usr/bin/stardocs"
+# STARBASE-OPEN HANDLER (reserved, enable when the starbase-open program is on main): take a
+# --starbase-open <path> argument, then
+#   install -Dm755 "$OPEN_BIN" "$APPDIR/usr/bin/starbase-open"
+# and add "$ID.Open" to the desktop-file loop below.
 strip "$APPDIR/usr/bin/starsheets" "$APPDIR/usr/bin/stardocs" 2>/dev/null || true
 for entry in "$ID" "$ID.Sheets" "$ID.Docs"; do
   install -Dm644 "$HERE/$entry.desktop" "$APPDIR/usr/share/applications/$entry.desktop"
 done
 install -Dm644 "$HERE/$ID.mime.xml" "$APPDIR/usr/share/mime/packages/$ID.xml"
 mkdir -p "$APPDIR/usr/share/metainfo"
+# The AppImage is built on Ubuntu 22.04, whose appstreamcli (0.15) rejects the newer
+# vcs-browser and contribute URL types that Flathub asks for, so the AppImage copy drops them.
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@DATE@/$BUILD_DATE/g" \
+  -e '/<url type="vcs-browser">/d' -e '/<url type="contribute">/d' \
   "$HERE/$ID.metainfo.xml.in" >"$APPDIR/usr/share/metainfo/$ID.metainfo.xml"
 "$HERE/icons.sh" "$APPDIR/usr/share/icons"
 # The package version, for `Starbase.AppImage --version` (AppRun).

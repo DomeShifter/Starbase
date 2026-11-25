@@ -28,7 +28,7 @@ or the programs don't start under X11. The Flatpak gets it from its runtime.
 | `linux/io.github.DomeShifter.Starbase.Sheets.desktop` | Starbase Sheets menu entry, with the spreadsheet MIME types. |
 | `linux/io.github.DomeShifter.Starbase.Docs.desktop` | Starbase Docs menu entry, with the document MIME types. |
 | `linux/io.github.DomeShifter.Starbase.mime.xml` | shared-mime-info globs for the spreadsheet types, copied from GridCraft. They only matter on minimal systems; document types use the system's definitions, as in WordCraft. |
-| `linux/io.github.DomeShifter.Starbase.metainfo.xml.in` | AppStream metadata for the whole package (software centres, Flathub). One component that lists all three menu entries as launchables. The scripts substitute `@VERSION@` and `@DATE@`. |
+| `linux/io.github.DomeShifter.Starbase.metainfo.xml.in` | AppStream metadata for the whole package (software centres, Flathub). One component; Flathub allows one launchable, so it names Starbase Drive (the other two entries are still exported). Releases are written out by hand from `CHANGELOG.md`. Screenshots: `linux/screenshots/`, linked by commit. |
 | `linux/icons.sh <dest>` | Builds the hicolor icon theme from the apps' own SVGs (nothing generated is committed). It pads non-square icons to a square and renders PNGs from 16 to 512 px with `rsvg-convert` or `resvg` when one of them is installed. |
 | `linux/AppRun` | AppImage entry point. It picks the program: no arguments starts the Starbase Drive home; `stardocs …`/`starsheets …` start that program; otherwise the first file's extension decides (Word/ODT/RTF go to Starbase Docs, everything else to Starbase Sheets). A symlink named `stardocs` to the AppImage also works. |
 | `linux/appimage.sh` | Builds `starbase-<version>-linux-<arch>.AppImage` (+ `.zsync`) from two built executables: `--starsheets <path> --stardocs <path> [--version v]`. It uses appimagetool 1.9.1 and the type2 runtime 20251108, both pinned by SHA-256 (same versions and sums as WordCraft). The embedded update information is `gh-releases-zsync\|DomeShifter\|Starbase\|latest\|starbase-*-linux-<arch>.AppImage.zsync`. |
@@ -82,10 +82,11 @@ The commands for a local build are in the manifest's header.
   Starbase Sheets and Starbase Docs each staying up for 15 s under Xvfb (software Vulkan/GL from
   the runtime), and the sandbox creating, writing and reading `~/Documents/Starbase` while seeing
   nothing else in `~/Documents`.
-- `appstreamcli validate` on the built metainfo passes. `flatpak-builder-lint`: the manifest is
-  clean; the build and repo fail only on `metainfo-missing-screenshots` (and, for the repo,
-  `appstream-screenshots-not-mirrored-in-ostree`, which follows from it). Results are in the job
-  summary.
+- `appstreamcli validate` on the built metainfo passes. `flatpak-builder-lint` (manifest,
+  builddir and repo) runs in CI with the screenshots mirrored as Flathub does it, and any lint
+  error fails the job. Results are in the job summary.
+- Flathub submission status, policy blockers and remaining steps:
+  [`linux/flathub-submission.md`](linux/flathub-submission.md).
 
 ## Still missing
 
@@ -102,8 +103,8 @@ The commands for a local build are in the manifest's header.
    warns when the committed manifest is behind). The fonts and word list that
    `starsheets/scripts/fetch-*.py` download are web-only; if a native build ever embeds them they
    become `file` sources (URL + sha256).
-5. **Metainfo screenshots** (Flathub requires them), a release-notes entry per release, and a
-   paragraph for Flathub reviewers on how Starbase differs from GridCraft and WordCraft.
+5. (Done: metainfo screenshots, the 0.1.0 release notes, branding colours, one launchable.) Each
+   new release needs its own `<release>` entry in the metainfo.
 6. **Local-mode scope** is James's decision (plan, decision 1). The manifest assumes
    `~/Documents/Starbase`; if he chooses all of Documents, it becomes `--filesystem=xdg-documents`.
 7. **Release job (P5):** build both executables on ubuntu-22.04 / ubuntu-22.04-arm, run
