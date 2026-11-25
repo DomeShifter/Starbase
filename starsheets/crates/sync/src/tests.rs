@@ -434,3 +434,24 @@ fn a_deflate_bomb_is_refused() {
     assert!(fits("{}", None));
     assert!(!fits("{}", Some(&vec![0; MAX_FRAME + 1])));
 }
+
+/// A file saved while someone else was on Sheet2 reopens on Sheet1 for the person who was last on
+/// Sheet1 (the web app remembers it per file): by the sheet's id, else its name, else the first.
+#[test]
+fn reopen_goes_to_the_remembered_sheet() {
+    let mut s = session();
+    s.execute("home.insertSheet", json!({})).unwrap();
+    s.execute("sheet.activate", json!({ "sheet": 1 })).unwrap();
+    let bytes = gridcraft_engine::io::save_bytes(&wb(&s), "t.xlsx").unwrap();
+    let (back, _) = gridcraft_engine::io::open_bytes("t.xlsx", &bytes).unwrap();
+    assert_eq!(back.active_sheet(), 1, "the file itself opens where it was saved");
+    let first = back.sheets[0].clone();
+    assert_ne!(first.file_id, 0);
+    assert_eq!(pick_sheet(&back, first.file_id, "renamed since"), 0);
+    assert_eq!(pick_sheet(&back, 0, &first.name), 0);
+    assert_eq!(pick_sheet(&back, 0, &back.sheets[1].name), 1);
+    assert_eq!(pick_sheet(&back, 999, "gone"), 0);
+    let mut hidden = back.clone();
+    Arc::make_mut(&mut hidden.sheets[0]).visibility = gridcraft_engine::model::Visibility::Hidden;
+    assert_eq!(pick_sheet(&hidden, first.file_id, &first.name), 1, "a hidden sheet isn't opened on");
+}
