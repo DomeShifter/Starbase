@@ -12,7 +12,9 @@
 //! - **Untrusted input**: at most [`MAX_SIDECAR`] bytes are read, no DTDs (so no entity
 //!   expansion: roxmltree refuses them), at most [`MAX_NODES`] nodes, UTF-8 only, and attributes
 //!   counted before parsing ([`MAX_ATTRS_PER_ELEMENT`], [`MAX_ATTRS`]): roxmltree compares each
-//!   attribute with the element's others, so 100 000 attributes on one element took seconds. The
+//!   attribute with the element's others, so 100 000 attributes on one element took seconds.
+//!   The same pass caps nesting ([`MAX_DEPTH`]: roxmltree recurses per level, and deep nesting
+//!   overflowed the stack and aborted the server) and namespace declarations ([`MAX_NS`]). The
 //!   edits API parses outside the server's store lock, so a slow sidecar can't stall other work.
 //! - **On disk**: the folder is opened once without following links and checked to be the
 //!   folder asked for; the sidecar is read, written and removed relative to that open folder
@@ -45,6 +47,11 @@ pub const MAX_ATTRS_PER_ELEMENT: usize = 256;
 pub const MAX_ATTRS: usize = 20_000;
 /// The most XML nodes parsed in one sidecar.
 pub const MAX_NODES: u32 = 100_000;
+/// Elements open at once: XMP needs about 8.
+pub const MAX_DEPTH: usize = 64;
+/// Namespace declarations (`xmlns`, `xmlns:x`) on one element, and in the whole sidecar.
+pub const MAX_NS_PER_ELEMENT: usize = 32;
+pub const MAX_NS: usize = 256;
 /// The longest `starbase:Edits` JSON read.
 const MAX_EDITS_JSON: usize = 16 * 1024;
 
@@ -120,18 +127,25 @@ fn text_of(bytes: &[u8]) -> Result<(&str, &str), String> {
 }
 
 fn parse(text: &str) -> Result<Document<'_>, String> {
-    if too_many_attributes(text.as_bytes()) {
-        return Err("it has too many attributes".into());
+    if let Some(why) = prescan(text.as_bytes()) {
+        return Err(why.into());
     }
     Document::parse_with_options(text, options()).map_err(|e| format!("it isn't valid XML ({e})"))
 }
 
-/// Whether some element has over [`MAX_ATTRS_PER_ELEMENT`] attributes, or the text over
-/// [`MAX_ATTRS`] in all, counting `=` outside quotes inside tags (comments, CDATA and processing
-/// instructions skipped). One pass; counting too many only refuses odd XML, never too few.
-fn too_many_attributes(b: &[u8]) -> bool {
+/// What [`prescan`] found wrong, if anything: the shapes roxmltree handles badly are refused
+/// before it sees them. Its parser recurses once per nesting level (5 000 levels overflowed a
+/// 2 MB thread stack and aborted the server), and copies the namespaces in scope at every element
+/// that declares one (9 000 nested declarations took minutes).
+///
+/// One pass over the bytes, no recursion: in tags (comments, CDATA and processing instructions
+/// skipped) it counts `=` outside quotes as attributes ([`MAX_ATTRS_PER_ELEMENT`], [`MAX_ATTRS`]),
+/// `xmlns` names as namespace declarations ([`MAX_NS_PER_ELEMENT`], [`MAX_NS`]), and open
+/// elements ([`MAX_DEPTH`]). A DTD is refused (roxmltree would too). Counting too many only
+/// refuses odd XML, never lets too much through.
+fn prescan(b: &[u8]) -> Option<&'static str> {
     let after = |from: usize, end: &[u8]| b[from..].windows(end.len()).position(|w| w == end).map_or(b.len(), |p| from + p + end.len());
-    let (mut i, mut total) = (0, 0usize);
+    let (mut i, mut total, mut ns_total, mut depth) = (0, 0usize, 0usize, 0usize);
     while i < b.len() {
         if b[i] != b'<' {
             i += 1;
@@ -150,7 +164,11 @@ fn too_many_attributes(b: &[u8]) -> bool {
             i = after(i + 2, b"?>");
             continue;
         }
-        let (mut here, mut quote) = (0usize, 0u8);
+        if rest.starts_with(b"<!") {
+            return Some("it has a DTD");
+        }
+        let closing = rest.starts_with(b"</");
+        let (mut here, mut ns_here, mut quote, mut last) = (0usize, 0usize, 0u8, 0u8);
         i += 1;
         while i < b.len() {
             let c = b[i];
@@ -164,15 +182,32 @@ fn too_many_attributes(b: &[u8]) -> bool {
                 here += 1;
             } else if c == b'>' {
                 break;
+            } else if c.is_ascii_whitespace() && b[i + 1..].starts_with(b"xmlns") {
+                ns_here += 1;
+            }
+            if !c.is_ascii_whitespace() {
+                last = c;
             }
             i += 1;
         }
         total += here;
+        ns_total += ns_here;
         if here > MAX_ATTRS_PER_ELEMENT || total > MAX_ATTRS {
-            return true;
+            return Some("it has too many attributes");
+        }
+        if ns_here > MAX_NS_PER_ELEMENT || ns_total > MAX_NS {
+            return Some("it declares too many namespaces");
+        }
+        if closing {
+            depth = depth.saturating_sub(1);
+        } else if last != b'/' {
+            depth += 1;
+            if depth > MAX_DEPTH {
+                return Some("it is nested too deeply");
+            }
         }
     }
-    false
+    None
 }
 
 fn rdf_root<'a, 'i>(doc: &'a Document<'i>) -> Option<Node<'a, 'i>> {
