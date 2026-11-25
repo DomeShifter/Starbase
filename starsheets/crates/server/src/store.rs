@@ -174,8 +174,33 @@ fn thin(folder: &Path, meta: &mut Map<String, Value>, keep: usize, now: i64) -> 
         fs::remove_file(folder.join(n))?;
     }
     let names: BTreeSet<String> = kept.into_iter().map(|k| k.0).collect();
-    meta.retain(|k, _| k == "current" || names.contains(k));
+    meta.retain(|k, _| k == "current" || k == COUNTER || names.contains(k));
     Ok(())
+}
+
+/// The key in a file's `versions.json` holding the next version number: a counter that only goes
+/// up, so numbers are never reused after versions are thinned out, restored or the file moved.
+const COUNTER: &str = "next";
+
+/// Takes the next version number. First touch of a file made before numbering: its versions that
+/// have no number get 1, 2, … oldest first (after the highest number any already has).
+fn take_number(folder: &Path, meta: &mut Map<String, Value>) -> u64 {
+    let mut next = meta.get(COUNTER).and_then(Value::as_u64).unwrap_or(0);
+    let highest = meta.values().filter_map(|e| e.get("n").and_then(Value::as_u64)).max().unwrap_or(0);
+    next = next.max(highest + 1).max(1);
+    for name in version_names(folder) {
+        if let Some(Value::Object(e)) = meta.get_mut(&name) {
+            if e.get("n").is_none() {
+                e.insert("n".into(), json!(next));
+                next += 1;
+            }
+        } else if !meta.contains_key(&name) {
+            meta.insert(name, json!({"n": next}));
+            next += 1;
+        }
+    }
+    meta.insert(COUNTER.into(), json!(next + 1));
+    next
 }
 
 /// "YYYY-mm-dd HH:MM:SS" (UTC) for the activity log.
@@ -608,13 +633,16 @@ impl Store {
         let lower = path.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
         let (_, ext) = splitext(&lower);
         let file = format!("{stem}{}", if ext.is_empty() { ".xlsx" } else { &ext });
-        fs::copy(path, folder.join(&file))?;
         let mut meta = self.load_json(&folder.join(VERSIONS_META));
+        // Numbered before the new copy exists, so older unnumbered versions come first.
+        let number = take_number(&folder, &mut meta);
+        fs::copy(path, folder.join(&file))?;
         let current = match meta.remove("current") {
             Some(Value::Object(m)) => m,
             _ => Map::new(),
         };
         let mut entry = Map::new();
+        entry.insert("n".into(), json!(number));
         entry.insert("saved".into(), json!(saved));
         entry.insert("author".into(), json!(crate::spaces::last_change(self, fid).map(|c| c.0).unwrap_or_default()));
         for key in ["name", "restored_from"] {
@@ -639,7 +667,7 @@ impl Store {
             // Copies made before versions were described: the copy's own time.
             let saved = e.and_then(|e| e["saved"].as_i64()).unwrap_or(mtime(&m).0);
             out.push(json!({
-                "v": v, "modified": saved, "saved": saved, "size": m.len(),
+                "v": v, "number": e.and_then(|e| e["n"].as_u64()), "modified": saved, "saved": saved, "size": m.len(),
                 "author": e.and_then(|e| e["author"].as_str()).unwrap_or(""),
                 "name": e.and_then(|e| e["name"].as_str()).unwrap_or(""),
                 "restored_from": e.and_then(|e| e.get("restored_from")).cloned().unwrap_or(Value::Null),
@@ -1221,6 +1249,60 @@ mod tests {
         // The name moved with the version: the file as it is now has none.
         assert!(store.load_json(&store.versions().join(&id).join(VERSIONS_META)).get("current").is_none());
         assert!(store.name_version(&id, "nope.docx", "x").is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn numbers(store: &Store, id: &str) -> Vec<u64> {
+        store.version_list(id).unwrap().iter().filter_map(|v| v["number"].as_u64()).collect()
+    }
+
+    #[test]
+    fn version_numbers_only_go_up_after_pruning_restore_and_moves() {
+        let dir = std::env::temp_dir().join(format!("starsheets-num-{}", random_hex(6)));
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("a.xlsx");
+        fs::write(&f, b"0").unwrap();
+        let store = Store { root: dir.clone(), keep: 2, spaces: false };
+        let id = store.synced_index().unwrap().keys().next().unwrap().clone();
+        for i in 1..=5 {
+            store.keep_version(&id, &f).unwrap();
+            fs::write(&f, format!("{i}")).unwrap();
+        }
+        // keep = 2: older ones were pruned, yet the newest keeps rising and nothing repeats.
+        let n = numbers(&store, &id);
+        assert!(n.len() <= 2, "{n:?}");
+        assert_eq!(n[0], 5, "newest first: {n:?}");
+        // Restore keeps the current file as a new, higher number.
+        let v = store.version_list(&id).unwrap()[0]["v"].as_str().unwrap().to_string();
+        let vdir = store.versions().join(&id);
+        fs::copy(vdir.join(&v), &f).unwrap();
+        store.keep_version(&id, &f).unwrap();
+        assert_eq!(numbers(&store, &id)[0], 6);
+        // A moved file keeps its id, so its counter.
+        fs::create_dir_all(dir.join("sub")).unwrap();
+        fs::rename(&f, dir.join("sub/a.xlsx")).unwrap();
+        store.keep_version(&id, &dir.join("sub/a.xlsx")).unwrap();
+        assert_eq!(numbers(&store, &id)[0], 7);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn version_numbers_start_after_the_highest_for_files_from_before_numbering() {
+        let dir = std::env::temp_dir().join(format!("starsheets-mig-{}", random_hex(6)));
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("a.xlsx");
+        fs::write(&f, b"x").unwrap();
+        let store = Store { root: dir.clone(), keep: 10, spaces: false };
+        let id = store.synced_index().unwrap().keys().next().unwrap().clone();
+        let vdir = store.versions().join(&id);
+        fs::create_dir_all(&vdir).unwrap();
+        for n in ["20260101-000000-0000.xlsx", "20260102-000000-0000.xlsx"] {
+            fs::write(vdir.join(n), b"old").unwrap();
+        }
+        store.keep_version(&id, &f).unwrap();
+        assert_eq!(numbers(&store, &id), vec![3, 2, 1]);
+        store.keep_version(&id, &f).unwrap();
+        assert_eq!(numbers(&store, &id)[0], 4);
         let _ = fs::remove_dir_all(&dir);
     }
 
