@@ -419,9 +419,25 @@ pub fn forget() {
 /// removed): the windows look again at what they are connected to ([`take_changed`]).
 static CHANGED: AtomicBool = AtomicBool::new(false);
 
-/// Whether the connection was forgotten since the last time this was asked.
+/// What `server.json` looked like when last asked (present, modified time): another Starbase
+/// program (Drive, a Docs window) that connects or disconnects changes it, and this one's
+/// [`CHANGED`] flag never hears of that.
+static SEEN: Mutex<Option<Option<std::time::SystemTime>>> = Mutex::new(None);
+
+fn saved_stamp() -> Option<std::time::SystemTime> {
+    let meta = std::fs::metadata(config_dir()?.join("server.json")).ok()?;
+    Some(meta.modified().unwrap_or(std::time::UNIX_EPOCH))
+}
+
+/// Whether the connection changed since the last time this was asked: forgotten here, or
+/// connected/disconnected by another Starbase program on this computer.
 pub fn take_changed() -> bool {
-    CHANGED.swap(false, Ordering::SeqCst)
+    let here = CHANGED.swap(false, Ordering::SeqCst);
+    let now = saved_stamp();
+    let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
+    let elsewhere = seen.is_some_and(|before| before != now);
+    *seen = Some(now);
+    here || elsewhere
 }
 
 impl Server {
@@ -540,6 +556,13 @@ mod tests {
         assert!(saved().is_some() && !take_changed(), "the newer sign-in stays");
         newer.forget_if_current();
         assert!(saved().is_none() && take_changed(), "a removed device is forgotten here too");
+        // Another Starbase program connects, then disconnects: this one notices both.
+        assert!(!take_changed());
+        keep("https://example.org", "sbd_other", &json!({ "username": "ann" })).unwrap();
+        assert!(take_changed(), "connected by another program");
+        assert!(!take_changed(), "told once");
+        std::fs::remove_file(dir.join("server.json")).unwrap();
+        assert!(take_changed(), "disconnected by another program");
         keep("https://example.org", "sbd_secret", &json!({ "username": "ann" })).unwrap();
         forget();
         assert!(saved().is_none() && !dir.join("token").exists());
