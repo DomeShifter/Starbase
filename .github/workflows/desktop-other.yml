@@ -45,12 +45,15 @@ jobs:
     steps:
       # Byte-exact checkouts on Windows: the fetch scripts read upstream.pin and compare
       # Cargo.toml blocks, and the tests read fixtures. Long paths for the engines' deep trees.
-      - name: Git settings (Windows)
+      # The C runtime linked in statically (+crt-static), so the .exe needs no Visual C++
+      # Redistributable (vcruntime140.dll) on the user's computer.
+      - name: Git and build settings (Windows)
         if: runner.os == 'Windows'
         working-directory: ${{ runner.temp }}
         run: |
           git config --global core.autocrlf false
           git config --global core.longpaths true
+          echo "RUSTFLAGS=-C target-feature=+crt-static" >> "$GITHUB_ENV"
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
@@ -101,5 +104,59 @@ jobs:
           path: |
             ${{ matrix.app }}/target/release/${{ matrix.app }}.exe
             ${{ matrix.app }}/target/release/${{ matrix.app }}
+          retention-days: 7
+          if-no-files-found: error
+
+  windows-portable:
+    # An UNSIGNED preview zip of both Windows programs (SignPath signs only an already-released
+    # build, desktop-plan.md 3c). Kept as an artifact only; release.yml attaches it later.
+    name: Windows portable zip (unsigned)
+    needs: build
+    # Also when only a macOS build failed (a missing Windows artifact still fails it).
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: starsheets-windows-x86_64
+          path: zip
+      - uses: actions/download-artifact@v8
+        with:
+          name: stardocs-windows-x86_64
+          path: zip
+      # Only Windows' own DLLs: no Visual C++ runtime or other DLL the user would have to find.
+      - name: The programs need only system DLLs
+        run: |
+          ls -la zip
+          for exe in zip/starsheets.exe zip/stardocs.exe; do
+            echo "$exe:"; objdump -p "$exe" | sed -n 's/.*DLL Name: //p' | sort -u | tee "$RUNNER_TEMP/dlls.txt"
+            if grep -iE '^(vcruntime|msvcp|ucrtbase)' "$RUNNER_TEMP/dlls.txt"; then echo "needs the Visual C++ runtime" >&2; exit 1; fi
+          done
+      - name: Pack
+        env:
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          printf '%s\r\n' \
+            "Starbase for Windows: PREVIEW, UNSIGNED (build ${SHA::7})" \
+            "" \
+            "starsheets.exe  Starbase Drive (the home screen) and Starbase Sheets" \
+            "stardocs.exe    Starbase Docs" \
+            "" \
+            "These programs are not signed yet. On first start Windows SmartScreen warns" \
+            "\"Windows protected your PC\" (publisher: Unknown). Choose \"More info\", then" \
+            "\"Run anyway\". If Windows blocks the files after unzipping, right-click the zip" \
+            "before unzipping, choose Properties and tick \"Unblock\"." \
+            "" \
+            "Nothing is installed: no Start menu entry and no file associations yet." \
+            "Settings are kept in %APPDATA%\\Starbase. New files go in Documents\\Starbase." \
+            "" \
+            "Licence: MIT OR Apache-2.0. Source: https://github.com/DomeShifter/Starbase" > zip/README.txt
+          cd zip && zip -9 ../starbase-windows-x64-portable.zip starsheets.exe stardocs.exe README.txt
+          cd .. && unzip -l starbase-windows-x64-portable.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: starbase-windows-x64-portable
+          path: starbase-windows-x64-portable.zip
           retention-days: 7
           if-no-files-found: error

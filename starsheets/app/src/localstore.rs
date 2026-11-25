@@ -380,6 +380,7 @@ pub(crate) fn os_user_name() -> String {
 }
 
 /// The full name of user `uid` in an /etc/passwd text, else its login name.
+#[cfg(any(unix, test))]
 fn passwd_name(passwd: &str, uid: u32) -> Option<String> {
     passwd.lines().find_map(|l| {
         let f: Vec<&str> = l.split(':').collect();
