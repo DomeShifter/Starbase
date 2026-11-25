@@ -170,7 +170,13 @@ pub fn diff_blocks(c: &Cont, bb: &[Arc<Block>], ab: &[Arc<Block>], out: &mut Vec
                 let rest = match split_para(&mut work, off, &tail) {
                     Ok(r) => r,
                     Err(_) => {
-                        return out.push(Step::Blocks { c: c.clone(), from: i, to: i + m, blocks: ab[i..i + n].to_vec(), old: bb[i..i + m].to_vec() });
+                        return out.push(Step::Blocks {
+                            c: c.clone(),
+                            from: i,
+                            to: i + m,
+                            blocks: ab[i..i + n].to_vec(),
+                            old: bb[i..i + m].to_vec(),
+                        });
                     }
                 };
                 out.push(Step::Split { c: c.clone(), block: i + k, off, tail: Box::new(tail) });
