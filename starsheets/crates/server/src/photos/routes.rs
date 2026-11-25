@@ -45,9 +45,13 @@ pub async fn route(
     q: &HashMap<String, String>,
     me: Option<auth::User>,
     headers: &HeaderMap,
+    body: &[u8],
 ) -> Option<Response<Body>> {
     if p.first().map(String::as_str) != Some("photos") {
         return None;
+    }
+    if p.len() == 3 && p[1] == "edits" {
+        return Some(super::edits::route(app, m, p[2].clone(), me, headers, body).await);
     }
     let post = p.len() == 2 && (p[1] == "enable" || p[1] == "disable");
     if (m != "GET" && !post) || (m != "POST" && post) {
@@ -120,7 +124,7 @@ async fn off<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Optio
 }
 
 /// The first 16 hex digits of a content hash: the `v` of a picture.
-fn tag(hash: &str) -> &str {
+pub fn tag(hash: &str) -> &str {
     &hash[..hash.len().min(16)]
 }
 
@@ -207,7 +211,8 @@ async fn list(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>)
                 "modified": modified,
                 "state": r.state.name(),
                 "error": r.error,
-                "v": if ready { r.hash.as_deref().map(tag) } else { None },
+                "v": if ready { r.thumb_key().map(tag) } else { None },
+                "edited": r.edits.is_some(),
                 "taken": r.meta.taken,
                 "width": if ready { Some(r.meta.width) } else { None },
                 "height": if ready { Some(r.meta.height) } else { None },
@@ -288,7 +293,7 @@ async fn thumb(app: &Shared, me: Option<auth::User>, id: String, size: &str, v: 
                     }
                     State::Failed => return Err((404, json!({"error": r.error, "state": "failed"}))),
                     State::Ready => {
-                        if let Some(hash) = &r.hash
+                        if let Some(hash) = r.thumb_key()
                             && let Some((file, ext)) = svc.thumb_file(hash, size)
                             && let Ok(bytes) = std::fs::read(&file)
                         {

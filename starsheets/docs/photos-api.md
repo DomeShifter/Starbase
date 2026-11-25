@@ -97,6 +97,61 @@ the sandbox `Content-Security-Policy`, `Content-Disposition: inline`.
   "last_rescan": { "started": 1764061200, "seconds": 4.2, "files": 4974 } }
 ```
 
+## Edits
+
+A picture's edits are kept next to it in an XMP sidecar, `photo.jpg.xmp` (the name darktable,
+digiKam and Lightroom use). The picture itself is never changed. The sidecar holds Adobe's
+`crs:` fields (so Lightroom and darktable see roughly the same edits), the picture's stored size
+and final orientation in `tiff:` fields, and Starbase's own exact copy as JSON in `starbase:Edits`.
+The exact mapping (crop corners, orientation) is in docs/photos-edit.md. Anything else in the sidecar (other apps' namespaces, darktable's
+history, keywords) is kept as it is. The edits' JSON is the `starbase-photo-edit` crate's `Edits`
+(every field optional; unknown fields are ignored; out-of-range values are refused).
+
+`GET /api/photos/edits/ID` (anyone who may view the picture):
+
+```json
+{"edits": {"v": 1, "exposure": 0.5, "crop": {"l": 0.1, "t": 0, "r": 0.9, "b": 1}, ...},
+ "etag": "3f2a…", "writable": true, "reason": null,
+ "foreign": ["darktable"], "source": "starbase", "thumb_v": "9c41…"}
+```
+
+- `etag`: `none` when there is no sidecar; send it back in `If-Match` to save.
+- Edits saved by a newer Starbase (`starbase:EditsVersion` other than 1) are shown as Adobe's
+  fields only and never changed (`writable: false`).
+- `writable: false` with a plain-language `reason` when this person can't save here: they may only
+  view, the picture's kind can't be edited yet (RAW, HEIC), the folder can't be written on the
+  server, or the sidecar is a link or isn't XMP Starbase can read.
+- `foreign`: other editors whose edits are in the sidecar: `darktable` (a darktable history with
+  steps beyond the automatic ones it adds on import) or `crs` (Adobe Camera Raw fields Starbase
+  doesn't write, or Lightroom's edits without ours).
+  Starbase keeps their data but doesn't show their edits.
+- `source`: `starbase` (our JSON), `crs` (imported from Adobe's fields, approximately) or `none`.
+- `thumb_v`: the picture's `v` for thumbnails; it changes whenever the edits change.
+
+Who may save: whoever may edit the picture file, including someone it was shared with on its own
+(not its folder): the sidecar is part of the picture, so editing the picture includes it.
+
+`PUT /api/photos/edits/ID` with `If-Match: <etag>` and the edits as the body (JSON, at most 16 KB):
+saves them. `If-Match: *` saves over whatever is there, but only when a sidecar exists. Answers `{"etag", "thumb_v"}`. Errors: 428 without `If-Match`; 400 for invalid edits;
+413 for a body over 16 KB; 403 for someone who may only view, or a folder that can't be written;
+409 with the current `etag` when the sidecar changed since the etag that was sent (someone else saved
+first: read again, then save). Edits that change nothing take Starbase's part out of the sidecar.
+
+`DELETE /api/photos/edits/ID` with `If-Match`: resets the picture. Starbase's fields are taken out;
+the sidecar is deleted only when nothing else is left in it. The reply's `removed` says whose edits
+went: `starbase`, `crs` (edits Lightroom wrote: the app should warn before, since GET said
+`source: "crs"`) or `none`.
+
+The sidecar goes with its picture: renaming, moving, copying, deleting (to the bin) and restoring
+the picture do the same to `photo.jpg.xmp`. In the bin it isn't an item of its own.
+
+Safety: the sidecar is read only if it is a plain file of at most 256 KB (never through a link), with
+at most 256 attributes on an element and 20 000 in all, and parsed without DTDs or entities, outside
+the server's lock (a slow file can't hold up anyone else). It is written to a temporary file in the
+same folder (keeping the old file's permissions) and renamed over the old one, only if it is still
+the sidecar that was read: two saves can't both win, and another app's save in the meantime is a
+409, never lost.
+
 ## Settings (environment)
 
 | Setting | Default | Meaning |
