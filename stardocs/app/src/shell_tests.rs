@@ -885,3 +885,30 @@ fn commenting_allows_comments_only() {
     assert_eq!(comment_text(&mut h, id), "Nice");
     assert_eq!(body_text(&mut h), "Shared words");
 }
+
+#[test]
+fn insert_chart_drawing_emoji_and_ctrl_enter_page_break() {
+    let mut h = window(1400.0);
+    type_text(&mut h, "One");
+    let before = body_text(&mut h).chars().count();
+    keys(&mut h, Modifiers::COMMAND, Key::Enter);
+    assert!(body_text(&mut h).contains('\u{000C}'), "Ctrl+Enter inserts a page break");
+    assert_eq!(body_text(&mut h).chars().count(), before + 1);
+
+    let objects = |h: &Harness<'static, Win>| -> usize {
+        let doc = &h.state().app.session.doc;
+        doc.story(wordcraft_doc::StoryRef::Body).unwrap().iter().filter_map(|b| b.as_para()).map(|p| p.objects.len()).sum()
+    };
+    assert_eq!(objects(&h), 0);
+    menu(&mut h, &["Insert", "Chart", "Pie"]);
+    assert_eq!(objects(&h), 1, "a chart");
+    menu(&mut h, &["Insert", "Drawing", "Ellipse"]);
+    assert_eq!(objects(&h), 2, "a shape");
+
+    menu(&mut h, &["Insert", "Emoji"]);
+    assert_eq!(h.state_mut().state()["dialogs"]["emoji"], true);
+    click(&mut h, "👍");
+    steps(&mut h, 3);
+    assert_eq!(h.state_mut().state()["dialogs"]["emoji"], false);
+    assert!(body_text(&mut h).contains('👍'));
+}

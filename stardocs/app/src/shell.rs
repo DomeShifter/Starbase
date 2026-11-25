@@ -162,6 +162,34 @@ pub const MENUS: &[(&str, &[Item])] = &[
         "Insert",
         &[
             Cmd("Image", "insert.picture", NO, ""),
+            Sub(
+                "Drawing",
+                &[
+                    Cmd("New drawing canvas", "insert.canvas", NO, ""),
+                    Sep,
+                    Cmd("Rectangle", "insert.shape", r#"{"kind":"rectangle"}"#, ""),
+                    Cmd("Rounded rectangle", "insert.shape", r#"{"kind":"roundedRectangle"}"#, ""),
+                    Cmd("Ellipse", "insert.shape", r#"{"kind":"ellipse"}"#, ""),
+                    Cmd("Triangle", "insert.shape", r#"{"kind":"triangle"}"#, ""),
+                    Cmd("Diamond", "insert.shape", r#"{"kind":"diamond"}"#, ""),
+                    Cmd("Star", "insert.shape", r#"{"kind":"star"}"#, ""),
+                    Cmd("Heart", "insert.shape", r#"{"kind":"heart"}"#, ""),
+                    Cmd("Line", "insert.shape", r#"{"kind":"line"}"#, ""),
+                    Cmd("Arrow", "insert.shape", r#"{"kind":"arrow"}"#, ""),
+                ],
+            ),
+            Sub(
+                "Chart",
+                &[
+                    Cmd("Column", "insert.chart", r#"{"type":"column"}"#, ""),
+                    Cmd("Bar", "insert.chart", r#"{"type":"bar"}"#, ""),
+                    Cmd("Line", "insert.chart", r#"{"type":"line"}"#, ""),
+                    Cmd("Area", "insert.chart", r#"{"type":"area"}"#, ""),
+                    Cmd("Pie", "insert.chart", r#"{"type":"pie"}"#, ""),
+                    Cmd("Scatter", "insert.chart", r#"{"type":"scatter"}"#, ""),
+                ],
+            ),
+            Cmd("Emoji", "stardocs.emoji", NO, ""),
             Sub("Table", &[TableGrid, Sep, Cmd("Table options", "ui.dialog:insertTable", NO, "")]),
             Cmd("Date", "insert.dateTime", r#"{"format":"d MMMM yyyy"}"#, ""),
             Sep,
@@ -522,6 +550,8 @@ pub struct Shell {
     restart: Option<String>,
     /// The dialog has just opened: its box takes the keyboard.
     restart_focus: bool,
+    /// Insert › Emoji's picker.
+    emoji: crate::emoji::Emoji,
     /// Each toolbar group's width last frame, to decide which fit.
     widths: Widths,
     /// The same for the picture tools' groups, shown while a picture is selected.
@@ -579,6 +609,8 @@ struct Flags {
     shortcuts: bool,
     /// Asks for the Restart numbering dialog (Format › Bullets and numbering › List options).
     restart: bool,
+    /// Asks for Insert › Emoji.
+    emoji: bool,
     /// Asks for File › Version history: the panel, or the Name current version dialog.
     history: bool,
     name_version: bool,
@@ -743,6 +775,7 @@ fn is_own(id: &str) -> bool {
             | "stardocs.makeCopy"
             | "stardocs.rename"
             | "stardocs.restartNumbering"
+            | "stardocs.emoji"
             | "stardocs.versionHistory"
             | "stardocs.nameVersion"
             | "stardocs.saveMyStyles"
@@ -758,6 +791,7 @@ fn run_menu(app: &mut WordApp, ctx: &egui::Context, flags: &mut Flags, link: Opt
         ("stardocs.compact", _) => flags.compact = !flags.compact,
         ("stardocs.shortcuts", _) => flags.shortcuts = true,
         ("stardocs.restartNumbering", _) => flags.restart = true,
+        ("stardocs.emoji", _) => flags.emoji = true,
         ("stardocs.versionHistory", _) => flags.history = true,
         ("stardocs.nameVersion", _) => flags.name_version = true,
         ("stardocs.saveMyStyles", _) => crate::mystyles::save(app),
@@ -952,6 +986,7 @@ impl Shell {
                 "shortcuts": self.shortcuts.open,
                 "customColour": self.custom.is_some(),
                 "restartNumbering": self.restart.is_some(),
+                "emoji": self.emoji.open,
                 "wordcraft": app.dialog.is_some(),
             },
             "toolbar": {
@@ -1019,6 +1054,10 @@ impl Shell {
             self.restart_focus = true;
         }
         self.restart_numbering(app, ui.ctx());
+        if std::mem::take(&mut self.flags.emoji) {
+            self.emoji.open = true;
+        }
+        self.emoji.ui(app, ui.ctx());
         self.shortcuts.ui(ui.ctx(), MENUS);
         if self.flags.words {
             self.word_count.ui(app, ui.ctx());
