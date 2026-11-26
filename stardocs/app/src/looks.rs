@@ -198,6 +198,28 @@ mod tests {
         assert!(card.left() >= page.right(), "the card {card:?} is beside the page {page:?}, not over it");
     }
 
+    /// Pages side by side keep the comment cards in a column of their own (StarDocs 0017): a
+    /// card on page 1 never covers page 2.
+    #[test]
+    fn side_by_side_pages_keep_comment_cards_off_the_next_page() {
+        let mut h = window();
+        h.state_mut().session.view.multi_page = true;
+        h.state_mut().run("review.newComment", json!({"text": "Is the hall free?"})).unwrap();
+        h.run_steps(6);
+        let pages = h.state().canvas.page_rects.clone();
+        if pages.len() < 2 {
+            return; // the sample document must run to two pages for this to mean anything
+        }
+        assert!(pages[1].min.y < pages[0].max.y, "pages are side by side: {pages:?}");
+        let cards = h.state().canvas.balloon_rects.clone();
+        assert!(!cards.is_empty(), "the comment has a card");
+        for (_, card) in &cards {
+            for p in &pages {
+                assert!(!card.intersects(*p), "card {card:?} covers page {p:?}");
+            }
+        }
+    }
+
     /// A comment made on selected text: the selection keeps its text, and what is typed into
     /// the new comment stays in the comment and out of the page (T1: after the first letter the
     /// page took the keyboard, so the rest replaced the selected text).
