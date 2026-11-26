@@ -313,7 +313,13 @@ impl PhotoMode {
                     p.circle_stroke(centre, side / 2.0 - 1.0, egui::Stroke::new(2.0, theme::SHARE));
                 }
                 let name = if c.name.is_empty() { "Unnamed".to_string() } else { c.name.clone() };
-                p.text(rect.min + vec2(side / 2.0, side + 4.0), egui::Align2::CENTER_TOP, name, egui::FontId::proportional(house::NOTE), theme::text_dim());
+                p.text(
+                    rect.min + vec2(side / 2.0, side + 4.0),
+                    egui::Align2::CENTER_TOP,
+                    name,
+                    egui::FontId::proportional(house::NOTE),
+                    theme::text_dim(),
+                );
                 if resp.clicked() {
                     open = Some(c.clone());
                 }
