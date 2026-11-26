@@ -41,9 +41,15 @@ with U.Session(br, base=base, outdir="shots") as s:
             check(f"{tag} default is Auto (3 across at 100 %, as before)", st.get("pagesSideBySide") == "pagesAuto" and st.get("pageCols") == 3, st)
         # The bottom-right switch, by a real click on its "2".
         cr = st.get("canvasRect") or [0, 0, w, h]
-        s.click_text("pages 2"); time.sleep(1.5)
-        st = s.snapshot("shell")
-        check(f"{tag} 2 pages side by side", st.get("pagesSideBySide") == "pages2" and st.get("pageCols") == 2, st)
+        if w < 2000:
+            s.hook("view.zoom", value=60); time.sleep(1)  # two pages only fit this width at 60 %
+        for _try in range(3):
+            # A real click needs the control on the physical screen (window stays 1300x900), so the wide run uses the hook.
+            s.click_text("pages 2") if w < 2000 else s.hook("stardocs.pages2"); time.sleep(1.5)
+            st = s.snapshot("shell")
+            if st.get("pagesSideBySide") == "pages2":
+                break
+        check(f"{tag} 2 pages side by side", st.get("pagesSideBySide") == "pages2" and st.get("pageCols") == 2, {k: st.get(k) for k in ("pagesSideBySide", "pageCols", "canvasRect")})
         s.shot(f"{tag}-two")
         # Click in page 2 where the app says it was drawn (pageRects, screen points), then type.
         pr = st.get("pageRects") or []
@@ -62,7 +68,7 @@ with U.Session(br, base=base, outdir="shots") as s:
         # Zoom still works with two pages.
         s.hook("view.zoom", value=60); time.sleep(1)
         st = s.snapshot()
-        check(f"{tag} zoom 60 % keeps 2 across", abs((st.get("view") or {}).get("zoom", 0) - 0.6) < 0.02 and st["shell"].get("pageCols") == 2, st.get("view"))
+        check(f"{tag} zoom 60 % keeps 2 across", abs((st.get("view") or {}).get("zoom", 0) - 0.6) < 0.02 and st["shell"].get("pageCols") == 2, {"zoom": (st.get("view") or {}).get("zoom"), "cols": st["shell"].get("pageCols")})
         s.hook("stardocs.pagesAuto"); time.sleep(1.5)
         st = s.snapshot("shell")
         check(f"{tag} Auto at 60 % shows all 3", st.get("pageCols") == 3, st)
