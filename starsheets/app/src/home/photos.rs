@@ -846,18 +846,17 @@ impl PhotoMode {
 
     /// The grid (or the question whether to turn Photos on) for `folder`.
     fn folder_ui(&mut self, ui: &mut Ui, store: &Backend, folder: &str) {
-        if let Some(e) = self.error.clone() {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(e).size(house::NOTE).color(house::ERROR));
-                if ui.add(house::link("OK")).clicked() {
-                    self.error = None;
-                }
-            });
+        if let Some(e) = self.error.clone()
+            && house::status_line(ui, house::Status::Error, &e)
+        {
+            self.error = None;
         }
         match self.enabled {
             None => {
-                ui.add_space(house::XL);
-                ui.label(RichText::new(if self.loading { "Loading…" } else { "" }).size(house::BODY).color(theme::text_dim()));
+                if self.loading {
+                    ui.add_space(house::XL);
+                    house::status_line(ui, house::Status::Loading, "Loading…");
+                }
                 return;
             }
             Some(false) => {
@@ -877,17 +876,16 @@ impl PhotoMode {
         ui.add_space(house::S);
         self.people_strip(ui, store);
         if self.pics.is_empty() {
-            ui.add_space(house::XL);
-            let text = if self.loading {
-                "Loading…"
+            if self.loading {
+                ui.add_space(house::XL);
+                house::status_line(ui, house::Status::Loading, "Loading…");
             } else if self.shell.filtering() && !self.shell.full.is_empty() {
-                "No pictures match the search or the type."
+                house::empty_state(ui, Some("search"), "No matches", "No pictures match the search or the type.", None);
             } else if self.shell.scope == shell::Scope::All {
-                "No pictures yet. Turn on Photos in a folder to see its pictures here."
-            } else {
-                "No pictures in this folder."
-            };
-            ui.label(RichText::new(text).size(house::BODY).color(theme::text_dim()));
+                house::empty_state(ui, Some("photo_library"), "No photos yet", "Turn on Photos in a folder to see its pictures here.", None);
+            } else if house::empty_state(ui, Some("photo_library"), "No photos yet", "Upload some to this folder.", Some("Upload")) {
+                self.upload_pick(&ui.ctx().clone(), store);
+            }
             return;
         }
         if self.alb.tab == albums::Tab::Timeline {
@@ -1050,6 +1048,24 @@ impl PhotoMode {
     }
 
     /// Above the grid: how many, subfolders, order, slideshow, turning off.
+    /// Lists `folder` again newest first (or oldest first), and remembers the choice.
+    pub(super) fn set_newest(&mut self, ctx: &egui::Context, store: &Backend, folder: &str, newest: bool) {
+        self.newest_first = newest;
+        store.set_setting("starsheets_home_photos_order", if newest { "new" } else { "old" });
+        self.list(ctx, store, folder);
+    }
+
+    /// Plays the listed pictures from the first.
+    pub(super) fn slideshow(&mut self, ctx: &egui::Context) {
+        if self.pics.is_empty() {
+            return;
+        }
+        let mut v = Viewer::new(0, self.pics.len());
+        v.play(ctx.input(|i| i.time));
+        self.viewer = Some(v);
+    }
+
+    /// The grid bar: how many pictures (the toolbar above holds Upload, View and Slideshow).
     fn bar_ui(&mut self, ui: &mut Ui, store: &Backend, folder: &str) {
         let ctx = ui.ctx().clone();
         ui.horizontal_wrapped(|ui| {
@@ -1058,32 +1074,7 @@ impl PhotoMode {
             if self.waiting > 0 {
                 text.push_str(&format!(" · preparing {}", self.waiting));
             }
-            ui.label(RichText::new(text).size(house::BODY).color(theme::text_dim()));
-            ui.add_space(house::M);
-            let pill = |ui: &mut Ui, label: &str, on: bool| -> egui::Response {
-                ui.add(
-                    egui::Button::new(RichText::new(label).size(house::BODY).color(theme::text()))
-                        .fill(if on { theme::share() } else { theme::card() })
-                        .stroke(egui::Stroke::new(1.0, theme::edge()))
-                        .corner_radius(16)
-                        .min_size(vec2(0.0, 32.0)),
-                )
-            };
-            if pill(ui, if self.newest_first { "Newest first" } else { "Oldest first" }, false).clicked() {
-                self.newest_first = !self.newest_first;
-                store.set_setting("starsheets_home_photos_order", if self.newest_first { "new" } else { "old" });
-                self.list(&ctx, store, folder);
-            }
-            let up = pill(ui, "Upload", false);
-            self.up.btn = Some([up.rect.center().x, up.rect.center().y]);
-            if up.clicked() {
-                self.upload_pick(&ctx, store);
-            }
-            if !self.pics.is_empty() && pill(ui, "Slideshow", false).clicked() {
-                let mut v = Viewer::new(0, self.pics.len());
-                v.play(ui.ctx().input(|i| i.time));
-                self.viewer = Some(v);
-            }
+            ui.label(RichText::new(text).size(house::NOTE).color(theme::text_dim()));
             if self.can_disable {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.add(link("Turn off Photos here")).on_hover_text("Forget this folder's thumbnails; the pictures stay as they are").clicked()

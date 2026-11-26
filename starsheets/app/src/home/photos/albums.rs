@@ -83,6 +83,36 @@ pub(in crate::home) struct Albums {
     text: String,
     ask: Ask,
     pub ppl: super::people::People,
+    /// The left list's "More" group (Timeline, Events, Duplicates) is open.
+    pub more: bool,
+}
+
+/// One row of the left list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum NavRow {
+    Go(Tab, &'static str, &'static str),
+    Divider,
+    /// Opens and closes the rows after it up to the next divider.
+    More,
+}
+
+/// The left list, top to bottom: the four main tabs, then "More" (Timeline, Events, Duplicates;
+/// listed only while it is open), then Locked at the bottom.
+pub(super) fn nav_rows(more: bool) -> Vec<NavRow> {
+    use NavRow::*;
+    let mut v = vec![
+        Go(Tab::Photos, "Photos", "photo_library"),
+        Go(Tab::Albums, "Albums", "collections"),
+        Go(Tab::People, "People", "face"),
+        Go(Tab::Places, "Places", "location_on"),
+        Divider,
+        More,
+    ];
+    if more {
+        v.extend([Go(Tab::Timeline, "Timeline", "schedule"), Go(Tab::Events, "Events", "event"), Go(Tab::Duplicates, "Duplicates", "content_copy")]);
+    }
+    v.extend([Divider, Go(Tab::Locked, "Locked", "lock")]);
+    v
 }
 
 pub(super) fn cards(v: &Json, key: &str) -> Vec<Card> {
@@ -201,7 +231,7 @@ impl Albums {
         json!({
             "tab": self.tab.name(), "albums": c(&self.albums), "places": c(&self.places), "events": c(&self.events),
             "open": self.open.as_ref().map(|c| json!({"id": c.id, "name": c.name})),
-            "selecting": !self.selected.is_empty(), "selected": sel,
+            "selecting": !self.selected.is_empty(), "selected": sel, "navMore": self.more,
         })
     }
 }
@@ -224,37 +254,37 @@ impl PhotoMode {
         }
     }
 
-    /// Left nav.
+    /// Left nav: one quiet 36-high row per tab ([`nav_rows`]), the picked one filled.
     pub(super) fn nav_ui(&mut self, ui: &mut Ui, _store: &Backend) {
         ui.add_space(house::S);
-        for (t, label, icon) in [
-            (Tab::Photos, "Photos", "photo_library"),
-            (Tab::Timeline, "Timeline", "schedule"),
-            (Tab::Albums, "Albums", "collections"),
-            (Tab::Places, "Places", "location_on"),
-            (Tab::People, "People", "face"),
-            (Tab::Events, "Events", "event"),
-            (Tab::Duplicates, "Duplicates", "content_copy"),
-            (Tab::Locked, "Locked", "lock"),
-        ] {
-            let on = self.alb.tab == t;
-            let b = egui::Button::new(RichText::new(format!("  {label}")).size(house::BODY).color(theme::text()))
-                .fill(if on { theme::share() } else { Color32::TRANSPARENT })
-                .corner_radius(16)
-                .min_size(vec2(120.0, 34.0));
-            let b = match crate::icons::icon(icon) {
-                Some(img) => {
-                    egui::Button::image_and_text(img.fit_to_exact_size(vec2(18.0, 18.0)), RichText::new(label).size(house::BODY).color(theme::text()))
-                        .fill(if on { theme::share() } else { Color32::TRANSPARENT })
-                        .corner_radius(16)
-                        .min_size(vec2(120.0, 34.0))
+        ui.spacing_mut().item_spacing.y = house::XS;
+        // A tab under More that is showing keeps More open.
+        let hidden = matches!(self.alb.tab, Tab::Timeline | Tab::Events | Tab::Duplicates);
+        for row in nav_rows(self.alb.more || hidden) {
+            match row {
+                NavRow::Divider => {
+                    ui.add_space(house::XS);
+                    house::menu_sep(ui);
+                    ui.add_space(house::XS);
                 }
-                None => b,
-            };
-            let resp = ui.add(b);
-            crate::house::target(ui.ctx(), label, resp.rect);
-            if resp.clicked() {
-                self.go(t);
+                NavRow::More => {
+                    let open = self.alb.more || hidden;
+                    let r = ui.add(
+                        house::quiet_with(Some(if open { "expand_more" } else { "chevron_right" }), "More", false)
+                            .min_size(vec2(120.0, house::BUTTON_HEIGHT)),
+                    );
+                    house::target(ui.ctx(), "photos:nav:more", r.rect);
+                    if r.clicked() {
+                        self.alb.more = !self.alb.more;
+                    }
+                }
+                NavRow::Go(t, label, icon) => {
+                    let r = ui.add(house::quiet_with(Some(icon), label, self.alb.tab == t).min_size(vec2(120.0, house::BUTTON_HEIGHT)));
+                    house::target(ui.ctx(), label, r.rect);
+                    if r.clicked() {
+                        self.go(t);
+                    }
+                }
             }
         }
     }
@@ -296,13 +326,10 @@ impl PhotoMode {
     /// The album and place cards, or the opened one.
     pub(super) fn cards_ui(&mut self, ui: &mut Ui, store: &Backend) {
         let ctx = ui.ctx().clone();
-        if let Some(e) = self.error.clone() {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(e).size(house::NOTE).color(house::ERROR));
-                if ui.add(house::link("OK")).clicked() {
-                    self.error = None;
-                }
-            });
+        if let Some(e) = self.error.clone()
+            && house::status_line(ui, house::Status::Error, &e)
+        {
+            self.error = None;
         }
         let t = self.alb.tab;
         if let Some(c) = self.alb.open.clone() {
@@ -349,15 +376,22 @@ impl PhotoMode {
             self.pick_ui(ui, store);
             ui.add_space(house::S);
             if self.pics.is_empty() {
-                ui.add_space(house::XL);
-                let text = if self.loading {
-                    "Loading…"
+                if self.loading {
+                    ui.add_space(house::XL);
+                    house::status_line(ui, house::Status::Loading, "Loading…");
                 } else if t == Tab::Albums {
-                    "No pictures here yet. Click Add photos, or right-click pictures in Photos and choose Add to album."
+                    if house::empty_state(
+                        ui,
+                        Some("photo_library"),
+                        "No pictures here yet",
+                        "Add some, or right-click pictures in Photos and choose Add to album.",
+                        Some("Add photos"),
+                    ) {
+                        self.open_picker(ui.ctx(), store);
+                    }
                 } else {
-                    "No pictures."
-                };
-                ui.label(RichText::new(text).size(house::BODY).color(theme::text_dim()));
+                    house::empty_state(ui, Some("photo_library"), "No pictures", "", None);
+                }
             } else {
                 self.grid(ui, store);
             }
@@ -396,15 +430,14 @@ impl PhotoMode {
             _ => self.alb.places.clone(),
         };
         if list.is_empty() {
-            ui.add_space(house::XL);
-            let text = if t == Tab::Albums {
-                "No albums yet."
+            let (icon, title, hint) = if t == Tab::Albums {
+                ("collections", "No albums yet", "Click New album, or right-click pictures in Photos and choose Add to album.")
             } else if t == Tab::Events {
-                "No events yet: five or more pictures taken close together in time show up here."
+                ("event", "No events yet", "Five or more pictures taken close together in time show up here.")
             } else {
-                "No places yet: pictures with a position (GPS) from folders you can edit show up here."
+                ("location_on", "No places yet", "Pictures with a position (GPS) from folders you can edit show up here.")
             };
-            ui.label(RichText::new(text).size(house::BODY).color(theme::text_dim()));
+            house::empty_state(ui, Some(icon), title, hint, None);
             return;
         }
         let mut open = None;
@@ -424,13 +457,8 @@ impl PhotoMode {
     }
 
     pub(super) fn pill(&self, ui: &mut Ui, label: &str, on: bool) -> bool {
-        let r = ui.add(
-            egui::Button::new(RichText::new(label).size(house::BODY).color(theme::text()))
-                .fill(if on { theme::share() } else { theme::card() })
-                .stroke(egui::Stroke::new(1.0, theme::edge()))
-                .corner_radius(16)
-                .min_size(vec2(0.0, 32.0)),
-        );
+        let b = house::secondary_in(label, theme::BLUE);
+        let r = ui.add(if on { b.fill(theme::share()) } else { b });
         house::target(ui.ctx(), &format!("pill-{label}"), r.rect);
         r.clicked()
     }
@@ -614,5 +642,23 @@ impl PhotoMode {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The left list: four main tabs, More (its three tabs only while open), Locked last.
+    #[test]
+    fn the_left_list_hides_three_tabs_under_more() {
+        let tabs = |more| nav_rows(more).into_iter().filter_map(|r| if let NavRow::Go(_, l, _) = r { Some(l) } else { None }).collect::<Vec<_>>();
+        assert_eq!(tabs(false), ["Photos", "Albums", "People", "Places", "Locked"]);
+        assert_eq!(tabs(true), ["Photos", "Albums", "People", "Places", "Timeline", "Events", "Duplicates", "Locked"]);
+        for more in [false, true] {
+            let rows = nav_rows(more);
+            assert_eq!(rows.iter().filter(|r| **r == NavRow::More).count(), 1);
+            assert_eq!(rows[rows.len() - 2], NavRow::Divider);
+        }
     }
 }

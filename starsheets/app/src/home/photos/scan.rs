@@ -87,7 +87,7 @@ impl ScanNow {
             }
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
         }
-        let b = ui.add_enabled_ui(!self.running, |ui| super::shell::pill(ui, Some("refresh"), "Scan now", false)).inner;
+        let b = ui.add_enabled_ui(!self.running, |ui| ui.add(crate::house::quiet_with(Some("refresh"), "Scan now", false))).inner;
         let b = b.on_hover_text("Look for new photos and faces now");
         house::target(&ctx, "photos:scan-now", b.rect);
         if b.clicked() {

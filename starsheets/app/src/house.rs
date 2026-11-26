@@ -272,6 +272,91 @@ pub fn icon_button(ui: &mut Ui, icon: &str, tip: &str, on: bool) -> egui::Respon
     ui.add(b.min_size(vec2(BUTTON_HEIGHT, BUTTON_HEIGHT))).on_hover_text(tip)
 }
 
+/// A quiet button: no frame until hovered (grey), 32 high, round. Toolbar actions, the selection
+/// bar, sorting: everything that is neither the one main action nor a plain icon.
+pub fn quiet(text: &str) -> egui::Button<'static> {
+    quiet_with(None, text, false)
+}
+
+/// A quiet button with its text in `colour` (accent actions on a dark note or bar).
+pub fn quiet_in(text: &str, colour: Color32) -> egui::Button<'static> {
+    egui::Button::new(RichText::new(text.to_string()).size(BODY).strong().color(colour))
+        .frame_when_inactive(false)
+        .corner_radius(CornerRadius::same(BUTTON_RADIUS))
+        .min_size(vec2(ROW_HEIGHT, ROW_HEIGHT))
+}
+
+/// A quiet button with an optional icon before the text, lit (selected fill) when `on`.
+pub fn quiet_with(icon: Option<&str>, text: &str, on: bool) -> egui::Button<'static> {
+    let t = RichText::new(text.to_string()).size(BODY).color(theme::text());
+    let b = match icon.and_then(crate::icons::icon) {
+        Some(img) if text.is_empty() => egui::Button::image(img.fit_to_exact_size(vec2(20.0, 20.0))),
+        Some(img) => egui::Button::image_and_text(img.fit_to_exact_size(vec2(20.0, 20.0)), t),
+        None => egui::Button::new(t),
+    };
+    let b = b.frame_when_inactive(on).corner_radius(CornerRadius::same(BUTTON_RADIUS)).min_size(vec2(ROW_HEIGHT, ROW_HEIGHT));
+    if on { b.fill(theme::share()) } else { b }
+}
+
+/// The empty state of a page: centred, [`XL`] from the top, a dim 48 px icon, a bold title, one
+/// dim hint line and, when `button` is given, one main button. True when that button is clicked.
+pub fn empty_state(ui: &mut Ui, icon: Option<&str>, title: &str, hint: &str, button: Option<&str>) -> bool {
+    let mut clicked = false;
+    ui.add_space(XL);
+    ui.vertical_centered(|ui| {
+        if let Some(img) = icon.and_then(|i| crate::icons::icon_in(i, theme::text_dim())) {
+            ui.add(img.fit_to_exact_size(vec2(48.0, 48.0)));
+            ui.add_space(M);
+        }
+        if !title.is_empty() {
+            ui.label(RichText::new(title).size(BODY).strong().color(theme::text()));
+        }
+        if !hint.is_empty() {
+            ui.add_space(XS);
+            ui.label(RichText::new(hint).size(NOTE).color(theme::text_dim()));
+        }
+        if let Some(b) = button {
+            ui.add_space(L);
+            let r = ui.add(primary_in(b, BLUE));
+            target(ui.ctx(), &format!("empty:{b}"), r.rect);
+            clicked = r.clicked();
+        }
+    });
+    clicked
+}
+
+/// What a [`status_line`] says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Status {
+    /// Waiting for something: a small spinner and dim text.
+    Loading,
+    /// Something failed: red text and a quiet Dismiss button.
+    Error,
+}
+
+/// One status message line, in the same place on every page. For [`Status::Error`], true when
+/// its Dismiss button is clicked.
+pub fn status_line(ui: &mut Ui, kind: Status, text: &str) -> bool {
+    let mut dismissed = false;
+    match kind {
+        Status::Loading => {
+            ui.horizontal(|ui| {
+                ui.add(egui::Spinner::new().size(NOTE).color(theme::text_dim()));
+                ui.label(RichText::new(text).size(NOTE).color(theme::text_dim()));
+            });
+        }
+        Status::Error => {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(text).size(NOTE).color(ERROR));
+                let r = ui.add(quiet("Dismiss"));
+                target(ui.ctx(), "status:dismiss", r.rect);
+                dismissed = r.clicked();
+            });
+        }
+    }
+    dismissed
+}
+
 /// A secondary button on the dark bar or panel: a dark grey pill with white text.
 pub fn secondary_dark(text: &str) -> egui::Button<'static> {
     egui::Button::new(RichText::new(text.to_string()).size(BODY).color(VIEW_BAR_TEXT))

@@ -113,6 +113,22 @@ pub(super) fn menu_rows(in_album: bool, in_locked: bool) -> Vec<(Act, &'static s
     v
 }
 
+/// The selection bar: (command, icon, label, shown on the bar). The first four stay on the bar;
+/// the rest sit in its More menu. "Remove from album" only in an album.
+pub(super) fn sel_rows(in_album: bool) -> Vec<(Act, &'static str, &'static str, bool)> {
+    let mut v = vec![
+        (Act::AddTo, "photo_library", "Add to album", true),
+        (Act::Favourite, "star", "Favourite", true),
+        (Act::Download, "download", "Download", true),
+        (Act::Delete, "delete", "Move to bin", true),
+    ];
+    if in_album {
+        v.push((Act::Remove, "remove", "Remove from album", false));
+    }
+    v.push((Act::Info, "info", "Info", false));
+    v
+}
+
 /// What the Drive around Photos does for it (it knows stars, the bin and Details).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::home) enum Out {
@@ -269,7 +285,15 @@ impl PhotoMode {
                 let n = ids.len();
                 self.say(ctx, if n == 1 { "Downloading 1 picture".into() } else { format!("Downloading {n} pictures") }, None);
             }
-            Act::Info => self.out.push(Out::Info(ids[0].clone())),
+            // The viewer's own Info panel; Drive's Details only for a picture not listed here.
+            Act::Info => match self.pics.iter().position(|p| p.id == ids[0]) {
+                Some(i) => {
+                    let mut v = super::Viewer::new(i, self.pics.len());
+                    v.info = true;
+                    self.viewer = Some(v);
+                }
+                None => self.out.push(Out::Info(ids[0].clone())),
+            },
             Act::Lock => self.lk.ask = Some(ids),
             Act::Unlock => self.move_locked(ctx, store, ids, false),
             Act::Delete if self.locked_tab() => self.say(ctx, "Move pictures out of the Locked folder first".into(), None),
@@ -367,27 +391,30 @@ impl PhotoMode {
                 chosen = Some(None);
             }
             let n = self.alb.selected.len();
-            ui.label(RichText::new(format!("{n} selected")).size(house::TITLE - 4.0).color(theme::text()));
+            ui.label(RichText::new(format!("{n} selected")).size(house::BODY).strong().color(theme::text()));
+            ui.add_space(house::L);
+            let all = ui.add(house::quiet("Select all"));
+            house::target(&ctx, "photos:sel:select-all", all.rect);
+            if all.clicked() {
+                chosen = Some(Some(Act::SelectAll));
+            }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let mut rows =
-                    vec![(Act::Delete, "delete", "Move to bin"), (Act::Download, "download", "Download"), (Act::Favourite, "star", "Favourite")];
-                if self.open_album().is_some() {
-                    rows.push((Act::Remove, "remove", "Remove from album"));
-                }
-                rows.push((Act::AddTo, "photo_library", "Add to album"));
-                if ui
-                    .add(egui::Button::new(RichText::new("Select all").size(house::BODY).color(theme::text())).frame(false).min_size(vec2(0.0, 36.0)))
-                    .clicked()
-                {
-                    chosen = Some(Some(Act::SelectAll));
-                }
-                for (act, icon, label) in rows {
-                    let text = RichText::new(label).size(house::BODY).color(theme::text());
-                    let b = match crate::icons::icon(icon) {
-                        Some(img) => egui::Button::image_and_text(img.fit_to_exact_size(vec2(20.0, 20.0)), text),
-                        None => egui::Button::new(text),
-                    };
-                    if ui.add(b.frame(false).min_size(vec2(0.0, 36.0))).clicked() {
+                ui.spacing_mut().item_spacing.x = house::S;
+                let rows = sel_rows(self.open_album().is_some());
+                let more = house::icon_button(ui, "more_vert", "More", false);
+                house::target(&ctx, "photos:sel:more", more.rect);
+                egui::Popup::menu(&more).show(|ui| {
+                    house::menu(ui, 220.0);
+                    for &(act, icon, label, _) in rows.iter().filter(|r| !r.3) {
+                        if house::menu_row(ui, Some(icon), label, "", true) {
+                            chosen = Some(Some(act));
+                        }
+                    }
+                });
+                for &(act, icon, label, _) in rows.iter().filter(|r| r.3).rev() {
+                    let r = ui.add(house::quiet_with(Some(icon), label, false));
+                    house::target(&ctx, &format!("photos:sel:{}", label.to_lowercase().replace(' ', "-")), r.rect);
+                    if r.clicked() {
                         chosen = Some(Some(act));
                     }
                 }
@@ -629,25 +656,18 @@ impl PhotoMode {
                     .inner_margin(egui::Margin { left: 16, right: 8, top: 6, bottom: 6 })
                     .show(ui, |ui| {
                         ui.set_min_height(36.0);
+                        house::view_bar_style(ui);
                         ui.horizontal_centered(|ui| {
                             ui.label(RichText::new(&note.text).size(house::BODY).color(Color32::WHITE));
                             ui.add_space(house::L);
-                            if note.undo
-                                && ui
-                                    .add(egui::Button::new(RichText::new("Undo").size(house::BODY).strong().color(theme::share())).frame(false))
-                                    .clicked()
-                            {
+                            if note.undo && ui.add(house::quiet_in("Undo", theme::share())).clicked() {
                                 self.pick.note = None;
                                 self.out.push(Out::Undo);
                             }
-                            if note.album.is_some()
-                                && ui
-                                    .add(egui::Button::new(RichText::new("Open album").size(house::BODY).strong().color(theme::share())).frame(false))
-                                    .clicked()
-                            {
+                            if note.album.is_some() && ui.add(house::quiet_in("Open album", theme::share())).clicked() {
                                 open = true;
                             }
-                            let x = egui::Button::new(RichText::new("\u{2715}").size(house::BODY).color(Color32::WHITE)).frame(false);
+                            let x = house::quiet_in("\u{2715}", Color32::WHITE);
                             if ui.add(x).on_hover_text("Close").clicked() {
                                 closed = true;
                             }
@@ -850,6 +870,20 @@ fn download(href: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// The selection bar shows four commands; the rest (Remove from album, Info) are under More.
+    #[test]
+    fn the_selection_bar_shows_four_then_more() {
+        for in_album in [false, true] {
+            let rows = sel_rows(in_album);
+            let shown: Vec<_> = rows.iter().filter(|r| r.3).map(|r| r.2).collect();
+            assert_eq!(shown, ["Add to album", "Favourite", "Download", "Move to bin"]);
+            let more: Vec<_> = rows.iter().filter(|r| !r.3).map(|r| r.2).collect();
+            assert_eq!(more, if in_album { vec!["Remove from album", "Info"] } else { vec!["Info"] });
+            for r in rows {
+                assert!(crate::icons::icon(r.1).is_some(), "{}", r.1);
+            }
+        }
+    }
 
     fn ids(n: usize) -> Vec<String> {
         (0..n).map(|i| format!("p{i}")).collect()
