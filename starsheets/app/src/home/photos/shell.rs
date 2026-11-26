@@ -151,7 +151,7 @@ impl PhotoMode {
 }
 
 /// A rounded button for the top bar: an optional icon and a label.
-fn pill(ui: &mut Ui, icon: Option<&str>, label: &str, on: bool) -> egui::Response {
+pub(super) fn pill(ui: &mut Ui, icon: Option<&str>, label: &str, on: bool) -> egui::Response {
     let text = RichText::new(label).size(house::BODY).color(theme::text());
     let b = match icon.and_then(crate::icons::icon) {
         Some(img) if label.is_empty() => egui::Button::image(img.fit_to_exact_size(vec2(20.0, 20.0))),
@@ -220,6 +220,8 @@ impl Home {
                         self.type_rows(ui);
                         house::menu_sep(ui);
                         self.theme_row(ui);
+                        house::menu_sep(ui);
+                        ui.horizontal_wrapped(|ui| self.photos.alb.ppl.scan.ui(ui, &self.store));
                     });
                 } else {
                     let dark = self.photos.shell.dark;
@@ -244,6 +246,7 @@ impl Home {
                         house::menu(ui, 200.0);
                         self.type_rows(ui);
                     });
+                    self.photos.alb.ppl.scan.ui(ui, &self.store);
                     let set = pill(ui, Some("folder"), self.photos.shell.scope.short(), self.photos.shell.scope != Scope::Folder);
                     house::target(&ctx, "photo-set", set.rect);
                     egui::Popup::menu(&set).show(|ui| {
