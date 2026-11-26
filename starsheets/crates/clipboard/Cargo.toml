@@ -1,0 +1,19 @@
+[package]
+name = "starbase-clipboard"
+description = "The Paste standard of every Starbase app: the app's own copy (forgotten when the tab loses focus), reading the clipboard where the browser lets a page, else the \"Press Ctrl+V now\" prompt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+# No app code and no egui: Starbase Sheets uses it from this workspace, Docs and Slides by path.
+# Each app draws the prompt in its own house style (texts: PROMPT_TITLE, PROMPT_REASON, DONT_EXPLAIN).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = ["Window", "Document", "Event", "EventTarget", "Storage", "VisibilityState"] }
+
+# The desktop app reads the system clipboard directly, so its menu Paste never needs the prompt.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+arboard = { version = "3", default-features = false }

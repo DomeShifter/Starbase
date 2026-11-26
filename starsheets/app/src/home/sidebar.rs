@@ -74,6 +74,14 @@ impl Home {
             self.node(ui, "Recent", "schedule", Some(View::Recent), None, "recent");
             self.node(ui, "Starred", "star", Some(View::Starred), None, "starred");
             self.node(ui, "Bin", "delete", Some(View::Bin), None, "bin");
+            // Photos' Locked folder, findable from the Drive too (it lives in Photo Mode).
+            if self.store.has_photos() {
+                let top = ui.cursor().min;
+                if self.row(ui, "Locked", "lock", None, 0, false, false, "locked:", None) {
+                    self.open_locked();
+                }
+                house::target(ui.ctx(), "drive:locked", Rect::from_min_size(top, vec2(ui.available_width(), 34.0)));
+            }
             let top = ui.cursor().min;
             self.node(ui, "Storage", "sort", Some(View::Storage), None, "storage");
             house::target(ui.ctx(), "Storage", Rect::from_min_size(top, vec2(ui.available_width(), 34.0)));
@@ -93,6 +101,15 @@ impl Home {
                 self.node(ui, "Everyone's files", "groups", Some(View::Everyone(String::new())), Some(""), "every");
             }
         });
+    }
+
+    /// Drive's "Locked" entry: into Photo Mode at its Locked tab, from a folder (My files when
+    /// the Drive shows no folder now, e.g. Recent or the bin).
+    pub(super) fn open_locked(&mut self) {
+        if let Some(v) = locked_view(self.view.as_ref(), &self.space) {
+            self.navigate(v);
+        }
+        self.photos.open_locked(&self.store);
     }
 
     /// A row of the tree. `folder`: the folder it stands for (it can be opened up and dropped on).
@@ -219,5 +236,39 @@ impl Home {
         let galley = p.layout(label.to_string(), font, theme::TEXT, r.right() - x - 56.0);
         p.galley(egui::pos2(x + 52.0, r.center().y - galley.size().y / 2.0), galley, theme::TEXT);
         resp.clicked() && !toggled
+    }
+}
+
+/// Where Drive's "Locked" entry goes first: nowhere when a folder is shown (Photo Mode opens
+/// over it), else My files.
+fn locked_view(view: Option<&View>, space: &str) -> Option<View> {
+    match view {
+        Some(View::Mine(_) | View::Shared(Some(_))) => None,
+        Some(View::Everyone(p)) if !p.is_empty() => None,
+        _ => Some(View::Mine(space.to_string())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn locked_entry_opens_over_a_folder() {
+        let mine = |p: &str| View::Mine(p.into());
+        for (view, want) in [
+            (None, Some(mine("ada"))),
+            (Some(View::Recent), Some(mine("ada"))),
+            (Some(View::Starred), Some(mine("ada"))),
+            (Some(View::Bin), Some(mine("ada"))),
+            (Some(View::Storage), Some(mine("ada"))),
+            (Some(View::Shared(None)), Some(mine("ada"))),
+            (Some(View::Everyone(String::new())), Some(mine("ada"))),
+            (Some(mine("ada/Pics")), None),
+            (Some(View::Shared(Some("bob/Trip".into()))), None),
+            (Some(View::Everyone("bob".into())), None),
+        ] {
+            assert_eq!(locked_view(view.as_ref(), "ada"), want, "{view:?}");
+        }
     }
 }

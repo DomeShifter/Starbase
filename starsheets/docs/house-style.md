@@ -146,3 +146,12 @@ away; Cancel puts it back.
 
 While a filter view is open, a dark bar (`house::VIEW_BAR`, Google's #3C4043) sits under the toolbar:
 white labels and text, text boxes in #5F6368, a ⋮ menu and ✕ at the right.
+
+## Paste
+
+Every Starbase app's menu Paste (Edit › Paste, a right-click Paste) follows one standard, from
+crate `starbase-clipboard` (decisions.md 2026-11-26): the app's own copy pastes at once while the
+tab kept the focus (a blur or hidden tab forgets it); otherwise https reads the clipboard (the
+browser may ask); on http or a refused read a small card "Press Ctrl+V now" shows at the top,
+with one reason line and a "Don't explain again" tick (kept per browser). It is not a modal: the
+keyboard stays on the place the menu was opened for, so Ctrl+V pastes there and closes it.
