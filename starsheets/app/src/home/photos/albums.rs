@@ -237,7 +237,9 @@ impl PhotoMode {
                 }
                 None => b,
             };
-            if ui.add(b).clicked() {
+            let resp = ui.add(b);
+            crate::house::target(ui.ctx(), label, resp.rect);
+            if resp.clicked() {
                 self.go(t);
             }
         }
