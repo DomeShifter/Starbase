@@ -1,0 +1,2 @@
+### Changed
+- StarDocs: keyboard shortcuts follow Google Docs: Ctrl+\ clears formatting, Ctrl+Shift+7/8 make numbered/bulleted lists, Ctrl+Alt+0 sets normal text, Ctrl+]/[ indent and outdent. The menus show the keys that really work (Ctrl+Shift+X strikethrough, Ctrl+L/E/R/J alignment, Ctrl+8 non-printing characters), and in the browser Ctrl+B/I/U/L/R and similar keys reach the document instead of the browser.
