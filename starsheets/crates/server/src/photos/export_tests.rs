@@ -132,7 +132,7 @@ async fn exports_are_new_files_for_people_who_may_add_them() {
     }
     std::fs::create_dir_all(s.full("ann/Trip")).unwrap();
     std::fs::write(s.full("ann/Trip/a.jpg"), photo(60, 40, 1)).unwrap();
-    std::fs::write(s.full("ann/Trip/raw.cr2"), b"raw").unwrap();
+    std::fs::write(s.full("ann/Trip/raw.cr3"), b"raw").unwrap();
     std::fs::write(s.full("ann/Trip/notes.txt"), b"text").unwrap();
     // Saved edits: a quarter turn.
     let e = edits(r#"{"rot90": 1}"#);
@@ -192,7 +192,7 @@ async fn exports_are_new_files_for_people_who_may_add_them() {
     assert_eq!(send(&app, "POST", "/api/photos/export/nosuchid", Some("bob"), &[], "").await.status, 403);
     assert_eq!(send(&app, "POST", &url(a), None, &[], "").await.status, 401);
     assert_eq!(send(&app, "POST", &url(&ids["ann/Trip/notes.txt"]), Some("ann"), &[], "").await.status, 404);
-    assert_eq!(send(&app, "POST", &url(&ids["ann/Trip/raw.cr2"]), Some("ann"), &[], "").await.status, 409);
+    assert_eq!(send(&app, "POST", &url(&ids["ann/Trip/raw.cr3"]), Some("ann"), &[], "").await.status, 409);
     let _ = std::fs::remove_dir_all(&root);
 }
 

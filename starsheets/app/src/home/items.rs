@@ -110,6 +110,9 @@ impl Home {
             self.bin_ui(ui);
             return;
         }
+        if self.view == Some(View::Storage) {
+            self.storage_header(ui);
+        }
         if let Some(folder) = self.photo_folder() {
             self.photos.ui(ui, &self.store, &folder);
             self.photo_outs(ui.ctx());
@@ -146,9 +149,9 @@ impl Home {
                 ui.label(RichText::new(empty).size(house::BODY).color(theme::TEXT_DIM));
             }
             let order = self.shown(&folders, &files);
-            if self.list && !order.is_empty() {
+            if (self.list || self.view == Some(View::Storage)) && !order.is_empty() {
                 self.list_ui(ui, &order, &mut clicked_item);
-            } else if self.mixed && self.view != Some(View::Recent) {
+            } else if self.mixed && !matches!(self.view, Some(View::Recent | View::Storage)) {
                 // Folders mixed in with files: everything as cards, in the sort's order.
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = vec2(house::M, house::M);
@@ -424,6 +427,7 @@ impl Home {
         }
         let sub = match (&self.view, f.opened) {
             (Some(View::Recent), Some(t)) => format!("You opened {}", ago(t)),
+            _ if self.found_snippet(&f.id).is_some() => self.found_snippet(&f.id).unwrap_or_default().to_string(),
             _ if self.accounts && f.owner != self.space => format!("{} · {}", self.person(&f.owner), ago(f.modified)),
             _ => format!("Modified {}", ago(f.modified)),
         };
@@ -437,10 +441,34 @@ impl Home {
         self.interact(ui, &item, &resp, clicked_item);
     }
 
+    /// The words around the match inside this file, while a search that found text in it is shown.
+    pub(super) fn found_snippet(&self, id: &str) -> Option<&str> {
+        let q = self.search.trim();
+        if q.is_empty() || self.found_for != q {
+            return None;
+        }
+        self.found.get(id).map(String::as_str).filter(|s| !s.is_empty())
+    }
+
     pub(super) fn list_ui(&mut self, ui: &mut Ui, order: &[Item], clicked_item: &mut bool) {
         let w = ui.available_width() - 8.0;
         let (h, _) = ui.allocate_exact_size(vec2(w, 28.0), Sense::hover());
-        let cols = [(0.0, "Name"), (w * 0.52, if self.accounts { "Owner" } else { "" }), (w * 0.70, "Last modified"), (w - 90.0, "Size")];
+        let storage = self.view == Some(View::Storage);
+        let cols = [
+            (0.0, "Name"),
+            (
+                w * 0.52,
+                if storage {
+                    "Location"
+                } else if self.accounts {
+                    "Owner"
+                } else {
+                    ""
+                },
+            ),
+            (w * 0.70, "Last modified"),
+            (w - 90.0, "Size"),
+        ];
         for (x, label) in cols {
             ui.painter().text(
                 h.left_center() + vec2(x + if x == 0.0 { 44.0 } else { 0.0 }, 0.0),
@@ -478,6 +506,10 @@ impl Home {
             })
             .collect();
         for ListRow { item, name, icon, owner, modified, size, starred } in rows {
+            let snippet = match &item {
+                Item::File(id) => self.found_snippet(id).map(str::to_string),
+                Item::Folder(_) => None,
+            };
             let (r, resp) = ui.allocate_exact_size(vec2(w, ROW), Sense::click_and_drag());
             let p = ui.painter().clone();
             if self.selected.contains(&item) {
@@ -516,9 +548,27 @@ impl Home {
                 {
                     let text = format!("@ {} mentioned you", self.person(&f.mentioned_by));
                     p.text(egui::pos2(end + 8.0 + star_room, r.center().y), Align2::LEFT_CENTER, text, FontId::proportional(12.0), house::BLUE);
+                } else if let Some(s) = snippet {
+                    // A match inside the file: the words around it, dim, after the name.
+                    let x = end + if starred { 30.0 } else { 14.0 };
+                    let left = r.left() + room + 44.0 - x;
+                    if left > 40.0 {
+                        let g = one_line(&p, s, 12.0, theme::TEXT_DIM, left);
+                        p.galley(egui::pos2(x, r.center().y - g.size().y / 2.0), g, theme::TEXT_DIM);
+                    }
                 }
             }
-            if self.accounts {
+            if storage {
+                let place = match &item {
+                    Item::File(id) => self.file(id).map(|f| f.folder.clone()).unwrap_or_default(),
+                    Item::Folder(_) => String::new(),
+                };
+                let place =
+                    if self.accounts { place.strip_prefix(self.space.as_str()).unwrap_or(&place).trim_start_matches('/').to_string() } else { place };
+                let place = if place.is_empty() { "My files".to_string() } else { place };
+                let place = one_line(&p, place, 13.0, theme::TEXT_DIM, w * 0.17);
+                p.galley(r.left_center() + vec2(w * 0.52, -7.0), place, theme::TEXT_DIM);
+            } else if self.accounts {
                 p.text(r.left_center() + vec2(w * 0.52, 0.0), Align2::LEFT_CENTER, self.person(&owner), FontId::proportional(13.0), theme::TEXT_DIM);
             }
             if modified > 0 {

@@ -74,6 +74,19 @@ impl Home {
             self.node(ui, "Recent", "schedule", Some(View::Recent), None, "recent");
             self.node(ui, "Starred", "star", Some(View::Starred), None, "starred");
             self.node(ui, "Bin", "delete", Some(View::Bin), None, "bin");
+            let top = ui.cursor().min;
+            self.node(ui, "Storage", "sort", Some(View::Storage), None, "storage");
+            house::target(ui.ctx(), "Storage", Rect::from_min_size(top, vec2(ui.available_width(), 34.0)));
+            if let Some((used, _, free)) = self.storage {
+                let text = match free {
+                    Some(f) => format!("{} used of {} free", size_text(used), size_text(f)),
+                    None => format!("{} used", size_text(used)),
+                };
+                ui.horizontal(|ui| {
+                    ui.add_space(56.0);
+                    ui.label(RichText::new(text).size(12.0).color(theme::TEXT_DIM));
+                });
+            }
             if self.accounts && self.admin {
                 ui.add_space(house::S);
                 ui.separator();
@@ -166,6 +179,7 @@ impl Home {
         folder: Option<String>,
     ) -> bool {
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
+        house::target(ui.ctx(), label, r);
         let p = ui.painter().clone();
         let dropping = self.dragging.is_some() && folder.is_some() && resp.contains_pointer();
         if current {

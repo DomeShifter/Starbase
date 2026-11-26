@@ -22,6 +22,7 @@ use crate::store::{Backend, Method, enc};
 use crate::theme;
 
 mod actions;
+mod activity;
 mod bin;
 mod filepreview;
 mod filters;
@@ -35,6 +36,7 @@ mod templates;
 mod test;
 pub(crate) mod textpreview;
 mod undo;
+mod video;
 mod viewer;
 
 const LEFT: f32 = 256.0;
@@ -108,6 +110,8 @@ enum View {
     Recent,
     Starred,
     Bin,
+    /// Storage used, and my files biggest first.
+    Storage,
     /// The server owner's view of every folder ("" = everyone's folders).
     Everyone(String),
 }
@@ -115,16 +119,22 @@ enum View {
 enum Reply {
     Listed(Json),
     Bin(Vec<BinRow>),
+    /// Storage figures: used, in the bin, free on the disk (None: unknown).
+    Storage(u64, u64, Option<u64>),
     Refresh,
     NewFolder(String),
     Thumb(String, String, Option<egui::ColorImage>),
     Download(String, Vec<u8>),
     /// Who has access to the item in Details.
     Access(Item, Json),
+    /// A file's Activity list (file id, answer).
+    Activity(String, Json),
     /// One request of an undoable action answered: what it did (None: nothing), or why not.
     Did(u64, Result<Option<undo::Step>, String>),
     /// One request of an undo answered.
     Undone(Result<(), String>),
+    /// The files whose text matches a search: (the search, [(file id, snippet)]).
+    Found(String, Vec<(String, String)>),
     Error(String),
 }
 
@@ -161,6 +171,8 @@ pub struct Home {
     files: Vec<FileRow>,
     folders: Vec<FolderRow>,
     bin: Vec<BinRow>,
+    /// Bytes used by my files, bytes in my bin, free bytes on the disk (from api/usage).
+    storage: Option<(u64, u64, Option<u64>)>,
     /// My own folder ("" without accounts), whether I'm the server's owner, the tops of "Shared
     /// with me", and everyone's names.
     space: String,
@@ -182,7 +194,15 @@ pub struct Home {
     mixed: bool,
     /// Details: the item shown, and who has access to it (from the server) once known.
     details: Option<(Item, Option<Json>)>,
+    /// Details: 0 = Details, 1 = Activity; and the Activity list once it arrives (file id, list).
+    details_tab: usize,
+    activity: Option<(String, Json)>,
     search: String,
+    /// Files whose text holds the search words (id → snippet), for the search in `found_for`.
+    found: HashMap<String, String>,
+    found_for: String,
+    /// The search last sent to the server for text matches.
+    asked: String,
     /// The chips under the search box (filters.rs).
     filters: filters::Filters,
     selected: Vec<Item>,
@@ -361,6 +381,42 @@ impl Home {
         if self.view == Some(View::Bin) {
             self.load_bin(ctx);
         }
+        self.load_storage(ctx);
+    }
+
+    fn load_storage(&mut self, ctx: &egui::Context) {
+        call(&self.store, &self.inbox, ctx, Method::Get, "api/usage".into(), None, |b| {
+            let v: Json = serde_json::from_slice(&b).unwrap_or_default();
+            Reply::Storage(v["used"].as_u64().unwrap_or(0), v["bin"].as_u64().unwrap_or(0), v["free"].as_u64())
+        });
+    }
+
+    /// Search also looks inside files: asks the server which files' text holds the words (once
+    /// per search; an answer for an older search is dropped when it arrives).
+    fn ask_text_matches(&mut self, ctx: &egui::Context) {
+        let q = self.search.trim().to_string();
+        if q == self.asked {
+            return;
+        }
+        self.asked = q.clone();
+        if q.chars().count() < 2 {
+            self.found.clear();
+            self.found_for.clear();
+            return;
+        }
+        let url = format!("api/content-search?q={}", enc(&q));
+        let q2 = q.clone();
+        call_any(&self.store, &self.inbox, ctx, Method::Get, url, None, move |r| {
+            let hits = r.ok().and_then(|b| serde_json::from_slice::<Json>(&b).ok()).map(|v| {
+                v["hits"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter().filter_map(|h| Some((h["id"].as_str()?.to_string(), h["snippet"].as_str().unwrap_or("").to_string()))).collect()
+                    })
+                    .unwrap_or_default()
+            });
+            Reply::Found(q2, hits.unwrap_or_default())
+        });
     }
 
     fn load_bin(&mut self, ctx: &egui::Context) {
@@ -670,7 +726,13 @@ impl Home {
                 .filter(|f| !fl.any() || fl.folder_ok(f, &self.space, self.folder_stats(&f.path).0))
                 .cloned()
                 .collect();
-            let files = self.files.iter().filter(|f| f.name.to_lowercase().contains(&q) && fl.file_ok(f, &self.space)).cloned().collect();
+            let text = self.found_for.to_lowercase() == q;
+            let files = self
+                .files
+                .iter()
+                .filter(|f| (f.name.to_lowercase().contains(&q) || (text && self.found.contains_key(&f.id))) && fl.file_ok(f, &self.space))
+                .cloned()
+                .collect();
             return self.sorted(folders, files);
         }
         let (folders, files): (Vec<FolderRow>, Vec<FileRow>) = match self.view.clone() {
@@ -689,6 +751,12 @@ impl Home {
                 let mut files: Vec<FileRow> = self.files.iter().filter(|f| f.opened.is_some()).cloned().collect();
                 files.sort_by_key(|f| std::cmp::Reverse(f.opened));
                 files.truncate(60);
+                return (Vec::new(), files);
+            }
+            Some(View::Storage) => {
+                let mut files: Vec<FileRow> = self.files.iter().filter(|f| !self.accounts || f.owner == self.space).cloned().collect();
+                files.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
+                files.truncate(200);
                 return (Vec::new(), files);
             }
             Some(View::Bin) | None => (Vec::new(), Vec::new()),
@@ -745,7 +813,7 @@ impl Home {
     fn shown(&self, folders: &[FolderRow], files: &[FileRow]) -> Vec<Item> {
         let mut items: Vec<Item> =
             folders.iter().map(|f| Item::Folder(f.path.clone())).chain(files.iter().map(|f| Item::File(f.id.clone()))).collect();
-        if self.mixed && self.view != Some(View::Recent) {
+        if self.mixed && !matches!(self.view, Some(View::Recent | View::Storage)) {
             self.sort_items(&mut items);
         }
         items
@@ -834,6 +902,7 @@ impl Home {
             Some(View::Recent) => parts.push(("Recent".into(), None)),
             Some(View::Starred) => parts.push(("Starred".into(), None)),
             Some(View::Bin) => parts.push(("Bin".into(), None)),
+            Some(View::Storage) => parts.push(("Storage".into(), None)),
             None => {}
         }
         parts
@@ -870,6 +939,7 @@ impl Home {
         ctx.request_repaint_after(std::time::Duration::from_millis(RELIST_MS as u64));
         let folder = self.photo_folder();
         self.photos.logic(ctx, &self.store, folder);
+        self.ask_text_matches(ctx);
         let replies: Vec<Reply> = std::mem::take(&mut *self.inbox.borrow_mut());
         for r in replies {
             match r {
@@ -878,6 +948,7 @@ impl Home {
                     self.bin = b;
                     self.loading = false;
                 }
+                Reply::Storage(u, b, f) => self.storage = Some((u, b, f)),
                 Reply::Refresh => self.refresh(ctx),
                 Reply::NewFolder(path) => {
                     self.refresh(ctx);
@@ -893,6 +964,11 @@ impl Home {
                         None => Thumb::None,
                     };
                     self.thumbs.insert(id, (version, t));
+                }
+                Reply::Activity(id, v) => {
+                    if matches!(&self.details, Some((Item::File(i), _)) if *i == id) {
+                        self.activity = Some((id, v));
+                    }
                 }
                 Reply::Access(item, v) => {
                     if let Some((i, a)) = self.details.as_mut()
@@ -921,6 +997,12 @@ impl Home {
                 Reply::Download(name, bytes) => {
                     if let Err(e) = self.store.download(&name, &bytes) {
                         self.error = Some(e);
+                    }
+                }
+                Reply::Found(q, hits) => {
+                    if q == self.search.trim() {
+                        self.found = hits.into_iter().collect();
+                        self.found_for = q;
                     }
                 }
                 Reply::Error(e) => {
@@ -1103,7 +1185,8 @@ fn size_text(n: u64) -> String {
     match n {
         0..=1023 => format!("{n} B"),
         1024..=1_048_575 => format!("{:.0} KB", n as f64 / 1024.0),
-        _ => format!("{:.1} MB", n as f64 / 1_048_576.0),
+        1_048_576..=1_073_741_823 => format!("{:.1} MB", n as f64 / 1_048_576.0),
+        _ => format!("{:.1} GB", n as f64 / 1_073_741_824.0),
     }
 }
 

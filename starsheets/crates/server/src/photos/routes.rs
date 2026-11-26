@@ -185,7 +185,7 @@ async fn list(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>)
     let got = off(move || {
         let svc = service(&a.store)?;
         if !svc.covers(&f2) {
-            return Some((false, Vec::new(), 0));
+            return Some((false, Vec::new(), HashMap::new(), 0));
         }
         // Rescanned by the scanner thread; one folder is waited for (briefly), a whole tree not.
         if let Some(ticket) = svc.look_at(&f2, deep)
@@ -194,11 +194,24 @@ async fn list(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>)
             svc.wait_scan(ticket, Duration::from_millis(1500));
         }
         let (queued, working) = svc.queued();
-        Some((true, svc.rows(&f2, deep), queued + working))
+        let mut rows = svc.rows(&f2, deep);
+        // Videos aren't read into the index: their length and shoot date come from the file itself.
+        let mut lengths = HashMap::new();
+        for r in rows.iter_mut().filter(|r| super::video::is_video(&r.media)) {
+            if let Some(i) = super::video::info_of(&a.store, &r.path, r.size, r.mtime_ns) {
+                if let Some(d) = i.duration {
+                    lengths.insert(r.path.clone(), d);
+                }
+                if r.meta.taken.is_none() {
+                    r.meta.taken = i.created.map(iso);
+                }
+            }
+        }
+        Some((true, rows, lengths, queued + working))
     })
     .await
     .flatten();
-    let Some((enabled, rows, waiting)) = got else { return error(503, super::NOT_SET_UP) };
+    let Some((enabled, rows, lengths, waiting)) = got else { return error(503, super::NOT_SET_UP) };
     // Where pictures were taken: for people who may edit, through their account (not a link).
     let places = role >= sharing::Role::Edit && named;
     let mut items: Vec<(String, Value)> = rows
@@ -211,7 +224,10 @@ async fn list(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>)
                 "modified" => format!("{modified:020}"),
                 _ => r.meta.taken.clone().map(|t| t.chars().take(19).collect()).unwrap_or_else(|| iso(modified)),
             };
-            let v = photo_json(&r, id, places);
+            let mut v = photo_json(&r, id, places);
+            if let Some(d) = lengths.get(&r.path) {
+                v["duration"] = json!(d);
+            }
             Some((format!("{key}\u{0}{}", r.path), v))
         })
         .collect();
@@ -322,7 +338,7 @@ pub(super) fn photo_json(r: &super::index::Row, id: &str, places: bool) -> Value
         "height": if ready { Some(r.meta.height) } else { None },
         "orientation": if ready { Some(r.meta.orientation) } else { None },
         "camera": (!camera.is_empty()).then_some(camera),
-        "gps": r.meta.lat.zip(r.meta.lon).filter(|_| places).map(|(lat, lon)| json!({"lat": lat, "lon": lon, "alt": r.meta.alt})),
+        "gps": r.meta.lat.zip(r.meta.lon).filter(|_| places).map(|(lat, lon)| json!({"lat": lat, "lon": lon, "alt": r.meta.alt, "place": super::albums::place_name(lat, lon)})),
     })
 }
 
