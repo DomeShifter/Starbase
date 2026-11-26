@@ -20,6 +20,7 @@ use serde_json::Value as Json;
 mod albums;
 mod dups;
 mod pick;
+mod upload;
 
 pub(super) use pick::{Act, Out};
 
@@ -131,6 +132,9 @@ pub(super) enum Got {
     Added(albums::Card, u64, u64, Vec<String>),
     /// The "Add photos" picker's list (pick.rs).
     Picker(Json),
+    /// A file picked for upload (name, bytes), and the answer for upload number n (true: a duplicate).
+    Picked(String, Vec<u8>),
+    Uploaded(usize, Result<bool, String>),
 }
 
 /// Textures within a budget of bytes, least recently drawn going first.
@@ -249,6 +253,8 @@ pub(super) struct PhotoMode {
     pub dups: dups::Dups,
     /// Selecting, the right-click menu, Add to album (pick.rs).
     pub pick: pick::Pick,
+    /// Upload from this device (upload.rs).
+    pub up: upload::Uploads,
     /// What the Drive around Photos is asked to do (stars, the bin, Details).
     pub out: Vec<Out>,
 }
@@ -269,6 +275,7 @@ impl Default for PhotoMode {
             error: None,
             waiting: 0,
             listed_at: -1e9,
+            up: Default::default(),
             inbox: Arc::default(),
             tex: Textures { budget: BUDGET, ..Default::default() },
             asking: HashSet::new(),
@@ -416,6 +423,7 @@ impl PhotoMode {
     /// Each frame: answers, and the listing again while pictures are still being read.
     pub fn logic(&mut self, ctx: &egui::Context, store: &Backend, folder: Option<String>) {
         self.frame += 1;
+        self.upload_pump(ctx, store, folder.as_deref(), ctx.input(|i| i.time));
         let now = ctx.input(|i| i.time);
         let got: Vec<Got> = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(|e| e.into_inner()));
         for g in got {
@@ -426,6 +434,11 @@ impl PhotoMode {
                 Got::Changed => self.alb.changed(ctx, store, &self.inbox),
                 Got::Added(c, n, asked, ids) => self.added(ctx, store, c, n, asked, ids),
                 Got::Picker(v) => self.take_picker(&v),
+                Got::Picked(name, bytes) => {
+                    let f = folder.clone().or_else(|| self.folder.clone()).unwrap_or_default();
+                    self.upload_add(&f, name, bytes);
+                }
+                Got::Uploaded(i, r) => self.upload_answer(i, r, now),
                 Got::Listed(f, sub, v) => {
                     if Some(&f) == self.folder.as_ref() && sub == self.sub && self.alb.tab == albums::Tab::Photos {
                         self.take_list(&v);
@@ -609,6 +622,7 @@ impl PhotoMode {
             self.sel_bar_ui(ui, store);
         }
         self.pick_ui(ui, store);
+        self.upload_ui(ui);
         ui.add_space(house::S);
         if self.pics.is_empty() {
             ui.add_space(house::XL);
@@ -751,7 +765,7 @@ impl PhotoMode {
     /// Above the grid: how many, subfolders, order, slideshow, turning off.
     fn bar_ui(&mut self, ui: &mut Ui, store: &Backend, folder: &str) {
         let ctx = ui.ctx().clone();
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let n = self.pics.len();
             let mut text = format!("{n} {}", if n == 1 { "picture" } else { "pictures" });
             if self.waiting > 0 {
@@ -759,7 +773,7 @@ impl PhotoMode {
             }
             ui.label(RichText::new(text).size(house::BODY).color(theme::TEXT_DIM));
             ui.add_space(house::M);
-            let pill = |ui: &mut Ui, label: &str, on: bool| {
+            let pill = |ui: &mut Ui, label: &str, on: bool| -> egui::Response {
                 ui.add(
                     egui::Button::new(RichText::new(label).size(house::BODY).color(theme::TEXT))
                         .fill(if on { theme::SHARE } else { Color32::WHITE })
@@ -767,19 +781,23 @@ impl PhotoMode {
                         .corner_radius(16)
                         .min_size(vec2(0.0, 32.0)),
                 )
-                .clicked()
             };
-            if pill(ui, "Include subfolders", self.sub) {
+            if pill(ui, "Include subfolders", self.sub).clicked() {
                 self.sub = !self.sub;
                 self.pics.clear();
                 self.list(&ctx, store, folder);
             }
-            if pill(ui, if self.newest_first { "Newest first" } else { "Oldest first" }, false) {
+            if pill(ui, if self.newest_first { "Newest first" } else { "Oldest first" }, false).clicked() {
                 self.newest_first = !self.newest_first;
                 store.set_setting("starsheets_home_photos_order", if self.newest_first { "new" } else { "old" });
                 self.list(&ctx, store, folder);
             }
-            if !self.pics.is_empty() && pill(ui, "Slideshow", false) {
+            let up = pill(ui, "Upload", false);
+            self.up.btn = Some([up.rect.center().x, up.rect.center().y]);
+            if up.clicked() {
+                self.upload_pick(&ctx, store);
+            }
+            if !self.pics.is_empty() && pill(ui, "Slideshow", false).clicked() {
                 let mut v = Viewer::new(0, self.pics.len());
                 v.play(ui.ctx().input(|i| i.time));
                 self.viewer = Some(v);
@@ -848,6 +866,7 @@ impl PhotoMode {
             "albums": self.alb.test_state(),
             "dups": self.dups.test_state(),
             "pick": self.pick.test_state(),
+            "upload": self.up.test_state(),
             "textures": { "count": self.tex.len(), "bytes": self.tex.total, "budget": self.tex.budget, "asking": self.asking.len() },
             "items": self.pics.iter().take(60).map(|p| json!({
                 "id": p.id, "name": p.name, "taken": p.taken, "state": p.state, "v": p.v, "media": p.media, "duration": p.duration,
