@@ -642,7 +642,7 @@ fn info_panel(
     let panel = Rect::from_min_max(pos2(rect.right() - INFO_W, rect.top() + house::VIEW_BAR_HEIGHT), pos2(rect.right(), rect.bottom()));
     ui.painter().rect_filled(panel, 0, house::VIEW_BAR);
     ui.painter().vline(panel.left(), panel.y_range(), egui::Stroke::new(1.0, house::VIEW_BAR_FIELD));
-    house::target(&ctx, "viewer:info", panel);
+    house::target(&ctx, "viewer:info-panel", panel);
     let mut c = ui.new_child(egui::UiBuilder::new().max_rect(panel.shrink(house::L)).layout(egui::Layout::top_down(egui::Align::Min)));
     house::view_bar_style(&mut c);
     c.spacing_mut().item_spacing = vec2(house::S, 0.0);

@@ -5,7 +5,7 @@ Seed first: python3 -I testing/seed.py --url <URL> --set gps   (pictures with ca
 Run:  photos_viewer_info.py http://<host>:<port> --browser chromium|firefox [--user NAME]
 Expects: the viewer opens with a 56 px dark bar (target viewer:bar) whose icon buttons are 36 x 36
 (viewer:close, viewer:info, viewer:download, ...); Info (viewer:info button) opens a 320 px panel
-(viewer:info) with the headings WHAT / WHEN AND WHERE / CAMERA / IN (empty ones left out), label left
+(viewer:info-panel) with the headings WHAT / WHEN AND WHERE / CAMERA / IN (empty ones left out), label left
 and value right, a close button (viewer:info:close) and 'Move to Locked folder' as a dark pill
 button (viewer:info:lock). The panel's close button shuts it; the I key opens it again.
 Screenshots: <browser>-viewer-0-bar, -1-info, -2-info-closed (look at them: spacing, alignment)."""
