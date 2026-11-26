@@ -55,6 +55,7 @@ pub(super) fn sentence(e: &Json) -> String {
 }
 
 /// The rows as shown ("Ada edited · 2 h ago"), for the test hook.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(super) fn rows(list: &Json) -> Vec<String> {
     let now = now();
     list["activity"]
