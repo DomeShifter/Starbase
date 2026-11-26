@@ -107,6 +107,8 @@ def run(br, testn, out):
         print(f"PASS [{br}] blur + outside clipboard: prompt, Ctrl+V pastes 'outside'", flush=True)
 
         blur_and_clip(s, "second")
+        s.click_xy(640, 420)
+        s.key("End")
         edit_paste(s)
         assert s.wait_for(lambda: s.snapshot("pastePromptShown")), "second prompt did not show"
         s.click_text(DONT)
@@ -115,6 +117,8 @@ def run(br, testn, out):
         assert s.wait_for(lambda: not s.snapshot("pastePromptShown")), "second prompt did not close"
         assert "second" in text(s), f"text = {text(s)!r}"
         blur_and_clip(s, "third")
+        s.click_xy(640, 420)
+        s.key("End")
         edit_paste(s)
         assert s.wait_for(lambda: s.snapshot("pastePromptShown")), "third prompt did not show"
         assert DONT not in s.snapshot("targets"), "reason line still shown after Don't explain again"
