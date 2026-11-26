@@ -60,6 +60,9 @@ pub async fn route(
     if p.len() == 3 && p[1] == "edits" {
         return Some(super::edits::route(app, m, p[2].clone(), me, headers, body).await);
     }
+    if p.len() == 3 && p[1] == "rotate" {
+        return Some(super::edits::rotate(app, m, p[2].clone(), me, body).await);
+    }
     if p.len() == 3 && p[1] == "export" {
         return Some(super::export::route(app, m, p[2].clone(), me, body).await);
     }

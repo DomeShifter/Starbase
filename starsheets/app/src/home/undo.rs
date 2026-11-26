@@ -36,6 +36,8 @@ pub(super) enum Step {
     AlbumAdd { album: String, ids: Vec<String> },
     /// Photos: these pictures were taken out of an album (undo: put them back).
     AlbumRemove { album: String, ids: Vec<String> },
+    /// Photos: a picture was turned a quarter to the left (or right); undo: the other way.
+    Rotate { id: String, left: bool },
 }
 
 impl Step {
@@ -44,6 +46,7 @@ impl Step {
         let files = |ids: &[String]| Some(serde_json::json!({ "files": ids }).to_string().into_bytes());
         match self {
             Step::Star { id, on } => (Method::Post, format!("api/files/{id}/star"), Some(format!("{{\"on\":{}}}", !on).into_bytes())),
+            Step::Rotate { id, left } => (Method::Post, format!("api/photos/rotate/{id}"), Some(rotate_body(!left))),
             Step::AlbumAdd { album, ids } => (Method::Post, format!("api/photos/albums/{}/remove", enc(album)), files(ids)),
             Step::AlbumRemove { album, ids } => (Method::Post, format!("api/photos/albums/{}/add", enc(album)), files(ids)),
             _ => {
@@ -71,7 +74,9 @@ impl Step {
             }
             Step::Made { path } => (Method::Delete, format!("api/folders?path={}&if_empty=1", enc(path))),
             Step::Binned { bin, original } => (Method::Post, format!("api/bin/restore?name={}&expect={}&exact=1", enc(bin), enc(original))),
-            Step::Star { .. } | Step::AlbumAdd { .. } | Step::AlbumRemove { .. } => unreachable!("they have a body: see undo_request"),
+            Step::Star { .. } | Step::AlbumAdd { .. } | Step::AlbumRemove { .. } | Step::Rotate { .. } => {
+                unreachable!("they have a body: see undo_request")
+            }
         }
     }
 
@@ -83,8 +88,14 @@ impl Step {
             Step::Binned { original, .. } => name_of(original).to_string(),
             Step::Star { .. } => "the star".into(),
             Step::AlbumAdd { .. } | Step::AlbumRemove { .. } => "the album".into(),
+            Step::Rotate { .. } => "the picture".into(),
         }
     }
+}
+
+/// The body of a rotate request.
+pub(super) fn rotate_body(left: bool) -> Vec<u8> {
+    format!("{{\"dir\":\"{}\"}}", if left { "left" } else { "right" }).into_bytes()
 }
 
 /// `&id=…` for a folder's undo, when the server gave its id.
@@ -310,6 +321,8 @@ mod tests {
     #[test]
     fn each_step_is_undone_by_a_checked_request() {
         let req = |s: Step| s.undo_request().1;
+        let (_, u, b) = (Step::Rotate { id: "p1".into(), left: true }).undo_request();
+        assert_eq!((u.as_str(), b.as_deref()), ("api/photos/rotate/p1", Some(&b"{\"dir\":\"right\"}"[..])));
         let (_, u, b) = (Step::Star { id: "f1".into(), on: true }).undo_request();
         assert_eq!((u.as_str(), b), ("api/files/f1/star", Some(b"{\"on\":false}".to_vec())));
         let (_, u, b) = (Step::AlbumAdd { album: "a1".into(), ids: vec!["x".into()] }).undo_request();

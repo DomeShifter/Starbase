@@ -19,6 +19,7 @@ use serde_json::Value as Json;
 
 pub(super) mod albums;
 mod dups;
+mod justify;
 mod locked;
 mod pick;
 mod upload;
@@ -36,8 +37,7 @@ pub(super) const LARGE: u32 = 1024;
 pub(super) const ORIGINAL: u32 = 0;
 /// Pictures asked for at once.
 const AT_ONCE: usize = 6;
-/// Target size of a grid square, and the gap between squares.
-const TILE: f32 = 180.0;
+/// The gap between pictures (the rows' target height: justify.rs).
 const GAP: f32 = 4.0;
 /// How long to wait before asking again for a thumbnail the server is still making (s).
 const RETRY: f64 = 2.0;
@@ -163,6 +163,8 @@ pub(super) enum Got {
     Unlocked,
     Wrong(String),
     Moved(Vec<String>, bool),
+    /// A picture was turned (id, left, the new thumbnail version) or couldn't be.
+    Rotated(String, bool, Result<Option<String>, String>),
     Nothing,
     /// A file picked for upload (name, bytes), and the answer for upload number n (true: a duplicate).
     Picked(String, Vec<u8>),
@@ -218,13 +220,6 @@ impl Textures {
     }
 }
 
-/// Columns and square size for a grid `width` wide (at least two columns).
-pub(super) fn layout(width: f32) -> (usize, f32) {
-    let cols = (((width + GAP) / (TILE + GAP)).floor() as usize).max(2);
-    let tile = ((width - GAP * (cols as f32 - 1.0)) / cols as f32).max(40.0);
-    (cols, tile)
-}
-
 /// The part of a picture `w` × `h` that fills a square (the middle of it), as texture coordinates.
 pub(super) fn cover_uv(w: f32, h: f32) -> Rect {
     if w <= 0.0 || h <= 0.0 {
@@ -274,6 +269,11 @@ pub(super) struct PhotoMode {
     pub tex: Textures,
     asking: HashSet<Key>,
     retry_at: HashMap<Key, f64>,
+    /// The real width / height of pictures whose thumbnail has loaded and differs from the
+    /// listing's (turned by EXIF or by an edit): the grid lays out with it.
+    ratios: HashMap<String, f32>,
+    /// Rotations asked for and not yet answered, and the ones that worked (one Undo for all).
+    turning: (usize, Vec<super::undo::Step>),
     failed: HashSet<Key>,
     pub frame: u64,
     pub viewer: Option<Viewer>,
@@ -314,6 +314,8 @@ impl Default for PhotoMode {
             tex: Textures { budget: BUDGET, ..Default::default() },
             asking: HashSet::new(),
             retry_at: HashMap::new(),
+            ratios: HashMap::new(),
+            turning: (0, Vec::new()),
             failed: HashSet::new(),
             frame: 0,
             viewer: None,
@@ -488,6 +490,7 @@ impl PhotoMode {
                     self.lk.error = Some(e);
                 }
                 Got::Moved(ids, into) => self.moved(ctx, store, &ids, into),
+                Got::Rotated(id, left, r) => self.rotated(ctx, id, left, r),
                 Got::Nothing => {}
                 Got::Picked(name, bytes) => {
                     let f = folder.clone().or_else(|| self.folder.clone()).unwrap_or_default();
@@ -605,10 +608,62 @@ impl PhotoMode {
         );
     }
 
+    /// Turns pictures a quarter (not videos or ones that can't be shown), as a saved edit.
+    pub(super) fn rotate(&mut self, ctx: &egui::Context, store: &Backend, ids: Vec<String>, left: bool) {
+        let ok = |p: &Pic| !p.is_video() && !matches!(p.state.as_str(), "failed" | "unsupported");
+        let ids: Vec<String> = ids.into_iter().filter(|id| self.pics.iter().any(|p| &p.id == id && ok(p))).collect();
+        if ids.is_empty() || self.turning.0 > 0 {
+            return;
+        }
+        self.turning = (ids.len(), Vec::new());
+        for id in ids {
+            let (inbox, ctx2, id2) = (self.inbox.clone(), ctx.clone(), id.clone());
+            store.call(
+                ctx,
+                Method::Post,
+                &format!("api/photos/rotate/{}", enc(&id)),
+                Some(super::undo::rotate_body(left)),
+                Box::new(move |a| {
+                    let r = match a {
+                        Ok((200, b)) => Ok(serde_json::from_slice::<Json>(&b).ok().and_then(|v| v["thumb_v"].as_str().map(str::to_string))),
+                        Ok((s, b)) => {
+                            let v: Json = serde_json::from_slice(&b).unwrap_or_default();
+                            Err(v["error"].as_str().map_or(format!("The server said {s}."), str::to_string))
+                        }
+                        Err(e) => Err(e),
+                    };
+                    Self::push(&inbox, &ctx2, Got::Rotated(id2, left, r));
+                }),
+            );
+        }
+    }
+
+    /// One picture's turn answered: its thumbnail is asked for again, and when all are, Undo is offered.
+    fn rotated(&mut self, ctx: &egui::Context, id: String, left: bool, r: Result<Option<String>, String>) {
+        self.turning.0 = self.turning.0.saturating_sub(1);
+        match r {
+            Ok(v) => {
+                // The grid already lays it out turned; the new thumbnail confirms it.
+                let was = self.pics.iter().find(|p| p.id == id).map_or(4.0 / 3.0, |p| self.ratio_of(p));
+                self.edited(&id, v);
+                self.ratios.insert(id.clone(), 1.0 / was);
+                self.turning.1.push(super::undo::Step::Rotate { id, left });
+            }
+            Err(e) => self.error = Some(format!("Couldn't turn the picture: {e}")),
+        }
+        if self.turning.0 == 0 && !self.turning.1.is_empty() {
+            let steps = std::mem::take(&mut self.turning.1);
+            let label = format!("Rotated {}", if left { "left" } else { "right" });
+            self.say_undo(ctx, label.clone());
+            self.out.push(Out::Did(label, steps));
+        }
+    }
+
     /// Picture `id`'s edits were saved: its thumbnails are asked for again at version `v`
     /// (the server's thumbnails show the edited picture).
     pub fn edited(&mut self, id: &str, v: Option<String>) {
         self.tex.forget(id);
+        self.ratios.remove(id);
         for p in self.pics.iter_mut().filter(|p| p.id == id) {
             if v.is_some() {
                 p.v = v.clone();
@@ -696,34 +751,47 @@ impl PhotoMode {
         self.grid(ui, store);
     }
 
-    /// The scrolling grid of `pics`.
+    /// The ratio (width / height) picture `i` is laid out with.
+    fn ratio_of(&self, p: &Pic) -> f32 {
+        self.ratios.get(&p.id).copied().unwrap_or_else(|| justify::ratio(p.width, p.height))
+    }
+
+    /// The scrolling grid of `pics`: justified rows, every picture in its own aspect ratio.
     pub(super) fn grid(&mut self, ui: &mut Ui, store: &Backend) {
         let ctx = ui.ctx().clone();
-        let (cols, tile) = layout(ui.available_width() - house::SCROLL_ROOM);
-        let rows = self.pics.len().div_ceil(cols);
-        ui.spacing_mut().item_spacing = vec2(GAP, GAP);
+        let width = (ui.available_width() - house::SCROLL_ROOM).max(80.0);
+        let ratios: Vec<f32> = self.pics.iter().map(|p| self.ratio_of(p)).collect();
+        let rows = justify::rows(&ratios, width, justify::target_for(width), GAP);
+        let (tops, total) = justify::offsets(&rows, GAP);
         let mut hit = None;
-        let shown = egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, tile, rows, |ui, range| {
-            for row in range.clone() {
-                ui.horizontal(|ui| {
-                    for c in 0..cols {
-                        let i = row * cols + c;
-                        if i >= self.pics.len() {
-                            break;
-                        }
-                        if let Some(h) = self.tile_ui(ui, &ctx, store, i, tile) {
-                            hit = Some((i, h));
-                        }
+        let mut seen = 0..0;
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show_viewport(ui, |ui, view| {
+            let (_, area) = ui.allocate_space(vec2(width, total));
+            // One screen above and below what is shown.
+            let (lo, hi) = (view.min.y - view.height(), view.max.y + view.height());
+            let first = tops.partition_point(|t| *t < lo).saturating_sub(1);
+            let last = tops.partition_point(|t| *t < hi).min(rows.len());
+            seen = first..last;
+            for (row, top) in rows[first..last].iter().zip(&tops[first..last]) {
+                let mut x = 0.0;
+                for (i, r) in ratios.iter().enumerate().take(row.end).skip(row.start) {
+                    let w = r * row.height;
+                    let rect = Rect::from_min_size(area.min + vec2(x, *top), vec2(w, row.height));
+                    x += w + GAP;
+                    // Only what is on screen is asked for first; the rest below.
+                    if rect.max.y < area.min.y + view.min.y || rect.min.y > area.min.y + view.max.y {
+                        continue;
                     }
-                });
+                    if let Some(h) = self.tile_ui(ui, &ctx, store, i, rect) {
+                        hit = Some((i, h));
+                    }
+                }
             }
-            range
         });
-        // One screen ahead, after everything on screen was asked for.
-        let range = shown.inner;
-        let ahead = range.end..(range.end + range.len()).min(rows);
+        // A screen ahead, after everything on screen was asked for.
         let n = self.pics.len();
-        for i in ahead.flat_map(|r| r * cols..((r + 1) * cols).min(n)) {
+        let ahead = rows.get(seen.end..).unwrap_or(&[]).iter().take(seen.len().max(1));
+        for i in ahead.flat_map(|r| r.start..r.end.min(n)) {
             self.want(&ctx, store, i, SMALL);
         }
         match hit {
@@ -762,8 +830,8 @@ impl PhotoMode {
     }
 
     /// One square of the grid: a click (on its checkbox or not), or a right-click menu command.
-    fn tile_ui(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend, i: usize, tile: f32) -> Option<Hit> {
-        let (rect, resp) = ui.allocate_exact_size(vec2(tile, tile), Sense::click());
+    fn tile_ui(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend, i: usize, rect: Rect) -> Option<Hit> {
+        let resp = ui.interact(rect, ui.auto_id_with(("photo_tile", i)), Sense::click());
         self.want(ctx, store, i, SMALL);
         let p = &self.pics[i];
         let (name, date, state) = (p.name.clone(), date_label(p.taken.as_deref(), p.modified), p.state.clone());
@@ -771,7 +839,14 @@ impl PhotoMode {
         painter.rect_filled(rect, 0, Color32::from_rgb(0xE8, 0xEA, 0xED));
         if let Some((t, _)) = self.best(i, SMALL) {
             let [w, h] = t.size();
-            painter.image(t.id(), rect, cover_uv(w as f32, h as f32), Color32::WHITE);
+            painter.image(t.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            // The picture's real shape (turned by EXIF or an edit) replaces the listing's.
+            let real = justify::ratio(w as u32, h as u32);
+            let id = self.pics[i].id.clone();
+            let listed = justify::ratio(self.pics[i].width, self.pics[i].height);
+            if self.ratios.get(&id).map_or((real / listed - 1.0).abs() > 0.02, |r| (real / r - 1.0).abs() > 0.02) {
+                self.ratios.insert(id, real);
+            }
         } else if self.pics[i].is_video() {
             painter.rect_filled(rect, 0, Color32::from_rgb(0x3C, 0x40, 0x43));
         } else if state == "failed" || state == "unsupported" {
@@ -1053,14 +1128,6 @@ mod tests {
             assert_eq!(stars_on(&sel, &pics, drive), on, "{why}");
         }
         assert!(!stars_on(&ids(&["d"]), &[], |_| Some(true)), "the Drive answers for pictures Photos hasn't listed");
-    }
-
-    #[test]
-    fn the_grid_fills_the_width() {
-        assert_eq!(layout(1000.0).0, 5);
-        let (cols, tile) = layout(1000.0);
-        assert!((cols as f32 * tile + GAP * (cols - 1) as f32 - 1000.0).abs() < 0.01);
-        assert_eq!(layout(200.0).0, 2, "a phone still gets two columns");
     }
 
     #[test]

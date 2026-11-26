@@ -85,6 +85,9 @@ pub(in crate::home) enum Act {
     Remove,
     /// Every picture listed (the bar's Select all, Ctrl/⌘-A).
     SelectAll,
+    /// A quarter turn, saved as an edit (R and Shift-R in the viewer).
+    RotateLeft,
+    RotateRight,
 }
 
 /// The right-click menu's rows: (command, icon, label). "Remove from album" only in an album.
@@ -98,6 +101,8 @@ pub(super) fn menu_rows(in_album: bool, in_locked: bool) -> Vec<(Act, &'static s
         (Act::AddTo, "photo_library", "Add to album…"),
         (Act::Favourite, "star", "Favourite"),
         (Act::Download, "download", "Download"),
+        (Act::RotateLeft, "rotate_left", "Rotate left"),
+        (Act::RotateRight, "rotate_right", "Rotate right"),
         (Act::Info, "info", "Info"),
     ];
     if in_album {
@@ -280,6 +285,7 @@ impl PhotoMode {
                 self.out.push(Out::Delete(ids));
             }
             Act::SelectAll => self.select_all(),
+            Act::RotateLeft | Act::RotateRight => self.rotate(ctx, store, ids, act == Act::RotateLeft),
             Act::Remove => {
                 let Some(c) = self.open_album() else { return };
                 post(ctx, store, &self.inbox, &format!("api/photos/albums/{}/remove", c.id), json!({ "files": ids }));
@@ -917,8 +923,35 @@ mod tests {
     #[test]
     fn the_menu_has_every_command() {
         for (in_album, want) in [
-            (false, vec!["Open", "Add to album…", "Favourite", "Download", "Info", "Move to Locked folder…", "Move to bin"]),
-            (true, vec!["Open", "Add to album…", "Favourite", "Download", "Info", "Remove from album", "Move to Locked folder…", "Move to bin"]),
+            (
+                false,
+                vec![
+                    "Open",
+                    "Add to album…",
+                    "Favourite",
+                    "Download",
+                    "Rotate left",
+                    "Rotate right",
+                    "Info",
+                    "Move to Locked folder…",
+                    "Move to bin",
+                ],
+            ),
+            (
+                true,
+                vec![
+                    "Open",
+                    "Add to album…",
+                    "Favourite",
+                    "Download",
+                    "Rotate left",
+                    "Rotate right",
+                    "Info",
+                    "Remove from album",
+                    "Move to Locked folder…",
+                    "Move to bin",
+                ],
+            ),
         ] {
             let rows = menu_rows(in_album, false);
             assert_eq!(rows.iter().map(|r| r.2).collect::<Vec<_>>(), want);
