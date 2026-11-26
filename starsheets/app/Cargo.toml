@@ -13,6 +13,8 @@ path = "src/main.rs"
 [dependencies]
 gridcraft-engine = { workspace = true }
 gridcraft-ui-egui = { workspace = true }
+# The save-state icon on the title row (shared with Docs and Slides).
+starbase-savestate = { path = "../crates/savestate" }
 gridcraft-chart = { workspace = true }
 # SVG loader for the toolbar icons (resvg).
 egui_extras = { version = "0.37", default-features = false, features = ["svg"] }

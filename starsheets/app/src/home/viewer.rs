@@ -209,8 +209,14 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
             if i.consume_key(Modifiers::NONE, Key::F) {
                 acts.push(Act::Favourite);
             }
-            if i.consume_key(Modifiers::NONE, Key::R) {
+            if i.consume_key(Modifiers::ALT, Key::R) {
                 toggle_raw = true;
+            }
+            if i.consume_key(Modifiers::SHIFT, Key::R) {
+                acts.push(Act::RotateLeft);
+            }
+            if i.consume_key(Modifiers::NONE, Key::R) {
+                acts.push(Act::RotateRight);
             }
             if i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::SHIFT, Key::Delete) {
                 acts.push(Act::Delete);
@@ -413,7 +419,7 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
             }
             if raw_file.is_some() {
                 let label = if v.raw { "JPEG" } else { "RAW" };
-                let tip = if v.raw { "Show the JPEG (R)" } else { "Show the RAW file (R)" };
+                let tip = if v.raw { "Show the JPEG (Alt-R)" } else { "Show the RAW file (Alt-R)" };
                 if ui
                     .add(
                         egui::Button::new(RichText::new(label).size(13.0).strong().color(Color32::WHITE))
@@ -425,6 +431,12 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
                 {
                     v.raw = !v.raw;
                 }
+            }
+            if button(ui, "white_rotate_right", "Rotate right (R)") {
+                acts.push(super::photos::Act::RotateRight);
+            }
+            if button(ui, "white_rotate_left", "Rotate left (Shift-R)") {
+                acts.push(super::photos::Act::RotateLeft);
             }
             if button(ui, "white_download", "Download") {
                 if let Some(f) = &raw_file {

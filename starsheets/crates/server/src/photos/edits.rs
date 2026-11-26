@@ -10,6 +10,11 @@
 //!   everything else in it; the sidecar is deleted when nothing else is left. `removed` says
 //!   whose edits went: `"crs"` = edits another app (Lightroom) wrote in Adobe's fields.
 //!
+//! - `POST /api/photos/rotate/ID` with `{"dir": "left" | "right"}`: turns the picture a quarter
+//!   (reads its edits, turns them, saves them like the PUT above; the reply is the PUT's, so
+//!   `thumb_v` says the thumbnails changed). The Photos grid and viewer's Rotate buttons, and
+//!   their undo, use it.
+//!
 //! Who may change them: whoever may edit the picture file itself (a file shared for editing
 //! alone counts: the sidecar is part of the picture). In three steps, so the server's store lock
 //! is never held while untrusted XML is parsed: (1) under the lock, the access checks and the
@@ -272,4 +277,31 @@ pub async fn route(app: &Shared, m: &str, id: String, me: Option<auth::User>, he
         r.headers_mut().insert(header::ETAG, v);
     }
     r
+}
+
+/// `POST /api/photos/rotate/ID`: a quarter turn saved as an edit (GET, turn, PUT; same checks).
+pub async fn rotate(app: &Shared, m: &str, id: String, me: Option<auth::User>, body: &[u8]) -> Response<Body> {
+    if m != "POST" {
+        return error(405, "use POST");
+    }
+    let left = match serde_json::from_slice::<Value>(body).ok().and_then(|v| v["dir"].as_str().map(str::to_string)).as_deref() {
+        Some("left") => true,
+        Some("right") => false,
+        _ => return error(400, "Send {\"dir\": \"left\"} or {\"dir\": \"right\"}."),
+    };
+    let got = route(app, "GET", id.clone(), me.clone(), &HeaderMap::new(), b"").await;
+    if got.status() != 200 {
+        return got;
+    }
+    let Ok(bytes) = axum::body::to_bytes(got.into_body(), MAX_BODY * 8).await else { return error(500, "server error") };
+    let v: Value = serde_json::from_slice(&bytes).unwrap_or_default();
+    if v["writable"].as_bool() != Some(true) {
+        return error(403, v["reason"].as_str().unwrap_or("This picture's folder can't be changed."));
+    }
+    let Ok(edits) = serde_json::from_value::<Edits>(v["edits"].clone()) else { return error(409, "This picture's saved edits couldn't be read.") };
+    let Ok(tag) = HeaderValue::from_str(v["etag"].as_str().unwrap_or("none")) else { return error(500, "server error") };
+    let mut h = HeaderMap::new();
+    h.insert(header::IF_MATCH, tag);
+    let new = serde_json::to_vec(&edits.turned(left)).unwrap_or_default();
+    route(app, "PUT", id, me, &h, &new).await
 }

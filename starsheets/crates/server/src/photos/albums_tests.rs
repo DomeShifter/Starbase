@@ -103,6 +103,14 @@ async fn albums_are_virtual_and_show_only_what_the_viewer_may_see() {
     let g = get(&app, &format!("/api/photos/places?place={}", name.replace(' ', "%20").replace(',', "%2C")), Some("ann"), &[]).await;
     assert_eq!((g.status, g.json["photos"].as_array().map(Vec::len)), (200, Some(1)), "{}", g.json);
     assert_eq!(get(&app, "/api/photos/places?place=Nowhere", Some("ann"), &[]).await.status, 404);
+    // The map: every picture with a position, with lat/lon; nothing for a viewer; no tiles unless set.
+    let g = get(&app, "/api/photos/places?all=1", Some("ann"), &[]).await;
+    let pts = g.json["photos"].as_array().unwrap();
+    assert_eq!(pts.len(), 1, "{}", g.json);
+    assert!(pts[0]["gps"]["lat"].as_f64().is_some_and(|l| (51.0..52.0).contains(&l)), "{}", g.json);
+    assert!(g.json["tiles"].is_null(), "{}", g.json);
+    assert_eq!(get(&app, "/api/photos/places?all=1", Some("bob"), &[]).await.json["photos"], json!([]));
+    assert_eq!(get(&app, "/api/photos/tiles/1/0/0.png", Some("bob"), &[]).await.status, 404);
 
     // Remove, then delete: the files stay.
     let g = post(&app, &format!("{url}/remove"), "ann", json!({"files": [b]})).await;

@@ -148,6 +148,20 @@ impl Default for Edits {
 }
 
 impl Edits {
+    /// The edits after a quarter turn of what is shown (`left`: anticlockwise), as Google Photos
+    /// does it: the crop turns with the picture, an earlier flip is kept. Four turns one way
+    /// give the edits back.
+    pub fn turned(&self, left: bool) -> Edits {
+        let mut e = self.clone();
+        // Shown = flip(rot(picture)): a turn of what is shown turns the other way underneath when
+        // the picture is flipped.
+        let cw = left == e.flip_h;
+        e.rot90 = (e.rot90 + if cw { 1 } else { 3 }) % 4;
+        let c = e.crop;
+        e.crop = if left { Crop { l: c.t, t: 1.0 - c.r, r: c.b, b: 1.0 - c.l } } else { Crop { l: 1.0 - c.b, t: c.l, r: 1.0 - c.t, b: c.r } };
+        e
+    }
+
     /// True when rendering gives back the same pixels (the aspect hint doesn't count).
     pub fn is_identity(&self) -> bool {
         self.geometry_is_identity() && self.pixels_are_identity() && self.red_eye.is_empty()
@@ -396,5 +410,34 @@ impl From<Edits> for RawEdits {
                 Some(e.red_eye.iter().map(|s| RawRedEye { x: wide(s.x), y: wide(s.y), r: wide(s.r) }).collect())
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod turn_tests {
+    use super::*;
+
+    fn same(a: &Edits, b: &Edits) -> bool {
+        let (c, d) = (a.crop, b.crop);
+        a.rot90 == b.rot90 && [c.l - d.l, c.t - d.t, c.r - d.r, c.b - d.b].iter().all(|x| x.abs() < 1e-5)
+    }
+
+    #[test]
+    fn quarter_turns_undo_each_other_and_carry_the_crop() {
+        let mut e = Edits { crop: Crop { l: 0.1, t: 0.2, r: 0.7, b: 0.9 }, ..Edits::default() };
+        for flip in [false, true] {
+            e.flip_h = flip;
+            assert!(same(&e.turned(true).turned(false), &e), "right undoes left (flip {flip})");
+            let mut x = e.clone();
+            for _ in 0..4 {
+                x = x.turned(true);
+            }
+            assert!(same(&x, &e), "four turns (flip {flip})");
+        }
+        e.flip_h = false;
+        assert_eq!(e.turned(true).rot90, 3);
+        assert_eq!(e.turned(false).rot90, 1);
+        e.flip_h = true;
+        assert_eq!(e.turned(true).rot90, 1);
     }
 }
