@@ -343,7 +343,15 @@ impl Photos {
                     break;
                 }
                 let found = match self.thumb_file(&thumb, 1024).and_then(|(p, _)| std::fs::read(p).ok()) {
-                    Some(bytes) => look(eng.as_mut(), &bytes).unwrap_or_default(),
+                    Some(bytes) => match look(eng.as_mut(), &bytes) {
+                        Ok(f) => f,
+                        // Shown, not swallowed: a silent error here once made every photo "no faces".
+                        Err(err) => {
+                            eprintln!("faces: {thumb}: {err}");
+                            self.ml.say(format!("Couldn't look for faces in a photo: {err}"));
+                            Vec::new()
+                        }
+                    },
                     // No thumbnail (cleared from the cache): noted as done, it comes back if remade.
                     None => Vec::new(),
                 };
@@ -513,17 +521,26 @@ pub fn align(img: &image::RgbImage, kps: &[[f32; 2]; 5]) -> image::RgbImage {
 }
 
 /// A picture as YuNet takes it: BGR, 0..255, NCHW, padded to multiples of 32.
-pub fn yunet_input(img: &image::RgbImage) -> (usize, usize, Vec<f32>) {
-    let (w, h) = (img.width() as usize, img.height() as usize);
-    let (pw, ph) = (w.div_ceil(32) * 32, h.div_ceil(32) * 32);
-    let mut v = vec![0f32; 3 * pw * ph];
-    for (x, y, p) in img.enumerate_pixels() {
-        let i = y as usize * pw + x as usize;
+/// YuNet (2023mar) takes exactly this square input: the ONNX file fixes it at 640×640, so any
+/// other size fails with "Got invalid dimensions for input" (which left People finding no faces).
+pub const YUNET_SIZE: usize = 640;
+
+/// The picture scaled to fit YUNET_SIZE (aspect kept, padded right/bottom with black), as BGR
+/// NCHW, plus the scale used: divide detections by it to get back to the picture's pixels.
+pub fn yunet_input(img: &image::RgbImage) -> (f32, Vec<f32>) {
+    let n = YUNET_SIZE;
+    let scale = n as f32 / img.width().max(img.height()).max(1) as f32;
+    let (w, h) =
+        (((img.width() as f32 * scale).round() as u32).clamp(1, n as u32), ((img.height() as f32 * scale).round() as u32).clamp(1, n as u32));
+    let small = image::imageops::resize(img, w, h, image::imageops::FilterType::Triangle);
+    let mut v = vec![0f32; 3 * n * n];
+    for (x, y, p) in small.enumerate_pixels() {
+        let i = y as usize * n + x as usize;
         v[i] = p.0[2] as f32;
-        v[pw * ph + i] = p.0[1] as f32;
-        v[2 * pw * ph + i] = p.0[0] as f32;
+        v[n * n + i] = p.0[1] as f32;
+        v[2 * n * n + i] = p.0[0] as f32;
     }
-    (pw, ph, v)
+    (scale, v)
 }
 
 /// A 112×112 face as an embedder takes it: RGB NCHW; AuraFace scaled to −1..1, SFace 0..255.
@@ -557,7 +574,7 @@ mod onnx {
     use ort::session::Session;
     use ort::value::Tensor;
 
-    use super::{Det, Engine, MIN_SCORE, YuStride, embed_input, model_file, yunet_decode, yunet_input};
+    use super::{Det, Engine, MIN_SCORE, YUNET_SIZE, YuStride, embed_input, model_file, yunet_decode, yunet_input};
 
     pub struct Onnx {
         det: Session,
@@ -582,8 +599,9 @@ mod onnx {
 
     impl Engine for Onnx {
         fn detect(&mut self, img: &image::RgbImage) -> Result<Vec<Det>, String> {
-            let (w, h, data) = yunet_input(img);
-            let t = Tensor::from_array(([1usize, 3, h, w], data)).map_err(e)?;
+            let (scale, data) = yunet_input(img);
+            let n = YUNET_SIZE;
+            let t = Tensor::from_array(([1usize, 3, n, n], data)).map_err(e)?;
             let out = self.det.run(ort::inputs![t]).map_err(e)?;
             let mut got: Vec<(usize, [Vec<f32>; 4])> = Vec::new();
             for s in [8usize, 16, 32] {
@@ -596,7 +614,15 @@ mod onnx {
                 got.push((s, part));
             }
             let strides: Vec<YuStride> = got.iter().map(|(s, p)| YuStride { stride: *s, cls: &p[0], obj: &p[1], bbox: &p[2], kps: &p[3] }).collect();
-            Ok(yunet_decode(&strides, w, h, MIN_SCORE))
+            let mut found = yunet_decode(&strides, n, n, MIN_SCORE);
+            for d in &mut found {
+                d.x /= scale;
+                d.y /= scale;
+                d.w /= scale;
+                d.h /= scale;
+                d.kps.iter_mut().for_each(|k| k.iter_mut().for_each(|c| *c /= scale));
+            }
+            Ok(found)
         }
 
         fn embed(&mut self, face: &image::RgbImage) -> Result<Vec<f32>, String> {

@@ -212,9 +212,12 @@ fn yunet_decoding_and_nms() {
 #[test]
 fn inputs_have_the_right_shape() {
     let img = image::RgbImage::from_pixel(40, 33, image::Rgb([10, 20, 30]));
-    let (w, h, v) = ml::yunet_input(&img);
-    assert_eq!((w, h, v.len()), (64, 64, 3 * 64 * 64));
-    assert_eq!((v[0], v[64 * 64], v[2 * 64 * 64]), (30.0, 20.0, 10.0), "BGR");
+    let (scale, v) = ml::yunet_input(&img);
+    let n = ml::YUNET_SIZE;
+    assert_eq!(v.len(), 3 * n * n, "always the model's fixed square");
+    assert!((scale - n as f32 / 40.0).abs() < 1e-6);
+    assert_eq!((v[0], v[n * n], v[2 * n * n]), (30.0, 20.0, 10.0), "BGR");
+    assert_eq!(v[n * n - 1], 0.0, "padding below the picture is black");
     let face = image::RgbImage::from_pixel(112, 112, image::Rgb([255, 0, 127]));
     let a = ml::embed_input(&face, "auraface");
     assert_eq!(a.len(), 3 * 112 * 112);
