@@ -80,6 +80,18 @@ impl Home {
                 }
             }
             "home:undo" => self.undo(ctx),
+            // `home:download` {files: [id], folders: [path]}: Download as the menu does it (one
+            // file as itself, else one zip); says which address it fetches.
+            "home:download" => {
+                let list = |k: &str| params.get(k).and_then(Json::as_array).into_iter().flatten().filter_map(Json::as_str).map(str::to_string);
+                let items: Vec<Item> = list("files").map(Item::File).chain(list("folders").map(Item::Folder)).collect();
+                if items.is_empty() {
+                    return Err("home:download needs {files} or {folders}".into());
+                }
+                let url = if let [Item::File(id)] = items.as_slice() { format!("api/files/{id}") } else { Self::zip_url(&items) };
+                self.download_items(ctx, &items);
+                return Ok(json!({ "url": url }));
+            }
             "home:opens" => {
                 let id = text("id").ok_or("home:opens needs {id}")?;
                 let f = self.file(&id).ok_or("no such file listed")?;
@@ -151,7 +163,9 @@ impl Home {
                 let ed = pm.editor.as_mut().ok_or("the editor isn't open")?;
                 ed.test_run(ctx, &self.store, &id["home:photos:edit:".len()..], params)?;
             }
-            "home:photos:tab" | "home:photos:select" | "home:photos:place:open" => pm.alb_test(ctx, &self.store, id, params)?,
+            "home:photos:tab" | "home:photos:dups:keep" | "home:photos:select" | "home:photos:place:open" => {
+                pm.alb_test(ctx, &self.store, id, params)?
+            }
             "home:photos:click" | "home:photos:menu" | "home:photos:bar" | "home:photos:addto" | "home:photos:picker" | "home:photos:note:open" => {
                 pm.pick_test(ctx, &self.store, id, params)?
             }

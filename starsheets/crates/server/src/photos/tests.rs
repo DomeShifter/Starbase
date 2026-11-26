@@ -438,6 +438,8 @@ fn inotify_sees_a_new_picture() {
 
 #[path = "albums_tests.rs"]
 mod albums_tests;
+#[path = "dups_tests.rs"]
+mod dups_tests;
 #[path = "edits_tests.rs"]
 mod edits_tests;
 #[path = "export_tests.rs"]
