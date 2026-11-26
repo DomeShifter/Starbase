@@ -39,6 +39,7 @@ pub(crate) mod textpreview;
 mod undo;
 mod video;
 mod viewer;
+mod viewopts;
 
 const LEFT: f32 = 256.0;
 const TOP: f32 = 64.0;
@@ -190,6 +191,8 @@ pub struct Home {
     forward: Vec<View>,
     expanded: HashSet<String>,
     list: bool,
+    /// List columns and grid cards (viewopts.rs).
+    vo: viewopts::ViewOpts,
     /// Sort: by (0 name, 1 date modified, 2 size), Z–A / newest / largest first, and whether
     /// folders are mixed in with files instead of kept at the top.
     sort_by: u8,
@@ -840,16 +843,7 @@ impl Home {
             house::menu(ui, 240.0);
             let tick = |on: bool| Some(if on { "check" } else { "" });
             house::menu_inset(ui, |ui| house::caps(ui, "Sort by"));
-            for (i, l) in ["Name", "Date modified", "Size"].iter().enumerate() {
-                if house::menu_row(ui, tick(self.sort_by == i as u8), l, "", true) {
-                    // Dates and sizes read best newest / largest first.
-                    if self.sort_by != i as u8 {
-                        self.descending = i != 0;
-                    }
-                    self.sort_by = i as u8;
-                    self.save_sort();
-                }
-            }
+            self.sort_by_rows(ui);
             house::menu_sep(ui);
             house::menu_inset(ui, |ui| house::caps(ui, "Sort direction"));
             let (up, down) = match self.sort_by {
@@ -872,6 +866,21 @@ impl Home {
                 self.save_sort();
             }
         });
+    }
+
+    /// The Sort by rows (Sort menu and the Grid ▾ menu).
+    fn sort_by_rows(&mut self, ui: &mut Ui) {
+        let tick = |on: bool| Some(if on { "check" } else { "" });
+        for (i, l) in ["Name", "Date modified", "Size"].iter().enumerate() {
+            if house::menu_row(ui, tick(self.sort_by == i as u8), l, "", true) {
+                // Dates and sizes read best newest / largest first.
+                if self.sort_by != i as u8 {
+                    self.descending = i != 0;
+                }
+                self.sort_by = i as u8;
+                self.save_sort();
+            }
+        }
     }
 
     fn title(&self) -> Vec<(String, Option<View>)> {
@@ -919,6 +928,7 @@ impl Home {
         if !self.booted {
             self.booted = true;
             self.list = self.store.setting("starsheets_home_list") == Some("1".into());
+            self.vo = viewopts::ViewOpts::load(&self.store);
             if let Some(s) = self.store.setting("starsheets_home_sort").filter(|s| s.len() == 3) {
                 let b = s.as_bytes();
                 self.sort_by = (b[0] - b'0').min(2);
