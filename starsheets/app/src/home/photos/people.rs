@@ -168,17 +168,17 @@ impl PhotoMode {
             p.circle_stroke(centre, side / 2.0 - 3.0, egui::Stroke::new(3.0, theme::SHARE));
         }
         let name = if c.name.is_empty() { "Add a name".to_string() } else { c.name.clone() };
-        let col = if c.name.is_empty() { theme::TEXT_DIM } else { theme::TEXT };
+        let col = if c.name.is_empty() { theme::text_dim() } else { theme::text() };
         p.text(rect.min + vec2(side / 2.0, side + 4.0), egui::Align2::CENTER_TOP, name, egui::FontId::proportional(house::BODY), col);
         let n = format!("{} {}", c.count, if c.count == 1 { "picture" } else { "pictures" });
-        p.text(rect.min + vec2(side / 2.0, side + 22.0), egui::Align2::CENTER_TOP, n, egui::FontId::proportional(house::NOTE), theme::TEXT_DIM);
+        p.text(rect.min + vec2(side / 2.0, side + 22.0), egui::Align2::CENTER_TOP, n, egui::FontId::proportional(house::NOTE), theme::text_dim());
         resp.clicked()
     }
 
     /// Off, models missing, progress: one or two lines over the people.
     fn people_status(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend) {
         let st = self.alb.ppl.state.clone();
-        let dim = |ui: &mut Ui, t: String| ui.label(RichText::new(t).size(house::NOTE).color(theme::TEXT_DIM));
+        let dim = |ui: &mut Ui, t: String| ui.label(RichText::new(t).size(house::NOTE).color(theme::text_dim()));
         if st.is_null() {
             return;
         }
@@ -248,7 +248,7 @@ impl PhotoMode {
                 ui.label(
                     RichText::new(format!("Downloading {}: {:.0} of {:.0} MB", d["file"].as_str().unwrap_or("the models"), mb(got), mb(total)))
                         .size(house::NOTE)
-                        .color(theme::TEXT_DIM),
+                        .color(theme::text_dim()),
                 );
             });
             // Ask again every second while it runs.
@@ -270,7 +270,7 @@ impl PhotoMode {
             .map(|f| format!("{} ({})", f["what"].as_str().unwrap_or(""), f["licence"].as_str().unwrap_or("")))
             .collect();
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(format!("Face recognition needs model files: {}.", files.join(", "))).size(house::NOTE).color(theme::TEXT_DIM));
+            ui.label(RichText::new(format!("Face recognition needs model files: {}.", files.join(", "))).size(house::NOTE).color(theme::text_dim()));
             if self.pill(ui, "Download face models", false) {
                 self.people_post(ctx, store, "api/photos/faces/models", json!({}));
             }
@@ -293,13 +293,13 @@ impl PhotoMode {
             self.person_ui(ui, &ctx, store, &c);
             return;
         }
-        ui.label(RichText::new("People").size(house::TITLE).color(theme::TEXT));
+        ui.label(RichText::new("People").size(house::TITLE).color(theme::text()));
         self.people_status(ui, &ctx, store);
         ui.add_space(house::S);
         let (named, groups) = (self.alb.ppl.named.clone(), self.alb.ppl.groups.clone());
         if named.is_empty() && groups.is_empty() {
             ui.add_space(house::XL);
-            ui.label(RichText::new("No faces yet.").size(house::BODY).color(theme::TEXT_DIM));
+            ui.label(RichText::new("No faces yet.").size(house::BODY).color(theme::text_dim()));
             return;
         }
         let (mut open, mut n) = (None, 0);
@@ -310,7 +310,7 @@ impl PhotoMode {
                 }
                 if !title.is_empty() {
                     ui.add_space(house::L);
-                    ui.label(RichText::new(title).size(house::BODY).color(theme::TEXT_DIM));
+                    ui.label(RichText::new(title).size(house::BODY).color(theme::text_dim()));
                 }
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = vec2(house::L, house::L);
@@ -347,7 +347,7 @@ impl PhotoMode {
                 self.viewer = None;
             }
             let title = if c.name.is_empty() { "Not named yet" } else { c.name.as_str() };
-            ui.label(RichText::new(title).size(house::TITLE).color(theme::TEXT));
+            ui.label(RichText::new(title).size(house::TITLE).color(theme::text()));
             if self.pill(ui, if c.name.is_empty() { "Add a name" } else { "Rename" }, false) {
                 self.alb.ppl.text = c.name.clone();
                 self.alb.ppl.ask = Ask::Name;
@@ -376,7 +376,7 @@ impl PhotoMode {
                 });
             }
             Ask::Merge => {
-                ui.label(RichText::new("The same person as:").size(house::NOTE).color(theme::TEXT_DIM));
+                ui.label(RichText::new("The same person as:").size(house::NOTE).color(theme::text_dim()));
                 let others: Vec<Card> = self.alb.ppl.named.iter().chain(&self.alb.ppl.groups).filter(|o| o.id != c.id).cloned().collect();
                 ui.horizontal_wrapped(|ui| {
                     for o in others.iter().take(60) {
@@ -406,7 +406,7 @@ impl PhotoMode {
                 let p = ui.painter_at(rect);
                 self.face_ui(ctx, store, &p, (&f.id, &f.v, f.bx), rect.center(), 26.0);
                 if resp.hovered() {
-                    p.circle_filled(rect.right_top() + vec2(-9.0, 9.0), 8.0, theme::TEXT);
+                    p.circle_filled(rect.right_top() + vec2(-9.0, 9.0), 8.0, theme::text());
                     p.text(rect.right_top() + vec2(-9.0, 9.0), egui::Align2::CENTER_CENTER, "×", egui::FontId::proportional(13.0), Color32::WHITE);
                 }
                 if resp.on_hover_text("Not this person: take this face out").clicked() {
@@ -421,7 +421,7 @@ impl PhotoMode {
         ui.add_space(house::S);
         if self.pics.is_empty() {
             let text = if self.loading { "Loading…" } else { "No pictures." };
-            ui.label(RichText::new(text).size(house::BODY).color(theme::TEXT_DIM));
+            ui.label(RichText::new(text).size(house::BODY).color(theme::text_dim()));
         } else {
             self.grid(ui, store);
         }
