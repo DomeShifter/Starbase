@@ -146,7 +146,7 @@ modules:
       # two equal (pin-engines.sh). stardocs/Cargo.toml is committed, so gen-cargo.py need not run.
       - type: git
         url: https://github.com/DomeShifter/wordcraft.git
-        commit: 65f51c28ee039f4bc955a6e1347b99df84d05f18
+        commit: faee1d99a96ece00edfe88d34836fc04f9e5e1bb
         dest: stardocs/upstream/wordcraft
       - cargo-sources-stardocs.json
 

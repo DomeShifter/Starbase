@@ -155,6 +155,14 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Cmd("Zoom in", "view.zoomIn", NO, ""),
             Cmd("Zoom out", "view.zoomOut", NO, ""),
             Cmd("Fit page width", "view.zoom", r#"{"value":"pageWidth"}"#, ""),
+            Sub(
+                "Pages side by side",
+                &[
+                    Toggle("1 page", "stardocs.pages1", "stardocs.pages1", ""),
+                    Toggle("2 pages", "stardocs.pages2", "stardocs.pages2", ""),
+                    Toggle("Auto: as many as fit", "stardocs.pagesAuto", "stardocs.pagesAuto", ""),
+                ],
+            ),
             Sep,
             Cmd("Full screen", "view.fullScreen", NO, ""),
         ],
@@ -615,8 +623,56 @@ struct Flags {
     /// Asks for File › Version history: the panel, or the Name current version dialog.
     history: bool,
     name_version: bool,
+    /// How many pages sit side by side in Print layout (View › Pages side by side).
+    pages: Pages,
     /// Read from storage yet.
     loaded: bool,
+}
+
+/// View › Pages side by side: one page per row (the default), two, or as many whole pages as
+/// fit the window's width. Kept with the other flags, so each browser remembers its user's pick.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+enum Pages {
+    #[default]
+    One,
+    Two,
+    Auto,
+}
+
+impl Pages {
+    /// The command id (also the menu key) and the stored word for each choice.
+    const ALL: [(Pages, &'static str, &'static str); 3] =
+        [(Pages::One, "stardocs.pages1", "pages1"), (Pages::Two, "stardocs.pages2", "pages2"), (Pages::Auto, "stardocs.pagesAuto", "pagesAuto")];
+
+    fn from_id(id: &str) -> Option<Pages> {
+        Self::ALL.iter().find(|(_, i, _)| *i == id).map(|(p, _, _)| *p)
+    }
+
+    fn word(self) -> &'static str {
+        Self::ALL.iter().find(|(p, _, _)| *p == self).map_or("pages1", |(_, _, w)| w)
+    }
+
+    /// The most pages across WordCraft may show, 0 for as many as fit.
+    fn max_cols(self) -> usize {
+        match self {
+            Pages::One => 1,
+            Pages::Two => 2,
+            Pages::Auto => 0,
+        }
+    }
+
+    /// Sets the choice on the view; a fit mode that keeps one page per row (Page Width, One
+    /// Page) gives way to the zoom it shows, so the pages can sit side by side at that zoom.
+    fn choose(self, app: &mut WordApp) {
+        let v = &mut app.session.view;
+        v.max_page_cols = self.max_cols();
+        if self != Pages::One {
+            v.single_column = false;
+            if v.fit == "pageWidth" || v.fit == "onePage" {
+                v.fit.clear();
+            }
+        }
+    }
 }
 
 const FLAGS_KEY: &str = "stardocs.flags";
@@ -656,9 +712,23 @@ impl Flags {
             if let Some(v) = store::get(FLAGS_KEY) {
                 self.words = v.contains("words");
                 self.compact = v.contains("compact");
+                self.pages = if v.contains("pagesAuto") {
+                    Pages::Auto
+                } else if v.contains("pages2") {
+                    Pages::Two
+                } else {
+                    Pages::One
+                };
             }
-        } else if (self.words, self.compact) != (before.words, before.compact) {
-            let v = [("words", self.words), ("compact", self.compact)].iter().filter(|(_, on)| *on).map(|(k, _)| *k).collect::<Vec<_>>().join(",");
+        } else if (self.words, self.compact, self.pages) != (before.words, before.compact, before.pages) {
+            let pages = (self.pages != Pages::One).then_some(self.pages.word());
+            let v = [("words", self.words), ("compact", self.compact)]
+                .iter()
+                .filter(|(_, on)| *on)
+                .map(|(k, _)| *k)
+                .chain(pages)
+                .collect::<Vec<_>>()
+                .join(",");
             store::set(FLAGS_KEY, &v);
         }
     }
@@ -676,6 +746,7 @@ fn is_on(app: &mut WordApp, flags: &Flags, key: &str) -> bool {
     match key {
         "stardocs.words" => flags.words,
         "stardocs.menus" => !flags.compact,
+        k if Pages::from_id(k).is_some() => Pages::from_id(k) == Some(flags.pages),
         "stardocs.print" => app.run("view.state", json!({})).ok().is_some_and(|v| v["mode"] == "print"),
         "trackChanges" => app.session.doc.settings.track_changes,
         "para.spaceBefore" => selection_para(app).space_before > 0.0,
@@ -767,6 +838,9 @@ fn is_own(id: &str) -> bool {
         id,
         "stardocs.words"
             | "stardocs.compact"
+            | "stardocs.pages1"
+            | "stardocs.pages2"
+            | "stardocs.pagesAuto"
             | "stardocs.shortcuts"
             | "stardocs.editing"
             | "stardocs.suggesting"
@@ -791,6 +865,10 @@ fn run_menu(app: &mut WordApp, ctx: &egui::Context, flags: &mut Flags, link: Opt
     match (id, link) {
         ("stardocs.words", _) => flags.words = !flags.words,
         ("stardocs.compact", _) => flags.compact = !flags.compact,
+        (id, _) if Pages::from_id(id).is_some() => {
+            flags.pages = Pages::from_id(id).unwrap_or_default();
+            flags.pages.choose(app);
+        }
         ("stardocs.shortcuts", _) => flags.shortcuts = true,
         ("stardocs.restartNumbering", _) => flags.restart = true,
         ("stardocs.emoji", _) => flags.emoji = true,
@@ -1005,6 +1083,9 @@ impl Shell {
             },
             "compact": self.flags.compact,
             "wordCountShown": self.flags.words,
+            "pagesSideBySide": self.flags.pages.word(),
+            "pageCols": app.canvas.cols,
+            "canvasRect": app.canvas.canvas_rect.map(|r| [r.min.x, r.min.y, r.width(), r.height()]),
             "renaming": self.renaming,
             "dialogs": {
                 "share": self.share.is_open(),
@@ -1071,6 +1152,7 @@ impl Shell {
             });
         self.version_history(app, ui, link);
         self.zoom_on_open(app, ui.available_width());
+        app.session.view.max_page_cols = self.flags.pages.max_cols();
         self.share.ui(ui.ctx());
         self.custom_colour(app, ui.ctx());
         if std::mem::take(&mut self.flags.shortcuts) {
@@ -1089,7 +1171,40 @@ impl Shell {
         if self.flags.words {
             self.word_count.ui(app, ui.ctx());
         }
+        self.pages_control(app, ui.ctx());
         self.flags.sync(before);
+    }
+
+    /// The small "pages side by side" switch at the bottom right, as Word's status bar has: one
+    /// page, two, or as many as fit (View › Pages side by side). Print layout only.
+    fn pages_control(&mut self, app: &mut WordApp, ctx: &egui::Context) {
+        if app.session.view.mode != wordcraft_engine::layout::ViewMode::Print || app.session.view.read_mode {
+            return;
+        }
+        let mut picked = None;
+        egui::Area::new(egui::Id::new("stardocs_pages_side_by_side"))
+            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-24.0, -16.0))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).inner_margin(egui::vec2(6.0, 3.0)).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        let choices = [(Pages::One, "1", "one page per row"), (Pages::Two, "2", "two pages"), (Pages::Auto, "Auto", "as many as fit")];
+                        for (p, label, tip) in choices {
+                            let text = egui::RichText::new(label).size(12.0);
+                            let r = ui.selectable_label(self.flags.pages == p, text).on_hover_text(format!("Pages side by side: {tip}"));
+                            target(ui.ctx(), &format!("pages {label}"), r.rect);
+                            if r.clicked() {
+                                picked = Some(p);
+                            }
+                        }
+                    });
+                });
+            });
+        if let Some(p) = picked {
+            self.flags.pages = p;
+            p.choose(app);
+        }
     }
 
     /// File › Version history: the panel on the right (drawn before the page, so the page takes
