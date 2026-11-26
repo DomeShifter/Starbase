@@ -43,10 +43,11 @@ pub(super) fn ui(ui: &mut egui::Ui, list: Option<&Json>, can_edit: bool) -> Opti
         ui.label(RichText::new("Only people who can edit this file see its versions.").size(house::BODY).color(theme::TEXT_DIM));
         return None;
     }
-    if ui.button("Upload new version…").clicked() {
+    let up = ui.button("Upload new version…");
+    house::target(ui.ctx(), "versions upload", up.rect);
+    if up.clicked() {
         act = Some(Act::Upload);
     }
-    house::target(ui.ctx(), "versions upload", ui.min_rect());
     ui.add_space(house::S);
     let Some(list) = list else {
         ui.label(RichText::new("Loading…").size(house::BODY).color(theme::TEXT_DIM));
