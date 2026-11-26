@@ -120,12 +120,7 @@ impl ViewOpts {
         out
     }
 
-    /// Card width, height and picture height for the chosen size.
-    pub fn card(&self) -> (f32, f32, f32) {
-        self.card_with(self.dates)
-    }
-
-    /// Like `card`, for a grid where a second line is shown (`sub`) or not.
+    /// Card width, height and picture height for the chosen size; `sub`: whether cards carry a second line.
     pub fn card_with(&self, sub: bool) -> (f32, f32, f32) {
         let f = [0.78, 1.0, 1.32][usize::from(self.size.min(2))];
         let pic = (PIC_H * f).round();
@@ -263,9 +258,9 @@ mod tests {
         for size in 0..3 {
             o.size = size;
             o.dates = true;
-            let (w, h, pic) = o.card();
+            let (w, h, pic) = o.card_with(o.dates);
             o.dates = false;
-            let (w2, h2, pic2) = o.card();
+            let (w2, h2, pic2) = o.card_with(o.dates);
             assert_eq!((w, pic), (w2, pic2));
             assert_eq!(h - h2, SUB_H);
             // Owner or snippet lines keep the line (and the height) even with dates off.
@@ -297,7 +292,7 @@ mod tests {
     fn every_card_size_and_column_lays_out() {
         for size in 0..3 {
             let o = ViewOpts { size, ..Default::default() };
-            let (w, h, pic) = o.card();
+            let (w, h, pic) = o.card_with(o.dates);
             assert!(w > 100.0 && h > pic && pic > 80.0, "{size}");
         }
         let mut o = ViewOpts::default();
