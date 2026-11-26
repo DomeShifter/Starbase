@@ -120,7 +120,11 @@ impl PhotoMode {
 
     /// Closes Locked now: the server forgets the unlock, the screen asks for the password again.
     pub(super) fn relock(&mut self, ctx: &egui::Context, store: &Backend) {
+        if self.lk.unlocked {
+            call(ctx, store, &self.inbox, "api/photos/locked/lock", None, |_, _| Got::Nothing);
+        }
         self.lk.reset();
+        self.lk.lock_req = false;
         self.lk.checked = true;
         self.pics.clear();
         self.viewer = None;
