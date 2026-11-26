@@ -9,6 +9,7 @@
 
 #[cfg(target_arch = "wasm32")]
 mod account;
+// The leave-page guard: its rule is tested natively.
 mod altcolours;
 mod autolink;
 mod bottom;
@@ -16,6 +17,8 @@ mod calcpreview;
 mod cfpanel;
 mod chartpanel;
 mod colourpicker;
+#[cfg(any(target_arch = "wasm32", test))]
+mod unload_guard;
 // The web app's "continue to" after sign-in; its check is also tested natively.
 #[cfg(any(target_arch = "wasm32", test))]
 mod continueto;

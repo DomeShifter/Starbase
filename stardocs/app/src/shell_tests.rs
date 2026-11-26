@@ -1129,3 +1129,12 @@ fn docx_keeps_chart_drawing_and_page_break() {
     assert!(raw.contains(wordcraft_doc::para::PAGE_BREAK), "the page break after reload");
     assert_eq!(canvas_members(&back), Some(1), "the canvas and its star after reload");
 }
+
+#[test]
+fn leave_page_guard_only_while_something_is_unsaved() {
+    use crate::shell::should_guard_unload as g;
+    // (editor dirty, save pending in the picker, not yet on the server)
+    for (d, p, s, want) in [(false, false, false, false), (true, false, false, true), (false, true, false, true), (false, false, true, true)] {
+        assert_eq!(g(d, p, s), want, "dirty={d} pending={p} server={s}");
+    }
+}
