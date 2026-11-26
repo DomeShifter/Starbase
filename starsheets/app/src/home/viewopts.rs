@@ -122,10 +122,15 @@ impl ViewOpts {
 
     /// Card width, height and picture height for the chosen size.
     pub fn card(&self) -> (f32, f32, f32) {
+        self.card_with(self.dates)
+    }
+
+    /// Like `card`, for a grid where a second line is shown (`sub`) or not.
+    pub fn card_with(&self, sub: bool) -> (f32, f32, f32) {
         let f = [0.78, 1.0, 1.32][usize::from(self.size.min(2))];
         let pic = (PIC_H * f).round();
-        // Without the date line the card loses that line's height too, instead of leaving a gap.
-        let tail = if self.dates { CARD_H - PIC_H } else { CARD_H - PIC_H - SUB_H };
+        // Without a second line (date, owner or snippet) the card loses that line's height too, instead of leaving a gap.
+        let tail = if sub { CARD_H - PIC_H } else { CARD_H - PIC_H - SUB_H };
         ((CARD_W * f).round(), pic + tail, pic)
     }
 }
@@ -263,6 +268,8 @@ mod tests {
             let (w2, h2, pic2) = o.card();
             assert_eq!((w, pic), (w2, pic2));
             assert_eq!(h - h2, SUB_H);
+            // Owner or snippet lines keep the line (and the height) even with dates off.
+            assert_eq!(o.card_with(true), (w, h, pic));
         }
     }
 

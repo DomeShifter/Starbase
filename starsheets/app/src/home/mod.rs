@@ -211,6 +211,8 @@ pub struct Home {
     /// Files whose text holds the search words (id → snippet), for the search in `found_for`.
     found: HashMap<String, String>,
     found_for: String,
+    /// Whether grid cards carry a second line (date on, or an owner/snippet line somewhere): sets the card height.
+    card_sub: bool,
     /// The search last sent to the server for text matches.
     asked: String,
     /// The chips under the search box (filters.rs).
@@ -841,6 +843,7 @@ impl Home {
             None => egui::Button::new(label),
         };
         let r = ui.add(b.fill(Color32::WHITE).stroke(Stroke::new(1.0, theme::BOX)).corner_radius(16).min_size(vec2(88.0, 32.0)));
+        house::target(ui.ctx(), "Sort", r.rect);
         egui::Popup::menu(&r).show(|ui| {
             house::menu(ui, 240.0);
             let tick = |on: bool| Some(if on { "check" } else { "" });
