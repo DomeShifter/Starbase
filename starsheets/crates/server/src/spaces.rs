@@ -265,6 +265,12 @@ pub fn opened(store: &Store, user: &User) -> Map<String, Value> {
 
 pub fn note_opened(store: &Store, user: &User, file: &str) -> io::Result<()> {
     let mut p = prefs(store, &user.username);
+    // Opening a file clears its "mentioned you" marker.
+    if let Some(m) = p.get_mut("mentions").and_then(Value::as_object_mut)
+        && m.remove(file).is_some()
+    {
+        let _ = save_prefs(store, &user.username, &p);
+    }
     let mut list: Vec<(String, i64)> =
         opened(store, user).into_iter().filter_map(|(k, v)| Some((k, v.as_i64()?))).filter(|(k, _)| k != file).collect();
     list.push((file.to_string(), now() as i64));
@@ -272,6 +278,28 @@ pub fn note_opened(store: &Store, user: &User, file: &str) -> io::Result<()> {
     list.truncate(100);
     p.insert("opened".into(), Value::Object(list.into_iter().map(|(k, t)| (k, json!(t))).collect()));
     save_prefs(store, &user.username, &p)
+}
+
+/// Files where someone mentioned `user` in a comment and they haven't opened it since
+/// (file id -> `{by, at}`): the "mentioned you" marker in the file list.
+pub fn mentions(store: &Store, user: &User) -> Map<String, Value> {
+    prefs(store, &user.username).get("mentions").and_then(Value::as_object).cloned().unwrap_or_default()
+}
+
+/// The most mentions kept per person (oldest dropped first).
+const MAX_MENTIONS: usize = 200;
+
+/// Records that `by` mentioned `username` in a comment on `file`.
+pub fn note_mention(store: &Store, username: &str, file: &str, by: &str) -> io::Result<()> {
+    let mut p = prefs(store, username);
+    let mut m = p.get("mentions").and_then(Value::as_object).cloned().unwrap_or_default();
+    m.insert(file.to_string(), json!({ "by": by, "at": now() as i64 }));
+    while m.len() > MAX_MENTIONS {
+        let Some(oldest) = m.iter().min_by_key(|(_, v)| v["at"].as_i64().unwrap_or(0)).map(|(k, _)| k.clone()) else { break };
+        m.remove(&oldest);
+    }
+    p.insert("mentions".into(), Value::Object(m));
+    save_prefs(store, username, &p)
 }
 
 // ---------------------------------------------------------------- external content

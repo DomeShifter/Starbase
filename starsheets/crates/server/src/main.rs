@@ -1134,6 +1134,32 @@ async fn gate(
                         need(role, Role::View)?;
                         return Err(send_json(&sharing::describe(store, Item::File(id), &path, role), 200));
                     }
+                    // "@Name" in a comment: the people named who may open the file get a marker.
+                    (["mentions"], "POST") => {
+                        need(role, Role::Comment)?;
+                        let named: Vec<String> = json
+                            .get("users")
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|u| u.as_str().map(str::to_string))
+                            .take(20)
+                            .collect();
+                        let (mut recorded, mut no_access) = (Vec::new(), Vec::new());
+                        for u in named {
+                            if u == me.username {
+                                continue;
+                            }
+                            let Some(user) = auth::users(store).into_iter().find(|x| x.username == u) else { continue };
+                            if sharing::file_role(store, true, Some(&user), id) >= Role::View {
+                                let _ = spaces::note_mention(store, &u, id, &me.username);
+                                recorded.push(u);
+                            } else {
+                                no_access.push(u);
+                            }
+                        }
+                        return Err(send_json(&json!({ "recorded": recorded, "no_access": no_access }), 200));
+                    }
                     (["sharing"], "POST") => {
                         need(role, Role::Owner)?;
                         return Err(match sharing::update(store, Item::File(id), &path, &json) {
@@ -1681,6 +1707,7 @@ fn after_files(app: &App, me: &auth::User, m: &str, p: &[String], r: Result<Repl
     let opened = spaces::opened(&app.store, me);
     let colours = spaces::colours(&app.store, me);
     let changed = spaces::changed_by(&app.store);
+    let mentioned = spaces::mentions(&app.store, me);
     let files: Vec<Value> = v["files"]
         .as_array()
         .cloned()
@@ -1701,6 +1728,9 @@ fn after_files(app: &App, me: &auth::User, m: &str, p: &[String], r: Result<Repl
             }
             if let Some(t) = opened.get(&id) {
                 f["opened"] = t.clone();
+            }
+            if let Some(by) = mentioned.get(&id).and_then(|m| m.get("by")) {
+                f["mentioned_by"] = by.clone();
             }
             Some(f)
         })

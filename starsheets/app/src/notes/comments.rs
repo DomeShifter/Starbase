@@ -198,7 +198,12 @@ impl Comments {
                         r.request_focus();
                         self.focus = false;
                     }
-                    if r.changed() || (r.has_focus() && writing.is_none()) {
+                    // "@" lists the people who can be mentioned; picking one rewrites the text.
+                    let picked = super::mentions::list(ui, r.rect, r.has_focus(), &mut text);
+                    if picked {
+                        r.request_focus();
+                    }
+                    if r.changed() || picked || (r.has_focus() && writing.is_none()) {
                         self.draft = Some((uid, cell, what, text.clone()));
                     }
                     let send_keys = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
@@ -222,6 +227,7 @@ impl Comments {
                             }
                         });
                         if send {
+                            super::mentions::record(&text);
                             let p = json!({ "cell": cell.a1(), "text": text.trim() });
                             action = Some(match what {
                                 Writing::New => ("review.newComment", signed(p)),
