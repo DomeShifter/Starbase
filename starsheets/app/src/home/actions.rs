@@ -67,16 +67,16 @@ impl Home {
             self.start_rename(item);
             ui.close();
         }
-        if let Item::File(id) = item {
-            if row(ui, "content_copy", "Make a copy", "", single) {
-                call(&self.store, &self.inbox, ui.ctx(), Method::Post, format!("api/files/{id}/copy"), None, refresh_after);
-                ui.close();
-            }
-            if row(ui, "download", "Download", "", single) {
-                let name = self.label_of(item);
-                self.download(ui.ctx(), id, &name);
-                ui.close();
-            }
+        if let Item::File(id) = item
+            && row(ui, "content_copy", "Make a copy", "", single)
+        {
+            call(&self.store, &self.inbox, ui.ctx(), Method::Post, format!("api/files/{id}/copy"), None, refresh_after);
+            ui.close();
+        }
+        // One file downloads as itself; several items, or a folder, as one .zip.
+        if row(ui, "download", "Download", "", !is_space || !single) {
+            self.download_items(ui.ctx(), &targets);
+            ui.close();
         }
         if row(ui, "info", "Details", "", single) {
             self.show_details(ui.ctx(), item.clone());
