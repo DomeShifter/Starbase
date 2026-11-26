@@ -30,6 +30,22 @@ def run(testn):
                 ok = cell.get("isText") is True and cell.get("number") is None and cell.get("numberTextMarkers") == 0 and not any("error-check" in k or "warning" in k for k in tg)
                 print(f"{'PASS' if ok else 'FAIL'} [{br}] cell={cell.get('input')!r} isText={cell.get('isText')} number={cell.get('number')} markers={cell.get('numberTextMarkers')}", flush=True)
                 fails += not ok
+                # a CSV whose first column is leading-zero text-numbers: no green corner on any of them
+                csv = b"code,qty,zip\n00123,1,'00123\n007,2,'007\n0420,3,'0420\n"
+                r = s.pg.request.post(f"{s.base}/api/files?name=ntw-zip.csv&as_is=1", data=csv,
+                                      headers={"content-type": "application/octet-stream"})
+                assert r.status < 300, f"upload csv: {r.status} {r.text()[:200]}"
+                s.open("sheets", path=f"/?file={r.json()['id']}&test"); time.sleep(4)
+                bad = []
+                for y, x in [(196, 75), (216, 75), (236, 75), (196, 203), (216, 203), (236, 203)]:  # data cells of col A (0-prefixed) and C (apostrophe text)
+                    s.click_xy(x, y)
+                    c = s.snapshot().get("cell") or {}
+                    print(f"  [{br}] x={x} y={y} input={c.get('input')!r} isText={c.get('isText')} markers={c.get('numberTextMarkers')}", flush=True)
+                    if c.get("numberTextMarkers") != 0 or c.get("input") in ("", None): bad.append((x, y))
+                s.shot(f"{br}-csv-leading-zero")
+                ok2 = not bad
+                print(f"{'PASS' if ok2 else 'FAIL'} [{br}] csv leading-zero column has no markers", flush=True)
+                fails += not ok2
         except Exception as e:
             fails += 1; print(f"FAIL [{br}] {type(e).__name__}: {str(e)[:200]}", flush=True)
     return fails
