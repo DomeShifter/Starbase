@@ -50,8 +50,14 @@ fn trace() -> bool {
 
 /// The starting document as `.docx` bytes: a heading, paragraphs, a table, a comment, a tracked
 /// insertion, a header and a footnote, made with the engine's own commands and saved by its
-/// writer.
+/// writer. Built once per process: the comment and the tracked insertion are stamped with the
+/// clock, so two builds a second apart are two different documents (and fingerprints).
 pub fn base_docx() -> Vec<u8> {
+    static BASE: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    BASE.get_or_init(build_base_docx).clone()
+}
+
+fn build_base_docx() -> Vec<u8> {
     let mut s = Session::new(Document::new());
     s.doc = s.blank_document();
     s.clamp_selection();
