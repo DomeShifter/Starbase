@@ -65,7 +65,7 @@ pub fn ask_sign_in() {
 /// Opens one of the avatar menu's dialogs, as the menu does (the test hook: `account:profile`,
 /// `account:password`, `account:people`).
 pub fn request(ctx: &egui::Context, what: &str) -> Result<(), String> {
-    if !matches!(what, "profile" | "password" | "people" | "storage" | "backups" | "devices") {
+    if !matches!(what, "profile" | "password" | "people" | "storage" | "backups" | "devices" | "twostep") {
         return Err(format!("no account dialog `{what}`"));
     }
     ctx.data_mut(|m| m.insert_temp(egui::Id::unique(REQUEST), what.to_string()));
