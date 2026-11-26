@@ -849,7 +849,7 @@ impl Store {
     /// The bin's name for what was just binned, and whose bin it is: an Undo puts it back with
     /// `POST /api/bin/restore?name=…&expect=<original>&exact=1`.
     fn binned(&self, relpath: &str, name: String) -> Value {
-        json!({"ok": true, "bin": name, "space": if self.spaces { space_of(relpath) } else { "" }})
+        json!({"ok": true, "bin": name, "original": relpath, "space": if self.spaces { space_of(relpath) } else { "" }})
     }
 
     /// Reserves a free file name in `folder` (stem.ext, stem (2).ext, …) by creating it exclusively.
