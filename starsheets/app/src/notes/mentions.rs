@@ -28,6 +28,9 @@ struct State {
     pick: usize,
     /// What the list showed last frame (the test hook reads this): (query, names).
     shown: Option<(String, Vec<String>)>,
+    /// Where the list was drawn: pressing on it takes the keyboard focus off the box, which must
+    /// not make the list vanish before the click lands.
+    area: Option<Rect>,
 }
 
 thread_local! {
@@ -133,8 +136,15 @@ pub fn list(ui: &mut Ui, field: Rect, has_focus: bool, text: &mut String) -> boo
         let Some((at, query)) = typing(text) else { return (Vec::new(), 0, String::new()) };
         (matching(&s.people, query).into_iter().cloned().collect::<Vec<_>>(), at, query.to_string())
     });
-    if rows.is_empty() || !has_focus {
-        STATE.with(|s| s.borrow_mut().shown = None);
+    let on_list = STATE
+        .with(|s| s.borrow().area)
+        .is_some_and(|a| ui.input(|i| i.pointer.any_down() && i.pointer.interact_pos().is_some_and(|p| a.contains(p))));
+    if rows.is_empty() || !(has_focus || on_list) {
+        STATE.with(|s| {
+            let mut s = s.borrow_mut();
+            s.shown = None;
+            s.area = None;
+        });
         return false;
     }
     let mut chosen: Option<usize> = None;
@@ -162,20 +172,26 @@ pub fn list(ui: &mut Ui, field: Rect, has_focus: bool, text: &mut String) -> boo
     if enter {
         chosen = Some(pick);
     }
-    Area::new(egui::Id::unique("starsheets_mention_list")).order(Order::Tooltip).fixed_pos(field.left_bottom() + vec2(0.0, 2.0)).show(
+    let shown = Area::new(egui::Id::unique("starsheets_mention_list")).order(Order::Tooltip).fixed_pos(field.left_bottom() + vec2(0.0, 2.0)).show(
         ui.ctx(),
         |ui| {
             house::card_frame().show(ui, |ui| {
                 ui.set_width(field.width().max(180.0));
                 for (i, (_, name)) in rows.iter().enumerate() {
-                    if ui.selectable_label(i == pick, name).clicked() {
+                    // Picked on the press: the box loses focus then, and the list with it.
+                    let row = ui.selectable_label(i == pick, name);
+                    if row.clicked() || (row.hovered() && ui.input(|i| i.pointer.primary_pressed())) {
                         chosen = Some(i);
                     }
                 }
             });
         },
     );
-    STATE.with(|s| s.borrow_mut().pick = pick);
+    STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        s.pick = pick;
+        s.area = Some(shown.response.rect);
+    });
     if let Some(i) = chosen {
         *text = insert(text, at, &rows[i].1);
         STATE.with(|s| s.borrow_mut().shown = None);
