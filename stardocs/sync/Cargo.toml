@@ -1,0 +1,18 @@
+[package]
+name = "starbase-docs-sync"
+description = "Live co-editing messages for Starbase Docs, shared by the server and the web app (no engine dependency: steps are a type parameter)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

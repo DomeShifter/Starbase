@@ -73,6 +73,8 @@ struct FileRow {
     opened: Option<i64>,
     /// Who saved the last change (username), when known.
     changed_by: String,
+    /// Who mentioned you in a comment here (username), until you open the file.
+    mentioned_by: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -463,6 +465,7 @@ impl Home {
                 shared: f["shared"].as_bool().unwrap_or(false),
                 opened: f["opened"].as_i64(),
                 changed_by: s(f, "changed_by"),
+                mentioned_by: s(f, "mentioned_by"),
             })
             .collect();
         let info = v["folder_info"].as_object().cloned().unwrap_or_default();

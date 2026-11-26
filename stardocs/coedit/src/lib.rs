@@ -1,4 +1,4 @@
-//! SPIKE of the Docs co-editing design (not for release): editing *steps* worked out by
+//! Docs co-editing engine (not wired into the app yet): editing *steps* worked out by
 //! comparing a WordCraft document before and after a command, applying them, mapping positions
 //! through them, transforming a step over a concurrent one (the server orders changes, the
 //! clients rebase their pending steps over what the server sent), and inverting them for
@@ -15,11 +15,13 @@
 
 pub mod diff;
 pub mod invert;
+pub mod room;
 pub mod sim;
 pub mod step;
 pub mod xform;
 
 pub use diff::diff;
 pub use invert::{invert, invert_all};
+pub use room::{Caret, Catchup, DocRoom, Entry, Received, Where};
 pub use step::{Attrs, Cont, Step, apply, apply_all, normalized, short};
 pub use xform::{DROPPED, RECORD_DROPS, map_pos, xform, xform_lists};

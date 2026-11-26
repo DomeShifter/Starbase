@@ -198,7 +198,19 @@ impl Comments {
                         r.request_focus();
                         self.focus = false;
                     }
-                    if r.changed() || (r.has_focus() && writing.is_none()) {
+                    // "@" lists the people who can be mentioned; picking one rewrites the text.
+                    let picked = super::mentions::list(ui, r.rect, r.has_focus(), &mut text);
+                    if super::mentions::refocus(ui.ctx()) {
+                        r.request_focus();
+                    }
+                    if picked {
+                        r.request_focus();
+                        // The text changed under the box: put the cursor after the inserted "@Name ".
+                        let mut st = egui::TextEdit::load_state(ui.ctx(), r.id).unwrap_or_default();
+                        st.cursor.set_char_range(Some(egui::text::CCursorRange::one(egui::text::CCursor::new(text.chars().count()))));
+                        st.store(ui.ctx(), r.id);
+                    }
+                    if r.changed() || picked || (r.has_focus() && writing.is_none()) {
                         self.draft = Some((uid, cell, what, text.clone()));
                     }
                     let send_keys = r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) && i.modifiers.command);
@@ -222,6 +234,7 @@ impl Comments {
                             }
                         });
                         if send {
+                            super::mentions::record(&text);
                             let p = json!({ "cell": cell.a1(), "text": text.trim() });
                             action = Some(match what {
                                 Writing::New => ("review.newComment", signed(p)),

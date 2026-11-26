@@ -1374,6 +1374,7 @@ const CHIP_GREY: egui::Color32 = egui::Color32::from_rgb(0xE8, 0xEA, 0xED);
 /// without chips and without a colour is plain text. Grey behind the row on hover or keyboard.
 fn list_item(ui: &mut Ui, it: &gridcraft_ui_egui::ListItem<'_>) -> egui::Response {
     let (rect, r) = ui.allocate_exact_size(it.size, egui::Sense::click());
+    house::target(ui.ctx(), &format!("list:{}", it.text), rect);
     if r.hovered() || it.selected {
         ui.painter().rect_filled(rect, 0.0, theme::MENU_HOVER);
     }

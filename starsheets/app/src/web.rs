@@ -390,6 +390,7 @@ impl eframe::App for WebShell {
         self.share.ui(&ctx);
         self.account.ui(&ctx);
         self.dates.ui(&mut self.app, ui);
+        crate::notes::mentions::set_file(self.files.linked().map(|l| l.1), &ctx);
         self.notes.intercept(&mut self.app, &ctx);
         self.notes.ui(&mut self.app, ui);
         self.error_tip.ui(&self.app, &ctx);
