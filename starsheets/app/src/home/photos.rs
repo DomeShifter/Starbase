@@ -18,6 +18,7 @@ use egui::{Color32, Rect, RichText, Sense, Ui, pos2, vec2};
 use serde_json::Value as Json;
 
 mod albums;
+mod dups;
 mod pick;
 
 pub(super) use pick::{Act, Out};
@@ -85,6 +86,8 @@ pub(super) enum Got {
     Error(String),
     /// The album or place list (albums.rs), and one opened.
     Cards(albums::Tab, Json),
+    /// The Duplicates list for a folder (dups.rs).
+    Dups(String, Json),
     Opened(albums::Tab, String, Json),
     /// An album changed: ask again.
     Changed,
@@ -206,6 +209,8 @@ pub(super) struct PhotoMode {
     pub editor: Option<super::photo_edit::Editor>,
     /// Albums and Places beside the grid (albums.rs).
     pub alb: albums::Albums,
+    /// The Duplicates tab (dups.rs).
+    pub dups: dups::Dups,
     /// Selecting, the right-click menu, Add to album (pick.rs).
     pub pick: pick::Pick,
     /// What the Drive around Photos is asked to do (stars, the bin, Details).
@@ -237,6 +242,7 @@ impl Default for PhotoMode {
             viewer: None,
             editor: None,
             alb: albums::Albums::default(),
+            dups: dups::Dups::default(),
             pick: pick::Pick::default(),
             out: Vec::new(),
         }
@@ -378,6 +384,7 @@ impl PhotoMode {
             match g {
                 Got::Cards(t, v) => self.alb.take_cards(t, &v),
                 Got::Opened(t, key, v) => self.take_opened(t, &key, &v),
+                Got::Dups(f, v) => self.dups.take(&f, &v),
                 Got::Changed => self.alb.changed(ctx, store, &self.inbox),
                 Got::Added(c, n, asked, ids) => self.added(ctx, store, c, n, asked, ids),
                 Got::Picker(v) => self.take_picker(&v),
@@ -530,6 +537,7 @@ impl PhotoMode {
             ui.separator();
             ui.vertical(|ui| match self.alb.tab {
                 albums::Tab::Photos => self.folder_ui(ui, store, folder),
+                albums::Tab::Duplicates => self.dups_ui(ui, store, folder),
                 _ => self.cards_ui(ui, store),
             });
         });
@@ -795,6 +803,7 @@ impl PhotoMode {
             "error": self.error,
             "count": self.pics.len(),
             "albums": self.alb.test_state(),
+            "dups": self.dups.test_state(),
             "pick": self.pick.test_state(),
             "textures": { "count": self.tex.len(), "bytes": self.tex.total, "budget": self.tex.budget, "asking": self.asking.len() },
             "items": self.pics.iter().take(60).map(|p| json!({

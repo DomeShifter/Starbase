@@ -7,6 +7,10 @@
 //!   everything in it (anyone who may edit the folder). Until then nothing in it is indexed.
 //! - `POST /api/photos/disable?folder=PATH`: turns it off and forgets the folder's pictures and
 //!   thumbnails (the folder's owner, or the server's).
+//! - `GET /api/photos/duplicates?folder=PATH` (or `folder_id`): groups of pictures anywhere in the
+//!   folder with exactly the same content (the index's content hash), each with its pictures as in
+//!   the listing; only groups of two or more, biggest waste first. No near-duplicate matching yet:
+//!   the index keeps no perceptual hash.
 //! - `GET /api/photos/status`: the index's state (the server's owner only).
 //!
 //! Who may: a folder's pictures, anyone who may view the folder; a thumbnail, anyone who may
@@ -67,6 +71,7 @@ pub async fn route(
         1 => list(app, q, me).await,
         2 if post => switch(app, q, me, p[1] == "enable").await,
         2 if p[1] == "status" => status(app, me).await,
+        2 if p[1] == "duplicates" => duplicates(app, q, me).await,
         4 if p[1] == "thumb" => thumb(app, me, p[2].clone(), &p[3], q.get("v").map(String::as_str), headers).await,
         _ => error(404, "not found"),
     })
@@ -224,6 +229,60 @@ async fn list(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>)
         }),
         200,
     )
+}
+
+/// GET /api/photos/duplicates: pictures with the same content hash, in groups.
+async fn duplicates(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>) -> Response<Body> {
+    let q2 = q.clone();
+    let checked = blocking(app, move |a| -> Result<Checked, Response<Body>> {
+        let acc = sharing::Access::new(&a.store, a.auth, me.as_ref());
+        let (folder, role, named) = folder_of(a, &acc, &q2)?;
+        let inside = |p: &str| {
+            let parent = store::parent_of(p);
+            parent == folder || folder.is_empty() || parent.starts_with(&format!("{folder}/"))
+        };
+        let ids = acc.file_paths.iter().filter(|(_, p)| inside(p)).map(|(id, p)| (p.clone(), id.clone())).collect();
+        Ok((folder, ids, role, named))
+    })
+    .await
+    .unwrap_or_else(|| Err(error(500, "server error")));
+    let (folder, ids, role, named) = match checked {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    let a = app.clone();
+    let f2 = folder.clone();
+    let got = off(move || {
+        let svc = service(&a.store)?;
+        if !svc.covers(&f2) {
+            return Some((false, Vec::new()));
+        }
+        svc.look_at(&f2, true);
+        Some((true, svc.rows(&f2, true)))
+    })
+    .await
+    .flatten();
+    let Some((enabled, rows)) = got else { return error(503, super::NOT_SET_UP) };
+    let places = role >= sharing::Role::Edit && named;
+    let mut by: HashMap<String, Vec<Value>> = HashMap::new();
+    let mut sizes: HashMap<String, u64> = HashMap::new();
+    for r in rows {
+        let (Some(id), Some(h)) = (ids.get(&r.path), r.hash.clone()) else { continue };
+        sizes.insert(h.clone(), r.size);
+        by.entry(h).or_default().push(photo_json(&r, id, places));
+    }
+    let mut groups: Vec<(u64, String, Vec<Value>)> = by
+        .into_iter()
+        .filter(|(_, v)| v.len() > 1)
+        .map(|(h, mut v)| {
+            v.sort_by(|a, b| a["folder"].as_str().cmp(&b["folder"].as_str()).then(a["name"].as_str().cmp(&b["name"].as_str())));
+            (sizes[&h] * (v.len() as u64 - 1), h, v)
+        })
+        .collect();
+    groups.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    let wasted: u64 = groups.iter().map(|g| g.0).sum();
+    let groups: Vec<Value> = groups.into_iter().map(|(w, h, v)| json!({ "key": tag(&h), "wasted": w, "photos": v })).collect();
+    send_json(&json!({ "folder": folder, "enabled": enabled, "wasted": wasted, "groups": groups }), 200)
 }
 
 /// `me`'s starred files (`f:<file id>`), to mark pictures in a listing with [`mark_stars`].
