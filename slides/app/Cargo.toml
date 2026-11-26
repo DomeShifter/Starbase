@@ -38,6 +38,8 @@ pollster = "1"
 # File › Connect to a server… and presentations on it (connect.rs, serverfile.rs): device sign-in,
 # the token in the system keyring, the files API. Shared with Starbase Sheets and Docs.
 starbase-connect = { path = "../../starsheets/crates/connect" }
+# The save-state icon on the title row (shared with Sheets and Docs).
+starbase-savestate = { path = "../../starsheets/crates/savestate" }
 
 # Native tests of the window (src/shell_tests.rs, local_tests.rs): egui_kittest's accessibility tree, no GPU.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

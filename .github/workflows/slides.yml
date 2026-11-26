@@ -8,9 +8,9 @@ name: Starbase Slides
 on:
   push:
     branches: [main]
-    paths: ["slides/**", "starsheets/crates/connect/**", ".github/workflows/slides.yml", "rustfmt.toml"]
+    paths: ["slides/**", "starsheets/crates/connect/**", "starsheets/crates/savestate/**", ".github/workflows/slides.yml", "rustfmt.toml"]
   pull_request:
-    paths: ["slides/**", "starsheets/crates/connect/**", ".github/workflows/slides.yml", "rustfmt.toml"]
+    paths: ["slides/**", "starsheets/crates/connect/**", "starsheets/crates/savestate/**", ".github/workflows/slides.yml", "rustfmt.toml"]
   workflow_dispatch:
   workflow_call: # from release.yml (the Starbase image)
 
