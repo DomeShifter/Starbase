@@ -1237,7 +1237,7 @@ async fn gate(
                     _ => need(a.folder_role(&path), Role::Owner)?,
                 }
             }
-            (["bin", ..], _) => {
+            (["bin" | "usage", ..], _) => {
                 q.insert("space".into(), home.clone());
             }
             _ => {}
@@ -3042,6 +3042,13 @@ mod tests {
         assert_eq!(g.headers[header::CONTENT_RANGE], format!("bytes 1-3/{}", png.len()).as_str());
         let g = send(&app, &ip, "GET", &format!("/api/files/{photo}/raw"), &boss, &[("range", "bytes=999-")], vec![]).await;
         assert_eq!(g.status, 416);
+        // A video (Photos plays it from raw): its own type, and byte ranges so it can seek.
+        let clip = b"\0\0\0\x18ftypmp42 fake clip bytes".to_vec();
+        let clip_id = id_of(&send(&app, &ip, "POST", &up("clip.mp4"), &boss, &[], clip.clone()).await);
+        let g = send(&app, &ip, "GET", &format!("/api/files/{clip_id}/raw"), &boss, &[("range", "bytes=4-9")], vec![]).await;
+        assert_eq!((g.status, g.bytes.as_slice()), (206, &clip[4..10]));
+        assert_eq!(g.headers[header::CONTENT_TYPE], "video/mp4");
+        assert_eq!(g.headers[header::CONTENT_RANGE], format!("bytes 4-9/{}", clip.len()).as_str());
         // HTML, SVG, text and unknown types are never served to be shown as they are.
         for id in [&html, &svg, &exe, &txt] {
             assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{id}/raw"), &boss, &[], vec![]).await.status, 415, "raw {id}");
