@@ -1108,6 +1108,7 @@ impl Home {
 
     pub fn ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        crate::prefetch::tick(&ctx, self.loading, ui.input(|i| i.time));
         self.templates_ui(&ctx);
         let photo_mode = self.photo_folder().is_some();
         ui.painter().rect_filled(ui.max_rect(), 0, theme::page());
