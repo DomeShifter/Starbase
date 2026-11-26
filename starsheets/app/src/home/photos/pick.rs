@@ -249,9 +249,7 @@ impl PhotoMode {
             }
             Act::Favourite => self.out.push(Out::Star(ids)),
             Act::Download => {
-                for id in &ids {
-                    download(id);
-                }
+                download_all(&ids);
                 let n = ids.len();
                 self.say(ctx, if n == 1 { "Downloading 1 picture".into() } else { format!("Downloading {n} pictures") }, None);
             }
@@ -792,9 +790,21 @@ pub(super) fn box_rect(rect: Rect) -> Rect {
     Rect::from_center_size(rect.left_top() + vec2(16.0, 16.0), vec2(28.0, 28.0))
 }
 
-/// Downloads a picture's original (the server sends it as an attachment). On the web an `<a
-/// download>` per picture, so several in a row all arrive.
-fn download(id: &str) {
+/// Downloads the pictures: one picture as the plain original, several as ONE .zip (the server's
+/// `api/zip`, as in Drive).
+fn download_all(ids: &[String]) {
+    download(&download_url(ids));
+}
+
+fn download_url(ids: &[String]) -> String {
+    match ids {
+        [one] => format!("api/files/{one}"),
+        _ => format!("api/zip?files={}&folders=", ids.join(",")),
+    }
+}
+
+/// Starts a download of `href` (the server sends it as an attachment): an `<a download>` click.
+fn download(href: &str) {
     #[cfg(target_arch = "wasm32")]
     {
         use wasm_bindgen::JsCast;
@@ -802,13 +812,13 @@ fn download(id: &str) {
             && let Ok(a) = doc.create_element("a")
             && let Ok(a) = a.dyn_into::<web_sys::HtmlAnchorElement>()
         {
-            a.set_href(&format!("api/files/{id}"));
+            a.set_href(href);
             a.set_download("");
             a.click();
         }
     }
     #[cfg(not(target_arch = "wasm32"))]
-    let _ = id;
+    let _ = href;
 }
 
 #[cfg(test)]
@@ -824,6 +834,12 @@ mod tests {
     }
 
     /// Every kind of click, from a given selection and anchor: what it does and what's left selected.
+    #[test]
+    fn several_pictures_download_as_one_zip() {
+        assert_eq!(download_url(&ids(1)), "api/files/p0");
+        assert_eq!(download_url(&ids(3)), "api/zip?files=p0,p1,p2&folders=");
+    }
+
     #[test]
     fn clicks_select_like_google_photos() {
         // (selected before, anchor, square, on_box, shift, ctrl) → (result, selected after, anchor after)
