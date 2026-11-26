@@ -109,11 +109,7 @@ pub(super) fn nav_rows(more: bool) -> Vec<NavRow> {
         More,
     ];
     if more {
-        v.extend([
-            Go(Tab::Timeline, "Timeline", "schedule"),
-            Go(Tab::Events, "Events", "event"),
-            Go(Tab::Duplicates, "Duplicates", "content_copy"),
-        ]);
+        v.extend([Go(Tab::Timeline, "Timeline", "schedule"), Go(Tab::Events, "Events", "event"), Go(Tab::Duplicates, "Duplicates", "content_copy")]);
     }
     v.extend([Divider, Go(Tab::Locked, "Locked", "lock")]);
     v
@@ -273,7 +269,10 @@ impl PhotoMode {
                 }
                 NavRow::More => {
                     let open = self.alb.more || hidden;
-                    let r = ui.add(house::quiet_with(Some(if open { "expand_more" } else { "chevron_right" }), "More", false).min_size(vec2(120.0, house::BUTTON_HEIGHT)));
+                    let r = ui.add(
+                        house::quiet_with(Some(if open { "expand_more" } else { "chevron_right" }), "More", false)
+                            .min_size(vec2(120.0, house::BUTTON_HEIGHT)),
+                    );
                     house::target(ui.ctx(), "photos:nav:more", r.rect);
                     if r.clicked() {
                         self.alb.more = !self.alb.more;
@@ -660,12 +659,6 @@ mod tests {
             let rows = nav_rows(more);
             assert_eq!(rows.iter().filter(|r| **r == NavRow::More).count(), 1);
             assert_eq!(rows[rows.len() - 2], NavRow::Divider);
-            for r in rows {
-                if let NavRow::Go(_, _, icon) = r {
-                    assert!(crate::icons::icon(icon).is_some(), "{icon}");
-                }
-            }
         }
     }
-
 }

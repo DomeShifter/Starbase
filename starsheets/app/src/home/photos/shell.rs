@@ -32,14 +32,6 @@ impl Scope {
             Scope::All => "Everything",
         }
     }
-
-    fn short(self) -> &'static str {
-        match self {
-            Scope::Folder => "This folder",
-            Scope::Sub => "With subfolders",
-            Scope::All => "Everything",
-        }
-    }
 }
 
 /// The Type filter's choices, in the order shown.
@@ -388,5 +380,4 @@ mod tests {
         assert!(narrow.ends_with(&[ViewItem::Upload, ViewItem::Slideshow, ViewItem::Scan]));
         assert!(view_items(true, false, false).ends_with(&[ViewItem::Sep, ViewItem::Scan]));
     }
-
 }

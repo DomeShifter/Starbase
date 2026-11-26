@@ -326,12 +326,10 @@ pub fn empty_state(ui: &mut Ui, icon: Option<&str>, title: &str, hint: &str, but
 }
 
 /// What a [`status_line`] says.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
     /// Waiting for something: a small spinner and dim text.
     Loading,
-    /// A long job: a slim bar (0..1) and dim text.
-    Working(f32),
     /// Something failed: red text and a quiet Dismiss button.
     Error,
 }
@@ -346,10 +344,6 @@ pub fn status_line(ui: &mut Ui, kind: Status, text: &str) -> bool {
                 ui.add(egui::Spinner::new().size(NOTE).color(theme::text_dim()));
                 ui.label(RichText::new(text).size(NOTE).color(theme::text_dim()));
             });
-        }
-        Status::Working(f) => {
-            ui.add(egui::ProgressBar::new(f.clamp(0.0, 1.0)).desired_height(XS).desired_width(240.0));
-            ui.label(RichText::new(text).size(NOTE).color(theme::text_dim()));
         }
         Status::Error => {
             ui.horizontal(|ui| {

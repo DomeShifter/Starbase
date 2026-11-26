@@ -660,19 +660,11 @@ impl PhotoMode {
                         ui.horizontal_centered(|ui| {
                             ui.label(RichText::new(&note.text).size(house::BODY).color(Color32::WHITE));
                             ui.add_space(house::L);
-                            if note.undo
-                                && ui
-                                    .add(house::quiet_in("Undo", theme::share()))
-                                    .clicked()
-                            {
+                            if note.undo && ui.add(house::quiet_in("Undo", theme::share())).clicked() {
                                 self.pick.note = None;
                                 self.out.push(Out::Undo);
                             }
-                            if note.album.is_some()
-                                && ui
-                                    .add(house::quiet_in("Open album", theme::share()))
-                                    .clicked()
-                            {
+                            if note.album.is_some() && ui.add(house::quiet_in("Open album", theme::share())).clicked() {
                                 open = true;
                             }
                             let x = house::quiet_in("\u{2715}", Color32::WHITE);
@@ -892,7 +884,6 @@ mod tests {
             }
         }
     }
-
 
     fn ids(n: usize) -> Vec<String> {
         (0..n).map(|i| format!("p{i}")).collect()
