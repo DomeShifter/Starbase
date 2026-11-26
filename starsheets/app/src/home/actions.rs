@@ -438,6 +438,14 @@ impl Home {
 
     pub(super) fn show_details(&mut self, ctx: &egui::Context, item: Item) {
         self.details = Some((item.clone(), None));
+        self.details_tab = 0;
+        self.activity = None;
+        if let (Item::File(id), true) = (&item, self.accounts) {
+            let id = id.clone();
+            call(&self.store, &self.inbox, ctx, Method::Get, format!("api/files/{id}/activity"), None, move |b| {
+                Reply::Activity(id, serde_json::from_slice(&b).unwrap_or_default())
+            });
+        }
         if self.accounts && !matches!(&item, Item::Folder(p) if !p.contains('/')) {
             let url = match &item {
                 Item::File(id) => format!("api/files/{id}/sharing"),
@@ -555,25 +563,39 @@ impl Home {
         let mut done = false;
         let mut share = false;
         house::dialog(ctx, "home_details", 480.0, &title, Some(&mut close), |ui| {
-            egui::Grid::new("home_details_grid").num_columns(2).spacing(vec2(house::L, house::S)).show(ui, |ui| {
-                for (k, v) in &rows {
-                    ui.label(RichText::new(*k).size(house::BODY).color(theme::TEXT_DIM));
-                    ui.label(RichText::new(v).size(house::BODY).color(theme::TEXT));
-                    ui.end_row();
+            let is_file = matches!(&item, Item::File(_));
+            if is_file && self.accounts {
+                let at = ui.cursor().min;
+                house::tabs(ui, &mut self.details_tab, &["Details", "Activity"]);
+                for (i, l) in ["Details", "Activity"].iter().enumerate() {
+                    let c = egui::pos2(at.x + 44.0 + 88.0 * i as f32, at.y + 16.0);
+                    house::target(ui.ctx(), &format!("details tab {l}"), egui::Rect::from_center_size(c, vec2(80.0, 28.0)));
                 }
-                if self.accounts && !matches!(&item, Item::Folder(p) if !p.contains('/')) {
-                    ui.label(RichText::new("Who has access").size(house::BODY).color(theme::TEXT_DIM));
-                    ui.vertical(|ui| {
-                        if access.is_none() {
-                            ui.label(RichText::new("Loading…").size(house::BODY).color(theme::TEXT_DIM));
-                        }
-                        for l in &access_lines {
-                            ui.label(RichText::new(l).size(house::BODY).color(theme::TEXT));
-                        }
-                    });
-                    ui.end_row();
-                }
-            });
+            }
+            if self.details_tab == 1 && is_file {
+                let list = self.activity.as_ref().map(|(_, j)| j);
+                activity::ui(ui, list);
+            } else {
+                egui::Grid::new("home_details_grid").num_columns(2).spacing(vec2(house::L, house::S)).show(ui, |ui| {
+                    for (k, v) in &rows {
+                        ui.label(RichText::new(*k).size(house::BODY).color(theme::TEXT_DIM));
+                        ui.label(RichText::new(v).size(house::BODY).color(theme::TEXT));
+                        ui.end_row();
+                    }
+                    if self.accounts && !matches!(&item, Item::Folder(p) if !p.contains('/')) {
+                        ui.label(RichText::new("Who has access").size(house::BODY).color(theme::TEXT_DIM));
+                        ui.vertical(|ui| {
+                            if access.is_none() {
+                                ui.label(RichText::new("Loading…").size(house::BODY).color(theme::TEXT_DIM));
+                            }
+                            for l in &access_lines {
+                                ui.label(RichText::new(l).size(house::BODY).color(theme::TEXT));
+                            }
+                        });
+                        ui.end_row();
+                    }
+                });
+            }
             let can_share = self.accounts && self.role_of(&item) == "owner" && !matches!(&item, Item::Folder(p) if !p.contains('/'));
             let labels: &[&str] = if can_share { &["Share…", "Close"] } else { &["Close"] };
             match house::actions_in(ui, labels, ACCENT) {

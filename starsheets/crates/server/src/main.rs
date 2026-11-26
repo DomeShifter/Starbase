@@ -13,6 +13,7 @@
 // make the error smaller would only add an allocation on the error path.
 #![allow(clippy::result_large_err)]
 
+mod activity;
 mod auth;
 mod backup;
 mod commenting;
@@ -1132,6 +1133,11 @@ async fn gate(
                         // Into someone else's folder: it becomes theirs, so only its owner may.
                         need(role, if store::space_of(&target) == store::space_of(&path) { Role::Edit } else { Role::Owner })?;
                     }
+                    // Activity: anyone who can see the file may read what happened to it.
+                    (["activity"], "GET") => {
+                        need(role, Role::View)?;
+                        return Err(send_json(&activity::list(store, id), 200));
+                    }
                     (["sharing"], "GET") => {
                         need(role, Role::View)?;
                         return Err(send_json(&sharing::describe(store, Item::File(id), &path, role), 200));
@@ -1994,6 +2000,12 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
         )
         .await
     {
+        if resp.status().is_success()
+            && let Some(me) = &me
+        {
+            let (who, id) = (me.username.clone(), p[1].clone());
+            blocking(&app, move |a| activity::note(&a.store, &id, &who, "commented", "")).await;
+        }
         return resp;
     }
     if m == "PUT" && p.len() == 3 && p[0] == "files" && p[2] == "thumb" {
@@ -2034,6 +2046,16 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
             // Sharing is answered inside the gate: open live rooms check access straight away.
             if m == "POST" && p.last().is_some_and(|l| l == "sharing") && resp.status().is_success() {
                 app.rooms.recheck_access();
+                if let (Some(me), true) = (&me, p.len() == 3 && p[0] == "files") {
+                    let (who, id) = (me.username.clone(), p[1].clone());
+                    let body: Value = serde_json::from_slice(&body).unwrap_or_default();
+                    blocking(&app, move |a| {
+                        for (kind, detail) in activity::from_sharing(&body) {
+                            activity::note(&a.store, &id, &who, kind, &detail);
+                        }
+                    })
+                    .await;
+                }
             }
             return resp;
         }
@@ -2048,6 +2070,7 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
         && ((p.len() == 1 && p[0] == "files" && (q.get("as_is").is_some_and(|v| v == "1") || q.get("imported").is_some_and(|v| v == "1")))
             || (p.len() == 3 && p[0] == "files" && p[2] == "copy"));
     let (m2, p2) = (m.clone(), p.clone());
+    let act_q = q.clone();
     let app2 = app.clone();
     let out = tokio::task::spawn_blocking(move || {
         let _g = app2.lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -2074,6 +2097,25 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
                     }
                     _ => None,
                 };
+                // Activity (Details): what was done, by whom.
+                if let (Ok(Reply::Json(v, 200 | 201)), true) = (&r, p2.first().is_some_and(|f| f == "files")) {
+                    let ev: Option<(String, &str, String)> = match (m2.as_str(), p2.as_slice()) {
+                        ("PUT", [_, id]) => Some((id.clone(), "edited", String::new())),
+                        ("POST", [_]) => v.get("id").and_then(Value::as_str).map(|i| (i.to_string(), "created", String::new())),
+                        ("POST", [_, _, c]) if c == "copy" => {
+                            v.get("id").and_then(Value::as_str).map(|i| (i.to_string(), "created", "a copy".to_string()))
+                        }
+                        ("POST", [_, id, c]) if c == "rename" => Some((id.clone(), "renamed", act_q.get("name").cloned().unwrap_or_default())),
+                        ("POST", [_, id, c]) if c == "move" => Some((id.clone(), "moved", act_q.get("folder").cloned().unwrap_or_default())),
+                        ("POST", [_, id, _, v, c]) if c == "restore" => Some((id.clone(), "restored", v.clone())),
+                        ("DELETE", [_, id]) => Some((id.clone(), "trashed", String::new())),
+                        _ => None,
+                    };
+                    if let Some((fid, kind, detail)) = ev {
+                        let who = me.username.clone();
+                        blocking(&app, move |a| activity::note(&a.store, &fid, &who, kind, &detail)).await;
+                    }
+                }
                 if let Some(id) = made {
                     let who = me.username.clone();
                     if from_outside {
@@ -2556,6 +2598,33 @@ mod tests {
         }
         assert_eq!(send(&app, &ip, "POST", "/api/templates/nope", &boss, &[], vec![]).await.status, 404);
         assert_eq!(send(&app, &ip, "GET", "/api/templates/cv", &boss, &[], vec![]).await.status, 404);
+    }
+
+    /// Details > Activity: what happened to a file, newest first; a sharee (a viewer, not the
+    /// owner) reads it, a person with no access gets a 403.
+    #[tokio::test]
+    async fn file_activity_for_a_sharee_and_not_a_stranger() {
+        let (app, ip, boss) = owned().await;
+        for who in ["ann", "vic"] {
+            let g = post(&app, &ip, "/api/users", &boss, json!({"username": who, "name": who, "password": format!("{who}password")})).await;
+            assert_eq!(g.status, 200);
+        }
+        let ann = cookie_of(&post(&app, &ip, "/api/login", "", json!({"username": "ann", "password": "annpassword"})).await);
+        let vic = cookie_of(&post(&app, &ip, "/api/login", "", json!({"username": "vic", "password": "vicpassword"})).await);
+        let id = send(&app, &ip, "POST", "/api/files?name=Letter.docx", &boss, &[], b"one".to_vec()).await.json["id"].as_str().unwrap().to_string();
+        let url = format!("/api/files/{id}/activity");
+        assert_eq!(send(&app, &ip, "GET", &url, &ann, &[], vec![]).await.status, 403, "no access yet");
+        assert_eq!(post(&app, &ip, &format!("/api/files/{id}/sharing"), &boss, json!({"people": {"ann": "view"}, "link": "view"})).await.status, 200);
+        assert_eq!(send(&app, &ip, "POST", &format!("/api/files/{id}/rename?name=Memo"), &boss, &[], vec![]).await.status, 200);
+        assert_eq!(send(&app, &ip, "PUT", &format!("/api/files/{id}"), &boss, &[], b"two".to_vec()).await.status, 200);
+        let g = send(&app, &ip, "GET", &url, &ann, &[], vec![]).await;
+        assert_eq!(g.status, 200, "a view-only sharee may read it: {:?}", g.json);
+        let kinds: Vec<&str> = g.json["activity"].as_array().unwrap().iter().map(|e| e["kind"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["edited", "renamed", "link", "shared", "created"], "newest first");
+        assert_eq!(g.json["activity"][0]["by"], "boss");
+        assert_eq!(g.json["activity"][3]["detail"], "ann (can view)");
+        assert_eq!(send(&app, &ip, "GET", &url, &vic, &[], vec![]).await.status, 403, "a stranger sees nothing");
+        let _ = std::fs::remove_dir_all(&app.store.root);
     }
 
     /// Docs' version history: a document's saves become versions with who saved them; editors
