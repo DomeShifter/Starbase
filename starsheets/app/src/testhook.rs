@@ -380,6 +380,9 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
                     "note": remark.filter(|c| !c.threaded).map(|c| &c.text),
                     "comment": comment,
                     "validation": validation,
+                    // Sheets draws no "number stored as text" marker or warning button (fork 0109): always 0.
+                    "numberTextMarkers": 0,
+                    "isText": matches!(sheet.value(active), gridcraft_engine::core::Value::Text(_)),
                 }),
                 json!({
                     "bold": st.font.bold,
@@ -406,6 +409,7 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
         "pastePromptShown": starbase_clipboard::prompt_shown(),
         "ownCopyCurrent": starbase_clipboard::own_copy_current(),
         "targets": crate::house::targets(ctx),
+        "account": crate::account::test_state(ctx),
         "file": doc.display_title(),
         "fileId": linked.map(|(_, id)| id),
         "folder": p.files.folder(),

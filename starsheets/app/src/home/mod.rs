@@ -31,6 +31,8 @@ mod input;
 mod items;
 mod photo_edit;
 mod photos;
+#[cfg(target_arch = "wasm32")]
+pub(crate) use photos::said;
 mod sidebar;
 mod templates;
 #[cfg(target_arch = "wasm32")]
@@ -46,6 +48,8 @@ const TOP: f32 = 64.0;
 const CARD_W: f32 = 216.0;
 const CARD_H: f32 = 196.0;
 const PIC_H: f32 = 144.0;
+/// Height of a card's second text line (date / owner), dropped when dates are off.
+const SUB_H: f32 = 16.0;
 const CHIP_H: f32 = 48.0;
 const ROW: f32 = 40.0;
 /// Starbase Drive's accent: Google Drive's blue (drop targets, dialog buttons), not Sheets' green.
@@ -209,6 +213,8 @@ pub struct Home {
     /// Files whose text holds the search words (id → snippet), for the search in `found_for`.
     found: HashMap<String, String>,
     found_for: String,
+    /// Whether grid cards carry a second line (date on, or an owner/snippet line somewhere): sets the card height.
+    card_sub: bool,
     /// The search last sent to the server for text matches.
     asked: String,
     /// The chips under the search box (filters.rs).
@@ -312,12 +318,19 @@ fn call_any(
     then: impl FnOnce(Result<Vec<u8>, (u16, String)>) -> Reply + 'static,
 ) {
     let (inbox2, ctx2) = (inbox.clone(), ctx.clone());
+    // Kept for the console line below, so an error on screen can be traced to its request.
+    let (what, path) = (format!("{method:?}"), url.split('?').next().unwrap_or("").to_string());
     store.call(
         ctx,
         method,
         &url,
         body,
         Box::new(move |answer| {
+            match &answer {
+                Ok((s, _)) if *s >= 400 => log::warn!("request {what} /{path} failed: {s}"),
+                Err(e) => log::warn!("request {what} /{path} failed: {e}"),
+                _ => {}
+            }
             let reply = match answer {
                 Ok((s, bytes)) if s < 400 => then(Ok(bytes)),
                 Ok((401, _)) => {
@@ -327,7 +340,7 @@ fn call_any(
                 }
                 Ok((s, bytes)) => {
                     let v: Json = serde_json::from_slice(&bytes).unwrap_or_default();
-                    then(Err((s, v["error"].as_str().map_or(format!("The server said {s}."), str::to_string))))
+                    then(Err((s, crate::home::photos::said(&v, s))))
                 }
                 Err(e) => then(Err((0, e))),
             };
@@ -839,6 +852,7 @@ impl Home {
             None => egui::Button::new(label),
         };
         let r = ui.add(b.fill(Color32::WHITE).stroke(Stroke::new(1.0, theme::BOX)).corner_radius(16).min_size(vec2(88.0, 32.0)));
+        house::target(ui.ctx(), "Sort", r.rect);
         egui::Popup::menu(&r).show(|ui| {
             house::menu(ui, 240.0);
             let tick = |on: bool| Some(if on { "check" } else { "" });
@@ -1099,6 +1113,7 @@ impl Home {
 
     pub fn ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        crate::prefetch::tick(&ctx, self.loading, ui.input(|i| i.time));
         self.templates_ui(&ctx);
         let photo_mode = self.photo_folder().is_some();
         ui.painter().rect_filled(ui.max_rect(), 0, theme::page());

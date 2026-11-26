@@ -22,6 +22,7 @@ mod devices;
 mod docx_comments;
 mod findpath;
 mod guard;
+mod linkpreview;
 mod live;
 mod log;
 mod oidc;
@@ -464,6 +465,54 @@ async fn accounts(
                 Some(Err((code, why))) => error(code, &why),
                 None => error(500, "server error"),
             }
+        }
+        (["link-preview", "settings"], "GET" | "POST") => {
+            // Anyone signed in may read it (the card asks); only the owner changes it.
+            let posting = m == "POST";
+            if (on && me.is_none()) || (posting && on && me.as_ref().is_none_or(|u| !u.owner)) {
+                return Some(error(403, "Only the owner can do that."));
+            }
+            let want = json.get("on").and_then(Value::as_bool).unwrap_or(false);
+            let r =
+                blocking(app, move |app| if posting { auth::set_link_preview(&app.store, want) } else { Ok(auth::link_preview(&app.store)) }).await;
+            match r {
+                Some(Ok(on)) => send_json(&json!({ "on": on }), 200),
+                Some(Err(why)) => error(400, &why),
+                None => error(500, "server error"),
+            }
+        }
+        (["link-preview"] | ["link-preview", "image"], "GET") => {
+            if on && me.is_none() {
+                return Some(error(401, "Sign in first."));
+            }
+            let url = q.get("url").cloned().unwrap_or_default();
+            if url.len() > 2048 {
+                return Some(error(400, "That address is too long."));
+            }
+            let enabled = blocking(app, |app| auth::link_preview(&app.store)).await.unwrap_or(false);
+            if path.len() == 2 {
+                let kind = q.get("kind").cloned().unwrap_or_default();
+                let got = if enabled { tokio::task::spawn_blocking(move || linkpreview::image(&url, &kind)).await.ok().flatten() } else { None };
+                return Some(match got {
+                    Some(b) => Response::builder()
+                        .status(200)
+                        .header(header::CONTENT_TYPE, "image/png")
+                        .header(header::CACHE_CONTROL, "private, max-age=86400")
+                        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+                        .body(Body::from(b))
+                        .unwrap(),
+                    None => error(404, "no picture"),
+                });
+            }
+            if !enabled {
+                return Some(send_json(&json!({ "state": "off" }), 200));
+            }
+            let who = me.as_ref().map_or_else(|| ip_key("link-preview", ask.ip), |u| format!("link-preview:{}", u.username));
+            if !LIMITS.take(&who, guard::LINK_PREVIEW_USER) {
+                return Some(send_json(&json!({ "state": "busy" }), 200));
+            }
+            let v = tokio::task::spawn_blocking(move || linkpreview::preview(&url)).await.unwrap_or_else(|_| json!({ "state": "none" }));
+            send_json(&v, 200)
         }
         (["signup", "settings"], "GET" | "POST") => {
             if me.as_ref().is_none_or(|u| !u.owner) {
@@ -1860,23 +1909,82 @@ async fn serve_site(site: &Path, path: &str, query: Option<&str>, headers: &Head
         }
     }
     let name = full.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let kind =
-        if name.ends_with(".wasm") { "application/wasm".to_string() } else { mime_guess::from_path(&full).first_or_octet_stream().to_string() };
-    let gz = PathBuf::from(format!("{}.gz", full.display()));
-    let zipped = headers.get(header::ACCEPT_ENCODING).and_then(|v| v.to_str().ok()).is_some_and(|v| v.contains("gzip")) && gz.is_file();
-    let Ok(data) = tokio::fs::read(if zipped { &gz } else { &full }).await else {
+    let kind = match full.extension().and_then(|e| e.to_str()) {
+        Some("wasm") => "application/wasm".to_string(),
+        Some("ttf") => "font/ttf".to_string(),
+        Some("otf") => "font/otf".to_string(),
+        Some("woff2") => "font/woff2".to_string(),
+        _ => mime_guess::from_path(&full).first_or_octet_stream().to_string(),
+    };
+    // Pre-compressed copies sit next to the file (release workflow): brotli first, then gzip.
+    let accepted = accepted_encodings(headers);
+    let mut served = full.clone();
+    let mut encoding = None;
+    for (token, ext) in [("br", "br"), ("gzip", "gz")] {
+        let cand = PathBuf::from(format!("{}.{ext}", full.display()));
+        if accepted.iter().any(|a| a == token) && cand.is_file() {
+            served = cand;
+            encoding = Some(token);
+            break;
+        }
+    }
+    let Ok(file) = tokio::fs::File::open(&served).await else {
+        return error(404, "not found");
+    };
+    let Ok(meta) = file.metadata().await else {
         return error(404, "not found");
     };
     let mut b = Response::builder().status(200).header(header::CONTENT_TYPE, kind).header("X-Content-Type-Options", "nosniff");
-    if zipped {
-        b = b.header(header::CONTENT_ENCODING, "gzip").header(header::VARY, "Accept-Encoding");
+    b = b.header(header::VARY, "Accept-Encoding");
+    if let Some(e) = encoding {
+        b = b.header(header::CONTENT_ENCODING, e);
     }
     if name == "index.html" || name == "build.json" {
         b = b.header(header::CACHE_CONTROL, "no-cache");
     } else if is_hashed(&name) {
         b = b.header(header::CACHE_CONTROL, "public, max-age=31536000, immutable");
+    } else {
+        // Fonts and other files without a hash in the name: kept by the browser but checked
+        // on every use (ETag, a 304 costs a few bytes), so an update is never stale.
+        let mtime = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0);
+        let tag = format!("\"{:x}-{:x}-{}\"", meta.len(), mtime, encoding.unwrap_or("id"));
+        if headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()).is_some_and(|v| v.split(',').any(|t| t.trim() == tag)) {
+            return Response::builder()
+                .status(304)
+                .header(header::ETAG, tag)
+                .header(header::CACHE_CONTROL, "no-cache")
+                .header(header::VARY, "Accept-Encoding")
+                .body(Body::empty())
+                .unwrap();
+        }
+        b = b.header(header::ETAG, tag).header(header::CACHE_CONTROL, "no-cache");
     }
-    b.body(Body::from(data)).unwrap()
+    // Streamed from disk in 64 KiB pieces, never the whole file in memory.
+    let stream = futures_util::stream::unfold(file, |mut f| async move {
+        use tokio::io::AsyncReadExt;
+        let mut buf = vec![0u8; 64 * 1024];
+        match f.read(&mut buf).await {
+            Ok(0) | Err(_) => None,
+            Ok(n) => {
+                buf.truncate(n);
+                Some((Ok::<_, std::io::Error>(axum::body::Bytes::from(buf)), f))
+            }
+        }
+    });
+    b.header(header::CONTENT_LENGTH, meta.len()).body(Body::from_stream(stream)).unwrap()
+}
+
+/// The content codings a request accepts (`gzip, br;q=0.5`; a coding with q=0 is refused).
+fn accepted_encodings(headers: &HeaderMap) -> Vec<String> {
+    let v = headers.get(header::ACCEPT_ENCODING).and_then(|v| v.to_str().ok()).unwrap_or("");
+    v.split(',')
+        .filter_map(|part| {
+            let mut it = part.split(';');
+            let name = it.next()?.trim().to_ascii_lowercase();
+            let refused = it.any(|p| p.trim().strip_prefix("q=").is_some_and(|q| q.trim().parse::<f32>().is_ok_and(|q| q <= 0.0)));
+            (!name.is_empty() && !refused).then_some(name)
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------- requests
@@ -2896,6 +3004,33 @@ mod tests {
         assert_eq!(r.headers()[header::CONTENT_ENCODING], "gzip");
         assert!(r.headers()[header::CACHE_CONTROL].to_str().unwrap().contains("immutable"));
         assert_eq!(body(r).await, b"zipped");
+
+        // Brotli is preferred when offered and present; gzip-only clients still get gzip.
+        std::fs::write(site.join("docs/app-0123456789abcdef_bg.wasm.br"), b"brotlied").unwrap();
+        let r = serve_site(&site, "/docs/app-0123456789abcdef_bg.wasm", None, &gzip).await;
+        assert_eq!(r.headers()[header::CONTENT_ENCODING], "br");
+        assert_eq!(r.headers()[header::VARY], "Accept-Encoding");
+        assert_eq!(r.headers()[header::CONTENT_LENGTH], "8");
+        assert_eq!(body(r).await, b"brotlied");
+        let mut only_gzip = HeaderMap::new();
+        only_gzip.insert(header::ACCEPT_ENCODING, "gzip, br;q=0".parse().unwrap());
+        let r = serve_site(&site, "/docs/app-0123456789abcdef_bg.wasm", None, &only_gzip).await;
+        assert_eq!(r.headers()[header::CONTENT_ENCODING], "gzip");
+        let r = serve_site(&site, "/docs/app-0123456789abcdef_bg.wasm", None, &none).await;
+        assert!(r.headers().get(header::CONTENT_ENCODING).is_none());
+        assert_eq!(body(r).await, b"\0asm");
+
+        // Fonts: right type, compressed when offered, revalidated by ETag (no hash in the name).
+        std::fs::write(site.join("Font-Regular.ttf"), b"ttfdata").unwrap();
+        std::fs::write(site.join("Font-Regular.ttf.br"), b"ttfbr").unwrap();
+        let r = serve_site(&site, "/Font-Regular.ttf", None, &gzip).await;
+        assert_eq!(r.headers()[header::CONTENT_TYPE], "font/ttf");
+        assert_eq!(r.headers()[header::CONTENT_ENCODING], "br");
+        let tag = r.headers()[header::ETAG].to_str().unwrap().to_string();
+        assert_eq!(r.headers()[header::CACHE_CONTROL], "no-cache");
+        let mut again = gzip.clone();
+        again.insert(header::IF_NONE_MATCH, tag.parse().unwrap());
+        assert_eq!(serve_site(&site, "/Font-Regular.ttf", None, &again).await.status(), 304);
         let _ = std::fs::remove_dir_all(&site);
     }
 

@@ -59,7 +59,7 @@ fn call(
             Ok((s, _, bytes)) if s < 400 => then(serde_json::from_slice(&bytes).unwrap_or_default()),
             Ok((s, _, bytes)) => {
                 let v: Json = serde_json::from_slice(&bytes).unwrap_or_default();
-                Reply::Error(v["error"].as_str().map_or(format!("The server said {s}."), str::to_string))
+                Reply::Error(crate::home::said(&v, s))
             }
             Err(e) => Reply::Error(e),
         };

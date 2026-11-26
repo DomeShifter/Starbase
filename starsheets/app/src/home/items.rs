@@ -160,6 +160,7 @@ impl Home {
                 ui.label(RichText::new(empty).size(house::BODY).color(theme::TEXT_DIM));
             }
             let order = self.shown(&folders, &files);
+            self.card_sub = files.iter().any(|f| !self.card_sub_text(f).is_empty());
             if (self.list || self.view == Some(View::Storage)) && !order.is_empty() {
                 self.list_ui(ui, &order, &mut clicked_item);
             } else if self.mixed && !matches!(self.view, Some(View::Recent | View::Storage)) {
@@ -310,7 +311,7 @@ impl Home {
 
     pub(super) fn folder_chip(&mut self, ui: &mut Ui, f: &FolderRow, clicked_item: &mut bool) {
         let item = Item::Folder(f.path.clone());
-        let (cw, _, _) = self.vo.card();
+        let (cw, _, _) = self.vo.card_with(self.vo.dates || self.card_sub);
         let (r, resp) = ui.allocate_exact_size(vec2(cw, CHIP_H), Sense::click_and_drag());
         let sel = self.selected.contains(&item);
         let p = ui.painter().clone();
@@ -353,7 +354,7 @@ impl Home {
     /// A folder the size of a file card (when folders are mixed in with files).
     pub(super) fn folder_card(&mut self, ui: &mut Ui, f: &FolderRow, clicked_item: &mut bool) {
         let item = Item::Folder(f.path.clone());
-        let (cw, ch, ph) = self.vo.card();
+        let (cw, ch, ph) = self.vo.card_with(self.vo.dates || self.card_sub);
         let (r, resp) = ui.allocate_exact_size(vec2(cw, ch), Sense::click_and_drag());
         let sel = self.selected.contains(&item);
         let p = ui.painter().clone();
@@ -378,8 +379,10 @@ impl Home {
             p.galley(egui::pos2(line.left() + 28.0, line.top() + 6.0), name, theme::TEXT);
         }
         let (newest, _) = self.folder_stats(&f.path);
-        let sub = if newest > 0 && self.vo.dates { format!("Folder · {}", ago(newest)) } else { "Folder".into() };
-        p.text(egui::pos2(line.left() + 28.0, line.top() + 36.0), Align2::LEFT_CENTER, sub, FontId::proportional(12.0), theme::TEXT_DIM);
+        if self.vo.dates {
+            let sub = if newest > 0 { format!("Folder · {}", ago(newest)) } else { "Folder".into() };
+            p.text(egui::pos2(line.left() + 28.0, line.top() + 36.0), Align2::LEFT_CENTER, sub, FontId::proportional(12.0), theme::TEXT_DIM);
+        }
         let resp = resp.on_hover_text(self.folder_label(&f.path));
         self.interact(ui, &item, &resp, clicked_item);
     }
@@ -387,7 +390,7 @@ impl Home {
     pub(super) fn file_card(&mut self, ui: &mut Ui, ctx: &egui::Context, f: &FileRow, clicked_item: &mut bool) {
         let item = Item::File(f.id.clone());
         let kind = kind_icon(&f.name);
-        let (cw, ch, ph) = self.vo.card();
+        let (cw, ch, ph) = self.vo.card_with(self.vo.dates || self.card_sub);
         let (r, resp) = ui.allocate_exact_size(vec2(cw, ch), Sense::click_and_drag());
         if ui.is_rect_visible(r) {
             self.want_thumb(ctx, f);
@@ -439,22 +442,34 @@ impl Home {
         {
             img.paint_at(ui, Rect::from_center_size(egui::pos2(line.right() - 10.0, line.top() + 16.0), vec2(16.0, 16.0)));
         }
-        let sub = match (&self.view, f.opened) {
+        let sub = self.card_sub_text(f);
+        let has_sub = !sub.is_empty();
+        if has_sub {
+            // Cut to the card's width: a long snippet must not run past the card.
+            let g = one_line(&p, sub, 12.0, theme::TEXT_DIM, line.width() - 52.0);
+            p.galley(egui::pos2(line.left() + 28.0, line.top() + 36.0 - g.size().y / 2.0), g, theme::TEXT_DIM);
+        }
+        if f.shared
+            && let Some(img) = crate::icons::icon("group")
+        {
+            // Without a second line the shared mark sits on the name line, left of the star.
+            let (x, y) = if has_sub { (line.right() - 10.0, line.top() + 36.0) } else { (line.right() - 30.0, line.top() + 16.0) };
+            img.paint_at(ui, Rect::from_center_size(egui::pos2(x, y), vec2(14.0, 14.0)));
+        }
+        let resp = resp.on_hover_text(&f.name);
+        self.interact(ui, &item, &resp, clicked_item);
+    }
+
+    /// A file card's second line: the date line (when shown), a search snippet, or the owner's name; empty when none applies.
+    pub(super) fn card_sub_text(&self, f: &FileRow) -> String {
+        match (&self.view, f.opened) {
             (Some(View::Recent), Some(t)) if self.vo.dates => format!("You opened {}", ago(t)),
             _ if self.found_snippet(&f.id).is_some() => self.found_snippet(&f.id).unwrap_or_default().to_string(),
             _ if self.accounts && f.owner != self.space && !self.vo.dates => self.person(&f.owner),
             _ if self.accounts && f.owner != self.space => format!("{} · {}", self.person(&f.owner), ago(f.modified)),
             _ if !self.vo.dates => String::new(),
             _ => format!("Modified {}", ago(f.modified)),
-        };
-        p.text(egui::pos2(line.left() + 28.0, line.top() + 36.0), Align2::LEFT_CENTER, sub, FontId::proportional(12.0), theme::TEXT_DIM);
-        if f.shared
-            && let Some(img) = crate::icons::icon("group")
-        {
-            img.paint_at(ui, Rect::from_center_size(egui::pos2(line.right() - 10.0, line.top() + 36.0), vec2(14.0, 14.0)));
         }
-        let resp = resp.on_hover_text(&f.name);
-        self.interact(ui, &item, &resp, clicked_item);
     }
 
     /// The words around the match inside this file, while a search that found text in it is shown.

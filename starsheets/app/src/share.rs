@@ -122,7 +122,7 @@ fn call(
         let reply = match fetch(method, &url, body.map(|b| serde_json::to_vec(&b).unwrap_or_default()), None).await {
             Ok((s, _, bytes)) => {
                 let v: Json = serde_json::from_slice(&bytes).unwrap_or_default();
-                if s < 400 { then(v) } else { Reply::Error(v["error"].as_str().map_or(format!("The server said {s}."), str::to_string)) }
+                if s < 400 { then(v) } else { Reply::Error(crate::home::said(&v, s)) }
             }
             Err(e) => Reply::Error(e),
         };
