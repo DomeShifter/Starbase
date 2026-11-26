@@ -241,6 +241,8 @@ async fn change(app: &Shared, me: Option<auth::User>, id: String, act: String, b
         let at = all.iter().position(|al| al["id"] == id.as_str()).ok_or_else(|| error(404, "no such album"))?;
         let ids: Vec<String> = b["files"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
         let mut added = 0;
+        // The ids this call really changed (an undo must undo only those).
+        let mut changed: Vec<String> = Vec::new();
         match act.as_str() {
             "delete" => {
                 all.remove(at);
@@ -253,6 +255,7 @@ async fn change(app: &Shared, me: Option<auth::User>, id: String, act: String, b
                     // Only pictures I may see (no hint about files I may not).
                     if seen(a, &acc, f).is_some() && files.len() < MAX_FILES && !files[files.len().saturating_sub(added)..].contains(f) {
                         files.push(f.clone());
+                        changed.push(f.clone());
                         added += 1;
                     }
                 }
@@ -260,6 +263,8 @@ async fn change(app: &Shared, me: Option<auth::User>, id: String, act: String, b
             }
             _ => {
                 let gone: HashSet<&String> = ids.iter().collect();
+                let have = files_of(&all[at]);
+                changed = have.iter().filter(|f| gone.contains(f)).cloned().collect();
                 let files: Vec<String> = files_of(&all[at]).into_iter().filter(|f| !gone.contains(f)).collect();
                 all[at]["files"] = json!(files);
             }
@@ -268,7 +273,7 @@ async fn change(app: &Shared, me: Option<auth::User>, id: String, act: String, b
             json!({"deleted": true})
         } else {
             // `added`: how many were new (pictures already in the album aren't added twice).
-            json!({"id": all[at]["id"], "name": all[at]["name"], "count": files_of(&all[at]).len(), "added": added})
+            json!({"id": all[at]["id"], "name": all[at]["name"], "count": files_of(&all[at]).len(), "added": added, "ids": changed})
         };
         save(a, &me, all)?;
         Ok(out)

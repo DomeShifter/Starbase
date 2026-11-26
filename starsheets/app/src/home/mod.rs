@@ -23,14 +23,17 @@ use crate::theme;
 
 mod actions;
 mod bin;
+mod filepreview;
 mod filters;
 mod input;
 mod items;
 mod photo_edit;
 mod photos;
 mod sidebar;
+mod templates;
 #[cfg(target_arch = "wasm32")]
 mod test;
+pub(crate) mod textpreview;
 mod undo;
 mod viewer;
 
@@ -196,6 +199,12 @@ pub struct Home {
     fetching: usize,
     /// "View as photos" (photos.rs, viewer.rs).
     photos: photos::PhotoMode,
+    /// The file preview over the Drive (filepreview.rs), when open.
+    file_preview: Option<filepreview::FilePreview>,
+    /// Where each file was last drawn (id → screen rect), for the test hook's real clicks.
+    tile_rects: HashMap<String, egui::Rect>,
+    /// The rows of the last right-click menu drawn (label, screen rect), for the test hook's real clicks.
+    menu_rects: Vec<(String, egui::Rect)>,
     /// What Ctrl+Z undoes, and the "Moved to … Undo" note (undo.rs).
     undo: undo::Undo,
     error: Option<String>,
@@ -452,17 +461,51 @@ impl Home {
         format!("api/files/{id}/preview")
     }
 
-    /// Opens file `id`'s preview in a new tab (a desktop app connected to a server downloads it).
-    fn preview(&mut self, ctx: &egui::Context, id: &str, name: &str) {
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = (ctx, name);
-            if let Some(w) = web_sys::window() {
-                let _ = w.open_with_url_and_target(&Self::preview_url(id), "_blank");
+    /// The files the preview's arrows go through: those of the view shown that don't open in an
+    /// editor, in the order shown.
+    fn previewable(&self) -> Vec<String> {
+        self.contents().1.into_iter().filter(|f| items::opens_as(&f.name) != items::Opens::Editor).map(|f| f.id).collect()
+    }
+
+    /// Opens Drive's preview of file `id` over the file list (filepreview.rs).
+    fn preview(&mut self, ctx: &egui::Context, id: &str) {
+        let Some(f) = self.file(id) else { return };
+        let (name, size, modified, owner) = (f.name.clone(), f.size, f.modified, f.owner.clone());
+        let owner = self.person(&owner);
+        let list = self.previewable();
+        let at = (list.iter().position(|x| x == id).unwrap_or(0), list.len().max(1));
+        self.file_preview = Some(filepreview::FilePreview::open(ctx, &self.store, id, &name, size, modified, owner, at));
+    }
+
+    /// One frame of the preview, if open; whether it was (it takes the keys then).
+    fn file_preview_ui(&mut self, ctx: &egui::Context) -> bool {
+        let Some(p) = self.file_preview.as_mut() else { return false };
+        match p.ui(ctx) {
+            Some(filepreview::Act::Close) => self.file_preview = None,
+            Some(filepreview::Act::Step(by)) => {
+                let (cur, info) = (p.id.clone(), p.info);
+                let list = self.previewable();
+                if !list.is_empty() {
+                    let at = list.iter().position(|x| *x == cur).map_or(0, |i| i as i64);
+                    let next = list[(at + i64::from(by)).rem_euclid(list.len() as i64) as usize].clone();
+                    self.preview(ctx, &next);
+                    if let Some(p) = self.file_preview.as_mut() {
+                        p.info = info;
+                    }
+                }
             }
+            Some(filepreview::Act::Download(id, name)) => self.download(ctx, &id, &name),
+            Some(filepreview::Act::NewTab(id)) => {
+                #[cfg(target_arch = "wasm32")]
+                if let Some(w) = web_sys::window() {
+                    let _ = w.open_with_url_and_target(&Self::preview_url(&id), "_blank");
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                let _ = id;
+            }
+            None => {}
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        self.download(ctx, id, name);
+        true
     }
 
     /// Downloads file `id`. In the browser the server sends it as an attachment (streamed, so a
@@ -774,6 +817,10 @@ impl Home {
                 self.mixed = b[2] == b'1';
             }
             self.open_dir = self.store.start_dir();
+            if self.store.start_templates() {
+                let folder = self.open_dir.clone().unwrap_or_else(|| self.space.clone());
+                templates::open(ctx, &folder);
+            }
             self.photos.boot(&self.store);
             self.refresh(ctx);
         }
@@ -911,6 +958,7 @@ impl Home {
 
     pub fn ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        self.templates_ui(&ctx);
         ui.painter().rect_filled(ui.max_rect(), 0, theme::PAGE);
         egui::Panel::top("home_top")
             .show_separator_line(false)
@@ -938,7 +986,7 @@ impl Home {
         self.note_ui(&ctx);
         // The photo viewer covers everything and takes the keys while it's open.
         let dialog = self.photos.pick_busy();
-        if !viewer::ui(&mut self.photos, &ctx, &self.store) && !dialog {
+        if !viewer::ui(&mut self.photos, &ctx, &self.store) && !dialog && !self.file_preview_ui(&ctx) {
             self.keys(&ctx);
         }
         // Photos' Add to album, Add photos and its note: over the grid and the viewer.

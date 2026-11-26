@@ -547,6 +547,13 @@ impl crate::shell::Drive for Link {
         go_home(&folder);
     }
 
+    fn templates(&self) {
+        let folder = self.state.borrow().folder.clone();
+        if let Some(w) = web_sys::window() {
+            let _ = w.open_with_url_and_target(&format!("../?templates=1&dir={}", enc(&folder)), "_blank");
+        }
+    }
+
     fn new_presentation(&self) {
         let folder = self.state.borrow().folder.clone();
         if let Some(w) = web_sys::window() {

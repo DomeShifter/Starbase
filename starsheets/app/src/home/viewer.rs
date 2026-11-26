@@ -184,8 +184,36 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
     let mut menu_at: Option<Rect> = None;
     // An album clicked in the Info panel: opened once the viewer is closed.
     let mut goto: Option<super::photos::albums::Card> = None;
+    // What the person asked for on this picture (keys or buttons): L add to album, Shift-L out of
+    // the open album, F favourite, Delete move to bin. Run after drawing, on the picture shown.
+    let mut acts: Vec<super::photos::Act> = Vec::new();
+    // Not while an album picker or a text box has the keys (typing "l" in its search box).
+    let typing = pm.pick_busy() || ctx.memory(|m| m.focused().is_some());
     // Keys first, so nothing behind the viewer gets them.
+    if !typing {
+        ctx.input_mut(|i| {
+            use super::photos::Act;
+            if i.consume_key(Modifiers::SHIFT, Key::L) {
+                acts.push(Act::Remove);
+            }
+            if i.consume_key(Modifiers::NONE, Key::L) {
+                acts.push(Act::AddTo);
+            }
+            if i.consume_key(Modifiers::NONE, Key::F) {
+                acts.push(Act::Favourite);
+            }
+            if i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::SHIFT, Key::Delete) {
+                acts.push(Act::Delete);
+            }
+            if i.consume_key(Modifiers::COMMAND, Key::Z) {
+                pm.out.push(super::photos::Out::Undo);
+            }
+        });
+    }
     ctx.input_mut(|i| {
+        if typing {
+            return;
+        }
         if i.consume_key(Modifiers::NONE, Key::Escape) {
             open = v.escape();
         }
@@ -332,6 +360,19 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
             ui.label(RichText::new(format!("{date} · {} of {}", v.pos + 1, n)).size(12.0).color(Color32::from_gray(200)));
         });
         bar_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if button(ui, "white_delete", "Move to bin (Delete)") {
+                acts.push(super::photos::Act::Delete);
+            }
+            if pm.open_album().is_some() && button(ui, "white_remove", "Remove from this album (Shift-L)") {
+                acts.push(super::photos::Act::Remove);
+            }
+            if button(ui, "white_photo_library", "Add to album (L)") {
+                acts.push(super::photos::Act::AddTo);
+            }
+            let starred = pm.pics.get(v.index()).is_some_and(|p| p.starred);
+            if toggle(ui, if starred { "white_star_fill" } else { "white_star" }, "Favourite (F)", starred) {
+                acts.push(super::photos::Act::Favourite);
+            }
             if button(ui, "white_download", "Download") {
                 download(&id);
                 crate::house::toast(ctx, "Downloading the original");
@@ -441,6 +482,13 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
         }
     });
     crate::house::show_toast(ctx);
+    if open && let Some(id) = pm.pics.get(v.index()).map(|p| p.id.clone()) {
+        for act in acts {
+            pm.act(ctx, store, act, vec![id.clone()], None);
+        }
+        // A picture binned or taken out of the album: the next one takes its place.
+        v.fit_list(pm.pics.len());
+    }
     if open {
         pm.viewer = Some(v);
         if edit {

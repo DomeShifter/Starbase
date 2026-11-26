@@ -121,7 +121,12 @@ impl Home {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             let a_folder = matches!(self.view, Some(View::Mine(_) | View::Everyone(_) | View::Shared(Some(_))));
             if folders.is_empty() && files.is_empty() && a_folder && !self.loading && self.search.trim().is_empty() {
-                empty_folder(ui, self.here().is_some());
+                let here = self.here();
+                if empty_folder(ui, here.is_some())
+                    && let Some(folder) = here
+                {
+                    super::templates::open(ui.ctx(), &folder);
+                }
             } else if folders.is_empty() && files.is_empty() {
                 let empty = if self.loading {
                     "Loading…"
@@ -261,6 +266,9 @@ impl Home {
     pub(super) fn interact(&mut self, ui: &mut Ui, item: &Item, resp: &egui::Response, clicked_item: &mut bool) {
         if resp.clicked() || resp.secondary_clicked() || resp.double_clicked() {
             *clicked_item = true;
+        }
+        if let Item::File(id) = item {
+            self.tile_rects.insert(id.clone(), resp.rect);
         }
         let order = self.order();
         self.select_click(ui, item, resp, &order);
@@ -603,8 +611,8 @@ impl Home {
             }
             // Files always open in a new tab, as from Google Drive, so the file browser stays
             // where it was (to-do 2 row 5; the separate "Open in new tab" entry went with it).
-            // Other files: a preview in a new tab (pictures, PDFs, sound, films, text), else a
-            // download.
+            // Other files: Drive's preview over the list (pictures, PDFs, sound, films, text; else
+            // "No preview available" with Download).
             Item::File(id) => {
                 let name = self.file(id).map(|f| f.name.clone()).unwrap_or_default();
                 // This computer's own files open where they belong: Sheets, Docs, else the
@@ -616,8 +624,8 @@ impl Home {
                             self.error = Some(e);
                         }
                     }
-                    Opens::Preview => self.preview(ctx, id, &name),
-                    Opens::Download => self.download(ctx, id, &name),
+                    // Anything else: Drive's preview ("No preview available" for unknown types).
+                    Opens::Preview | Opens::Download => self.preview(ctx, id),
                 }
             }
         }
@@ -676,7 +684,7 @@ pub(super) fn kind_icon(name: &str) -> &'static str {
 pub(super) enum Opens {
     /// Starbase Sheets or Docs.
     Editor,
-    /// The server's preview page, in a new tab.
+    /// Drive's preview over the file list (filepreview.rs).
     Preview,
     Download,
 }
@@ -716,7 +724,8 @@ fn one_line(p: &egui::Painter, text: String, size: f32, colour: Color32, width: 
 
 /// An empty folder, as in Google Drive: a round picture, "Drop files here" and how else to add
 /// something; for a folder you can only view, just that it is empty.
-fn empty_folder(ui: &mut Ui, can_add: bool) {
+/// The empty folder's picture and words; `true` when "Start from a template" was clicked.
+fn empty_folder(ui: &mut Ui, can_add: bool) -> bool {
     ui.vertical_centered(|ui| {
         ui.add_space(64.0);
         let (r, _) = ui.allocate_exact_size(vec2(120.0, 120.0), Sense::hover());
@@ -733,7 +742,14 @@ fn empty_folder(ui: &mut Ui, can_add: bool) {
         ui.label(RichText::new(head).size(house::TITLE).color(theme::TEXT));
         ui.add_space(house::XS);
         ui.label(RichText::new(sub).size(house::BODY).color(theme::TEXT_DIM));
-    });
+        can_add && {
+            ui.add_space(house::S);
+            let r = ui.add(house::link("Start from a template"));
+            house::target(ui.ctx(), "Start from a template", r.rect);
+            r.clicked()
+        }
+    })
+    .inner
 }
 
 #[cfg(test)]
