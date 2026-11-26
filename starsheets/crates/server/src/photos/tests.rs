@@ -634,6 +634,18 @@ mod http {
         assert_eq!(get(&app, "/api/photos?folder=ann/Private", Some("bob"), &[]).await.status, 403);
         assert_eq!(ask(&app, "POST", "/api/photos/disable?folder=ann/Trip", Some("bob"), &[]).await.status, 403);
 
+        // Everything (all=1): the pictures I may see wherever they are, read ones only; never
+        // another person's (Bob sees what is shared with him (Trip and the folder inside), not Private).
+        let names_of = |g: &Got| -> Vec<String> { g.json["photos"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap().to_string()).collect() };
+        let g = get(&app, "/api/photos?all=1&sort=name", Some("bob"), &[]).await;
+        assert_eq!((g.status, names_of(&g)), (200, ["a.jpg", "b.jpg", "c.png"].map(String::from).to_vec()), "{}", g.json);
+        assert_eq!((g.json["all"].as_bool(), g.json["can_enable"].as_bool()), (Some(true), Some(false)));
+        let g = get(&app, "/api/photos?all=1&sort=name&desc=1", Some("ann"), &[]).await;
+        let n = names_of(&g);
+        assert!(n.contains(&"a.jpg".to_string()) && !n.contains(&"secret.jpg".to_string()), "Photos is off for Private: {}", g.json);
+        assert_eq!(n.first().map(String::as_str), n.iter().max().map(String::as_str), "descending by name");
+        assert_eq!(get(&app, "/api/photos?all=1", None, &[]).await.status, 401, "signed in only");
+
         // Status: the server's owner only.
         let g = get(&app, "/api/photos/status", Some("boss"), &[]).await;
         assert_eq!(g.status, 200);
