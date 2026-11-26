@@ -1,4 +1,4 @@
-//! SPIKE A: what working out steps costs per keystroke in a 100-page document (printed with
+//! What working out steps costs per keystroke in a 100-page document (printed with
 //! `--nocapture`; the assertion is only a loose guard). Run with `--release` for real numbers.
 
 use std::sync::Arc;
