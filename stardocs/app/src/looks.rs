@@ -198,6 +198,35 @@ mod tests {
         assert!(card.left() >= page.right(), "the card {card:?} is beside the page {page:?}, not over it");
     }
 
+    /// A comment made on selected text: the selection keeps its text, and what is typed into
+    /// the new comment stays in the comment and out of the page (T1: after the first letter the
+    /// page took the keyboard, so the rest replaced the selected text).
+    #[test]
+    fn typing_in_a_new_comment_leaves_the_page_and_the_selection_alone() {
+        use wordcraft_doc::StoryRef;
+        let mut h = window();
+        let body = h.state().session.doc.plain_text(StoryRef::Body);
+        let mut sel = h.state().session.sel.clone();
+        sel.anchor.off = 4;
+        sel.focus.off = 8;
+        h.state_mut().session.sel = sel.clone();
+        let selected = h.state().session.selected_text();
+        assert!(!selected.is_empty());
+        h.state_mut().run("review.newComment", json!({"text": ""})).unwrap();
+        // As a click on the toolbar button does: the page asks for the keyboard back.
+        h.state_mut().canvas.want_focus = true;
+        h.run_steps(5);
+        let after = h.state().session.sel.clone();
+        assert_eq!(h.state().session.selected_text(), selected, "the selection keeps its text: {sel:?} became {after:?}");
+        for letter in ["a", "b", "c", "d"] {
+            h.event(egui::Event::Text(letter.into()));
+            h.run_steps(3);
+        }
+        assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), body, "nothing typed reached the page");
+        let part = h.state().session.doc.comments.values().next().expect("the comment is still there").part;
+        assert_eq!(h.state().session.doc.plain_text(StoryRef::Part(part)), "abcd");
+    }
+
     /// The Comments pane under our look: our header, the empty message, and a card with
     /// Comment / Cancel for a new comment; Cancel removes it.
     #[test]
