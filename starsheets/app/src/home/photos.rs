@@ -291,10 +291,19 @@ pub(super) fn date_label(taken: Option<&str>, modified: i64) -> String {
     super::ago(modified)
 }
 
+/// The setting that remembers the Locked folder note was dismissed ("1").
+pub const LOCKED_HINT_KEY: &str = "starsheets_home_photos_hint_locked";
+/// The one-time note shown above the pictures in Photo Mode.
+pub const LOCKED_HINT: &str = "Hide private pictures: right-click a picture and choose Move to Locked folder. Find them under Locked on the left.";
+
 pub(super) struct PhotoMode {
     /// The switch: show folders as photos.
     pub on: bool,
     booted: bool,
+    /// The one-time "how to hide pictures" note: Got it was pressed (a setting, kept).
+    hint_dismissed: bool,
+    /// The note was drawn this frame (for the test hook).
+    hint_shown: bool,
     /// The folder listed, and whether with its subfolders.
     pub folder: Option<String>,
     pub sub: bool,
@@ -346,6 +355,8 @@ impl Default for PhotoMode {
         PhotoMode {
             on: false,
             booted: false,
+            hint_dismissed: false,
+            hint_shown: false,
             folder: None,
             sub: false,
             newest_first: true,
@@ -386,7 +397,44 @@ impl PhotoMode {
             self.booted = true;
             self.on = store.setting("starsheets_home_photos") == Some("1".into());
             self.newest_first = store.setting("starsheets_home_photos_order") != Some("old".into());
+            self.hint_dismissed = store.setting(LOCKED_HINT_KEY).as_deref() == Some("1");
         }
+    }
+
+    /// "Got it" on the Locked folder note: never shown again for this person.
+    pub fn dismiss_locked_hint(&mut self, store: &Backend) {
+        self.hint_dismissed = true;
+        store.set_setting(LOCKED_HINT_KEY, "1");
+    }
+
+    /// Drive's "Locked" entry: Photo Mode on, at the Locked tab (which asks for the password).
+    pub(in crate::home) fn open_locked(&mut self, store: &Backend) {
+        self.boot(store);
+        self.set_on(store, true);
+        self.go(albums::Tab::Locked);
+    }
+
+    /// The one-time note above the grid on how to hide pictures and where to find them.
+    fn locked_hint_ui(&mut self, ui: &mut Ui, store: &Backend) {
+        if self.hint_dismissed {
+            return;
+        }
+        self.hint_shown = true;
+        ui.add_space(house::S);
+        let card = house::card_frame().show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                if let Some(img) = crate::icons::icon("lock") {
+                    ui.add(img.fit_to_exact_size(vec2(18.0, 18.0)));
+                }
+                ui.label(RichText::new(LOCKED_HINT).size(house::BODY).color(theme::text()));
+                let ok = ui.add(house::link("Got it"));
+                crate::house::target(ui.ctx(), "photos:hint-locked:ok", ok.rect);
+                if ok.clicked() {
+                    self.dismiss_locked_hint(store);
+                }
+            });
+        });
+        crate::house::target(ui.ctx(), "photos:hint-locked", card.response.rect);
     }
 
     pub fn set_on(&mut self, store: &Backend, on: bool) {
@@ -752,6 +800,7 @@ impl PhotoMode {
     /// Left nav (Photos, Albums, Places) and what it shows.
     pub fn ui(&mut self, ui: &mut Ui, store: &Backend, folder: &str) {
         let ctx = ui.ctx().clone();
+        self.hint_shown = false;
         self.alb.boot_cards(&ctx, store, &self.inbox);
         // On a phone the nav is a wrapped row above the pictures, not a column beside them.
         if ui.available_width() < 560.0 {
@@ -803,6 +852,7 @@ impl PhotoMode {
         }
         if self.alb.selected.is_empty() {
             self.bar_ui(ui, store, folder);
+            self.locked_hint_ui(ui, store);
         } else {
             self.sel_bar_ui(ui, store);
         }
@@ -1089,6 +1139,7 @@ impl PhotoMode {
             "dups": self.dups.test_state(),
             "pick": self.pick.test_state(),
             "locked": self.locked_state(),
+            "lockedHint": { "shown": self.hint_shown, "dismissed": self.hint_dismissed },
             "upload": self.up.test_state(),
             "textures": { "count": self.tex.len(), "bytes": self.tex.total, "budget": self.tex.budget, "asking": self.asking.len() },
             "items": self.pics.iter().take(60).map(|p| json!({
@@ -1186,6 +1237,58 @@ pub(super) async fn decode_web(bytes: Vec<u8>, max: u32) -> Option<egui::ColorIm
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Remembers settings like a browser's local storage; nothing else.
+    #[derive(Default)]
+    struct Settings(std::cell::RefCell<HashMap<String, String>>);
+
+    impl crate::store::Store for Settings {
+        fn call(&self, _: &egui::Context, _: crate::store::Method, _: &str, _: Option<Vec<u8>>, _: crate::store::Done) {}
+        fn open(&self, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn new_file(&self, _: &str, _: bool) -> Result<(), String> {
+            Ok(())
+        }
+        fn pick_files(&self, _: Box<dyn Fn(String, Vec<u8>)>) {}
+        fn download(&self, _: &str, _: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn setting(&self, key: &str) -> Option<String> {
+            self.0.borrow().get(key).cloned()
+        }
+        fn set_setting(&self, key: &str, value: &str) {
+            self.0.borrow_mut().insert(key.into(), value.into());
+        }
+        fn has_photos(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn locked_hint_shows_until_got_it_then_never_again() {
+        let store = Backend(std::rc::Rc::new(Settings::default()));
+        let mut p = PhotoMode::default();
+        p.boot(&store);
+        assert!(!p.hint_dismissed, "new person: the note shows");
+        p.dismiss_locked_hint(&store);
+        assert!(p.hint_dismissed);
+        assert_eq!(store.setting(LOCKED_HINT_KEY).as_deref(), Some("1"), "kept as a setting");
+        let mut again = PhotoMode::default();
+        again.boot(&store);
+        assert!(again.hint_dismissed, "next visit: not shown again");
+    }
+
+    #[test]
+    fn drive_locked_entry_turns_photo_mode_on_at_locked() {
+        let store = Backend(std::rc::Rc::new(Settings::default()));
+        let mut p = PhotoMode::default();
+        assert!(!p.on);
+        p.open_locked(&store);
+        assert!(p.on, "Photo Mode on");
+        assert_eq!(store.setting("starsheets_home_photos").as_deref(), Some("1"), "and remembered");
+        assert!(p.alb.tab == albums::Tab::Locked, "at the Locked tab (asks for the password)");
+    }
 
     #[test]
     fn video_lengths_read_like_a_player() {
