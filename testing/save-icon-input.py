@@ -27,7 +27,7 @@ def run(testn, apps):
                     seen, shot = [], False
                     end = time.time() + 60
                     while time.time() < end:
-                        k = s.snapshot("saveIcon")
+                        k = s.snapshot("saveIcon" if app == "sheets" else "shell.saveIcon")  # Docs: shell state is nested
                         if k and (not seen or seen[-1] != k): seen.append(k)
                         if k in ("unsaved", "saving") and not shot: s.shot(f"{tag}-floppy"); shot = True
                         if k == "saved" and len(seen) > 1: break
@@ -38,7 +38,7 @@ def run(testn, apps):
                     s.shot(f"{tag}-card")
                     s.click_xy(x, y, settle=3)
                     st = s.snapshot()
-                    hist = bool(st.get("history")) if app == "sheets" else "true" in str(st).lower().split("versionhistory")[-1][:12]
+                    hist = bool(st.get("history")) if app == "sheets" else ((st.get("shell") or {}).get("versionHistory") is True or "true" in str(st).lower().split("versionhistory")[-1][:12])
                     ok = ok_states and card and hist
                     print(f"{'PASS' if ok else 'FAIL'} [{tag}] states={seen} card={card} history={hist}", flush=True)
                     fails += not ok
