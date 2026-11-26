@@ -91,11 +91,18 @@ pub fn update(store: &Store, id: &str, body: &Value) -> Result<(), String> {
         Some(pw) => entry["password"] = json!(auth::hash_new(pw)?),
         None => {}
     }
+    if p.get("password").is_some() {
+        entry["grants"] = Value::Null; // a new or removed password ends everyone's unlock
+    }
     all.insert(token, entry);
     store.save_json(&path(store), &Value::Object(all)).map_err(|e| e.to_string())
 }
 
 pub struct Reply {
+    /// The password page needs its form to work: the page's CSP then allows forms.
+    pub form: bool,
+    pub set_cookie: Option<String>,
+    pub location: Option<String>,
     pub code: u16,
     pub content_type: &'static str,
     pub disposition: Option<String>,
@@ -110,7 +117,68 @@ fn page(code: u16, title: &str, inner: &str) -> Reply {
          iframe,img{{max-width:100%}}iframe{{width:100%;height:70vh;border:1px solid #ddd}}</style><h1>{t}</h1>{inner}",
         t = preview::esc(title)
     );
-    Reply { code, content_type: "text/html; charset=utf-8", disposition: None, body: html.into_bytes() }
+    Reply {
+        form: false,
+        set_cookie: None,
+        location: None,
+        code,
+        content_type: "text/html; charset=utf-8",
+        disposition: None,
+        body: html.into_bytes(),
+    }
+}
+
+/// How long a typed password keeps a link open in that browser.
+const UNLOCK_SECS: f64 = 3600.0;
+
+fn cookie_name(token: &str) -> String {
+    format!("pl_{token}")
+}
+
+fn password_page(token: &str, wrong: bool) -> Reply {
+    let note = if wrong { "<p>That password isn't right.</p>" } else { "" };
+    let mut r = page(
+        if wrong { 401 } else { 200 },
+        "Password needed",
+        &format!("{note}<form method=post action=\"/api/public/{token}\"><input type=password name=pw autofocus> <button>Open</button></form>"),
+    );
+    r.form = true;
+    r
+}
+
+/// A password typed on the link's page (POST): right -> a short-lived cookie for this link's path
+/// only and back to the link; wrong -> the page again. The password never sits in an address.
+pub fn unlock(store: &Store, token: &str, password: &str) -> Reply {
+    let mut all = load(store);
+    let Some(entry) = all.get_mut(token) else { return page(404, "Link not found", "<p>This link doesn't exist or was turned off.</p>") };
+    if entry["expires"].as_f64().is_some_and(|e| now() >= e) {
+        return page(410, "This link has expired", "<p>Ask the person who shared it for a new one.</p>");
+    }
+    let Some(hash) = entry["password"].as_str() else { return redirect(token, None) };
+    if !auth::verify(password, Some(hash)) {
+        return password_page(token, true);
+    }
+    let grant = random_hex(16);
+    let t = now();
+    let mut grants: Map<String, Value> = entry["grants"].as_object().cloned().unwrap_or_default();
+    grants.retain(|_, v| v.as_f64().is_some_and(|e| e > t));
+    grants.insert(grant.clone(), json!(t + UNLOCK_SECS));
+    entry["grants"] = Value::Object(grants);
+    let _ = store.save_json(&path(store), &Value::Object(all));
+    redirect(token, Some(format!("{}={grant}; Path=/api/public/{token}; Max-Age={}; HttpOnly; SameSite=Lax", cookie_name(token), UNLOCK_SECS as u64)))
+}
+
+fn redirect(token: &str, cookie: Option<String>) -> Reply {
+    let mut r = page(303, "Opening", "");
+    r.location = Some(format!("/api/public/{token}"));
+    r.set_cookie = cookie;
+    r
+}
+
+/// The unlock cookie's value in a request's `Cookie` header, if any.
+pub fn grant_in(cookies: &str, token: &str) -> String {
+    let name = format!("{}=", cookie_name(token));
+    cookies.split(';').find_map(|p| p.trim().strip_prefix(name.as_str()).map(str::to_string)).unwrap_or_default()
 }
 
 /// What may be shown inline without running anything of the file's own.
@@ -126,24 +194,19 @@ fn viewable(name: &str) -> Option<&'static str> {
     }
 }
 
-/// Serves `/api/public/TOKEN[/view|/download]?pw=…`.
-pub fn serve(store: &Store, token: &str, what: &str, password: &str) -> Reply {
+/// Serves `/api/public/TOKEN[/view|/download]`; `grant` is the unlock cookie's value (see `unlock`).
+pub fn serve(store: &Store, token: &str, what: &str, grant: &str) -> Reply {
     let all = load(store);
     let Some(entry) = all.get(token) else { return page(404, "Link not found", "<p>This link doesn't exist or was turned off.</p>") };
     if entry["expires"].as_f64().is_some_and(|e| now() >= e) {
         return page(410, "This link has expired", "<p>Ask the person who shared it for a new one.</p>");
     }
     let id = entry["file"].as_str().unwrap_or_default();
-    let query = format!("?pw={}", form_urlencoded::byte_serialize(password.as_bytes()).collect::<String>());
-    if let Some(hash) = entry["password"].as_str()
-        && !auth::verify(password, Some(hash))
-    {
-        let note = if password.is_empty() { "" } else { "<p>That password isn't right.</p>" };
-        return page(
-            if password.is_empty() { 200 } else { 401 },
-            "Password needed",
-            &format!("{note}<form method=get><input type=password name=pw autofocus> <button>Open</button></form>"),
-        );
+    if entry["password"].as_str().is_some() {
+        let ok = !grant.is_empty() && entry["grants"][grant].as_f64().is_some_and(|e| e > now());
+        if !ok {
+            return password_page(token, false);
+        }
     }
     let Some(rel) = store.path_of(id).ok().flatten() else { return page(404, "File not found", "<p>That file is gone.</p>") };
     let name = rel.rsplit('/').next().unwrap_or("file").to_string();
@@ -152,12 +215,12 @@ pub fn serve(store: &Store, token: &str, what: &str, password: &str) -> Reply {
     match what {
         "" => {
             let shown = match viewable(&name) {
-                Some(t) if t.starts_with("image/") => format!("<p><img alt=\"\" src=\"{base}/view{query}\"></p>"),
-                Some(_) => format!("<p><iframe sandbox src=\"{base}/view{query}\"></iframe></p>"),
+                Some(t) if t.starts_with("image/") => format!("<p><img alt=\"\" src=\"{base}/view\"></p>"),
+                Some(_) => format!("<p><iframe sandbox src=\"{base}/view\"></iframe></p>"),
                 None if no_download => "<p>This file can't be shown here, and downloading is turned off for this link.</p>".to_string(),
                 None => String::new(),
             };
-            let button = if no_download { String::new() } else { format!("<p><a class=b href=\"{base}/download{query}\">Download</a></p>") };
+            let button = if no_download { String::new() } else { format!("<p><a class=b href=\"{base}/download\">Download</a></p>") };
             page(200, &name, &format!("{shown}{button}"))
         }
         "view" | "download" => {
@@ -174,10 +237,21 @@ pub fn serve(store: &Store, token: &str, what: &str, password: &str) -> Reply {
                 return page(500, "Couldn't read the file", "");
             }
             if what == "view" {
-                Reply { code: 200, content_type: mime.unwrap_or("application/octet-stream"), disposition: Some("inline".into()), body: data }
+                Reply {
+                    form: false,
+                    set_cookie: None,
+                    location: None,
+                    code: 200,
+                    content_type: mime.unwrap_or("application/octet-stream"),
+                    disposition: Some("inline".into()),
+                    body: data,
+                }
             } else {
                 let safe: String = name.chars().filter(|c| !c.is_control() && !matches!(c, '"' | '\\' | '/')).collect();
                 Reply {
+                    form: false,
+                    set_cookie: None,
+                    location: None,
                     code: 200,
                     content_type: "application/octet-stream",
                     disposition: Some(format!("attachment; filename=\"{safe}\"")),

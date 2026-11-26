@@ -321,18 +321,23 @@ impl Share {
             if !self.url.contains("/folders/") {
                 house::gap(ui);
                 house::label(ui, "Public link", "Anyone with this address can open the file, signed in or not.");
-                ui.add_enabled(owner, egui::Checkbox::new(&mut self.public.on, "Anyone on the internet with the link can open it"));
+                let r = ui.add_enabled(owner, egui::Checkbox::new(&mut self.public.on, "Anyone on the internet with the link can open it"));
+                house::target(ctx, "public:on", r.rect);
                 if self.public.on {
                     ui.horizontal(|ui| {
                         house::text(ui, "Expires on");
-                        ui.add_sized(vec2(120.0, house::FIELD_HEIGHT), house::field(&mut self.public.expires, house::BODY).hint_text("2027-01-31"));
+                        let r = ui
+                            .add_sized(vec2(120.0, house::FIELD_HEIGHT), house::field(&mut self.public.expires, house::BODY).hint_text("2027-01-31"));
+                        house::target(ctx, "public:expires", r.rect);
                         house::note(ui, "Leave empty for no expiry.");
                     });
-                    ui.add_enabled(owner, egui::Checkbox::new(&mut self.public.no_download, "View only: hide download, print and copy"));
+                    let r = ui.add_enabled(owner, egui::Checkbox::new(&mut self.public.no_download, "View only: hide download, print and copy"));
+                    house::target(ctx, "public:view_only", r.rect);
                     ui.horizontal(|ui| {
                         house::text(ui, "Password");
                         let hint = if self.public.has_password { "Set. Type a new one to change it." } else { "None" };
-                        ui.add_sized(vec2(220.0, house::FIELD_HEIGHT), house::field(&mut self.public_password, house::BODY).hint_text(hint));
+                        let r = ui.add_sized(vec2(220.0, house::FIELD_HEIGHT), house::field(&mut self.public_password, house::BODY).hint_text(hint));
+                        house::target(ctx, "public:password", r.rect);
                         if self.public.has_password {
                             ui.checkbox(&mut self.public_no_password, "Remove password");
                         }
@@ -343,7 +348,9 @@ impl Share {
                         ui.horizontal(|ui| {
                             let width = ui.available_width() - 104.0 - house::S;
                             ui.add_sized(vec2(width, house::FIELD_HEIGHT), house::field(&mut url, house::BODY));
-                            if ui.add(house::secondary_in("Copy public link", house::BLUE).min_size(vec2(104.0, house::BUTTON_HEIGHT))).clicked() {
+                            let r = ui.add(house::secondary_in("Copy public link", house::BLUE).min_size(vec2(104.0, house::BUTTON_HEIGHT)));
+                            house::target(ctx, "Copy public link", r.rect);
+                            if r.clicked() {
                                 if let Some(w) = web_sys::window() {
                                     let _ = w.navigator().clipboard().write_text(&url);
                                 }

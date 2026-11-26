@@ -483,7 +483,9 @@ pub fn actions_in(ui: &mut Ui, labels: &[&str], accent: Color32) -> Option<usize
         ui.spacing_mut().item_spacing.x = S;
         for (i, l) in labels.iter().enumerate().rev() {
             let b = if i + 1 == labels.len() { primary_in(l, accent) } else { secondary_in(l, accent) };
-            if ui.add(b).clicked() {
+            let r = ui.add(b);
+            target(ui.ctx(), l, r.rect);
+            if r.clicked() {
                 hit = Some(i);
             }
         }

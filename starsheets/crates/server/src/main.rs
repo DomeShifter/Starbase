@@ -1881,18 +1881,44 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
         q.entry(k.into_owned()).or_insert_with(|| v.into_owned());
     }
     // A public link (publiclink.rs): no account needed.
-    if p.first().map(String::as_str) == Some("public") && p.len() >= 2 && (method == Method::GET || method == Method::HEAD) {
-        let (token, what, pw) = (p[1].clone(), p.get(2).cloned().unwrap_or_default(), q.get("pw").cloned().unwrap_or_default());
-        return match blocking(&app, move |a| publiclink::serve(&a.store, &token, &what, &pw)).await {
+    if p.first().map(String::as_str) == Some("public") && p.len() >= 2 {
+        let token = p[1].clone();
+        let reply = if method == Method::POST && p.len() == 2 {
+            // The password page's form: a small body, no account.
+            let b = match read_body(body, &headers, 4096, SMALL_WAIT).await {
+                Ok(b) => b,
+                Err(resp) => return resp,
+            };
+            let pw = form_urlencoded::parse(&b).find(|(k, _)| k == "pw").map(|(_, v)| v.into_owned()).unwrap_or_default();
+            blocking(&app, move |a| publiclink::unlock(&a.store, &token, &pw)).await
+        } else if method == Method::GET || method == Method::HEAD {
+            let what = p.get(2).cloned().unwrap_or_default();
+            let cookies = headers.get_all(header::COOKIE).iter().filter_map(|v| v.to_str().ok()).collect::<Vec<_>>().join(";");
+            blocking(&app, move |a| publiclink::serve(&a.store, &token, &what, &publiclink::grant_in(&cookies, &token))).await
+        } else {
+            return error(405, "method not allowed");
+        };
+        return match reply {
             Some(r) => {
+                let csp = if r.form {
+                    "sandbox allow-forms allow-same-origin; default-src 'none'; style-src 'unsafe-inline'; form-action 'self'"
+                } else {
+                    "sandbox allow-same-origin; default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; frame-src 'self'"
+                };
                 let mut b = Response::builder()
                     .status(r.code)
                     .header(header::CONTENT_TYPE, r.content_type)
                     .header(header::CACHE_CONTROL, "no-store")
                     .header("x-content-type-options", "nosniff")
-                    .header("content-security-policy", "sandbox; default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; frame-src 'self'");
+                    .header("content-security-policy", csp);
                 if let Some(d) = r.disposition {
                     b = b.header(header::CONTENT_DISPOSITION, d);
+                }
+                if let Some(c) = r.set_cookie {
+                    b = b.header(header::SET_COOKIE, c);
+                }
+                if let Some(l) = r.location {
+                    b = b.header(header::LOCATION, l);
                 }
                 b.body(Body::from(r.body)).unwrap()
             }
@@ -2439,14 +2465,32 @@ mod tests {
         assert_eq!(send(&app, &ip, "GET", &format!("/api/public/{t}/download"), "", &[], vec![]).await.bytes, b"PNGDATA");
         // Password.
         post(&app, &ip, &sh, &boss, json!({"public": {"on": true, "password": "opensesame"}})).await;
-        let dl = |pw: &str| format!("/api/public/{t}/download{pw}");
-        assert_eq!(send(&app, &ip, "GET", &dl(""), "", &[], vec![]).await.status, 200, "asks for the password");
-        assert!(!send(&app, &ip, "GET", &dl(""), "", &[], vec![]).await.bytes.starts_with(b"PNGDATA"));
-        assert_eq!(send(&app, &ip, "GET", &dl("?pw=nope"), "", &[], vec![]).await.status, 401);
-        assert_eq!(send(&app, &ip, "GET", &dl("?pw=opensesame"), "", &[], vec![]).await.bytes, b"PNGDATA");
+        let dl = format!("/api/public/{t}/download");
+        let get = |uri: String, cookie: String| {
+            let (app, ip) = (app.clone(), ip.clone());
+            async move { send(&app, &ip, "GET", &uri, &cookie, &[], vec![]).await }
+        };
+        assert_eq!(get(dl.clone(), String::new()).await.status, 200, "asks for the password");
+        assert!(!get(dl.clone(), String::new()).await.bytes.starts_with(b"PNGDATA"));
+        // The password goes in a form POST, never in the address.
+        let unlock = |pw: &str| {
+            let (app, ip, uri, body) = (app.clone(), ip.clone(), format!("/api/public/{t}"), format!("pw={pw}").into_bytes());
+            async move { send(&app, &ip, "POST", &uri, "", &[("content-type", "application/x-www-form-urlencoded")], body).await }
+        };
+        let bad = unlock("nope").await;
+        assert_eq!(bad.status, 401);
+        assert!(bad.headers.get(header::SET_COOKIE).is_none());
+        assert!(!get(format!("{dl}?pw=opensesame"), String::new()).await.bytes.starts_with(b"PNGDATA"), "?pw= no longer works");
+        let ok = unlock("opensesame").await;
+        assert_eq!(ok.status, 303);
+        let set = ok.headers.get(header::SET_COOKIE).unwrap().to_str().unwrap().to_string();
+        assert!(set.contains("HttpOnly") && set.contains(&format!("Path=/api/public/{t}")), "{set}");
+        let cookie = set.split(';').next().unwrap().to_string();
+        assert_eq!(get(dl.clone(), cookie.clone()).await.bytes, b"PNGDATA");
+        assert!(!get(dl.clone(), "pl_x=1".into()).await.bytes.starts_with(b"PNGDATA"), "a made-up cookie is not a key");
         // Expired.
         post(&app, &ip, &sh, &boss, json!({"public": {"on": true, "expires": "2001-02-03"}})).await;
-        let g = send(&app, &ip, "GET", &format!("/api/public/{t}?pw=opensesame"), "", &[], vec![]).await;
+        let g = get(format!("/api/public/{t}"), cookie.clone()).await;
         assert_eq!(g.status, 410);
         assert!(String::from_utf8_lossy(&g.bytes).contains("This link has expired"));
         // Bad date refused; off removes it.

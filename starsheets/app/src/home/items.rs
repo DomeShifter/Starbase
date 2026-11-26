@@ -267,6 +267,7 @@ impl Home {
         if resp.clicked() || resp.secondary_clicked() || resp.double_clicked() {
             *clicked_item = true;
         }
+        house::target(ui.ctx(), &format!("item:{}", self.label_of(item)), resp.rect);
         let order = self.order();
         self.select_click(ui, item, resp, &order);
         if resp.double_clicked() {
