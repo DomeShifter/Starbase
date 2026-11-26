@@ -15,7 +15,7 @@ use axum::http::Response;
 use serde_json::{Value, json};
 
 use super::albums::{Seen, cover, place_name, rows_of, seen};
-use super::routes::photo_json;
+use super::routes::{mark_stars, photo_json, stars_of};
 use crate::{Shared, auth, blocking, error, send_json, sharing};
 
 pub const GAP_SECS: i64 = 6 * 3600;
@@ -105,6 +105,7 @@ pub async fn events(app: &Shared, me: Option<auth::User>, which: Option<String>)
     if app.auth && me.is_none() {
         return error(401, "Sign in first.");
     }
+    let stars = stars_of(app, me.as_ref()).await;
     let mine = blocking(app, move |a| {
         let acc = sharing::Access::new(&a.store, a.auth, me.as_ref());
         acc.file_paths.keys().filter_map(|id| seen(a, &acc, id)).collect::<Vec<Seen>>()
@@ -149,7 +150,8 @@ pub async fn events(app: &Shared, me: Option<auth::User>, which: Option<String>)
     let (evs, waiting) = got;
     if let Some(id) = which {
         let Some(e) = evs.iter().find(|e| e.0 == id) else { return error(404, "no such event") };
-        let photos: Vec<Value> = e.2.iter().map(|(id, r, g)| photo_json(r, id, *g)).collect();
+        let mut photos: Vec<Value> = e.2.iter().map(|(id, r, g)| photo_json(r, id, *g)).collect();
+        mark_stars(&mut photos, &stars);
         return send_json(&json!({"event": e.1, "id": e.0, "name": e.1, "photos": photos, "waiting": waiting}), 200);
     }
     let out: Vec<Value> = evs.iter().map(|(id, n, rows)| json!({"id": id, "name": n, "count": rows.len(), "cover": cover(rows)})).collect();

@@ -937,9 +937,12 @@ impl Home {
         self.pending_move_ui(&ctx);
         self.note_ui(&ctx);
         // The photo viewer covers everything and takes the keys while it's open.
-        if !viewer::ui(&mut self.photos, &ctx, &self.store) {
+        let dialog = self.photos.pick_busy();
+        if !viewer::ui(&mut self.photos, &ctx, &self.store) && !dialog {
             self.keys(&ctx);
         }
+        // Photos' Add to album, Add photos and its note: over the grid and the viewer.
+        self.photos.overlays(&ctx, &self.store);
         // Connected to a server, or disconnected: the Drive starts again over the new files.
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(store) = self.connect.ui(&ctx) {
