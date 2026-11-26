@@ -21,6 +21,7 @@ pub(super) mod albums;
 mod dups;
 mod locked;
 mod pick;
+mod timeline;
 mod upload;
 
 pub(super) use pick::{Act, Out};
@@ -287,6 +288,8 @@ pub(super) struct PhotoMode {
     pub pick: pick::Pick,
     /// The Locked tab (locked.rs).
     pub lk: locked::Locked,
+    /// The Timeline tab (timeline.rs).
+    pub tl: timeline::Timeline,
     /// Upload from this device (upload.rs).
     pub up: upload::Uploads,
     /// What the Drive around Photos is asked to do (stars, the bin, Details).
@@ -322,6 +325,7 @@ impl Default for PhotoMode {
             dups: dups::Dups::default(),
             pick: pick::Pick::default(),
             lk: locked::Locked::default(),
+            tl: timeline::Timeline::default(),
             out: Vec::new(),
         }
     }
@@ -495,7 +499,7 @@ impl PhotoMode {
                 }
                 Got::Uploaded(i, r) => self.upload_answer(i, r, now),
                 Got::Listed(f, sub, v) => {
-                    if Some(&f) == self.folder.as_ref() && sub == self.sub && self.alb.tab == albums::Tab::Photos {
+                    if Some(&f) == self.folder.as_ref() && sub == self.sub && matches!(self.alb.tab, albums::Tab::Photos | albums::Tab::Timeline) {
                         self.take_list(&v);
                     }
                 }
@@ -547,7 +551,7 @@ impl PhotoMode {
         if let Some(f) = &folder
             && !self.loading
             && self.enabled == Some(true)
-            && self.alb.tab == albums::Tab::Photos
+            && matches!(self.alb.tab, albums::Tab::Photos | albums::Tab::Timeline)
             && (self.waiting > 0 || self.pics.iter().any(|p| p.state == "pending"))
             && now - self.listed_at > RELIST
         {
@@ -649,7 +653,7 @@ impl PhotoMode {
             });
             ui.separator();
             ui.vertical(|ui| match self.alb.tab {
-                albums::Tab::Photos => self.folder_ui(ui, store, folder),
+                albums::Tab::Photos | albums::Tab::Timeline => self.folder_ui(ui, store, folder),
                 albums::Tab::Duplicates => self.dups_ui(ui, store, folder),
                 albums::Tab::Locked => self.locked_ui(ui, store),
                 _ => self.cards_ui(ui, store),
@@ -693,7 +697,11 @@ impl PhotoMode {
             ui.label(RichText::new(text).size(house::BODY).color(theme::TEXT_DIM));
             return;
         }
-        self.grid(ui, store);
+        if self.alb.tab == albums::Tab::Timeline {
+            self.timeline_ui(ui, store);
+        } else {
+            self.grid(ui, store);
+        }
     }
 
     /// The scrolling grid of `pics`.
@@ -929,6 +937,7 @@ impl PhotoMode {
             "waiting": self.waiting,
             "error": self.error,
             "count": self.pics.len(),
+            "timeline": self.tl.test_state(),
             "albums": self.alb.test_state(),
             "dups": self.dups.test_state(),
             "pick": self.pick.test_state(),

@@ -17,6 +17,7 @@ use crate::theme;
 pub(in crate::home) enum Tab {
     #[default]
     Photos,
+    Timeline,
     Albums,
     Places,
     Events,
@@ -29,6 +30,7 @@ impl Tab {
     fn name(self) -> &'static str {
         match self {
             Tab::Photos => "photos",
+            Tab::Timeline => "timeline",
             Tab::Albums => "albums",
             Tab::Places => "places",
             Tab::Events => "events",
@@ -162,7 +164,7 @@ impl Albums {
             Tab::Albums => self.albums = cards(v, "albums"),
             Tab::Places => self.places = cards(v, "places"),
             Tab::Events => self.events = cards(v, "events"),
-            Tab::Photos | Tab::Duplicates | Tab::Locked => {}
+            Tab::Photos | Tab::Timeline | Tab::Duplicates | Tab::Locked => {}
         }
     }
 
@@ -203,7 +205,7 @@ impl PhotoMode {
             self.pics.clear();
             self.viewer = None;
             // Back to the folder: listed again.
-            if t == Tab::Photos {
+            if matches!(t, Tab::Photos | Tab::Timeline) {
                 self.folder = None;
             }
         }
@@ -214,6 +216,7 @@ impl PhotoMode {
         ui.add_space(house::S);
         for (t, label, icon) in [
             (Tab::Photos, "Photos", "photo_library"),
+            (Tab::Timeline, "Timeline", "schedule"),
             (Tab::Albums, "Albums", "collections"),
             (Tab::Places, "Places", "location_on"),
             (Tab::Events, "Events", "event"),
@@ -494,12 +497,13 @@ impl PhotoMode {
             "home:photos:tab" => {
                 let t = match s("tab").as_str() {
                     "photos" => Tab::Photos,
+                    "timeline" => Tab::Timeline,
                     "albums" => Tab::Albums,
                     "places" => Tab::Places,
                     "events" => Tab::Events,
                     "duplicates" => Tab::Duplicates,
                     "locked" => Tab::Locked,
-                    _ => return Err("tab is photos, albums, places, events, duplicates or locked".into()),
+                    _ => return Err("tab is photos, timeline, albums, places, events, duplicates or locked".into()),
                 };
                 self.go(t);
             }
