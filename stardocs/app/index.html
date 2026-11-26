@@ -25,5 +25,18 @@
 <body>
   <canvas id="stardocs_canvas"></canvas>
   <div id="stardocs_loading">Loading Starbase Docs&hellip;</div>
+<script>
+  // A file made from a template and closed without a change is removed again (the server only
+  // does it while the file is still exactly what was created, and nobody else has opened it).
+  (function () {
+    var q = new URLSearchParams(location.search), id = q.get('file'), fresh = q.get('fresh'), was = q.get('was');
+    if (!id || !fresh || !was) return;
+    window.addEventListener('pagehide', function () {
+      try {
+        navigator.sendBeacon('../' + 'api/files/' + encodeURIComponent(id) + '/discard?version=' + encodeURIComponent(fresh) + '&name=' + encodeURIComponent(was));
+      } catch (e) {}
+    });
+  })();
+</script>
 </body>
 </html>

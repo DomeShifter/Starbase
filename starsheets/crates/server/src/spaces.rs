@@ -263,7 +263,24 @@ pub fn opened(store: &Store, user: &User) -> Map<String, Value> {
     prefs(store, &user.username).get("opened").and_then(Value::as_object).cloned().unwrap_or_default()
 }
 
+/// Who has opened each file since the server started (see [`opened_by_others`]).
+static OPENERS: std::sync::Mutex<Option<std::collections::HashMap<String, std::collections::HashSet<String>>>> = std::sync::Mutex::new(None);
+
+/// Whether anyone but `me` has opened the file since the server started: a new file somebody
+/// else has seen is kept even if its creator closes it untouched.
+pub fn opened_by_others(file: &str, me: &str) -> bool {
+    let g = OPENERS.lock().unwrap_or_else(|e| e.into_inner());
+    g.as_ref().and_then(|m| m.get(file)).is_some_and(|s| s.iter().any(|u| u != me))
+}
+
 pub fn note_opened(store: &Store, user: &User, file: &str) -> io::Result<()> {
+    OPENERS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(Default::default)
+        .entry(file.to_string())
+        .or_default()
+        .insert(user.username.clone());
     let mut p = prefs(store, &user.username);
     // Opening a file clears its "mentioned you" marker.
     if let Some(m) = p.get_mut("mentions").and_then(Value::as_object_mut)

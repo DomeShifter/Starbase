@@ -41,6 +41,11 @@ pub(crate) trait Store {
     fn poll(&self) {}
     /// Opens a listed file: a spreadsheet in Starbase Sheets, a document in Starbase Docs.
     fn open(&self, id: &str, name: &str) -> Result<(), String>;
+    /// Opens a file just made from a template. On the web the new tab asks the server to remove
+    /// it again when closed without a change (`fresh` = the version it was created with).
+    fn open_new(&self, id: &str, name: &str, _fresh: &str) -> Result<(), String> {
+        self.open(id, name)
+    }
     /// Starts a new spreadsheet, or a new document, saved in `folder`.
     fn new_file(&self, folder: &str, document: bool) -> Result<(), String>;
     /// Asks which files to upload; `got` gets each one picked (name, bytes).
@@ -228,6 +233,14 @@ impl Store for ServerStore {
         // Files always open in a new tab, as from Google Drive, so the home screen stays where it was.
         if let Some(w) = web_sys::window() {
             let _ = w.open_with_url_and_target(&crate::files::file_url(id, name), "_blank");
+        }
+        Ok(())
+    }
+
+    fn open_new(&self, id: &str, name: &str, fresh: &str) -> Result<(), String> {
+        if let Some(w) = web_sys::window() {
+            let url = format!("{}&fresh={}&was={}", crate::files::file_url(id, name), enc(fresh), enc(name));
+            let _ = w.open_with_url_and_target(&url, "_blank");
         }
         Ok(())
     }

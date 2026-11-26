@@ -1135,6 +1135,13 @@ async fn gate(
                         // Into someone else's folder: it becomes theirs, so only its owner may.
                         need(role, if store::space_of(&target) == store::space_of(&path) { Role::Edit } else { Role::Owner })?;
                     }
+                    // A new file closed untouched is removed (store.rs), unless someone else has opened it.
+                    (["discard"], "POST") => {
+                        need(role, Role::Edit)?;
+                        if spaces::opened_by_others(id, &me.username) {
+                            return Err(send_json(&json!({"discarded": false}), 200));
+                        }
+                    }
                     // Activity: anyone who can see the file may read what happened to it.
                     (["activity"], "GET") => {
                         need(role, Role::View)?;
@@ -2628,6 +2635,33 @@ mod tests {
         }
         let after: Vec<Vec<u8>> = starbase_templates::ALL.iter().map(|t| starbase_templates::bytes(t.key).unwrap().to_vec()).collect();
         assert_eq!(before, after, "the templates are unchanged");
+        // Closed untouched: gone for good (not in the bin); a rename, a save, or a wrong version keeps it.
+        let new = |tag: &str| {
+            let (app, ip, boss, url) = (app.clone(), ip.clone(), boss.clone(), format!("/api/templates/monthly-budget?folder={folder}"));
+            async move {
+                let g = send(&app, &ip, "POST", &url, &boss, &[], vec![]).await;
+                let _ = tag;
+                (
+                    g.json["id"].as_str().unwrap().to_string(),
+                    g.json["name"].as_str().unwrap().to_string(),
+                    g.json["version"].as_str().unwrap().to_string(),
+                )
+            }
+        };
+        let enc = |s: &str| form_urlencoded::byte_serialize(s.as_bytes()).collect::<String>();
+        let (id, name, ver) = new("a").await;
+        let d = |id: &str, name: &str, ver: &str| format!("/api/files/{id}/discard?version={}&name={}", enc(ver), enc(name));
+        assert_eq!(send(&app, &ip, "POST", &d(&id, &name, "wrong"), &boss, &[], vec![]).await.json["discarded"], false);
+        assert_eq!(send(&app, &ip, "POST", &d(&id, "Other.xlsx", &ver), &boss, &[], vec![]).await.json["discarded"], false, "renamed since");
+        assert_eq!(send(&app, &ip, "POST", &d(&id, &name, &ver), &vic, &[], vec![]).await.status, 403);
+        assert_eq!(send(&app, &ip, "POST", &d(&id, &name, &ver), &boss, &[], vec![]).await.json["discarded"], true);
+        assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{id}"), &boss, &[], vec![]).await.status, 404);
+        assert_eq!(send(&app, &ip, "GET", "/api/bin", &boss, &[], vec![]).await.json.as_array().map_or(0, Vec::len), 0, "not in the bin");
+        let (id, name, ver) = new("b").await;
+        let put = send(&app, &ip, "PUT", &format!("/api/files/{id}"), &boss, &[], b"edited".to_vec()).await;
+        assert_eq!(put.status, 200);
+        assert_eq!(send(&app, &ip, "POST", &d(&id, &name, &ver), &boss, &[], vec![]).await.json["discarded"], false, "edited");
+        assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{id}"), &boss, &[], vec![]).await.status, 200);
         // The Drive opened without `dir` (no folder known yet): the copy goes to the person's
         // own top folder, never to a folder with an empty name.
         for url in ["/api/templates/monthly-budget", "/api/templates/monthly-budget?folder="] {
