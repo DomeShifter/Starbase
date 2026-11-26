@@ -22,6 +22,7 @@ mod devices;
 mod docx_comments;
 mod findpath;
 mod guard;
+mod linkpreview;
 mod live;
 mod log;
 mod oidc;
@@ -464,6 +465,53 @@ async fn accounts(
                 Some(Err((code, why))) => error(code, &why),
                 None => error(500, "server error"),
             }
+        }
+        (["link-preview", "settings"], "GET" | "POST") => {
+            // Anyone signed in may read it (the card asks); only the owner changes it.
+            let posting = m == "POST";
+            if (on && me.is_none()) || (posting && on && me.as_ref().is_none_or(|u| !u.owner)) {
+                return Some(error(403, "Only the owner can do that."));
+            }
+            let want = json.get("on").and_then(Value::as_bool).unwrap_or(false);
+            let r = blocking(app, move |app| if posting { auth::set_link_preview(&app.store, want) } else { Ok(auth::link_preview(&app.store)) }).await;
+            match r {
+                Some(Ok(on)) => send_json(&json!({ "on": on }), 200),
+                Some(Err(why)) => error(400, &why),
+                None => error(500, "server error"),
+            }
+        }
+        (["link-preview"] | ["link-preview", "image"], "GET") => {
+            if on && me.is_none() {
+                return Some(error(401, "Sign in first."));
+            }
+            let url = q.get("url").cloned().unwrap_or_default();
+            if url.len() > 2048 {
+                return Some(error(400, "That address is too long."));
+            }
+            let enabled = blocking(app, |app| auth::link_preview(&app.store)).await.unwrap_or(false);
+            if path.len() == 2 {
+                let kind = q.get("kind").cloned().unwrap_or_default();
+                let got = if enabled { tokio::task::spawn_blocking(move || linkpreview::image(&url, &kind)).await.ok().flatten() } else { None };
+                return Some(match got {
+                    Some(b) => Response::builder()
+                        .status(200)
+                        .header(header::CONTENT_TYPE, "image/png")
+                        .header(header::CACHE_CONTROL, "private, max-age=86400")
+                        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+                        .body(Body::from(b))
+                        .unwrap(),
+                    None => error(404, "no picture"),
+                });
+            }
+            if !enabled {
+                return Some(send_json(&json!({ "state": "off" }), 200));
+            }
+            let who = me.as_ref().map_or_else(|| ip_key("link-preview", ask.ip), |u| format!("link-preview:{}", u.username));
+            if !LIMITS.take(&who, guard::LINK_PREVIEW_USER) {
+                return Some(send_json(&json!({ "state": "busy" }), 200));
+            }
+            let v = tokio::task::spawn_blocking(move || linkpreview::preview(&url)).await.unwrap_or_else(|_| json!({ "state": "none" }));
+            send_json(&v, 200)
         }
         (["signup", "settings"], "GET" | "POST") => {
             if me.as_ref().is_none_or(|u| !u.owner) {

@@ -4,9 +4,10 @@
 //! stops GridCraft's click-to-follow). The card shows the site's name and the address, with Open,
 //! Copy link and, where the user may edit, Edit link and Remove link.
 //!
-//! **No network request.** The card only reads the address it was given: no page title, no
-//! preview picture and no site icon (a generic globe is drawn instead). A fetched preview, if it
-//! ever comes, must be opt-in (docs/privacy.md); it would go in the empty slot under the header.
+//! **Page preview: owner opt-in, off by default** (docs/privacy.md). When the owner turned it on
+//! (People › Link previews), resting the pointer on a web link asks our own server
+//! (`api/link-preview`) for the page title, site icon and a small picture; the browser never
+//! contacts the other site. Off, offline or failed: the card stays as before (globe + address).
 
 use egui::{Align2, Button, Pos2, Rect, RichText, Ui, vec2};
 use gridcraft_engine::core::{CellRef, Value};
@@ -311,6 +312,10 @@ impl LinkCard {
         let in_full = shown_url == link.target;
         let heading = heading(&kind);
         let can_open = !matches!(kind, LinkKind::Refused(_));
+        // A page preview only for a web link the pointer rests on (never ahead of time).
+        let web = matches!(&kind, LinkKind::External(u) if u.starts_with("http://") || u.starts_with("https://"));
+        let preview = (via_hover && web).then(|| preview_for(&link.target, &ctx));
+        let fade = preview.as_ref().filter(|p| p.state == "ok").map_or(0.0, |p| ctx.animate_bool(egui::Id::new(("link-preview-fade", &link.target)), !p.title.is_empty() || p.picture.is_some()));
         SHOWN.with(|s| {
             *s.borrow_mut() = json!({
                 "cell": cell.a1(),
@@ -321,6 +326,13 @@ impl LinkCard {
                 "open": can_open,
                 "edit": can_edit,
                 "source": format!("{:?}", link.source),
+                "preview": preview.as_ref().map(|p| json!({
+                    "state": p.state,
+                    "title": p.title,
+                    "site": p.site,
+                    "icon": p.icon.is_some(),
+                    "picture": p.picture.is_some(),
+                })),
             })
         });
         let mut action = None;
@@ -332,20 +344,48 @@ impl LinkCard {
                 house::card_frame().inner_margin(egui::Margin::same(house::M as i8)).show(ui, |ui| {
                     ui.set_max_width(380.0);
                     ui.spacing_mut().item_spacing = vec2(house::S, house::XS);
+                    let ok = preview.as_ref().filter(|p| p.state == "ok");
                     ui.horizontal(|ui| {
-                        if let Some(globe) = icons::icon("language") {
-                            ui.add(globe);
+                        // The site's own icon when the preview brought one, else the globe.
+                        match ok.and_then(|p| p.icon.as_ref()) {
+                            Some(tex) => {
+                                let r = ui.add(egui::Image::new((tex.id(), vec2(20.0, 20.0))));
+                                house::target(ui.ctx(), "linkcard:icon", r.rect);
+                            }
+                            None => {
+                                if let Some(globe) = icons::icon("language") {
+                                    ui.add(globe);
+                                }
+                            }
                         }
                         ui.vertical(|ui| {
-                            ui.add(egui::Label::new(RichText::new(&heading).size(house::BODY).strong().color(theme::TEXT)).truncate());
+                            let heading = ok.map(|p| p.site.as_str()).filter(|s| !s.is_empty()).unwrap_or(&heading);
+                            ui.add(egui::Label::new(RichText::new(heading).size(house::BODY).strong().color(theme::TEXT)).truncate());
                             let url = ui.add(egui::Label::new(RichText::new(&shown_url).size(house::NOTE).color(theme::TEXT_DIM)).truncate());
                             if !in_full {
                                 url.on_hover_text(&link.target);
                             }
                         });
                     });
-                    // Room for an opt-in fetched preview (page title, picture) later: nothing is
-                    // fetched now.
+                    // The page preview (owner opt-in, fetched by our server): title, then a small
+                    // picture, fading in when they arrive; otherwise today's card unchanged.
+                    if let Some(p) = ok.filter(|_| fade > 0.0) {
+                        ui.scope(|ui| {
+                            ui.multiply_opacity(fade);
+                            if !p.title.is_empty() {
+                                ui.add_space(house::XS);
+                                let r = ui.add(egui::Label::new(RichText::new(&p.title).size(house::BODY).color(theme::TEXT)).wrap());
+                                house::target(ui.ctx(), "linkcard:title", r.rect);
+                            }
+                            if let Some(tex) = &p.picture {
+                                ui.add_space(house::XS);
+                                let size = tex.size_vec2();
+                                let scale = (348.0 / size.x).min(180.0 / size.y).min(1.0);
+                                let r = ui.add(egui::Image::new((tex.id(), size * scale)).corner_radius(4.0));
+                                house::target(ui.ctx(), "linkcard:picture", r.rect);
+                            }
+                        });
+                    }
                     if let LinkKind::Refused(why) = &kind {
                         ui.add_space(house::XS);
                         ui.add(egui::Label::new(RichText::new(why).size(house::NOTE).color(theme::TEXT_DIM)).wrap());
@@ -412,6 +452,69 @@ impl LinkCard {
             self.dismissed = Some(cell);
         }
     }
+}
+
+/// A web page's preview as the server sent it (`GET api/link-preview`). The browser never asks
+/// the other site: the server fetches (only when its owner turned previews on).
+#[derive(Clone, Default)]
+pub struct Preview {
+    /// "loading", "ok", "none", "off", "busy" or "error".
+    pub state: String,
+    pub title: String,
+    pub site: String,
+    pub icon: Option<egui::TextureHandle>,
+    pub picture: Option<egui::TextureHandle>,
+}
+
+thread_local! {
+    static PREVIEWS: std::cell::RefCell<std::collections::HashMap<String, Preview>> = Default::default();
+}
+
+/// The preview for `url`, asking the server the first time (only called once the pointer rested).
+fn preview_for(url: &str, ctx: &egui::Context) -> Preview {
+    if let Some(p) = PREVIEWS.with(|m| m.borrow().get(url).cloned()) {
+        return p;
+    }
+    PREVIEWS.with(|m| m.borrow_mut().insert(url.to_string(), Preview { state: "loading".into(), ..Default::default() }));
+    #[cfg(target_arch = "wasm32")]
+    {
+        let (url, ctx) = (url.to_string(), ctx.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            let p = fetch_preview(&url, &ctx).await;
+            PREVIEWS.with(|m| m.borrow_mut().insert(url, p));
+            ctx.request_repaint();
+        });
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // The desktop app has no server to ask: today's card.
+        let _ = ctx;
+        PREVIEWS.with(|m| m.borrow_mut().insert(url.to_string(), Preview { state: "off".into(), ..Default::default() }));
+    }
+    PREVIEWS.with(|m| m.borrow().get(url).cloned()).unwrap_or_default()
+}
+
+#[cfg(target_arch = "wasm32")]
+async fn fetch_preview(url: &str, ctx: &egui::Context) -> Preview {
+    use crate::files::{Method, enc, fetch};
+    let q = enc(url);
+    let error = Preview { state: "error".into(), ..Default::default() };
+    let Ok((200, _, bytes)) = fetch(Method::Get, &format!("api/link-preview?url={q}"), None, None).await else { return error };
+    let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
+    let text = |k: &str| v[k].as_str().unwrap_or("").chars().filter(|c| !c.is_control()).take(120).collect::<String>();
+    let mut p = Preview { state: v["state"].as_str().unwrap_or("error").to_string(), title: text("title"), site: text("site"), icon: None, picture: None };
+    for kind in ["icon", "picture"] {
+        if v[kind].as_bool() != Some(true) {
+            continue;
+        }
+        let Ok((200, _, png)) = fetch(Method::Get, &format!("api/link-preview/image?url={q}&kind={kind}"), None, None).await else { continue };
+        let Ok(img) = image::load_from_memory_with_format(&png, image::ImageFormat::Png) else { continue };
+        let rgba = img.into_rgba8();
+        let ci = egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw());
+        let tex = ctx.load_texture(format!("link-preview-{kind}-{url}"), ci, egui::TextureOptions::LINEAR);
+        if kind == "icon" { p.icon = Some(tex) } else { p.picture = Some(tex) }
+    }
+    p
 }
 
 #[derive(Clone, Copy)]
