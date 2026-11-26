@@ -253,6 +253,9 @@ pub(in crate::home) struct PlacesMap {
     pub list: bool,
     asked: bool,
     pub loaded: bool,
+    /// Every picture with a position; `pics` is this through the grid's Type filter and search.
+    all: Vec<Pic>,
+    sig: String,
     pics: Vec<Pic>,
     pts: Vec<[f32; 2]>,
     /// The server's detailed tiles: (deepest zoom, credit line).
@@ -272,9 +275,9 @@ pub(in crate::home) struct PlacesMap {
 
 impl PlacesMap {
     pub fn take(&mut self, v: &Json) {
-        self.pics = PhotoMode::parse_pics(v);
-        self.pics.retain(|p| p.gps.is_some());
-        self.pts = self.pics.iter().filter_map(|p| p.gps).map(|(lat, lon)| mercator(lat, lon)).collect();
+        self.all = PhotoMode::parse_pics(v);
+        self.all.retain(|p| p.gps.is_some());
+        self.sig = String::from("\u{0}");
         self.tiles = v["tiles"]["max_z"].as_u64().map(|z| (z as u32, v["tiles"]["attribution"].as_str().unwrap_or("").to_string()));
         self.loaded = true;
         self.fitted = false;
@@ -345,8 +348,17 @@ impl PhotoMode {
     pub(super) fn map_ui(&mut self, ui: &mut Ui, store: &Backend) {
         let ctx = ui.ctx().clone();
         self.map_boot(&ctx, store);
+        let sig = format!("{:?}|{}", self.shell.types, self.shell.query.trim().to_lowercase());
+        if self.map.sig != sig && self.map.loaded {
+            let pics: Vec<Pic> = self.map.all.iter().filter(|p| self.shell.matches(p)).cloned().collect();
+            self.map.pts = pics.iter().filter_map(|p| p.gps).map(|(lat, lon)| mercator(lat, lon)).collect();
+            self.map.pics = pics;
+            self.map.sig = sig;
+            self.map.fitted = false;
+            self.map.open = None;
+        }
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Places").size(house::TITLE).color(theme::TEXT));
+            ui.label(RichText::new("Places").size(house::TITLE).color(theme::text()));
             if self.pill(ui, "List", false) {
                 self.map.list = true;
             }
@@ -362,7 +374,7 @@ impl PhotoMode {
                 self.map.zoom_at(v, v.center(), 1.0);
             }
             if self.map.loaded && self.map.pics.is_empty() {
-                ui.label(RichText::new("No pictures with a position (GPS) yet.").size(house::NOTE).color(theme::TEXT_DIM));
+                ui.label(RichText::new("No pictures with a position (GPS) yet.").size(house::NOTE).color(theme::text_dim()));
             }
         });
         ui.add_space(house::S);

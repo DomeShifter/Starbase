@@ -209,7 +209,7 @@ impl PhotoMode {
             if self.pics.is_empty() {
                 ui.add_space(house::XL);
                 let text = if self.loading { "Loading…" } else { "Nothing in the Locked folder." };
-                ui.label(RichText::new(text).size(house::BODY).color(theme::TEXT_DIM));
+                ui.label(RichText::new(text).size(house::BODY).color(theme::text_dim()));
                 return;
             }
             self.grid(ui, store);
@@ -217,12 +217,12 @@ impl PhotoMode {
         }
         ui.add_space(house::XL);
         if self.loading && !self.lk.busy {
-            ui.label(RichText::new("Loading…").size(house::BODY).color(theme::TEXT_DIM));
+            ui.label(RichText::new("Loading…").size(house::BODY).color(theme::text_dim()));
             return;
         }
         ui.vertical(|ui| {
             ui.set_max_width(320.0);
-            ui.label(RichText::new("Locked folder").size(house::BODY).strong().color(theme::TEXT));
+            ui.label(RichText::new("Locked folder").size(house::BODY).strong().color(theme::text()));
             ui.add_space(house::S);
             house::note(ui, "Type your password to see the pictures you locked.");
             ui.add_space(house::L);

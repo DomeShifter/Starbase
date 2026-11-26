@@ -697,7 +697,7 @@ impl Home {
     /// The folder shown as photos, when "View as photos" is on and a folder is shown (not
     /// Recent, Starred, the bin, or search results).
     fn photo_folder(&self) -> Option<String> {
-        if !self.photos.on || !self.store.has_photos() || !self.search.trim().is_empty() {
+        if !self.photos.on || !self.store.has_photos() {
             return None;
         }
         match self.view.as_ref()? {
@@ -943,6 +943,10 @@ impl Home {
         #[cfg(not(target_arch = "wasm32"))]
         ctx.request_repaint_after(std::time::Duration::from_millis(RELIST_MS as u64));
         let folder = self.photo_folder();
+        // Photo Mode: dark while it is open, the search box searches photos.
+        theme::sync_dark(ctx, folder.is_some() && self.photos.shell.dark);
+        let query = if folder.is_some() { self.search.clone() } else { String::new() };
+        self.photos.shell_query(&query);
         self.photos.logic(ctx, &self.store, folder);
         self.ask_text_matches(ctx);
         let replies: Vec<Reply> = std::mem::take(&mut *self.inbox.borrow_mut());
@@ -1086,24 +1090,28 @@ impl Home {
     pub fn ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.templates_ui(&ctx);
-        ui.painter().rect_filled(ui.max_rect(), 0, theme::PAGE);
+        let photo_mode = self.photo_folder().is_some();
+        ui.painter().rect_filled(ui.max_rect(), 0, theme::page());
         egui::Panel::top("home_top")
             .show_separator_line(false)
             .exact_size(TOP)
-            .frame(egui::Frame::NONE.fill(theme::PAGE).inner_margin(egui::Margin::symmetric(16, 0)))
-            .show(ui, |ui| self.top_ui(ui));
-        egui::Panel::left("home_left")
-            .show_separator_line(false)
-            .exact_size(LEFT)
-            .resizable(false)
-            .frame(egui::Frame::NONE.fill(theme::PAGE).inner_margin(egui::Margin { left: 12, right: 12, top: 8, bottom: 8 }))
-            .show(ui, |ui| self.left_ui(ui));
+            .frame(egui::Frame::NONE.fill(theme::page()).inner_margin(egui::Margin::symmetric(16, 0)))
+            .show(ui, |ui| if photo_mode { self.photo_top_ui(ui) } else { self.top_ui(ui) });
+        // Photo Mode has no Drive list on the left.
+        if !photo_mode {
+            egui::Panel::left("home_left")
+                .show_separator_line(false)
+                .exact_size(LEFT)
+                .resizable(false)
+                .frame(egui::Frame::NONE.fill(theme::PAGE).inner_margin(egui::Margin { left: 12, right: 12, top: 8, bottom: 8 }))
+                .show(ui, |ui| self.left_ui(ui));
+        }
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::NONE
-                    .fill(Color32::WHITE)
-                    .corner_radius(egui::CornerRadius { nw: 16, ..Default::default() })
-                    .inner_margin(egui::Margin { left: 24, right: 16, top: 16, bottom: 0 }),
+                    .fill(theme::card())
+                    .corner_radius(egui::CornerRadius { nw: if photo_mode { 0 } else { 16 }, ..Default::default() })
+                    .inner_margin(egui::Margin { left: if photo_mode { 12 } else { 24 }, right: 16, top: 16, bottom: 0 }),
             )
             .show(ui, |ui| self.main_ui(ui));
         self.drag_ui(&ctx);

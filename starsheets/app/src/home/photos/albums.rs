@@ -221,14 +221,14 @@ impl PhotoMode {
             (Tab::Locked, "Locked", "lock"),
         ] {
             let on = self.alb.tab == t;
-            let b = egui::Button::new(RichText::new(format!("  {label}")).size(house::BODY).color(theme::TEXT))
-                .fill(if on { theme::SHARE } else { Color32::TRANSPARENT })
+            let b = egui::Button::new(RichText::new(format!("  {label}")).size(house::BODY).color(theme::text()))
+                .fill(if on { theme::share() } else { Color32::TRANSPARENT })
                 .corner_radius(16)
                 .min_size(vec2(120.0, 34.0));
             let b = match crate::icons::icon(icon) {
                 Some(img) => {
-                    egui::Button::image_and_text(img.fit_to_exact_size(vec2(18.0, 18.0)), RichText::new(label).size(house::BODY).color(theme::TEXT))
-                        .fill(if on { theme::SHARE } else { Color32::TRANSPARENT })
+                    egui::Button::image_and_text(img.fit_to_exact_size(vec2(18.0, 18.0)), RichText::new(label).size(house::BODY).color(theme::text()))
+                        .fill(if on { theme::share() } else { Color32::TRANSPARENT })
                         .corner_radius(16)
                         .min_size(vec2(120.0, 34.0))
                 }
@@ -299,9 +299,11 @@ impl PhotoMode {
                         self.pics.clear();
                         self.viewer = None;
                     }
-                    ui.label(RichText::new(&c.name).size(house::TITLE).color(theme::TEXT));
+                    ui.label(RichText::new(&c.name).size(house::TITLE).color(theme::text()));
                     let n = self.pics.len();
-                    ui.label(RichText::new(format!("{n} {}", if n == 1 { "picture" } else { "pictures" })).size(house::BODY).color(theme::TEXT_DIM));
+                    ui.label(
+                        RichText::new(format!("{n} {}", if n == 1 { "picture" } else { "pictures" })).size(house::BODY).color(theme::text_dim()),
+                    );
                     if t == Tab::Events && !self.pics.is_empty() && self.pill(ui, "Save as album", false) {
                         self.create(ui.ctx(), store, &c.name, true);
                     }
@@ -330,7 +332,7 @@ impl PhotoMode {
                 } else {
                     "No pictures."
                 };
-                ui.label(RichText::new(text).size(house::BODY).color(theme::TEXT_DIM));
+                ui.label(RichText::new(text).size(house::BODY).color(theme::text_dim()));
             } else {
                 self.grid(ui, store);
             }
@@ -351,7 +353,7 @@ impl PhotoMode {
             self.alb.boot_cards(&ctx, store, &self.inbox);
         } else if t == Tab::Albums {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Albums").size(house::TITLE).color(theme::TEXT));
+                ui.label(RichText::new("Albums").size(house::TITLE).color(theme::text()));
                 if self.pill(ui, "New album", false) {
                     self.alb.text.clear();
                     self.alb.ask = Ask::New;
@@ -359,7 +361,7 @@ impl PhotoMode {
             });
             self.pick_ui(ui, store);
         } else {
-            ui.label(RichText::new("Events").size(house::TITLE).color(theme::TEXT));
+            ui.label(RichText::new(if t == Tab::Events { "Events" } else { "Places" }).size(house::TITLE).color(theme::text()));
             self.alb.boot_cards(&ctx, store, &self.inbox);
         }
         ui.add_space(house::S);
@@ -377,7 +379,7 @@ impl PhotoMode {
             } else {
                 "No places yet: pictures with a position (GPS) from folders you can edit show up here."
             };
-            ui.label(RichText::new(text).size(house::BODY).color(theme::TEXT_DIM));
+            ui.label(RichText::new(text).size(house::BODY).color(theme::text_dim()));
             return;
         }
         let mut open = None;
@@ -398,9 +400,9 @@ impl PhotoMode {
 
     pub(super) fn pill(&self, ui: &mut Ui, label: &str, on: bool) -> bool {
         ui.add(
-            egui::Button::new(RichText::new(label).size(house::BODY).color(theme::TEXT))
-                .fill(if on { theme::SHARE } else { Color32::WHITE })
-                .stroke(egui::Stroke::new(1.0, theme::BOX))
+            egui::Button::new(RichText::new(label).size(house::BODY).color(theme::text()))
+                .fill(if on { theme::share() } else { theme::card() })
+                .stroke(egui::Stroke::new(1.0, theme::edge()))
                 .corner_radius(16)
                 .min_size(vec2(0.0, 32.0)),
         )
@@ -425,9 +427,9 @@ impl PhotoMode {
             p.rect_filled(img, 8, Color32::from_black_alpha(30));
         }
         let name: String = if c.name.chars().count() > 24 { c.name.chars().take(22).chain("…".chars()).collect() } else { c.name.clone() };
-        p.text(rect.min + vec2(2.0, side + 6.0), egui::Align2::LEFT_TOP, name, egui::FontId::proportional(house::BODY), theme::TEXT);
+        p.text(rect.min + vec2(2.0, side + 6.0), egui::Align2::LEFT_TOP, name, egui::FontId::proportional(house::BODY), theme::text());
         let n = format!("{} {}", c.count, if c.count == 1 { "picture" } else { "pictures" });
-        p.text(rect.min + vec2(2.0, side + 24.0), egui::Align2::LEFT_TOP, n, egui::FontId::proportional(house::NOTE), theme::TEXT_DIM);
+        p.text(rect.min + vec2(2.0, side + 24.0), egui::Align2::LEFT_TOP, n, egui::FontId::proportional(house::NOTE), theme::text_dim());
         resp.clicked()
     }
 
@@ -439,7 +441,7 @@ impl PhotoMode {
             Ask::New | Ask::Rename => {
                 ui.horizontal(|ui| {
                     ui.label(
-                        RichText::new(if self.alb.ask == Ask::New { "Album name" } else { "New name" }).size(house::BODY).color(theme::TEXT_DIM),
+                        RichText::new(if self.alb.ask == Ask::New { "Album name" } else { "New name" }).size(house::BODY).color(theme::text_dim()),
                     );
                     let r = ui.add(egui::TextEdit::singleline(&mut self.alb.text).desired_width(220.0));
                     let go = self.pill(ui, "OK", false) || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
@@ -461,7 +463,7 @@ impl PhotoMode {
             }
             Ask::Delete => {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new("Delete this album? The pictures stay where they are.").size(house::BODY).color(theme::TEXT));
+                    ui.label(RichText::new("Delete this album? The pictures stay where they are.").size(house::BODY).color(theme::text()));
                     if self.pill(ui, "Delete", false) {
                         if let Some(c) = &open {
                             self.delete(&ctx, store, &c.id);
