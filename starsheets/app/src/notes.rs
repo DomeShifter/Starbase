@@ -11,6 +11,7 @@ use gridcraft_ui_egui::SheetApp;
 use serde_json::json;
 
 mod comments;
+pub(crate) mod mentions;
 
 /// Asks for a new comment on the active cell (Insert › Comment, Ctrl+Alt+M).
 pub use comments::REQUEST as COMMENT_REQUEST;
