@@ -35,6 +35,7 @@ mod templates;
 mod test;
 pub(crate) mod textpreview;
 mod undo;
+mod video;
 mod viewer;
 
 const LEFT: f32 = 256.0;

@@ -40,6 +40,7 @@ pub mod raw;
 pub mod routes;
 pub mod sidecar;
 pub mod strip;
+pub mod video;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Read;
@@ -82,6 +83,10 @@ pub fn media_of(name: &str) -> Option<(&'static str, bool)> {
         "tif" | "tiff" => ("image/tiff", false),
         "dng" | "cr2" | "nef" | "arw" | "orf" | "rw2" | "raf" | "pef" | "srw" => ("image/x-raw", true),
         "cr3" => ("image/x-raw", false),
+        // Videos: listed with a generic tile, played by the browser from the Drive's Range-aware raw route.
+        "mp4" | "m4v" => ("video/mp4", false),
+        "mov" => ("video/quicktime", false),
+        "webm" => ("video/webm", false),
         _ => return None,
     })
 }
