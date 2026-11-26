@@ -79,7 +79,7 @@ async fn albums_are_virtual_and_show_only_what_the_viewer_may_see() {
     sharing::set(
         &app.store,
         sharing::Item::Folder(&folder_id),
-        &sharing::Share { people: vec![("bob".into(), sharing::Role::View)], link: sharing::Role::None },
+        &sharing::Share { people: vec![("bob".into(), sharing::Role::View)], link: sharing::Role::None, ..Default::default() },
     )
     .unwrap();
     let g = post(&app, &format!("/api/photos/albums/{bid}/add"), "bob", json!({"files": [a, b, c]})).await;

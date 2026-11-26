@@ -10,8 +10,27 @@ use gridcraft_ui_egui::formula_graphics;
 const MAX_BYTES: usize = 16 << 20;
 
 /// Starts a fetch for every address the grid asked for since the last frame.
+/// In a spreadsheet that isn't the person's own, nothing is fetched until they allow it
+/// (external.rs): the cell shows a small "blocked" picture and the address waits.
 pub fn fetch_wanted(ctx: &egui::Context) {
-    for url in formula_graphics::wanted() {
+    let wanted = formula_graphics::wanted();
+    if wanted.is_empty() {
+        return;
+    }
+    if crate::external::allowed() {
+        fetch_now(wanted, ctx);
+        return;
+    }
+    for url in wanted {
+        let blocked = Some((crate::external::BLOCKED_PNG.to_vec(), "image/png".to_string()));
+        formula_graphics::set(&url, if crate::external::hold(&url) { blocked } else { None });
+    }
+    ctx.request_repaint();
+}
+
+/// Fetches these addresses now (the person's own spreadsheet, or one they allowed).
+pub fn fetch_now(urls: Vec<String>, ctx: &egui::Context) {
+    for url in urls {
         if !(url.starts_with("https://") || url.starts_with("http://")) {
             formula_graphics::set(&url, None);
             continue;

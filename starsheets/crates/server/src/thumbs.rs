@@ -143,8 +143,113 @@ fn draw_one(wb: &Workbook) -> Result<Vec<u8>, String> {
     starsheets_sync::thumb::draw(wb)
 }
 
+/// Tile pictures of photos and PDFs are TILE_W × TILE_H (the Drive card's shape).
+pub const TILE_W: u32 = 360;
+pub const TILE_H: u32 = 240;
+/// PDFs bigger than this get the PDF icon rather than being read for a picture.
+pub const MAX_PDF: u64 = 64 * 1024 * 1024;
+/// One PDF at a time (its own lock: a slow PDF never holds up spreadsheet pictures).
+static PDF: Mutex<()> = Mutex::new(());
+
+/// A photo's thumbnail (JPEG or PNG, any size, already upright) as a Drive tile: scaled to
+/// cover TILE_W × TILE_H and cut to it around the middle, as Google Drive shows photos.
+pub fn tile(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    let img = image::load_from_memory(bytes).map_err(|e| e.to_string())?;
+    let img = img.resize_to_fill(TILE_W, TILE_H, image::imageops::FilterType::Triangle);
+    png_of(&image::DynamicImage::ImageRgba8(img.to_rgba8()))
+}
+
+fn png_of(img: &image::DynamicImage) -> Result<Vec<u8>, String> {
+    let mut out = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut out, image::ImageFormat::Png).map_err(|e| e.to_string())?;
+    Ok(out.into_inner())
+}
+
+/// The top of a PDF's first page, TILE_W wide, on white (cut to TILE_H, as Drive shows it).
+pub fn from_pdf(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
+    let _one = PDF.lock().unwrap_or_else(|e| e.into_inner());
+    // A broken file must never take the server down with it.
+    std::panic::catch_unwind(move || pdf_first_page(bytes)).unwrap_or_else(|_| Err("the PDF reader failed".into()))
+}
+
+fn pdf_first_page(bytes: Vec<u8>) -> Result<Vec<u8>, String> {
+    use hayro::hayro_syntax::Pdf;
+    let pdf = Pdf::new(bytes).map_err(|e| format!("not a readable PDF: {e:?}"))?;
+    let pages = pdf.pages();
+    let page = pages.first().ok_or("the PDF has no pages")?;
+    let (w, h) = page.render_dimensions();
+    if !(w >= 1.0 && h >= 1.0) {
+        return Err("the first page has no size".into());
+    }
+    // TILE_W wide; a very long, thin page is drawn smaller so the pixmap stays small.
+    let scale = (TILE_W as f32 / w).min(4.0 * TILE_H as f32 / h).max(0.01);
+    let settings = hayro::PixmapSettings { x_scale: scale, y_scale: scale, bg_color: hayro::vello_cpu::color::palette::css::WHITE };
+    let pix = hayro::render(page, &hayro::RenderCache::new(), &Default::default(), &hayro::RenderSettings::default(), &settings);
+    let png = pix.into_png().map_err(|e| format!("{e:?}"))?;
+    let img = image::load_from_memory_with_format(&png, image::ImageFormat::Png).map_err(|e| e.to_string())?;
+    let (iw, ih) = (img.width(), img.height());
+    png_of(&img.crop_imm(0, 0, iw.min(TILE_W), ih.min(TILE_H)))
+}
+
 #[cfg(test)]
 mod tests {
+    /// A one-page PDF (200 × 100 pt) with a black box in its top-left corner.
+    fn tiny_pdf() -> Vec<u8> {
+        let content = "0 0 0 rg 0 50 100 50 re f";
+        let objs = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_string(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_string(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 100] /Contents 4 0 R >>".to_string(),
+            format!("<< /Length {} >>\nstream\n{content}\nendstream", content.len()),
+        ];
+        let mut out = b"%PDF-1.4\n".to_vec();
+        let mut offs = Vec::new();
+        for (i, o) in objs.iter().enumerate() {
+            offs.push(out.len());
+            out.extend(format!("{} 0 obj\n{o}\nendobj\n", i + 1).bytes());
+        }
+        let xref = out.len();
+        out.extend(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).bytes());
+        for o in offs {
+            out.extend(format!("{o:010} 00000 n \n").bytes());
+        }
+        out.extend(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).bytes());
+        out
+    }
+
+    #[test]
+    fn draws_the_top_of_a_pdfs_first_page() {
+        let png = super::from_pdf(tiny_pdf()).unwrap();
+        let img = image::load_from_memory(&png).unwrap().to_rgba8();
+        // 200 × 100 pt drawn TILE_W wide: 360 × 180 (shorter than a tile: not cut).
+        assert_eq!((img.width(), img.height()), (super::TILE_W, 180));
+        assert!(img.get_pixel(10, 10).0[0] < 50, "the black box (top left)");
+        assert!(img.get_pixel(350, 170).0[0] > 200, "white page");
+    }
+
+    #[test]
+    fn a_broken_pdf_is_an_error_not_a_crash() {
+        assert!(super::from_pdf(b"%PDF-1.4 nothing here".to_vec()).is_err());
+        assert!(super::from_pdf(Vec::new()).is_err());
+    }
+
+    #[test]
+    fn photo_tiles_cover_the_card() {
+        // A tall picture (portrait) becomes a full tile, cut around the middle.
+        let mut tall = image::RgbImage::from_pixel(100, 300, image::Rgb([255, 0, 0]));
+        for y in 140..160 {
+            for x in 0..100 {
+                tall.put_pixel(x, y, image::Rgb([0, 0, 255]));
+            }
+        }
+        let mut src = std::io::Cursor::new(Vec::new());
+        tall.write_to(&mut src, image::ImageFormat::Png).unwrap();
+        let png = super::tile(src.get_ref()).unwrap();
+        let img = image::load_from_memory(&png).unwrap().to_rgba8();
+        assert_eq!((img.width(), img.height()), (super::TILE_W, super::TILE_H));
+        assert!(img.get_pixel(180, 120).0[2] > 200, "the middle stays in view");
+    }
+
     #[test]
     fn draws_a_small_png() {
         let png = super::from_bytes("t.csv", b"Name,Amount\nRent,1200\nFood,350.5\nA long piece of text that runs on,\n").unwrap();
