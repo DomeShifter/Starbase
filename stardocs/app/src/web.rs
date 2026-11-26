@@ -208,6 +208,7 @@ impl eframe::App for WebShell {
 
     /// Forwards this frame's raw browser input to the app before widgets run.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        crate::emacs_keys::strip(ctx, raw);
         self.app.raw_input_hook(ctx, raw);
     }
 

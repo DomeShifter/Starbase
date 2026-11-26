@@ -666,6 +666,25 @@ fn checklist_from_the_menu_and_ctrl_shift_9() {
 }
 
 #[test]
+fn checklist_toolbar_button_and_click_to_tick() {
+    let mut h = window(1400.0);
+    type_text(&mut h, "Milk");
+    click_containing(&mut h, "Checklist (Ctrl+Shift+9)");
+    assert_eq!(checklist_items(&h), 1, "the toolbar button makes a checklist item");
+    let doc = &h.state().app.session.doc;
+    let body = wordcraft_doc::StoryRef::Body;
+    let p = doc.para_paths(body)[0].clone();
+    let ticked = |h: &Harness<'static, Win>| {
+        let doc = &h.state().app.session.doc;
+        wordcraft_engine::cmd::checklist::item_box(doc, body, &p)
+            .is_some_and(|r| matches!(r.control.kind, wordcraft_doc::ControlKind::CheckBox { checked: true, .. }))
+    };
+    assert!(!ticked(&h));
+    run(&mut h, "developer.toggleCheckBox", json!({"control": wordcraft_engine::cmd::checklist::TAG}));
+    assert!(ticked(&h), "ticking the box marks the item done");
+}
+
+#[test]
 fn a_pictures_right_click_menu_offers_format_image() {
     let mut h = window(1400.0);
     run(&mut h, "insert.picture", json!({"data": PNG, "width": 100}));
@@ -884,4 +903,158 @@ fn commenting_allows_comments_only() {
     type_text(&mut h, "Nice");
     assert_eq!(comment_text(&mut h, id), "Nice");
     assert_eq!(body_text(&mut h), "Shared words");
+}
+
+#[test]
+fn insert_chart_drawing_emoji_and_ctrl_enter_page_break() {
+    let mut h = window(1400.0);
+    type_text(&mut h, "One");
+    let before = body_text(&mut h).chars().count();
+    keys(&mut h, Modifiers::COMMAND, Key::Enter);
+    assert!(body_text(&mut h).contains('\u{000C}'), "Ctrl+Enter inserts a page break");
+    assert_eq!(body_text(&mut h).chars().count(), before + 1);
+
+    let objects = |h: &Harness<'static, Win>| -> usize {
+        let doc = &h.state().app.session.doc;
+        doc.story(wordcraft_doc::StoryRef::Body).unwrap().iter().filter_map(|b| b.as_para()).map(|p| p.objects.len()).sum()
+    };
+    assert_eq!(objects(&h), 0);
+    menu(&mut h, &["Insert", "Chart", "Pie"]);
+    assert_eq!(objects(&h), 1, "a chart");
+    menu(&mut h, &["Insert", "Drawing", "Ellipse"]);
+    assert_eq!(objects(&h), 2, "a shape");
+
+    menu(&mut h, &["Insert", "Emoji"]);
+    assert_eq!(h.state_mut().state()["dialogs"]["emoji"], true);
+    click(&mut h, "👍");
+    steps(&mut h, 3);
+    assert_eq!(h.state_mut().state()["dialogs"]["emoji"], false);
+    assert!(body_text(&mut h).contains('👍'));
+}
+
+/// The body's raw paragraph text, objects included (as `OBJ`), one paragraph per line.
+fn raw_body(h: &Harness<'static, Win>) -> String {
+    let doc = &h.state().app.session.doc;
+    let body = doc.story(wordcraft_doc::StoryRef::Body).unwrap();
+    body.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect::<Vec<_>>().join("\n")
+}
+
+fn object_count(h: &Harness<'static, Win>) -> usize {
+    raw_body(h).matches(wordcraft_doc::para::OBJ).count()
+}
+
+/// Members of the first drawing canvas in the body, if there is one.
+fn canvas_members(doc: &wordcraft_doc::Document) -> Option<usize> {
+    doc.story(wordcraft_doc::StoryRef::Body)?.iter().filter_map(|b| b.as_para()).flat_map(|p| p.objects.iter()).find_map(|o| match o {
+        wordcraft_doc::InlineObject::Group { canvas: Some(_), children, .. } => Some(children.len()),
+        _ => None,
+    })
+}
+
+/// Ctrl+Enter (and Insert › Break › Page break) never deletes a selected object: Docs keeps it
+/// and breaks the page after it. With text selected the break replaces the text, as typing does;
+/// with only a caret it goes at the caret.
+#[test]
+fn ctrl_enter_keeps_a_selected_object_and_breaks_after_it() {
+    type Setup = fn(&mut Harness<'static, Win>);
+    let cases: [(&str, Setup, bool); 6] = [
+        ("selected shape", |h| menu(h, &["Insert", "Drawing", "Ellipse"]), true),
+        ("selected image", |h| run(h, "insert.picture", json!({"data": PNG, "width": 100})), true),
+        ("selected chart", |h| menu(h, &["Insert", "Chart", "Pie"]), true),
+        ("selected canvas", |h| menu(h, &["Insert", "Drawing", "New drawing canvas"]), true),
+        ("text selection", |h| run(h, "select.all", json!({})), false),
+        ("caret only", |_| {}, false),
+    ];
+    for via_menu in [false, true] {
+        for (name, setup, object) in cases {
+            let mut h = window(1400.0);
+            type_text(&mut h, "One two");
+            setup(&mut h);
+            let selected = wordcraft_engine::cmd::objects::object_selection(&h.state().app.session).is_some();
+            assert_eq!(selected, object, "{name}: object selected before the break");
+            let objects = object_count(&h);
+            if via_menu {
+                menu(&mut h, &["Insert", "Break", "Page break"]);
+            } else {
+                keys(&mut h, Modifiers::COMMAND, Key::Enter);
+            }
+            let raw = raw_body(&h);
+            let what = format!("{name} (menu {via_menu}): {raw:?}");
+            assert_eq!(raw.matches(wordcraft_doc::para::PAGE_BREAK).count(), 1, "one page break: {what}");
+            assert_eq!(object_count(&h), objects, "no object deleted: {what}");
+            if object {
+                let (o, b) = (raw.find(wordcraft_doc::para::OBJ).unwrap(), raw.find(wordcraft_doc::para::PAGE_BREAK).unwrap());
+                assert!(o < b, "the break goes after the object: {what}");
+                assert!(body_text(&mut h).contains("One two"), "the text stays: {what}");
+            } else if name == "text selection" {
+                assert!(!body_text(&mut h).contains("One two"), "the break replaces the selected text: {what}");
+            } else {
+                assert!(body_text(&mut h).starts_with("One two\u{000C}"), "the break goes at the caret: {what}");
+            }
+        }
+    }
+}
+
+/// Insert › Drawing › New drawing canvas puts a selected canvas in the text; the next shape
+/// goes inside it (a member, not a second object).
+#[test]
+fn new_drawing_canvas_takes_the_next_shape() {
+    let mut h = window(1400.0);
+    type_text(&mut h, "One");
+    menu(&mut h, &["Insert", "Drawing", "New drawing canvas"]);
+    assert!(wordcraft_engine::cmd::canvas::selected_canvas(&h.state().app.session).is_some(), "the new canvas is selected");
+    assert_eq!(canvas_members(&h.state().app.session.doc), Some(0), "an empty canvas");
+    assert_eq!(object_count(&h), 1);
+    menu(&mut h, &["Insert", "Drawing", "Rectangle"]);
+    assert_eq!(object_count(&h), 1, "the shape went into the canvas, not beside it");
+    assert_eq!(canvas_members(&h.state().app.session.doc), Some(1), "the canvas holds the rectangle");
+}
+
+/// Saved as .docx and read back, a chart, drawings (a shape and a canvas) and a page break all
+/// survive: the chart part exists and is referenced, the drawings are in document.xml.
+#[test]
+fn docx_keeps_chart_drawing_and_page_break() {
+    use std::io::Read;
+    let mut h = window(1400.0);
+    let to_end = |h: &mut Harness<'static, Win>| {
+        let end = h.state().app.session.doc.end_of(wordcraft_doc::StoryRef::Body);
+        run(h, "caret.set", json!({ "pos": end }));
+    };
+    type_text(&mut h, "One");
+    keys(&mut h, Modifiers::COMMAND, Key::Enter);
+    menu(&mut h, &["Insert", "Chart", "Column"]);
+    to_end(&mut h);
+    menu(&mut h, &["Insert", "Drawing", "Ellipse"]);
+    to_end(&mut h);
+    menu(&mut h, &["Insert", "Drawing", "New drawing canvas"]);
+    menu(&mut h, &["Insert", "Drawing", "Star"]);
+    let before = raw_body(&h);
+    assert_eq!(before.matches(wordcraft_doc::para::OBJ).count(), 3, "chart, ellipse, canvas: {before:?}");
+    assert_eq!(canvas_members(&h.state().app.session.doc), Some(1));
+
+    let bytes = wordcraft_engine::io::save_bytes("t.docx", &h.state().app.session.doc).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.clone())).unwrap();
+    let names: Vec<String> = zip.file_names().map(str::to_string).collect();
+    let mut part = |name: &str| {
+        let mut s = String::new();
+        zip.by_name(name).unwrap_or_else(|_| panic!("{name} in {names:?}")).read_to_string(&mut s).unwrap();
+        s
+    };
+    let chart = names.iter().find(|n| n.starts_with("word/charts/chart") && n.ends_with(".xml")).unwrap_or_else(|| panic!("a chart part: {names:?}"));
+    let rels = part("word/_rels/document.xml.rels");
+    let target = chart.trim_start_matches("word/");
+    assert!(rels.contains(target), "{target} is referenced: {rels}");
+    let xml = part("word/document.xml");
+    assert!(xml.contains(r#"<w:br w:type="page"/>"#), "a page break");
+    assert!(xml.contains("<c:chart"), "the chart is placed");
+    assert!(xml.contains("<wps:wsp"), "the ellipse is a shape");
+    assert!(xml.contains("<wpc:wpc"), "the canvas is a drawing canvas");
+    assert!(xml.matches("<w:drawing>").count() >= 3, "three drawings");
+
+    // Read back: the same objects, the break, the canvas and its star.
+    let back = wordcraft_engine::io::open_bytes("t.docx", &bytes).unwrap();
+    let raw: String = back.story(wordcraft_doc::StoryRef::Body).unwrap().iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect();
+    assert_eq!(raw.matches(wordcraft_doc::para::OBJ).count(), 3, "three objects after reload: {raw:?}");
+    assert!(raw.contains(wordcraft_doc::para::PAGE_BREAK), "the page break after reload");
+    assert_eq!(canvas_members(&back), Some(1), "the canvas and its star after reload");
 }

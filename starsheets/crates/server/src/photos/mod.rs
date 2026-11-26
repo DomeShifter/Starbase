@@ -28,14 +28,17 @@
 //! Symbolic links are never followed (as everywhere in the store), and hidden files and
 //! folders (`.starsheets`, `.bin`) are skipped.
 
+pub mod albums;
 pub mod crs;
 pub mod decode;
 pub mod edits;
+mod events;
 pub mod export;
 pub mod index;
 pub mod model;
 pub mod routes;
 pub mod sidecar;
+pub mod strip;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Read;
@@ -90,7 +93,7 @@ pub struct Config {
     pub child_memory: u64,
     /// Seconds between rescans; None = by file system (network: 600, local: 3600).
     pub rescan: Option<u64>,
-    /// Where the index and thumbnails go; None = `.starsheets/photos-cache` in the store.
+    /// Where the index and thumbnails go (STARBASE_PHOTOS_CACHE); None = chosen by [`pick_cache`].
     pub cache: Option<PathBuf>,
     /// The most the thumbnails may take, bytes.
     pub cache_cap: u64,
@@ -128,9 +131,7 @@ impl Config {
     pub fn from_env() -> Config {
         let get = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
         let num = |k: &str| get(k).and_then(|v| v.trim().parse::<u64>().ok());
-        // A local disk for the cache when there is one: STARBASE_PHOTOS_CACHE, else a volume
-        // mounted at /cache (Docker), else inside the store (Photos::start says so in the log).
-        let cache = get("STARBASE_PHOTOS_CACHE").map(PathBuf::from).or_else(|| is_mount(Path::new("/cache")).then(|| PathBuf::from("/cache/photos")));
+        let cache = get("STARBASE_PHOTOS_CACHE").map(PathBuf::from);
         let (workers, child_memory) = fit_memory(
             num("STARBASE_PHOTOS_WORKERS").unwrap_or(2).clamp(1, 32) as usize,
             num("STARBASE_PHOTOS_CHILD_MB").map_or(decode::CHILD_MEMORY, |m| m * 1024 * 1024).max(decode::MIN_CHILD_MEMORY),
@@ -145,6 +146,50 @@ impl Config {
             watch: true,
         }
     }
+}
+
+/// FNV-1a: a short, stable name for a store's path.
+fn short_hash(s: &str) -> String {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in s.bytes() {
+        h = (h ^ b as u64).wrapping_mul(0x100000001b3);
+    }
+    format!("{h:016x}")
+}
+
+/// Where the index and thumbnails go, and why (in plain words, for the log). SQLite's locking
+/// does not work on network shares (CIFS/SMB, NFS...), so: the setting, else a volume at /cache,
+/// else (store on a network share) a local per-user folder, else inside the store.
+pub fn pick_cache(
+    setting: Option<PathBuf>,
+    cache_mounted: bool,
+    store_root: &Path,
+    store_meta: &Path,
+    is_network: impl Fn(&Path) -> bool,
+    xdg_cache: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> (PathBuf, String) {
+    if let Some(p) = setting {
+        return (p, "set by STARBASE_PHOTOS_CACHE".into());
+    }
+    if cache_mounted {
+        return (PathBuf::from("/cache/photos"), "a volume is mounted at /cache".into());
+    }
+    if is_network(store_root) {
+        let base = xdg_cache
+            .filter(|p| p.is_absolute())
+            .or_else(|| home.filter(|p| p.is_absolute()).map(|h| h.join(".cache")))
+            .unwrap_or_else(|| PathBuf::from("/var/cache"));
+        let dir = base.join("starbase").join("photos").join(short_hash(&store_root.to_string_lossy()));
+        return (dir, "the storage folder is on a network share, where the index cannot work, so a local folder is used".into());
+    }
+    (store_meta.join("photos-cache"), "the storage folder is on a local disk".into())
+}
+
+const NEEDS_LOCAL: &str = "Photos needs a local disk for its index; the store is on a network share. Set STARBASE_PHOTOS_CACHE or mount /cache.";
+pub(crate) const NOT_SET_UP: &str = "Photos isn't set up on this server yet \u{2014} ask the person who runs it.";
+pub(crate) fn admin_unavailable_message() -> &'static str {
+    NEEDS_LOCAL
 }
 
 /// File systems where other computers change files without inotify hearing of it.
@@ -235,6 +280,44 @@ pub struct Photos {
 
 static SERVICES: LazyLock<Mutex<HashMap<PathBuf, Arc<Photos>>>> = LazyLock::new(Default::default);
 
+/// Pictures read only for a Drive tile: one at a time (each may use a child's memory budget).
+static DRIVE_READING: Mutex<()> = Mutex::new(());
+
+/// The 256-pixel thumbnail (JPEG or PNG, upright: EXIF orientation applied) of the picture at
+/// `path`, for its Drive tile. Photos' own thumbnail when Photos is on for its folder and has
+/// read it (edits shown); otherwise the picture is read now, the same way Photos reads one (a
+/// child process when the server runs them), and the caller keeps the result.
+pub fn drive_thumb(store: &Store, path: &str) -> Result<Vec<u8>, String> {
+    if !media_of(path).is_some_and(|(_, thumbs)| thumbs) {
+        return Err("no thumbnails of this kind of picture".into());
+    }
+    let svc = service(store);
+    if let Some(svc) = svc.as_ref().filter(|s| s.covers(path))
+        && let Some(r) = svc.row(path).filter(|r| r.state == State::Ready && svc.fresh(r))
+        && let Some(hash) = r.thumb_key()
+        && let Some((file, _)) = svc.thumb_file(hash, decode::SIZES[0])
+        && let Ok(bytes) = std::fs::read(&file)
+    {
+        svc.used(&file);
+        return Ok(bytes);
+    }
+    let memory = svc.as_ref().map_or(decode::CHILD_MEMORY, |s| s.cfg.child_memory);
+    let file = store.open_safe(path).ok_or("no such file")?;
+    if file.metadata().map_err(|e| e.to_string())?.len() > MAX_FILE {
+        return Err("too big".into());
+    }
+    let _one = DRIVE_READING.lock().unwrap_or_else(|e| e.into_inner());
+    let made = match WORKER_EXE.get() {
+        Some(exe) => decode::run_isolated(exe, file, memory, None)?,
+        None => {
+            let mut bytes = Vec::new();
+            file.take(MAX_FILE).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+            decode::make_guarded(&bytes, &decode::Limits::for_memory(memory), None)?
+        }
+    };
+    made.thumbs.into_iter().find(|t| t.size == decode::SIZES[0]).map(|t| t.bytes).ok_or_else(|| "no thumbnail".into())
+}
+
 /// The photo service of `store`, started on first use.
 pub fn service(store: &Store) -> Option<Arc<Photos>> {
     let mut all = SERVICES.lock().unwrap_or_else(|e| e.into_inner());
@@ -247,7 +330,7 @@ pub fn service(store: &Store) -> Option<Arc<Photos>> {
             Some(p)
         }
         Err(e) => {
-            eprintln!("Photos: can't open the index: {e}");
+            eprintln!("Photos: can't open the index: {e}{}", if on_network(&store.root) { format!(". {NEEDS_LOCAL}") } else { String::new() });
             None
         }
     }
@@ -256,7 +339,16 @@ pub fn service(store: &Store) -> Option<Arc<Photos>> {
 impl Photos {
     /// Opens the index, then starts the workers, the watcher and the scanner.
     pub fn start(store: &Store, cfg: Config) -> Result<Arc<Photos>, String> {
-        let cache = cfg.cache.clone().unwrap_or_else(|| store.meta().join("photos-cache"));
+        let (cache, why) = pick_cache(
+            cfg.cache.clone(),
+            is_mount(Path::new("/cache")),
+            &store.root,
+            &store.meta(),
+            on_network,
+            std::env::var_os("XDG_CACHE_HOME").map(PathBuf::from),
+            std::env::var_os("HOME").map(PathBuf::from),
+        );
+        eprintln!("Photos: index and thumbnails in {} ({why})", cache.display());
         std::fs::create_dir_all(cache.join("thumbs")).map_err(|e| format!("{}: {e}", cache.display()))?;
         let (db, aside) = Index::open_or_rebuild(&cache.join("index.sqlite")).map_err(|e| e.to_string())?;
         if let Some(a) = aside {

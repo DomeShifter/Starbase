@@ -17,6 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 deckcraft-engine = { workspace = true }
+deckcraft-render = { workspace = true }
 deckcraft-ui-egui = { workspace = true }
 # The font database the bundled fonts go into (src/fonts.rs).
 deckcraft-fonts = { workspace = true }
@@ -55,4 +56,4 @@ rfd = { workspace = true }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration", "MessageEvent", "Event", "EventTarget", "UrlSearchParams", "BeforeUnloadEvent", "Storage", "Request", "RequestInit", "RequestCredentials", "Response", "Headers", "History", "Performance", "MouseEvent", "PointerEvent", "KeyboardEvent", "AddEventListenerOptions", "Screen"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration", "MessageEvent", "Event", "EventTarget", "UrlSearchParams", "BeforeUnloadEvent", "Storage", "Request", "RequestInit", "RequestCredentials", "Response", "Headers", "History", "Performance", "MouseEvent", "PointerEvent", "KeyboardEvent", "AddEventListenerOptions", "Screen", "Navigator", "Clipboard", "HtmlTextAreaElement", "HtmlDocument"] }

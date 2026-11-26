@@ -254,6 +254,11 @@ impl eframe::App for WebShell {
             return;
         }
         self.files.logic(&mut self.app, ctx);
+        // External content (IMAGE pictures): blocked in spreadsheets that aren't this person's own.
+        if let Some(d) = self.app.session.active() {
+            let file = self.files.linked().filter(|(uid, _)| *uid == d.uid).map(|(_, id)| id);
+            crate::external::note_doc(d.uid, file.as_deref(), d.path.is_some(), ctx);
+        }
         // Live editing: send this tab's changes, apply everyone else's (live.rs).
         self.live.logic(&mut self.app, ctx, &self.files);
         self.share.logic(&self.app, ctx, &self.files);
@@ -295,6 +300,7 @@ impl eframe::App for WebShell {
 
     /// Forwards a browser frame's raw input to the shared app before eframe handles it.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        crate::emacs_keys::strip(ctx, raw);
         drop_alt_text(raw);
         self.input.raw_input(raw);
         self.autolink.saw_input(raw);

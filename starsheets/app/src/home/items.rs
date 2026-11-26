@@ -543,13 +543,38 @@ impl Home {
             // after this and would see it with nothing focused).
             ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter));
             self.renaming = None;
+            let naming = matches!(&ritem, Item::Folder(p) if self.just_made.as_ref() == Some(p));
             self.just_made = None;
             if commit && !text.is_empty() {
-                let url = match &ritem {
-                    Item::File(id) => format!("api/files/{id}/rename?name={}", enc(&text)),
-                    Item::Folder(p) => format!("api/folders/rename?path={}&name={}", enc(p), enc(&text)),
+                // Undoable (undo.rs); naming a folder just made joins its New folder's undo.
+                let group = if naming { self.undo.start_naming() } else { self.undo.start("Renamed".into(), 1, false) };
+                let (url, then): (String, super::undo::Then) = match &ritem {
+                    Item::File(id) => {
+                        let (id, was) = (id.clone(), self.file(id).map(|f| join(&f.folder, &f.name)).unwrap_or_default());
+                        (
+                            format!("api/files/{id}/rename?name={}", enc(&text)),
+                            Box::new(move |v: &Json| {
+                                let now = join(parent_of(&was), v["name"].as_str()?);
+                                let id = v["id"].as_str().map_or(id, str::to_string);
+                                (!was.is_empty() && now != was).then_some(super::undo::Step::File { id, was, now })
+                            }),
+                        )
+                    }
+                    Item::Folder(p) => {
+                        let was = p.clone();
+                        (
+                            format!("api/folders/rename?path={}&name={}", enc(p), enc(&text)),
+                            Box::new(move |v: &Json| {
+                                let now = v["path"].as_str()?.to_string();
+                                let id = v["id"].as_str().unwrap_or_default().to_string();
+                                (now != was).then_some(super::undo::Step::Folder { id, was, now })
+                            }),
+                        )
+                    }
                 };
-                call(&self.store, &self.inbox, ui.ctx(), Method::Post, url, None, refresh_after);
+                call_any(&self.store, &self.inbox, ui.ctx(), Method::Post, url, None, move |r| {
+                    Reply::Did(group, r.map(|b| then(&serde_json::from_slice(&b).unwrap_or_default())).map_err(|e| e.1))
+                });
             }
         }
         true

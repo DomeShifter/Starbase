@@ -177,7 +177,7 @@ async fn connection(
             Some(Ok(Message::Text(t))) => match serde_json::from_str::<ToServer>(&t) {
                 Ok(ToServer::Hello { file, build, client, protocol, have }) => {
                     // Only a different protocol needs the tab to reload (not every new build).
-                    if protocol != sync::PROTOCOL {
+                    if needs_reload(protocol) {
                         crate::log::note(&app.store, &format!("tab of {} on an older Starbase (build {build:?}) asked to reload", who(&user)));
                         let _ = socket.send(Message::Text(text(&ToClient::Reload).into())).await;
                         return;
@@ -1101,6 +1101,12 @@ impl Room {
     }
 }
 
+/// Whether a tab speaking `protocol` must reload first: any other protocol than ours, older or
+/// newer (protocol 9: a tab on 8 would drop sheets' grid sizes and so show data the others can't).
+fn needs_reload(protocol: u32) -> bool {
+    protocol != sync::PROTOCOL
+}
+
 /// Writes `wb` over file `id`, as long as the file on disk is still `expected` (never over a
 /// change made outside StarSheets). The .xlsx is made before taking the server's file lock.
 /// Returns the file's new version. `sheet`: the sheet the file opens on (the last editor's).
@@ -1153,6 +1159,15 @@ mod tests {
         cseq: u64,
         /// Who-is-here messages, kept aside.
         seen: Vec<ToClient>,
+    }
+
+    /// Polls until the condition holds (at most 10 s): the room saves on its own thread, and a fixed
+    /// sleep flakes under load.
+    fn wait_until(mut cond: impl FnMut() -> bool) {
+        let end = std::time::Instant::now() + Duration::from_secs(10);
+        while !cond() && std::time::Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     fn app() -> (Shared, String, std::path::PathBuf) {
@@ -1249,6 +1264,36 @@ mod tests {
     }
 
     #[test]
+    fn a_tab_on_an_older_protocol_reloads() {
+        assert!(needs_reload(8), "protocol 8 knows no grid sizes");
+        assert!(needs_reload(sync::PROTOCOL + 1));
+        assert!(!needs_reload(sync::PROTOCOL));
+    }
+
+    /// One person makes the sheet smaller while another types below the new end: the typing
+    /// isn't lost, the grid grows to hold it (on the server and in the first person's tab).
+    #[test]
+    fn shrinking_while_someone_types_below_keeps_the_typing() {
+        let (app, file, dir) = app();
+        let mut a = join(&app, &file, "a");
+        let mut b = join(&app, &file, "b");
+        edit(&app, &file, &mut a, "home.deleteRows", json!({"rows": "51:1048576"}));
+        take_applied(&mut a);
+        take_applied(&mut b);
+        // b types before it hears that a made the sheet 40 rows (b's change is on an older base);
+        // the server runs b's typing after a's delete, so the grid grows back to hold it.
+        edit(&app, &file, &mut a, "home.deleteRows", json!({"rows": "41:50"}));
+        edit(&app, &file, &mut b, "cell.set", json!({"cell": "B45", "input": "typed"}));
+        for _ in 0..2 {
+            take_applied(&mut a);
+        }
+        let sh = a.session.active().unwrap().wb.sheets[0].clone();
+        assert_eq!(sh.value(gridcraft_engine::core::CellRef::parse("B45").unwrap()), gridcraft_engine::core::Value::Text("typed".into()));
+        assert!(sh.row_count() >= 45, "the grid grew to hold it: {}", sh.row_count());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn two_tabs_stay_identical_and_the_file_is_saved() {
         let (app, file, dir) = app();
         let mut a = join(&app, &file, "a");
@@ -1273,7 +1318,7 @@ mod tests {
         // Leaving saves at once.
         app.rooms.send(&app, &file, RoomMsg::Leave { client: "a".into() });
         app.rooms.send(&app, &file, RoomMsg::Leave { client: "b".into() });
-        std::thread::sleep(Duration::from_millis(400));
+        wait_until(|| std::fs::read_to_string(dir.join("t.csv")).is_ok_and(|s| s.contains("from a") && s.contains("from b")));
         let saved = std::fs::read_to_string(dir.join("t.csv")).unwrap();
         assert!(saved.contains("from a") && saved.contains("from b"), "{saved}");
         let copies = std::fs::read_dir(dir.join(".starsheets/versions").join(&file)).unwrap().flatten();
@@ -1364,7 +1409,7 @@ mod tests {
         assert!(matches!(next(&mut a), ToClient::Reset { .. }));
         assert!(message(&mut a).contains("Starbase Sheets copy"));
         app.rooms.send(&app, &file, RoomMsg::Leave { client: "a".into() });
-        std::thread::sleep(Duration::from_millis(400));
+        wait_until(|| std::fs::read_dir(&dir).unwrap().flatten().any(|e| e.file_name().to_string_lossy().contains("Starbase Sheets copy")));
         assert!(std::fs::read_to_string(dir.join("t.csv")).unwrap().contains("theirs"), "their version is untouched");
         let copies: Vec<_> = std::fs::read_dir(&dir)
             .unwrap()
@@ -1517,7 +1562,7 @@ mod tests {
         let bob = crate::auth::add(&app.store, "bob", "Bob", "a long password").unwrap();
         let share = |role: Role| {
             let people = if role == Role::None { Vec::new() } else { vec![("bob".to_string(), role)] };
-            crate::sharing::set(&app.store, Item::File(&file), &Share { people, link: Role::None }).unwrap();
+            crate::sharing::set(&app.store, Item::File(&file), &Share { people, link: Role::None, ..Default::default() }).unwrap();
         };
         share(Role::Edit);
         let mut b = join_as(&app, &file, "c1", "tab", Some(bob), true);
@@ -1607,7 +1652,7 @@ mod tests {
         edit(&app, &file, &mut a, "cell.set", json!({"cell": "A1", "input": "on Sheet1"}));
         take_applied(&mut a);
         app.rooms.send(&app, &file, RoomMsg::Leave { client: "a".into() });
-        std::thread::sleep(Duration::from_millis(400));
+        wait_until(|| opened(&dir) == 0);
         assert_eq!(opened(&dir), 0, "saved open on Sheet1, where the change was");
         let _ = std::fs::remove_dir_all(dir);
     }

@@ -191,6 +191,11 @@ fn run(ctx: &egui::Context, app: &mut SheetApp, home: &mut Home, id: &str, param
     if home.active {
         return Err(format!("`{id}` needs a spreadsheet open (this is the home screen)"));
     }
+    // External content bar (external.rs): `external:allow` presses Allow.
+    if id == "external:allow" {
+        crate::external::allow(ctx);
+        return Ok(json!({ "allowed": crate::external::allowed() }));
+    }
     // The clipboard, which a script can't reach: `clip:copy` copies the selection as Ctrl+C does
     // and answers the text and HTML it puts on the clipboard; `clip:paste {text, html?, values?}`
     // pastes as Ctrl+V (Ctrl+Shift+V with `values`) does when the browser hands those over.
@@ -383,6 +388,8 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
         "active": active.a1(),
         "selection": ranges.join(","),
         "freeze": wb.active().and_then(|s| s.freeze).map(|(r, c)| json!({ "rows": r, "cols": c })),
+        // The sheet's grid size (rows × columns); `sized` false = Excel's full grid.
+        "grid": wb.active().map(|s| json!({ "rows": s.row_count(), "cols": s.col_count(), "sized": s.grid_rows.is_some() })),
         "filterView": crate::shell::filterviews::state(&*p.app),
         "smartFill": crate::smartfill::suggestion(p.app).map(|s| json!({
             "at": s.at.a1(),
@@ -392,6 +399,7 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
         "pivot": crate::pivotpanel::state(&*p.app),
         "imagesReady": formula_images_ready(&*p.app),
         "linkCard": crate::linkcard::shown(),
+        "external": json!({ "verdict": crate::external::verdict().map(|v| format!("{v:?}")), "held": crate::external::held_count() }),
         "history": p.files.history_state(),
         "cell": cell,
         "format": format,

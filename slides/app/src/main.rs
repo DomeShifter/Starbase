@@ -18,6 +18,9 @@
 // `--version`/`--help` join the terminal that started them (starbase_connect::attach_terminal).
 #![cfg_attr(all(windows, not(debug_assertions), not(test)), windows_subsystem = "windows")]
 
+// Shared with Sheets (one definition): Ctrl+H/K/U/W never edit a text box the Emacs way.
+#[path = "../../../starsheets/app/src/emacs_keys.rs"]
+mod emacs_keys;
 mod fonts;
 mod icons;
 mod shell;
@@ -25,6 +28,8 @@ mod theme;
 
 #[cfg(any(target_arch = "wasm32", test))]
 mod api;
+#[cfg(target_arch = "wasm32")]
+mod dialogs;
 #[cfg(target_arch = "wasm32")]
 mod fullscreen;
 #[cfg(target_arch = "wasm32")]

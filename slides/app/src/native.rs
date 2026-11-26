@@ -452,6 +452,7 @@ impl eframe::App for Desktop {
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        crate::emacs_keys::strip(ctx, raw);
         // A presentation dropped on the window opens (here, or in a window of its own); pictures
         // and other files go to DeckCraft, which inserts them.
         let dropped = std::mem::take(&mut raw.dropped_files);
