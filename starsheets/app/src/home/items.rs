@@ -424,6 +424,7 @@ impl Home {
         }
         let sub = match (&self.view, f.opened) {
             (Some(View::Recent), Some(t)) => format!("You opened {}", ago(t)),
+            _ if self.found_snippet(&f.id).is_some() => self.found_snippet(&f.id).unwrap_or_default().to_string(),
             _ if self.accounts && f.owner != self.space => format!("{} · {}", self.person(&f.owner), ago(f.modified)),
             _ => format!("Modified {}", ago(f.modified)),
         };
@@ -435,6 +436,15 @@ impl Home {
         }
         let resp = resp.on_hover_text(&f.name);
         self.interact(ui, &item, &resp, clicked_item);
+    }
+
+    /// The words around the match inside this file, while a search that found text in it is shown.
+    pub(super) fn found_snippet(&self, id: &str) -> Option<&str> {
+        let q = self.search.trim();
+        if q.is_empty() || self.found_for != q {
+            return None;
+        }
+        self.found.get(id).map(String::as_str).filter(|s| !s.is_empty())
     }
 
     pub(super) fn list_ui(&mut self, ui: &mut Ui, order: &[Item], clicked_item: &mut bool) {
@@ -478,6 +488,10 @@ impl Home {
             })
             .collect();
         for ListRow { item, name, icon, owner, modified, size, starred } in rows {
+            let snippet = match &item {
+                Item::File(id) => self.found_snippet(id).map(str::to_string),
+                Item::Folder(_) => None,
+            };
             let (r, resp) = ui.allocate_exact_size(vec2(w, ROW), Sense::click_and_drag());
             let p = ui.painter().clone();
             if self.selected.contains(&item) {
@@ -508,6 +522,15 @@ impl Home {
                 p.galley(at, galley, theme::TEXT);
                 if starred {
                     p.text(egui::pos2(end + 8.0, r.center().y), Align2::LEFT_CENTER, "★", FontId::proportional(14.0), theme::TEXT);
+                }
+                // A match inside the file: the words around it, dim, after the name.
+                if let Some(s) = snippet {
+                    let x = end + if starred { 30.0 } else { 14.0 };
+                    let left = r.left() + room + 44.0 - x;
+                    if left > 40.0 {
+                        let g = one_line(&p, s, 12.0, theme::TEXT_DIM, left);
+                        p.galley(egui::pos2(x, r.center().y - g.size().y / 2.0), g, theme::TEXT_DIM);
+                    }
                 }
             }
             if self.accounts {

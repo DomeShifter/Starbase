@@ -26,6 +26,8 @@ impl Home {
             "view": view,
             "loading": self.loading,
             "search": self.search,
+            // Files whose text matched the search, with the snippet shown for each.
+            "found": self.found.iter().map(|(id, s)| json!({ "id": id, "snippet": s })).collect::<Vec<_>>(),
             "filters": { "kind": self.filters.kind, "who": self.filters.who, "when": self.filters.when },
             "error": self.error,
             "undo": self.undo.done.iter().map(|a| a.label.clone()).collect::<Vec<_>>(),

@@ -16,6 +16,7 @@
 mod auth;
 mod backup;
 mod commenting;
+mod contentsearch;
 mod devices;
 mod docx_comments;
 mod findpath;
@@ -1965,6 +1966,9 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
         return please_sign_in(&app, &headers);
     }
     let me = current_user(&app, &headers);
+    if let Some(resp) = contentsearch::route(&app, &m, &p, &q, me.clone()).await {
+        return resp;
+    }
     if let Some(resp) = findpath::route(&app, &m, &p, &q, me.clone()).await {
         return resp;
     }
@@ -2301,14 +2305,14 @@ mod tests {
         format!("10.{}.{}.{}", b(0), b(2), b(4))
     }
 
-    struct Got {
-        status: u16,
-        headers: HeaderMap,
-        json: Value,
-        bytes: Vec<u8>,
+    pub(crate) struct Got {
+        pub(crate) status: u16,
+        pub(crate) headers: HeaderMap,
+        pub(crate) json: Value,
+        pub(crate) bytes: Vec<u8>,
     }
 
-    async fn send(app: &Shared, ip: &str, method: &str, uri: &str, cookie: &str, extra: &[(&str, &str)], body: Vec<u8>) -> Got {
+    pub(crate) async fn send(app: &Shared, ip: &str, method: &str, uri: &str, cookie: &str, extra: &[(&str, &str)], body: Vec<u8>) -> Got {
         let mut b = axum::http::Request::builder().method(method).uri(uri).header(header::HOST, "192.168.1.5:8080");
         if !cookie.is_empty() {
             b = b.header(header::COOKIE, cookie);
@@ -2325,16 +2329,16 @@ mod tests {
         Got { status, headers, json: serde_json::from_slice(&bytes).unwrap_or(Value::Null), bytes: bytes.to_vec() }
     }
 
-    async fn post(app: &Shared, ip: &str, uri: &str, cookie: &str, v: Value) -> Got {
+    pub(crate) async fn post(app: &Shared, ip: &str, uri: &str, cookie: &str, v: Value) -> Got {
         send(app, ip, "POST", uri, cookie, &[], serde_json::to_vec(&v).unwrap()).await
     }
 
-    fn cookie_of(g: &Got) -> String {
+    pub(crate) fn cookie_of(g: &Got) -> String {
         g.headers.get(header::SET_COOKIE).and_then(|v| v.to_str().ok()).unwrap_or("").split(';').next().unwrap_or("").to_string()
     }
 
     /// A server with its owner ("boss"), signed in: (app, address, owner's cookie).
-    async fn owned() -> (Shared, String, String) {
+    pub(crate) async fn owned() -> (Shared, String, String) {
         let app = app(true);
         let ip = address();
         let code = auth::setup_code(&app.store);

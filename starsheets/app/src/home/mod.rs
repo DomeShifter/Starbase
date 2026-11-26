@@ -123,6 +123,8 @@ enum Reply {
     Did(u64, Result<Option<undo::Step>, String>),
     /// One request of an undo answered.
     Undone(Result<(), String>),
+    /// The files whose text matches a search: (the search, [(file id, snippet)]).
+    Found(String, Vec<(String, String)>),
     Error(String),
 }
 
@@ -181,6 +183,11 @@ pub struct Home {
     /// Details: the item shown, and who has access to it (from the server) once known.
     details: Option<(Item, Option<Json>)>,
     search: String,
+    /// Files whose text holds the search words (id → snippet), for the search in `found_for`.
+    found: HashMap<String, String>,
+    found_for: String,
+    /// The search last sent to the server for text matches.
+    asked: String,
     /// The chips under the search box (filters.rs).
     filters: filters::Filters,
     selected: Vec<Item>,
@@ -359,6 +366,34 @@ impl Home {
         if self.view == Some(View::Bin) {
             self.load_bin(ctx);
         }
+    }
+
+    /// Search also looks inside files: asks the server which files' text holds the words (once
+    /// per search; an answer for an older search is dropped when it arrives).
+    fn ask_text_matches(&mut self, ctx: &egui::Context) {
+        let q = self.search.trim().to_string();
+        if q == self.asked {
+            return;
+        }
+        self.asked = q.clone();
+        if q.chars().count() < 2 {
+            self.found.clear();
+            self.found_for.clear();
+            return;
+        }
+        let url = format!("api/content-search?q={}", enc(&q));
+        let q2 = q.clone();
+        call_any(&self.store, &self.inbox, ctx, Method::Get, url, None, move |r| {
+            let hits = r.ok().and_then(|b| serde_json::from_slice::<Json>(&b).ok()).map(|v| {
+                v["hits"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter().filter_map(|h| Some((h["id"].as_str()?.to_string(), h["snippet"].as_str().unwrap_or("").to_string()))).collect()
+                    })
+                    .unwrap_or_default()
+            });
+            Reply::Found(q2, hits.unwrap_or_default())
+        });
     }
 
     fn load_bin(&mut self, ctx: &egui::Context) {
@@ -667,7 +702,13 @@ impl Home {
                 .filter(|f| !fl.any() || fl.folder_ok(f, &self.space, self.folder_stats(&f.path).0))
                 .cloned()
                 .collect();
-            let files = self.files.iter().filter(|f| f.name.to_lowercase().contains(&q) && fl.file_ok(f, &self.space)).cloned().collect();
+            let text = self.found_for.to_lowercase() == q;
+            let files = self
+                .files
+                .iter()
+                .filter(|f| (f.name.to_lowercase().contains(&q) || (text && self.found.contains_key(&f.id))) && fl.file_ok(f, &self.space))
+                .cloned()
+                .collect();
             return self.sorted(folders, files);
         }
         let (folders, files): (Vec<FolderRow>, Vec<FileRow>) = match self.view.clone() {
@@ -867,6 +908,7 @@ impl Home {
         ctx.request_repaint_after(std::time::Duration::from_millis(RELIST_MS as u64));
         let folder = self.photo_folder();
         self.photos.logic(ctx, &self.store, folder);
+        self.ask_text_matches(ctx);
         let replies: Vec<Reply> = std::mem::take(&mut *self.inbox.borrow_mut());
         for r in replies {
             match r {
@@ -918,6 +960,12 @@ impl Home {
                 Reply::Download(name, bytes) => {
                     if let Err(e) = self.store.download(&name, &bytes) {
                         self.error = Some(e);
+                    }
+                }
+                Reply::Found(q, hits) => {
+                    if q == self.search.trim() {
+                        self.found = hits.into_iter().collect();
+                        self.found_for = q;
                     }
                 }
                 Reply::Error(e) => {
