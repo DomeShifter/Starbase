@@ -70,9 +70,11 @@ async fn scan_now_queues_only_my_folders_and_waits_between_asks() {
     let model = ph.face_model().to_string();
     let face = Found { x: 0.1, y: 0.1, w: 0.2, h: 0.2, score: 0.95, px: 80.0, emb: vec![1.0, 0.0, 0.0, 0.0] };
     let thumb_of = |path: &str| ph.with_db(faces::thumb_paths).unwrap().into_iter().find(|(_, p)| p == path).unwrap().0;
-    ph.with_db(|ix| faces::keep(ix, &thumb_of("bob/Mine/b.jpg"), &model, std::slice::from_ref(&face))).unwrap();
+    // Thumbnail ids first: with_db is not re-entrant (a lookup inside it waits on itself forever).
+    let (bob_t, ada_t) = (thumb_of("bob/Mine/b.jpg"), thumb_of("ada/Pics/c.jpg"));
+    ph.with_db(|ix| faces::keep(ix, &bob_t, &model, std::slice::from_ref(&face))).unwrap();
     assert_eq!(get(&app, "/api/photos/scan", Some("ada"), &[]).await.json["faces_new"], 0, "Bob's face isn't counted for Ada");
-    ph.with_db(|ix| faces::keep(ix, &thumb_of("ada/Pics/c.jpg"), &model, &[face])).unwrap();
+    ph.with_db(|ix| faces::keep(ix, &ada_t, &model, &[face])).unwrap();
     assert_eq!(get(&app, "/api/photos/scan", Some("ada"), &[]).await.json["faces_new"], 1, "Ada's new face");
     // Each person sees their own run.
     let none = get(&app, "/api/photos/scan", Some("boss"), &[]).await.json;
