@@ -1214,6 +1214,32 @@ async fn gate(
                         need(role, Role::View)?;
                         return Err(send_json(&sharing::describe(store, Item::File(id), &path, role), 200));
                     }
+                    // "@Name" in a comment: the people named who may open the file get a marker.
+                    (["mentions"], "POST") => {
+                        need(role, Role::Comment)?;
+                        let named: Vec<String> = json
+                            .get("users")
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|u| u.as_str().map(str::to_string))
+                            .take(20)
+                            .collect();
+                        let (mut recorded, mut no_access) = (Vec::new(), Vec::new());
+                        for u in named {
+                            if u == me.username {
+                                continue;
+                            }
+                            let Some(user) = auth::users(store).into_iter().find(|x| x.username == u) else { continue };
+                            if sharing::file_role(store, true, Some(&user), id) >= Role::View {
+                                let _ = spaces::note_mention(store, &u, id, &me.username);
+                                recorded.push(u);
+                            } else {
+                                no_access.push(u);
+                            }
+                        }
+                        return Err(send_json(&json!({ "recorded": recorded, "no_access": no_access }), 200));
+                    }
                     (["sharing"], "POST") => {
                         need(role, Role::Owner)?;
                         return Err(match sharing::update(store, Item::File(id), &path, &json) {
@@ -1761,6 +1787,7 @@ fn after_files(app: &App, me: &auth::User, m: &str, p: &[String], r: Result<Repl
     let opened = spaces::opened(&app.store, me);
     let colours = spaces::colours(&app.store, me);
     let changed = spaces::changed_by(&app.store);
+    let mentioned = spaces::mentions(&app.store, me);
     let files: Vec<Value> = v["files"]
         .as_array()
         .cloned()
@@ -1781,6 +1808,9 @@ fn after_files(app: &App, me: &auth::User, m: &str, p: &[String], r: Result<Repl
             }
             if let Some(t) = opened.get(&id) {
                 f["opened"] = t.clone();
+            }
+            if let Some(by) = mentioned.get(&id).and_then(|m| m.get("by")) {
+                f["mentioned_by"] = by.clone();
             }
             Some(f)
         })
@@ -2807,6 +2837,53 @@ mod tests {
         let _ = std::fs::remove_dir_all(&app.store.root);
     }
 
+    /// Drive "Manage versions" for any file: a new revision put over xlsx, pptx, a photo or a text
+    /// file keeps the old one; an editor restores it, a viewer and a stranger are refused (403).
+    #[tokio::test]
+    async fn any_file_keeps_versions() {
+        let (app, ip, boss) = owned().await;
+        for who in ["ann", "vic", "eve"] {
+            let g = post(&app, &ip, "/api/users", &boss, json!({"username": who, "name": who, "password": format!("{who}password")})).await;
+            assert_eq!(g.status, 200);
+        }
+        let mut cookies = Vec::new();
+        for who in ["ann", "vic", "eve"] {
+            cookies.push(cookie_of(&post(&app, &ip, "/api/login", "", json!({"username": who, "password": format!("{who}password")})).await));
+        }
+        let (ann, vic, eve) = (cookies[0].clone(), cookies[1].clone(), cookies[2].clone());
+        for name in ["a.xlsx", "deck.pptx", "pic.png", "notes.txt"] {
+            let id = send(&app, &ip, "POST", &format!("/api/files?name={name}&as_is=1"), &boss, &[], b"one".to_vec()).await.json["id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let g = post(&app, &ip, &format!("/api/files/{id}/sharing"), &boss, json!({"people": {"ann": "edit", "vic": "view"}})).await;
+            assert_eq!(g.status, 200, "{name}");
+            assert_eq!(send(&app, &ip, "PUT", &format!("/api/files/{id}"), &ann, &[], b"two".to_vec()).await.status, 200);
+            let h = send(&app, &ip, "GET", &format!("/api/files/{id}/history"), &ann, &[], vec![]).await;
+            let vs = h.json["versions"].as_array().unwrap().clone();
+            assert_eq!(vs.len(), 1, "{name}: {vs:?}");
+            assert_eq!((vs[0]["author"].as_str(), vs[0]["size"].as_u64()), (Some("boss"), Some(3)), "{name}");
+            let v = vs[0]["v"].as_str().unwrap().to_string();
+            for (who, cookie) in [("viewer", &vic), ("stranger", &eve)] {
+                for url in [format!("/api/files/{id}/history"), format!("/api/files/{id}/versions"), format!("/api/files/{id}/versions/{v}")] {
+                    assert_eq!(send(&app, &ip, "GET", &url, cookie, &[], vec![]).await.status, 403, "{name} {who} {url}");
+                }
+                assert_eq!(
+                    send(&app, &ip, "POST", &format!("/api/files/{id}/versions/{v}/restore"), cookie, &[], vec![]).await.status,
+                    403,
+                    "{name} {who}"
+                );
+            }
+            assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{id}/versions/{v}"), &ann, &[], vec![]).await.bytes, b"one");
+            let g = send(&app, &ip, "POST", &format!("/api/files/{id}/versions/{v}/restore"), &ann, &[], vec![]).await;
+            assert_eq!(g.status, 200, "{name}: {:?}", g.json);
+            assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{id}"), &boss, &[], vec![]).await.bytes, b"one");
+            let h = send(&app, &ip, "GET", &format!("/api/files/{id}/history"), &ann, &[], vec![]).await;
+            assert_eq!(h.json["versions"].as_array().unwrap().len(), 2, "{name}: the restore keeps the version it replaced");
+        }
+        let _ = std::fs::remove_dir_all(&app.store.root);
+    }
+
     #[tokio::test]
     async fn removing_someone_moves_their_folder_to_the_owner() {
         let (app, ip, boss) = owned().await;
@@ -3203,13 +3280,12 @@ mod tests {
             assert_eq!(send(&app, &ip, "GET", &url, &ann, &[], vec![]).await.status, 403, "{url}");
         }
         assert_eq!(g.headers[header::CACHE_CONTROL], "no-store", "never cached: access can be taken away");
-        // Replacing it keeps no versions, but the old content goes to the bin (restorable);
-        // renaming keeps its type; moving too.
+        // Replacing it keeps the old content as a version (restorable); renaming keeps its type; moving too.
         assert_eq!(send(&app, &ip, "PUT", &format!("/api/files/{photo}"), &boss, &[], b"new".to_vec()).await.status, 200);
-        assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{photo}/versions"), &boss, &[], vec![]).await.json, json!([]));
-        let bin = send(&app, &ip, "GET", "/api/bin", &boss, &[], vec![]).await.json;
-        assert!(bin.as_array().unwrap().iter().any(|b| b["name"] == "photo.png" && b["original"] == "boss/photo.png"), "{bin}");
-        assert_eq!(std::fs::read(app.store.full("boss/.bin/photo.png")).unwrap(), png, "the replaced content");
+        let vs = send(&app, &ip, "GET", &format!("/api/files/{photo}/versions"), &boss, &[], vec![]).await.json;
+        assert_eq!(vs.as_array().map(Vec::len), Some(1), "{vs}");
+        let v = vs[0]["v"].as_str().unwrap();
+        assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{photo}/versions/{v}"), &boss, &[], vec![]).await.bytes, png);
         assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{photo}"), &boss, &[], vec![]).await.bytes, b"new");
         let g = send(&app, &ip, "POST", &format!("/api/files/{photo}/rename?name=Holiday"), &boss, &[], vec![]).await;
         assert_eq!(g.json["name"], "Holiday.png");

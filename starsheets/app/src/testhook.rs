@@ -340,7 +340,7 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
         return json!({ "screen": "home", "home": p.home.test_state(), "account": crate::account::test_state(ctx), "targets": crate::house::targets(ctx) });
     }
     let Some(doc) = p.app.session.active() else {
-        return json!({ "screen": "sheet", "file": null });
+        return json!({ "screen": "sheet", "file": null, "mention": crate::notes::mentions::test_state() });
     };
     let wb = &doc.wb;
     let sheets: Vec<&str> = wb.sheets.iter().map(|s| s.name.as_str()).collect();
@@ -401,6 +401,7 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
     let linked = p.files.linked().filter(|(uid, _)| *uid == doc.uid);
     json!({
         "screen": "sheet",
+        "mention": crate::notes::mentions::test_state(),
         "targets": crate::house::targets(ctx),
         "file": doc.display_title(),
         "fileId": linked.map(|(_, id)| id),

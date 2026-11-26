@@ -26,7 +26,7 @@ struct World {
 impl World {
     fn new(n: usize) -> World {
         World {
-            server: Server { doc: open(base()), log: Vec::new() },
+            server: Server::new(open(base())),
             clients: (0..n).map(|i| Client::new(i, open(base()))).collect(),
             up: vec![VecDeque::new(); n],
             down: vec![VecDeque::new(); n],

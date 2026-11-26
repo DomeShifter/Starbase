@@ -249,12 +249,18 @@ impl PhotoMode {
             }
             Act::Favourite => self.out.push(Out::Star(ids)),
             Act::Download => {
+                // A stacked picture downloads with its RAW twin.
+                let ids: Vec<String> =
+                    ids.iter().flat_map(|id| self.pics.iter().find(|p| &p.id == id).map_or_else(|| vec![id.clone()], |p| p.with_stack())).collect();
                 download_all(&ids);
                 let n = ids.len();
                 self.say(ctx, if n == 1 { "Downloading 1 picture".into() } else { format!("Downloading {n} pictures") }, None);
             }
             Act::Info => self.out.push(Out::Info(ids[0].clone())),
             Act::Delete => {
+                // Deleting a stack moves both files (JPEG and RAW) to the bin, which Undo restores.
+                let ids: Vec<String> =
+                    ids.iter().flat_map(|id| self.pics.iter().find(|p| &p.id == id).map_or_else(|| vec![id.clone()], |p| p.with_stack())).collect();
                 self.pics.retain(|p| !ids.contains(&p.id));
                 if let Some(v) = &mut self.viewer {
                     v.fit_list(self.pics.len());

@@ -10,7 +10,7 @@ on:
     branches: [main]
     paths: ["stardocs/**", ".github/workflows/stardocs-coedit.yml", "rustfmt.toml"]
   pull_request:
-    paths: ["stardocs/coedit/**", ".github/workflows/stardocs-coedit.yml"]
+    paths: ["stardocs/**", ".github/workflows/stardocs-coedit.yml"]
   schedule:
     - cron: "0 5 * * 1" # Monday 05:00 UTC
   workflow_dispatch:
@@ -50,7 +50,7 @@ jobs:
         with:
           components: clippy, rustfmt
       - name: Formatting
-        run: cargo fmt -p stardocs-coedit --check
+        run: cargo fmt -p stardocs-coedit -p starbase-docs-sync --check
       # Saved only on main (CONTRIBUTING.md, "Continuous integration").
       - uses: Swatinem/rust-cache@v2
         with:
@@ -58,11 +58,11 @@ jobs:
           workspaces: stardocs
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Clippy
-        run: cargo clippy -p stardocs-coedit --tests --no-deps -- -D warnings
+        run: cargo clippy -p stardocs-coedit -p starbase-docs-sync --tests --no-deps -- -D warnings
       - name: Convergence, transform pairs and inverses, undo, 100-page cost
         run: |
           # An empty value means "the tests' defaults".
           [ -n "$COEDIT_CASES" ] || unset COEDIT_CASES
           [ -n "$COEDIT_PAIRS" ] || unset COEDIT_PAIRS
           echo "cases: ${COEDIT_CASES:-default}, pairs: ${COEDIT_PAIRS:-default}"
-          cargo test -p stardocs-coedit -- --nocapture
+          cargo test -p stardocs-coedit -p starbase-docs-sync -- --nocapture
