@@ -49,6 +49,7 @@ fn serde_round_trip() {
         temperature: 15,
         tint: -5,
         filter: Some(Filter { name: FilterName::Sepia, amount: 0.3 }),
+        red_eye: vec![],
     };
     let s = serde_json::to_string(&e).unwrap();
     assert!(s.contains(r#""angle":-12.3"#) && s.contains(r#""aspect":"16:9""#) && s.contains(r#""v":1"#), "{s}");
@@ -344,4 +345,77 @@ fn perf() {
             println!("{w}x{h} {label}: {:.1} ms", t.elapsed().as_secs_f64() * 1000.0 / n as f64);
         }
     }
+}
+
+// ---- auto enhance and red-eye ----
+
+fn luma_spread(img: &RgbaImage) -> (f32, f32) {
+    let v: Vec<f32> = img.pixels().map(|p| 0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32).collect();
+    let mean = v.iter().sum::<f32>() / v.len() as f32;
+    let sd = (v.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / v.len() as f32).sqrt();
+    (sd, v.iter().cloned().fold(0.0, f32::max) - v.iter().cloned().fold(255.0, f32::min))
+}
+
+/// A dull picture: a ramp squeezed into 90..170 with a blue-ish cast.
+fn dull() -> RgbaImage {
+    RgbaImage::from_fn(64, 64, |x, y| {
+        let v = 90 + ((x + y) * 80 / 126) as u8;
+        Rgba([v - 10, v, v + 10, 255])
+    })
+}
+
+#[test]
+fn auto_widens_the_histogram_and_is_plain_slider_values() {
+    let img = dull();
+    let e = starbase_photo_edit::auto_enhance(&img, &Edits::default());
+    assert!(e.exposure != 0.0 || e.contrast != 0, "{e:?}");
+    assert_eq!(e, starbase_photo_edit::auto_enhance(&img, &Edits::default()), "deterministic");
+    let out = render(&img, &e);
+    let (sd0, range0) = luma_spread(&img);
+    let (sd1, range1) = luma_spread(&out);
+    assert!(sd1 > sd0 * 1.2 && range1 > range0 * 1.2, "sd {sd0}->{sd1} range {range0}->{range1}");
+    // the blue cast is reduced
+    let (a, b) = (px(&img, 32, 32), px(&out, 32, 32));
+    assert!((b[2] as i32 - b[0] as i32).abs() < (a[2] as i32 - a[0] as i32).abs());
+    // keeps other edits, survives JSON
+    let kept = Edits { rot90: 1, saturation: 20, ..Edits::default() };
+    let e2 = starbase_photo_edit::auto_enhance(&img, &kept);
+    assert_eq!((e2.rot90, e2.saturation), (1, 20));
+    assert_eq!(parse(&serde_json::to_string(&e2).unwrap()).unwrap(), e2);
+}
+
+#[test]
+fn auto_on_flat_or_empty_pictures_changes_nothing() {
+    assert!(starbase_photo_edit::auto_enhance(&flat(8, 8, [100, 100, 100]), &Edits::default()).is_identity());
+    assert!(starbase_photo_edit::auto_enhance(&RgbaImage::new(0, 0), &Edits::default()).is_identity());
+}
+
+#[test]
+fn red_eye_turns_a_red_disk_dark_grey_and_leaves_the_rest() {
+    let mut img = flat(100, 100, [120, 110, 100]);
+    for y in 0..100u32 {
+        for x in 0..100u32 {
+            if (x as i32 - 50).pow(2) + (y as i32 - 50).pow(2) <= 25 {
+                img.put_pixel(x, y, Rgba([210, 20, 20, 255]));
+            }
+        }
+    }
+    // a red pixel outside the spot stays red
+    img.put_pixel(5, 5, Rgba([210, 20, 20, 255]));
+    let e = Edits { red_eye: vec![starbase_photo_edit::RedEye { x: 0.5, y: 0.5, r: 0.08 }], ..Edits::default() };
+    assert!(!e.is_identity());
+    let out = render(&img, &e);
+    assert_eq!(px(&out, 50, 50), [20, 20, 20, 255]);
+    assert_eq!(px(&out, 5, 5), [210, 20, 20, 255]);
+    assert_eq!(px(&out, 80, 80), [120, 110, 100, 255], "the skin around is untouched");
+    assert_eq!(parse(&serde_json::to_string(&e).unwrap()).unwrap(), e);
+    // follows the eye through a rotation
+    let r = render(&img, &Edits { rot90: 1, ..e.clone() });
+    assert_eq!(px(&r, 50, 50), [20, 20, 20, 255]);
+}
+
+#[test]
+fn red_eye_spots_are_range_checked() {
+    assert!(parse(r#"{"red_eye":[{"x":2,"y":0.5,"r":0.05}]}"#).is_err());
+    assert!(parse(r#"{"red_eye":[{"x":0.5,"y":0.5,"r":0}]}"#).is_err());
 }

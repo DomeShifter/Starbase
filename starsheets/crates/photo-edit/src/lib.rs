@@ -14,12 +14,14 @@
 
 #![forbid(unsafe_code)]
 
+mod auto;
 mod geometry;
 mod model;
 mod tone;
 
+pub use auto::auto_enhance;
 pub use image::RgbaImage;
-pub use model::{Aspect, Crop, EditError, Edits, Filter, FilterName, MAX_ANGLE, MAX_EXPOSURE, MAX_SLIDER, MIN_CROP, VERSION};
+pub use model::{Aspect, Crop, EditError, Edits, Filter, FilterName, MAX_ANGLE, MAX_EXPOSURE, MAX_RED_EYE, MAX_SLIDER, MIN_CROP, RedEye, VERSION};
 
 /// Renders `e` on `img` (already upright). Edits made in code are clamped to their ranges first,
 /// so this never panics; untouched steps are skipped, so identity edits give the same bytes back.
@@ -28,7 +30,13 @@ pub fn render(img: &RgbaImage, e: &Edits) -> RgbaImage {
     if img.width() == 0 || img.height() == 0 {
         return img.clone();
     }
-    let mut out = geometry::apply(img, &e);
+    let mut out = if e.red_eye.is_empty() {
+        geometry::apply(img, &e)
+    } else {
+        let mut fixed = img.clone();
+        auto::apply_red_eye(&mut fixed, &e.red_eye);
+        geometry::apply(&fixed, &e)
+    };
     if !e.pixels_are_identity() {
         tone::apply(&mut out, &e);
     }
@@ -69,5 +77,11 @@ fn sanitize(e: &Edits) -> Edits {
         temperature: s(e.temperature),
         tint: s(e.tint),
         filter: e.filter.map(|f| Filter { name: f.name, amount: fin(f.amount, 0.0, 1.0, 0.0) }),
+        red_eye: e
+            .red_eye
+            .iter()
+            .take(MAX_RED_EYE)
+            .map(|s| RedEye { x: fin(s.x, 0.0, 1.0, 0.0), y: fin(s.y, 0.0, 1.0, 0.0), r: fin(s.r, 0.001, 0.5, 0.01) })
+            .collect(),
     }
 }
