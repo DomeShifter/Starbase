@@ -239,7 +239,9 @@ impl Store for ServerStore {
 
     fn open_new(&self, id: &str, name: &str, fresh: &str) -> Result<(), String> {
         if let Some(w) = web_sys::window() {
-            let url = format!("{}&fresh={}&was={}", crate::files::file_url(id, name), enc(fresh), enc(name));
+            // `test` is carried over so a click test can drive the new tab through its test hook.
+            let test = w.location().search().ok().and_then(|s| web_sys::UrlSearchParams::new_with_str(&s).ok()).is_some_and(|q| q.has("test"));
+            let url = format!("{}&fresh={}&was={}{}", crate::files::file_url(id, name), enc(fresh), enc(name), if test { "&test" } else { "" });
             let _ = w.open_with_url_and_target(&url, "_blank");
         }
         Ok(())
