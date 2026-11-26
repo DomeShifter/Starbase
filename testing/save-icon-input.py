@@ -1,15 +1,20 @@
 #!/usr/bin/env python3
-"""Real-input check of the save-state icon (to-do 3 row 38) in Sheets and Docs, Chromium + Firefox.
+"""Real-input check of the save-state icon (to-do 3 row 38) in Sheets, Docs and Slides, Chromium + Firefox.
 Types a change with xdotool, records the saveIcon states seen (expects unsaved/saving, then saved), hovers the
 icon (the card target must appear), clicks it (version history must open). Screenshots: floppy + card per app and
 browser. Needs the shared click library starbase_ui.py (STARBASE_UI_DIR, default ~/.claude/tools).
-    save-icon-input.py --testn 32 [--apps sheets,docs]
+    save-icon-input.py --testn 32 [--apps sheets,docs,slides]
+Slides: double-clicks the title placeholder of the new presentation's first slide and types into it.
 """
 import os, subprocess, sys, time
 
 sys.path.insert(0, os.environ.get("STARBASE_UI_DIR", os.path.expanduser("~/.claude/tools")))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from starbase_ui import Session, ship_and_run  # noqa: E402
+
+
+# Middle of the first slide's title placeholder in a 1280-wide window (thumbnails left, slide in the middle).
+SLIDE_TITLE = (720, 330)
 
 
 def run(testn, apps):
@@ -21,13 +26,15 @@ def run(testn, apps):
                 with Session(br, testn=testn, outdir="shots") as s:
                     s.sign_in("ada"); s.open(app); time.sleep(3)
                     if app == "sheets": s.click_xy(400, 330)
+                    elif app == "slides": s.click_xy(*SLIDE_TITLE); time.sleep(0.4); s.click_xy(*SLIDE_TITLE)
                     else: s.click_xy(640, 420)
                     subprocess.run(["xdotool", "type", "--delay", "60", "hello save icon"])
                     if app == "sheets": s.key("Return", settle=0.1)
+                    if app == "slides": s.key("Escape", settle=0.1)
                     seen, shot = [], False
                     end = time.time() + 60
                     while time.time() < end:
-                        k = s.snapshot("saveIcon" if app == "sheets" else "shell.saveIcon")  # Docs: shell state is nested
+                        k = s.snapshot("saveIcon" if app == "sheets" else "shell.saveIcon")  # Docs, Slides: shell state is nested
                         if k and (not seen or seen[-1] != k): seen.append(k)
                         if k in ("unsaved", "saving") and not shot: s.shot(f"{tag}-floppy"); shot = True
                         if k == "saved" and len(seen) > 1: break
@@ -38,7 +45,7 @@ def run(testn, apps):
                     s.shot(f"{tag}-card")
                     s.click_xy(x, y, settle=3)
                     st = s.snapshot()
-                    hist = bool(st.get("history")) if app == "sheets" else ((st.get("shell") or {}).get("versionHistory") is True or "true" in str(st).lower().split("versionhistory")[-1][:12])
+                    hist = bool(st.get("history")) if app == "sheets" else (st.get("shell") or {}).get("historyOpen") is True if app == "slides" else ((st.get("shell") or {}).get("versionHistory") is True or "true" in str(st).lower().split("versionhistory")[-1][:12])
                     ok = ok_states and card and hist
                     print(f"{'PASS' if ok else 'FAIL'} [{tag}] states={seen} card={card} history={hist}", flush=True)
                     fails += not ok

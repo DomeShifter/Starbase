@@ -530,7 +530,7 @@ impl Shell {
             let out = starbase_savestate::save_icon(ui, &info, &pal_icon);
             // Screen readers (and the window tests) read the card's first line.
             let said = starbase_savestate::card_lines(&info)[0].clone();
-            out.response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &said));
+            out.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &said));
             target(ui.ctx(), "save-icon", out.response.rect);
             if let Some(card) = out.card {
                 target(ui.ctx(), "save-icon-card", card);
@@ -1030,7 +1030,8 @@ fn target(ctx: &egui::Context, label: &str, rect: egui::Rect) {
 pub fn targets(ctx: &egui::Context) -> Value {
     let all = ctx.data(|d| d.get_temp::<Targets>(egui::Id::NULL)).unwrap_or_default().0;
     let last = all.values().map(|(p, _)| *p).max().unwrap_or(0);
-    let map: serde_json::Map<String, Value> = all.into_iter().filter(|(_, (p, _))| p + 1 >= last).map(|(k, (_, r))| (k, json!([r.center().x, r.center().y]))).collect();
+    let map: serde_json::Map<String, Value> =
+        all.into_iter().filter(|(_, (p, _))| p + 1 >= last).map(|(k, (_, r))| (k, json!([r.center().x, r.center().y]))).collect();
     Value::Object(map)
 }
 
