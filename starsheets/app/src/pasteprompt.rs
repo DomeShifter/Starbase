@@ -16,6 +16,7 @@ pub fn before(ctx: &egui::Context) {
     let pasted = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))));
     let esc = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
     clip::prompt_frame(pasted, esc);
+    clip::hold_page_focus();
 }
 
 /// Call after everything else: draws the prompt while it waits.

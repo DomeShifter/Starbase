@@ -106,6 +106,7 @@ pub fn frame(app: &mut WordApp, ctx: &egui::Context) {
         // Esc is taken only while the prompt shows, so it doesn't also act on the page.
         let esc = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
         clip::prompt_frame(pasted, esc);
+        clip::hold_page_focus();
     }
     prompt_ui(ctx);
 }
