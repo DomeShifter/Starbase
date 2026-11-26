@@ -29,8 +29,12 @@ impl Home {
             "view": view,
             "list": self.list,
             "view_opts": json!({ "cols": self.vo.cols_str(), "grid": self.vo.grid_str() }),
+            // Grid card height / picture height for the current size and date setting.
+            "card": json!({ "h": self.vo.card_with(self.vo.dates || self.card_sub).1, "pic": self.vo.card_with(self.vo.dates).2 }),
             "storage": self.storage.map(|(u, b, f)| json!({ "used": u, "bin": b, "free": f })),
             "loading": self.loading,
+            // Quiet prefetch of Docs and Slides (prefetch.rs): "skipped" / "started" / "done" / null.
+            "prefetch": crate::prefetch::test_state(),
             "versions": self.versions.as_ref().map(|(_, v)| super::history::rows(v)),
             "details_tab": self.details_tab,
             "activity": self.activity.as_ref().map(|(_, v)| super::activity::rows(v)),
