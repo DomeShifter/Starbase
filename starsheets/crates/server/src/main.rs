@@ -2167,9 +2167,8 @@ async fn handle_inner(State(app): State<Shared>, req: Request) -> Response<Body>
     }
     let me = current_user(&app, &headers);
     // The file list and the storage total: kept a few seconds per person (listcache.rs).
-    let cache_key = (!app.auth || me.is_some())
-        .then(|| listcache::key(&app.store.root, me.as_ref().map_or("", |u| u.username.as_str()), &m, &p, &q))
-        .flatten();
+    let cache_key =
+        (!app.auth || me.is_some()).then(|| listcache::key(&app.store.root, me.as_ref().map_or("", |u| u.username.as_str()), &m, &p, &q)).flatten();
     let cache_gen = listcache::start();
     if let Some(v) = cache_key.as_deref().and_then(listcache::get) {
         return send_json(&v, 200);
@@ -2881,7 +2880,8 @@ mod tests {
         }
         let ann = cookie_of(&post(&app, &ip, "/api/login", "", json!({"username": "ann", "password": "annpassword"})).await);
         let vic = cookie_of(&post(&app, &ip, "/api/login", "", json!({"username": "vic", "password": "vicpassword"})).await);
-        let names = |g: &Got| -> Vec<String> { g.json["files"].as_array().unwrap().iter().map(|f| f["name"].as_str().unwrap().to_string()).collect() };
+        let names =
+            |g: &Got| -> Vec<String> { g.json["files"].as_array().unwrap().iter().map(|f| f["name"].as_str().unwrap().to_string()).collect() };
         let list = |who: String| {
             let (app, ip) = (app.clone(), ip.clone());
             async move { send(&app, &ip, "GET", "/api/files", &who, &[], vec![]).await }

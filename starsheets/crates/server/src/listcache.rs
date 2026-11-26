@@ -23,7 +23,8 @@ const TTL: Duration = Duration::from_secs(5);
 const MAX_ENTRIES: usize = 256;
 
 static GEN: AtomicU64 = AtomicU64::new(0);
-static CACHE: LazyLock<Mutex<HashMap<String, (u64, Instant, Value)>>> = LazyLock::new(Default::default);
+type Entry = (u64, Instant, Value);
+static CACHE: LazyLock<Mutex<HashMap<String, Entry>>> = LazyLock::new(Default::default);
 
 /// Something that may change the list or the storage total has happened (or is about to).
 pub fn changed() {
