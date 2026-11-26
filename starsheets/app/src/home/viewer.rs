@@ -401,6 +401,7 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
         bar_ui.add_space(house::S);
         bar_ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
+            ui.add_space(house::M); // two text lines (about 32 px) centred in the 56 px bar
             let shown = match (&raw_file, v.raw) {
                 (Some(f), true) => f.name.clone(),
                 _ => name.clone(),
@@ -649,7 +650,10 @@ fn info_panel(
     c.spacing_mut().item_spacing = vec2(house::S, 0.0);
     let mut close = false;
     c.horizontal(|ui| {
-        ui.label(RichText::new("Info").size(house::BODY).strong().color(house::VIEW_BAR_TEXT));
+        ui.vertical(|ui| {
+            ui.add_space(house::S); // centre the title on the 36 px close button
+            ui.label(RichText::new("Info").size(house::BODY).strong().color(house::VIEW_BAR_TEXT));
+        });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let r = house::icon_button(ui, "white_close", "Close Info (I)", false);
             house::target(&ctx, "viewer:info:close", r.rect);
