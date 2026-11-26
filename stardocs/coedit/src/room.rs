@@ -160,7 +160,7 @@ impl DocRoom {
             self.log.pop_front();
             self.floor += 1;
         }
-        let check = (self.check_every > 0 && seq % self.check_every == 0).then(|| self.hash().ok()).flatten();
+        let check = (self.check_every > 0 && seq.is_multiple_of(self.check_every)).then(|| self.hash().ok()).flatten();
         Ok(Received::Applied { seq, steps, check })
     }
 
