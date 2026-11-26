@@ -1518,16 +1518,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    fn person(username: &str) -> Option<crate::auth::User> {
-        Some(crate::auth::User { username: username.into(), name: username.into(), colour: "#000000".into(), owner: false })
-    }
-
     /// Security review #3: a tab that reuses another tab's id (it is sent to everyone) gets its
     /// own connection name from the server, so it can't push that tab out, edit as it (when it
     /// may only view) or undo its changes.
     #[test]
     fn a_tab_cannot_pass_itself_off_as_another() {
-        let (app, file, dir) = app();
+        use crate::sharing::{Item, Role, Share};
+        // Real accounts with real shares: the periodic access check (every RECHECK, 300 ms in
+        // tests) would otherwise disconnect people who don't exist, or re-send a viewer the file
+        // as an editor, on a slow machine (the test failed at random, 2026-11-26).
+        let (app, file, dir) = app_with(true);
+        crate::auth::add(&app.store, "boss", "Boss", "a long password").unwrap();
+        let users: Vec<_> = [("ed", Role::Edit), ("vi", Role::View), ("mal", Role::Edit)]
+            .into_iter()
+            .map(|(n, r)| (crate::auth::add(&app.store, n, n, "a long password").unwrap(), r))
+            .collect();
+        let people = users.iter().map(|(u, r)| (u.username.clone(), *r)).collect();
+        crate::sharing::set(&app.store, Item::File(&file), &Share { people, link: Role::None, ..Default::default() }).unwrap();
+        let person = |n: &str| users.iter().find(|(u, _)| u.username == n).map(|(u, _)| u.clone());
         let mut ed = join_as(&app, &file, "c1", "tab1", person("ed"), true);
         let mut viewer = join_as(&app, &file, "c2", "tab1", person("vi"), false);
         // A second Join under a name already in the room is refused; the editor stays.
