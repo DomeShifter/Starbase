@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Drive file preview: real keys in Chromium and Firefox (run on CT105 under xvfb-run)."""
-import io, json, struct, sys, time, zlib
+import io, json, struct, subprocess, sys, time, zlib
 from playwright.sync_api import sync_playwright
 
 BASE = sys.argv[1]
@@ -23,7 +23,26 @@ def jpeg_rot6():
     b = io.BytesIO(); im.save(b, "JPEG", exif=ex); return b.getvalue()
 
 
-PDF = b"%PDF-1.1\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj 2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj 3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>endobj\ntrailer<</Root 1 0 R>>\n%%EOF\n"
+PDF_TEXT = "Starbase copy check"
+
+
+def pdf_with_text(text):
+    """A one-page PDF with real (selectable) text, with a correct xref so every viewer opens it."""
+    stream = f"BT /F1 36 Tf 40 300 Td ({text}) Tj ET".encode()
+    objs = [b"<</Type/Catalog/Pages 2 0 R>>", b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
+            b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 400]/Resources<</Font<</F1 5 0 R>>>>/Contents 4 0 R>>",
+            b"<</Length %d>>stream\n" % len(stream) + stream + b"\nendstream",
+            b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>"]
+    out, offs = bytearray(b"%PDF-1.4\n"), []
+    for i, o in enumerate(objs, 1):
+        offs.append(len(out)); out += b"%d 0 obj\n" % i + o + b"\nendobj\n"
+    x = len(out)
+    out += b"xref\n0 %d\n0000000000 65535 f \n" % (len(objs) + 1) + b"".join(b"%010d 00000 n \n" % o for o in offs)
+    out += b"trailer<</Size %d/Root 1 0 R>>\nstartxref\n%d\n%%%%EOF\n" % (len(objs) + 1, x)
+    return bytes(out)
+
+
+PDF = pdf_with_text(PDF_TEXT)
 FILES = {"pv_a.png": png(400, 200), "pv_b.txt": b"hello preview\nline two\n", "pv_c.pdf": PDF, "pv_d.zip": b"PK\x05\x06" + b"\0" * 18,
          "pv_f.md": b"# Title\n\nSome *text*.\n", "pv_g.csv": b"a,b\n1,2\n", "pv_h.json": b'{"a": [1, 2]}', "pv_i.rs": b"fn main() {}\n"}
 TEXT = {"pv_b.txt": "plain", "pv_f.md": "markdown", "pv_g.csv": "table", "pv_h.json": "json", "pv_i.rs": "code"}
@@ -125,11 +144,27 @@ def run(kind):
         pg.mouse.click(*OPEN_WITH); time.sleep(0.6)
         vis = pg.evaluate(frame_vis)
         rec(kind, "menu closed -> pdf frame back", vis == "visible", vis)
-        # Click into the PDF (the keyboard goes to the frame), then Esc without moving back.
-        pg.mouse.click(640, 450); time.sleep(0.8)
+        # Click into the PDF: the keyboard stays there, so its text can be selected and copied.
+        subprocess.run(["xclip", "-selection", "clipboard"], input=b"before", timeout=5)
+        pg.mouse.click(640, 450); time.sleep(1.0)
         foc = pg.evaluate("document.activeElement && document.activeElement.tagName")
+        rec(kind, "click into pdf keeps focus there", foc == "IFRAME", f"focus={foc}")
+        pg.keyboard.press("Control+a"); time.sleep(0.3)
+        pg.keyboard.press("Control+c"); time.sleep(0.8)
+        clip = subprocess.run(["xclip", "-o", "-selection", "clipboard"], capture_output=True, timeout=5).stdout.decode(errors="replace")
+        rec(kind, "select + Ctrl+C copies pdf text", PDF_TEXT in clip, repr(clip[:60]))
+        foc = pg.evaluate("document.activeElement && document.activeElement.tagName")
+        rec(kind, "pdf keeps focus after copy", foc == "IFRAME" and pv() is not None, f"focus={foc}")
+        # The pointer leaves the PDF: the page has the keyboard again and Esc closes.
+        pg.mouse.move(40, 450, steps=4); time.sleep(0.4)
         pg.keyboard.press("Escape"); time.sleep(0.8)
-        rec(kind, "Esc closes after click into pdf", pv() is None, f"focus={foc}")
+        rec(kind, "pointer off pdf, Esc closes", pv() is None)
+        # The × closes, even with the keyboard inside the PDF.
+        run_("home:preview", {"id": ids["pv_c.pdf"]}); time.sleep(1.5)
+        pg.mouse.click(640, 450); time.sleep(0.6)
+        x0, y0, x1, y1 = pv()["close"]
+        pg.mouse.click((x0 + x1) / 2, (y0 + y1) / 2); time.sleep(0.8)
+        rec(kind, "x button closes (focus in pdf)", pv() is None, f"rect={[round(v) for v in (x0, y0, x1, y1)]}")
         run_("home:preview", {"id": ids["pv_c.pdf"]}); time.sleep(1)
         run_("home:preview", {"id": ids["pv_d.zip"]})
         time.sleep(0.8)

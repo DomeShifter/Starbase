@@ -82,6 +82,29 @@ pub(super) fn closes_preview(key: &str, ctrl: bool, alt: bool, meta: bool, shift
     matches!(key, "Escape" | "Esc") && !(ctrl || alt || meta || shift)
 }
 
+/// Something that happens around a PDF frame while the preview shows it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum FrameEvent {
+    /// The frame finished loading.
+    Loaded,
+    /// The pointer left the frame (back onto the page).
+    PointerLeft,
+    /// A click on the page, outside the frame.
+    ClickOutside,
+    /// The page lost the keyboard, e.g. to a click into the PDF.
+    PageBlur,
+}
+
+/// Whether `ev` hands the keyboard back from a PDF frame to the page, so Esc and the arrows work
+/// again. Never when the PDF takes the keyboard itself (a click into it): users must be able to
+/// select and copy its text and use its own Find. The × in the top bar always closes.
+pub(super) fn frame_gives_focus_back(ev: FrameEvent) -> bool {
+    match ev {
+        FrameEvent::Loaded | FrameEvent::PointerLeft | FrameEvent::ClickOutside => true,
+        FrameEvent::PageBlur => false,
+    }
+}
+
 /// The part of a fetched text file that is kept: a byte over [`textpreview::MAX_BYTES`] so the
 /// preview knows to say it shows only the first part.
 fn keep_head(mut bytes: Vec<u8>) -> Vec<u8> {
@@ -128,6 +151,8 @@ pub(super) struct FilePreview {
     pub at: (usize, usize),
     content: Content,
     got: Arc<Mutex<Vec<(String, Got)>>>,
+    /// Where the × was drawn, for the test hook's real clicks.
+    close_rect: Rect,
     #[cfg(target_arch = "wasm32")]
     element: Option<Element>,
 }
@@ -158,6 +183,7 @@ impl FilePreview {
             at,
             content: Content::Loading,
             got: Arc::default(),
+            close_rect: Rect::NOTHING,
             #[cfg(target_arch = "wasm32")]
             element: None,
         };
@@ -227,6 +253,7 @@ impl FilePreview {
         serde_json::json!({
             "id": self.id, "name": self.name, "shown": self.shown.label(), "content": content, "element": element,
             "zoom": self.zoom, "info": self.info, "index": self.at.0, "count": self.at.1,
+            "close": [self.close_rect.min.x, self.close_rect.min.y, self.close_rect.max.x, self.close_rect.max.y],
         })
     }
 
@@ -297,7 +324,16 @@ impl FilePreview {
             b.add_space(8.0);
             b.add(egui::Label::new(RichText::new(&self.name).size(16.0).color(Color32::WHITE)).truncate());
             b.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if icon_button(ui, "white_close", "Close (Esc)") {
+                // Always works, wherever the keyboard is (a PDF frame may hold it): a filled circle
+                // so it is easy to see on any file.
+                let close = match crate::icons::icon("white_close") {
+                    Some(img) => egui::Button::image(img.fit_to_exact_size(vec2(24.0, 24.0))),
+                    None => egui::Button::new(RichText::new("×").size(22.0).color(Color32::WHITE)),
+                };
+                let close =
+                    ui.add(close.fill(Color32::from_white_alpha(48)).corner_radius(20).min_size(vec2(40.0, 40.0))).on_hover_text("Close (Esc)");
+                self.close_rect = close.rect;
+                if close.clicked() {
                     act = Some(Act::Close);
                 }
                 if icon_toggle(ui, "white_info", "Details", self.info) {
@@ -583,7 +619,9 @@ impl FilePreview {
             if tag == "iframe" {
                 let (esc, ctx2, frame) = (e.esc.clone(), ctx.clone(), e.el.clone());
                 let on_load = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::Event)>::new(move |_e: web_sys::Event| {
-                    refocus_canvas(&frame);
+                    if frame_gives_focus_back(FrameEvent::Loaded) {
+                        refocus_canvas(&frame);
+                    }
                     let Some(inner) = frame.dyn_ref::<web_sys::HtmlIFrameElement>().and_then(|f| f.content_window()) else { return };
                     let (esc, ctx2) = (esc.clone(), ctx2.clone());
                     let f = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::Event)>::new(move |e: web_sys::Event| {
@@ -604,23 +642,22 @@ impl FilePreview {
                 if target.add_event_listener_with_callback_and_bool("load", on_load.as_ref().unchecked_ref(), true).is_ok() {
                     e.listeners.push((target, "load", on_load));
                 }
-                // A click into the PDF moves the keyboard into the frame, and a browser's own PDF
-                // viewer (Firefox's) never lets this page hear its keys, so Esc would do nothing.
-                // As Google Drive does, keep the keyboard on the page: when the page loses it to
-                // the frame, take it straight back (the wheel and clicks still reach the PDF).
-                if let Some(w) = web_sys::window() {
+                // A click into the PDF keeps the keyboard there (select, copy, Find): a browser's
+                // own PDF viewer (Firefox's) never lets this page hear those keys. Take it back
+                // only when the pointer leaves the frame or the page is clicked outside it.
+                let frame_el: web_sys::EventTarget = e.el.clone().into();
+                let page: Option<web_sys::EventTarget> = web_sys::window().map(Into::into);
+                for (target, ev, what) in [(Some(frame_el), "pointerleave", FrameEvent::PointerLeft), (page, "pointerdown", FrameEvent::ClickOutside)]
+                {
+                    let Some(target) = target else { continue };
                     let frame = e.el.clone();
-                    let on_blur = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::Event)>::new(move |_e: web_sys::Event| {
-                        let frame = frame.clone();
-                        // The frame gets the focus just after the page's blur: look a moment later.
-                        let later = wasm_bindgen::closure::Closure::once_into_js(move || refocus_canvas(&frame));
-                        if let Some(w) = web_sys::window() {
-                            let _ = w.set_timeout_with_callback_and_timeout_and_arguments_0(later.unchecked_ref(), 0);
+                    let f = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::Event)>::new(move |_e: web_sys::Event| {
+                        if frame_gives_focus_back(what) {
+                            refocus_canvas(&frame);
                         }
                     });
-                    let target: web_sys::EventTarget = w.into();
-                    if target.add_event_listener_with_callback_and_bool("blur", on_blur.as_ref().unchecked_ref(), true).is_ok() {
-                        e.listeners.push((target, "blur", on_blur));
+                    if target.add_event_listener_with_callback_and_bool(ev, f.as_ref().unchecked_ref(), true).is_ok() {
+                        e.listeners.push((target, ev, f));
                     }
                 }
             }
@@ -704,6 +741,16 @@ mod tests {
         ];
         for (key, [c, a, m, s], want) in table {
             assert_eq!(closes_preview(key, c, a, m, s), want, "{key} {c} {a} {m} {s}");
+        }
+    }
+
+    /// What hands the keyboard back from a PDF frame: every event, so a new one can't slip by.
+    #[test]
+    fn pdf_frame_focus_comes_back_only_off_the_pdf() {
+        use FrameEvent::*;
+        let table = [(Loaded, true), (PointerLeft, true), (ClickOutside, true), (PageBlur, false)];
+        for (ev, want) in table {
+            assert_eq!(frame_gives_focus_back(ev), want, "{ev:?}");
         }
     }
 

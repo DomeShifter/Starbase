@@ -6,4 +6,4 @@
 - Server: a PDF's raw bytes may be framed by Starbase's own pages (X-Frame-Options SAMEORIGIN, frame-ancestors 'self').
 
 ### Fixed
-- Drive: Esc closes the file preview also after a PDF or a film took the keyboard focus.
+- Drive: Esc closes the file preview also after a film took the keyboard focus, or once the pointer is off a PDF (a click into a PDF keeps the keyboard there, so its text can be selected and copied); the × in the top bar always closes.
