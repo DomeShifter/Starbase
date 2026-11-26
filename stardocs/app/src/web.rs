@@ -483,13 +483,16 @@ fn guard_unload(dirty: Rc<Cell<bool>>, saves: AsyncSaves) -> Result<(), String> 
 /// (Insert Link) went to Chromium's search box and took the keyboard away from the page. The
 /// listener only stops the browser's action; eframe still receives the key.
 fn keep_app_shortcuts() -> Result<(), String> {
-    let document = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;
+    let window = web_sys::window().ok_or("no window")?;
     let on_key = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
         if is_app_shortcut(&e.key(), &e.code(), e.ctrl_key() || e.meta_key(), e.alt_key(), e.shift_key()) {
             e.prevent_default();
         }
     });
-    document.add_event_listener_with_callback("keydown", on_key.as_ref().unchecked_ref()).map_err(|e| format!("{e:?}"))?;
+    // Capture phase on `window`: eframe stops the keydown from bubbling past its text input, so a
+    // `document` bubble listener never ran (measured in Firefox: Ctrl+B opened the bookmarks
+    // sidebar, which took the keyboard, and Ctrl+I/U then never reached the page).
+    window.add_event_listener_with_callback_and_bool("keydown", on_key.as_ref().unchecked_ref(), true).map_err(|e| format!("{e:?}"))?;
     // The listener lives as long as the page.
     on_key.forget();
     Ok(())
