@@ -41,6 +41,7 @@ pub mod raw;
 pub mod routes;
 pub mod sidecar;
 pub mod strip;
+pub mod tiles;
 pub mod video;
 
 use std::collections::{HashMap, HashSet, VecDeque};
