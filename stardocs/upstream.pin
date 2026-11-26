@@ -3,6 +3,6 @@
 # scripts/fetch-upstream.sh (it also regenerates Cargo.toml from upstream's).
 repo = "https://github.com/DomeShifter/wordcraft.git"
 branch = "stardocs"
-commit = "94c97fe02fe4f97b1fb8c5a1f2ccfab1e952c90c"
+commit = "9df06a8d369ea32a69f590609e7c7324df826734"
 base = "v0.18.1"
 upstream = "https://github.com/storytold/wordcraft.git"
