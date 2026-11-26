@@ -465,6 +465,30 @@ pub struct Store {
 }
 
 /// The first part of a path: whose space it's in (spaces on).
+/// Bytes of the regular files below `dir` (no links followed; bounded depth).
+fn dir_bytes(dir: &Path, depth: u32) -> u64 {
+    let Ok(rd) = fs::read_dir(dir) else { return 0 };
+    let mut n = 0;
+    for e in rd.flatten() {
+        let Ok(m) = fs::symlink_metadata(e.path()) else { continue };
+        if m.is_file() {
+            n += m.len();
+        } else if m.is_dir() && depth < 64 {
+            n += dir_bytes(&e.path(), depth + 1);
+        }
+    }
+    n
+}
+
+/// Free bytes on the disk holding `path` (None if it can't be told).
+fn free_bytes(path: &Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: c is a valid NUL-terminated path and st a valid out-pointer.
+    (unsafe { libc::statvfs(c.as_ptr(), &mut st) } == 0).then(|| st.f_bavail as u64 * st.f_frsize as u64)
+}
+
 pub fn space_of(relpath: &str) -> &str {
     relpath.split('/').next().unwrap_or("")
 }
@@ -927,8 +951,23 @@ impl Store {
             Some("files") => self.route_files(method, p, q, if_match, body, &mut index),
             Some("folders") => self.route_folders(method, p, q, &mut index),
             Some("bin") => self.route_bin(method, p, q, &mut index),
+            Some("storage") if p.len() == 1 && method == "GET" => self.storage(q),
             _ => Err(Bad::new(404, "not found")),
         }
+    }
+
+    /// GET /api/storage: bytes used by the person's own files (their space, hidden folders and the
+    /// bin left out), what their bin holds, and the free space of the disk. There is no quota.
+    fn storage(&self, q: &HashMap<String, String>) -> R<Reply> {
+        let space = if self.spaces { rel(qs(q, "space"))? } else { String::new() };
+        if self.spaces && (space.is_empty() || space.contains('/')) {
+            return Err(Bad::new(400, "whose storage?"));
+        }
+        let (mut files, mut folders) = (Vec::new(), Vec::new());
+        self.walk_dir(&space, &mut files, &mut folders);
+        let used: u64 = files.iter().filter_map(|f| fs::symlink_metadata(self.full(f)).ok()).map(|m| m.len()).sum();
+        let bin_bytes = dir_bytes(&self.bin(&space), 0);
+        ok(json!({"used": used, "files": files.len(), "bin": bin_bytes, "free": free_bytes(&self.root)}))
     }
 
     fn route_files(
@@ -1547,6 +1586,24 @@ mod tests {
         let store = Store { root: dir.clone(), keep: 3, spaces: false };
         let id = store.synced_index().unwrap().keys().next().unwrap().clone();
         (dir, store, id)
+    }
+
+    #[test]
+    fn storage_counts_own_files_and_the_bin_separately() {
+        let dir = std::env::temp_dir().join(format!("starsheets-stor-{}", random_hex(6)));
+        fs::create_dir_all(dir.join("ann/docs")).unwrap();
+        fs::create_dir_all(dir.join("ann/.bin")).unwrap();
+        fs::create_dir_all(dir.join("bob")).unwrap();
+        fs::write(dir.join("ann/a.xlsx"), vec![0u8; 100]).unwrap();
+        fs::write(dir.join("ann/docs/b.bin"), vec![0u8; 50]).unwrap();
+        fs::write(dir.join("ann/.bin/old.xlsx"), vec![0u8; 7]).unwrap();
+        fs::write(dir.join("bob/c.xlsx"), vec![0u8; 1000]).unwrap();
+        let store = Store { root: dir.clone(), keep: 3, spaces: true };
+        let (code, v) = call(&store, "GET", "storage?space=ann");
+        assert_eq!((code, v["used"].as_u64(), v["bin"].as_u64(), v["files"].as_u64()), (200, Some(150), Some(7), Some(2)), "{v}");
+        assert!(v["free"].as_u64().is_some());
+        assert_eq!(call(&store, "GET", "storage").0, 400, "no space named");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

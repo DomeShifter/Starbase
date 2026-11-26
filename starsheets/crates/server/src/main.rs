@@ -1229,7 +1229,7 @@ async fn gate(
                     _ => need(a.folder_role(&path), Role::Owner)?,
                 }
             }
-            (["bin", ..], _) => {
+            (["bin" | "storage", ..], _) => {
                 q.insert("space".into(), home.clone());
             }
             _ => {}
