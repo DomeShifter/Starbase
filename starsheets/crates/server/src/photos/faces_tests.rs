@@ -134,8 +134,13 @@ fn name_merge_remove_and_regroup() {
     assert_eq!(groups.len(), 2, "{all:?}");
     // Name one group: it becomes a person.
     let g = *groups.iter().next().unwrap();
-    let p = faces::name(&ix, g, "Ann").unwrap();
-    assert_eq!(faces::people(&ix).unwrap()[&p], "Ann");
+    let p = faces::name(&ix, g, "ada", "Ann").unwrap();
+    assert_eq!(faces::people(&ix, "ada").unwrap()[&p], "Ann");
+    // Names are per account: bob doesn't see ada's name, and his own doesn't change hers.
+    assert!(faces::people(&ix, "bob").unwrap().is_empty());
+    assert_eq!(faces::name(&ix, Who::Person(p), "bob", "Annie").unwrap(), p);
+    assert_eq!(faces::people(&ix, "ada").unwrap()[&p], "Ann");
+    assert_eq!(faces::people(&ix, "bob").unwrap()[&p], "Annie");
     let ann: Vec<_> = faces::faces(&ix, "auraface").unwrap().into_iter().filter(|f| f.person == Some(p)).collect();
     assert_eq!(ann.len(), 2);
     // Merge the other group into Ann, then take one wrong face out.

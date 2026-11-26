@@ -338,7 +338,9 @@ impl PhotoMode {
     fn person_ui(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend, c: &Card) {
         let url = format!("api/photos/people/{}", c.id);
         ui.horizontal(|ui| {
-            if ui.add(link("‹ People")).clicked() {
+            let back = ui.add(link("‹ People"));
+            house::target(ctx, "people:back", back.rect);
+            if back.clicked() {
                 self.alb.open = None;
                 self.alb.ppl.ask = Ask::None;
                 self.pics.clear();

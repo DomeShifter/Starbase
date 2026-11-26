@@ -1,0 +1,81 @@
+//! People through the router: names are per account, never shown to anyone else.
+
+use super::http::{Got, get, send};
+use super::*;
+use crate::photos::faces::{self, Found};
+use crate::{Shared, auth};
+
+async fn post(app: &Shared, uri: &str, who: &str, body: Value) -> Got {
+    send(app, "POST", uri, Some(who), &[], &body.to_string()).await
+}
+
+fn face(e: [f32; 4]) -> Found {
+    Found { x: 0.1, y: 0.1, w: 0.2, h: 0.2, score: 0.95, px: 80.0, emb: e.to_vec() }
+}
+
+#[tokio::test]
+async fn a_name_is_seen_only_by_the_account_that_gave_it() {
+    let root = tmp("people");
+    let s = Store { root: root.clone(), keep: 3, spaces: true };
+    for (u, n) in [("boss", "Boss"), ("ada", "Ada"), ("bob", "Bob")] {
+        auth::add(&s, u, n, &format!("{u}password")).unwrap();
+    }
+    // Ada and Bob each have their own copies of the same two pictures (same content, same faces).
+    for p in ["ada/Pics/a.jpg", "bob/Mine/a.jpg", "ada/Pics/b.jpg", "bob/Mine/b.jpg"] {
+        std::fs::create_dir_all(s.full(p).parent().unwrap()).unwrap();
+        let img = if p.ends_with("a.jpg") { halves(60, 40) } else { halves(40, 60) };
+        std::fs::write(s.full(p), jpeg(&img)).unwrap();
+    }
+    s.synced_index().unwrap();
+    let app: Shared = Arc::new(crate::App {
+        store: s,
+        base: root.clone(),
+        lock: std::sync::Mutex::new(()),
+        location: "here".into(),
+        auth: true,
+        site: None,
+        rooms: crate::live::Rooms::default(),
+        oidc: None,
+    });
+    for (u, f) in [("ada", "ada/Pics"), ("bob", "bob/Mine")] {
+        assert_eq!(send(&app, "POST", &format!("/api/photos/enable?folder={f}"), Some(u), &[], "").await.status, 200);
+    }
+    let ph = service(&app.store).unwrap();
+    let t = Instant::now();
+    while ph.with_db(faces::thumb_paths).unwrap_or_default().len() < 4 {
+        assert!(t.elapsed() < Duration::from_secs(20), "never read");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    // One person's face in both pictures (as the face worker would keep them), then grouped.
+    let model = ph.face_model().to_string();
+    let thumbs: std::collections::BTreeSet<String> = ph.with_db(faces::thumb_paths).unwrap().into_iter().map(|(t, _)| t).collect();
+    assert_eq!(thumbs.len(), 2, "same content, same thumbnail key");
+    for (i, t) in thumbs.iter().enumerate() {
+        ph.with_db(|ix| faces::keep(ix, t, &model, &[face([1.0, 0.02 * i as f32, 0.0, 0.0])])).unwrap();
+    }
+    faces::regroup(ph.db_lock(), &model).unwrap();
+
+    let ada = get(&app, "/api/photos/people", Some("ada"), &[]).await.json;
+    let g = ada["groups"][0]["id"].as_str().expect("one group").to_string();
+    let named = post(&app, &format!("/api/photos/people/{g}/name"), "ada", json!({"name": "Sally Ride"})).await;
+    assert_eq!(named.status, 200);
+    let p = named.json["id"].as_str().unwrap().to_string();
+    let ada = get(&app, "/api/photos/people", Some("ada"), &[]).await.json;
+    assert_eq!(ada["people"][0]["name"], "Sally Ride");
+
+    // Bob sees the faces in his own pictures, but never Ada's name for them.
+    let bob = get(&app, "/api/photos/people", Some("bob"), &[]).await.json;
+    assert!(!bob.to_string().contains("Sally Ride"), "{bob}");
+    assert_eq!(bob["people"], json!([]));
+    assert_eq!(bob["groups"][0]["id"], p.as_str());
+    assert_eq!(bob["groups"][0]["name"], "");
+    let one = get(&app, &format!("/api/photos/people/{p}"), Some("bob"), &[]).await.json;
+    assert_eq!(one["name"], "");
+    assert!(!one.to_string().contains("Sally Ride"));
+
+    // Bob's own name is his alone.
+    assert_eq!(post(&app, &format!("/api/photos/people/{p}/name"), "bob", json!({"name": "Mae"})).await.status, 200);
+    assert_eq!(get(&app, "/api/photos/people", Some("bob"), &[]).await.json["people"][0]["name"], "Mae");
+    assert_eq!(get(&app, "/api/photos/people", Some("ada"), &[]).await.json["people"][0]["name"], "Sally Ride");
+    let _ = std::fs::remove_dir_all(root);
+}

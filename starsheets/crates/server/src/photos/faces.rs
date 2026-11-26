@@ -49,6 +49,14 @@ pub const SCHEMA_V3: &str = "BEGIN;
     PRAGMA user_version = 3;
     COMMIT;";
 
+/// Names are per account (index schema version 4): `people.name` is no longer used. Everyone
+/// names the people in their own pictures; a person in a picture two accounts can see has a
+/// name for each of them (or none), never one shared name.
+pub const SCHEMA_V4: &str = "BEGIN;
+    CREATE TABLE IF NOT EXISTS person_names(person INTEGER NOT NULL, user TEXT NOT NULL, name TEXT NOT NULL, PRIMARY KEY(person, user));
+    PRAGMA user_version = 4;
+    COMMIT;";
+
 /// Similarities and distances (cosine) for one embedding model.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Thresholds {
@@ -298,10 +306,10 @@ pub fn faces(ix: &Index, model: &str) -> rusqlite::Result<Vec<Face>> {
     .collect()
 }
 
-/// People: id → name.
-pub fn people(ix: &Index) -> rusqlite::Result<HashMap<i64, String>> {
-    let mut st = conn(ix).prepare("SELECT id, name FROM people")?;
-    st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect()
+/// The people `user` named: id → name (`user` is the account name, "" without sign-in).
+pub fn people(ix: &Index, user: &str) -> rusqlite::Result<HashMap<i64, String>> {
+    let mut st = conn(ix).prepare("SELECT person, name FROM person_names WHERE user = ?1")?;
+    st.query_map([user], |r| Ok((r.get(0)?, r.get(1)?)))?.collect()
 }
 
 /// A group as the People view names it: `p<person id>` or `g<group id>`.
@@ -341,24 +349,27 @@ fn ids_of(c: &Connection, who: Who) -> rusqlite::Result<Vec<i64>> {
     st.query_map([n], |r| r.get(0))?.collect()
 }
 
-/// Names `who`: a group becomes a person; a person is renamed. Returns the person.
-pub fn name(ix: &Index, who: Who, name: &str) -> rusqlite::Result<i64> {
+/// Names `who` for `user` only (others keep their own name, or none): a group becomes a person;
+/// a person is renamed. An empty name names nobody (a group still becomes a person). Returns the
+/// person.
+pub fn name(ix: &Index, who: Who, user: &str, name: &str) -> rusqlite::Result<i64> {
     let c = conn(ix);
-    match who {
-        Who::Person(p) => {
-            c.execute("UPDATE people SET name = ?1 WHERE id = ?2", params![name, p])?;
-            Ok(p)
-        }
+    let p = match who {
+        Who::Person(p) => p,
         Who::Group(_) => {
             let ids = ids_of(c, who)?;
-            c.execute("INSERT INTO people(name, created) VALUES(?1, ?2)", params![name, now()])?;
+            c.execute("INSERT INTO people(name, created) VALUES('', ?1)", [now()])?;
             let p = c.last_insert_rowid();
             for id in ids {
                 c.execute("UPDATE faces SET person = ?1, auto = 0, grp = NULL, suggest = NULL WHERE id = ?2", params![p, id])?;
             }
-            Ok(p)
+            p
         }
+    };
+    if !name.is_empty() {
+        c.execute("INSERT OR REPLACE INTO person_names(person, user, name) VALUES(?1, ?2, ?3)", params![p, user, name])?;
     }
+    Ok(p)
 }
 
 /// Puts every face of `from` with `into`. When `into` is a group, it becomes a person first
@@ -372,7 +383,7 @@ pub fn merge(ix: &Index, from: Who, into: Who) -> rusqlite::Result<i64> {
     };
     let p = match into {
         Who::Person(p) => p,
-        Who::Group(_) => name(ix, into, "")?,
+        Who::Group(_) => name(ix, into, "", "")?,
     };
     for id in ids_of(c, from)? {
         c.execute("UPDATE faces SET person = ?1, auto = 0, grp = NULL, suggest = NULL WHERE id = ?2", params![p, id])?;
@@ -381,6 +392,12 @@ pub fn merge(ix: &Index, from: Who, into: Who) -> rusqlite::Result<i64> {
         && old != p
     {
         c.execute("UPDATE face_not SET person = ?1 WHERE person = ?2", params![p, old])?;
+        // Each account keeps its name for the merged person (or takes the one it gave `from`).
+        c.execute(
+            "INSERT OR IGNORE INTO person_names(person, user, name) SELECT ?1, user, name FROM person_names WHERE person = ?2",
+            params![p, old],
+        )?;
+        c.execute("DELETE FROM person_names WHERE person = ?1", [old])?;
         c.execute("DELETE FROM people WHERE id = ?1", [old])?;
     }
     Ok(p)

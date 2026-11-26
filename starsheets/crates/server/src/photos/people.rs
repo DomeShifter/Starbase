@@ -14,8 +14,11 @@
 //!   their pinned URLs (SHA-256 checked) into the models folder; progress in `"download"`
 //!   `{"busy", "file", "got", "total", "error"}`, `"can_download"` says whether the button applies.
 //!
-//! Deferred hardening: people are one list for the whole server (anyone who can see one of a
-//! group's pictures may name or merge it); per-person libraries and an owner-only rename can follow.
+//! Names are per account: a name someone gives is shown only to them (faces.rs, `person_names`),
+//! so nobody ever sees another account's names. Faces and their groups are kept by picture
+//! content, so the faces of a picture two accounts can see show up for both, each with their own
+//! name (or unnamed). Deferred hardening: grouping and merges are still one set for the whole
+//! server (anyone who can see one of a group's pictures may merge it or take a face out).
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -43,6 +46,11 @@ fn fetch(a: &App, owner: bool) -> Answer {
     }
     s.fetch_models().map_err(|e| error(400, &e))?;
     Ok(state(a, owner))
+}
+
+/// Whose names: the account name, or "" without sign-in.
+fn user(me: &Option<auth::User>) -> &str {
+    me.as_ref().map_or("", |u| u.username.as_str())
 }
 
 /// The pictures I may see, by thumbnail key.
@@ -146,7 +154,7 @@ fn list(a: &App, me: Option<auth::User>, owner: bool) -> Answer {
     let vis = visible(a, &s, &me);
     let model = s.face_model().to_string();
     let (all, names) = s
-        .with_db(|ix| Ok::<_, rusqlite::Error>((faces::faces(ix, &model)?, faces::people(ix)?)))
+        .with_db(|ix| Ok::<_, rusqlite::Error>((faces::faces(ix, &model)?, faces::people(ix, user(&me))?)))
         .map_err(|_| error(500, "couldn't read the faces"))?;
     let mut groups: HashMap<Who, (BTreeSet<String>, Option<Value>)> = HashMap::new();
     for f in &all {
@@ -197,7 +205,7 @@ fn open(a: &App, me: Option<auth::User>, id: &str) -> Answer {
     let who = who_of(id)?;
     let (mine, vis) = faces_of(a, &s, &me, who)?;
     let name = match who {
-        Who::Person(p) => s.with_db(faces::people).ok().and_then(|n| n.get(&p).cloned()).unwrap_or_default(),
+        Who::Person(p) => s.with_db(|ix| faces::people(ix, user(&me))).ok().and_then(|n| n.get(&p).cloned()).unwrap_or_default(),
         Who::Group(_) => String::new(),
     };
     let fj: Vec<Value> = mine.iter().filter_map(|f| face_json(f, &vis)).collect();
@@ -229,7 +237,7 @@ fn change(a: &App, me: Option<auth::User>, id: &str, act: &str, b: &Value) -> An
             if n.is_empty() || n.chars().count() > MAX_NAME || n.chars().any(char::is_control) {
                 return Err(error(400, "A name is 1 to 80 characters."));
             }
-            let p = s.with_db(|ix| faces::name(ix, who, &n)).map_err(db_err)?;
+            let p = s.with_db(|ix| faces::name(ix, who, user(&me), &n)).map_err(db_err)?;
             json!({"id": Who::Person(p).key()})
         }
         "merge" => {

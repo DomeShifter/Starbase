@@ -457,6 +457,8 @@ mod edits_tests;
 mod export_tests;
 #[path = "locked_tests.rs"]
 mod locked_tests;
+#[path = "people_tests.rs"]
+mod people_tests;
 
 mod http {
     use super::*;

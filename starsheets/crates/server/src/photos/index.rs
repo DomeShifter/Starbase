@@ -13,7 +13,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use super::decode::Meta;
 
 /// The schema version this server writes.
-pub const SCHEMA: i32 = 3;
+pub const SCHEMA: i32 = 4;
 
 /// Where a picture is in the work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -183,6 +183,10 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // Faces and people (faces.rs, ml.rs): kept by thumbnail key, so a renamed or moved
         // picture keeps them; derived like everything here, except the names people give.
         conn.execute_batch(super::faces::SCHEMA_V3)?;
+    }
+    if v < 4 {
+        // People's names, per account (faces.rs).
+        conn.execute_batch(super::faces::SCHEMA_V4)?;
     }
     Ok(())
 }
