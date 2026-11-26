@@ -1757,6 +1757,7 @@ mod tests {
         let mut h = harness(reply(true, &[]));
         let c = egui::Context::default();
         let store = h.state().store.clone();
+        h.run(); // the saved edits arrive first
         h.state_mut().ed.rotate();
         assert!(h.state().ed.dirty(), "rotated, not yet copied");
         h.state_mut().ed.copy(&c, &store);
