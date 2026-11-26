@@ -7,6 +7,8 @@
 //!   `{"id", "name", "count", "cover": {"id", "v", "box": [x, y, w, h]}}` (box 0..1 of the
 //!   thumbnail). `people` are named (by name), `groups` unnamed (biggest first).
 //! - `GET /api/photos/people/ID`: `{"id", "name", "faces": [{"face", "id", "v", "box"}], "photos", "waiting"}`.
+//! - `GET /api/photos/people/face/FACE/FILE[?v=]`: face FACE (in picture FILE) as a square
+//!   [`FACE_PX`] JPEG, cut from the big thumbnail so it is sharp (`v` = the cover's content tag).
 //! - `POST /api/photos/people/ID/name` `{"name"}`; `/merge` `{"into": ID}`; `/remove` `{"face"}`.
 //! - `GET|POST /api/photos/faces` `{"on": bool}`: face recognition on or off (the server's owner;
 //!   `STARBASE_PHOTOS_FACES` overrides).
@@ -261,4 +263,45 @@ fn change(a: &App, me: Option<auth::User>, id: &str, act: &str, b: &Value) -> An
     s.ml.dirty.store(true, std::sync::atomic::Ordering::Relaxed);
     s.ml.poke();
     Ok(out)
+}
+
+/// The side of a face picture: People shows faces up to 128 px, so twice that for HiDPI screens.
+pub const FACE_PX: u32 = 256;
+
+/// `GET /api/photos/people/face/FACE/FILE`: anyone who may see picture FILE gets its face FACE.
+pub async fn face_image(app: &Shared, me: Option<auth::User>, face: &str, id: String, v: Option<&str>) -> Response<Body> {
+    use axum::http::header;
+    if app.auth && me.is_none() {
+        return error(401, "Sign in first.");
+    }
+    let Ok(face) = face.parse::<i64>() else { return error(404, "No such face.") };
+    let got = blocking(app, move |a| -> Result<(Vec<u8>, String), Response<Body>> {
+        let s = svc(a)?;
+        let acc = sharing::Access::with_locked(&a.store, a.auth, me.as_ref());
+        if acc.file_role(&id) < sharing::Role::View {
+            return Err(error(403, "You don't have access to that."));
+        }
+        let path = acc.file_paths.get(&id).cloned().ok_or_else(|| error(404, "no such file"))?;
+        let key =
+            s.row(&path).filter(|_| s.covers(&path)).and_then(|r| r.thumb_key().map(str::to_string)).ok_or_else(|| error(404, "no such file"))?;
+        let f = s.with_db(|ix| faces::face(ix, face)).ok().flatten().filter(|f| f.thumb == key).ok_or_else(|| error(404, "No such face."))?;
+        let bytes = s.face_file(&f, FACE_PX).ok_or_else(|| error(404, "No thumbnail yet."))?;
+        Ok((bytes, tag(&key).to_string()))
+    })
+    .await
+    .unwrap_or_else(|| Err(error(500, "the server is busy")));
+    let (bytes, vtag) = match got {
+        Ok(g) => g,
+        Err(r) => return r,
+    };
+    let cache = if v == Some(vtag.as_str()) { "private, max-age=31536000, immutable" } else { "private, no-cache" };
+    Response::builder()
+        .status(200)
+        .header(header::CONTENT_TYPE, "image/jpeg")
+        .header(header::ETAG, format!("\"{vtag}-face{face}\""))
+        .header(header::CACHE_CONTROL, cache)
+        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+        .header(header::CONTENT_SECURITY_POLICY, crate::preview::SANDBOX)
+        .body(Body::from(bytes))
+        .unwrap_or_else(|_| error(500, "server error"))
 }
