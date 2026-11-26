@@ -926,6 +926,7 @@ impl eframe::App for NativeShell {
         self.panels.ui(&mut self.app, ui);
         self.messages.ui(&mut self.app, &ctx);
         self.spell.before(&ctx);
+        crate::pasteprompt::before(&ctx);
         self.edit_menu.before(&mut self.app, &ctx);
         self.find.keys(&self.app, &ctx);
         crate::dvpanel::delete_key(&mut self.app);
@@ -952,6 +953,7 @@ impl eframe::App for NativeShell {
         self.panels.protect.warning_ui(&mut self.app, &ctx);
         self.spell.ui(&mut self.app, &ctx);
         self.edit_menu.ui(&mut self.app, &ctx);
+        crate::pasteprompt::ui(&ctx);
         crate::house::style_tooltips(&ctx);
         self.input.end_frame(&ctx);
     }
