@@ -51,9 +51,8 @@ def main():
     rec("face circles drawn", "person:0" in t, str(sorted(k for k in t if k.startswith('person'))))
     # name person 0
     S.click_text(f"person:{first}"); time.sleep(2)
-    S.click_text("Add a name"); time.sleep(1)
-    S.click_text("name field"); time.sleep(0.5)
-    subprocess.run(["xdotool", "type", "--delay", "40", NAME]); S.click_text("Save"); time.sleep(2)
+    S.click_text("people:title"); time.sleep(1)  # the name is the title: click it to type in place
+    subprocess.run(["xdotool", "type", "--delay", "40", NAME]); subprocess.run(["xdotool", "key", "Return"]); time.sleep(2)
     back()
     rec("naming works", S.wait_for(lambda: any(n["name"] == NAME for n in pe().get("named", [])), secs=20), json.dumps(pe().get("named")))
     S.shot(f"{br}-2-named")
@@ -77,6 +76,7 @@ def main():
     before = len(pe()["groups"]) + len(pe()["named"])
     if pe()["groups"]:
         S.click_text(f"person:{len(pe()['named'])}"); time.sleep(3)
+        S.click_text("people:more"); time.sleep(1)  # Merge is in the More menu
         S.click_text("Merge with…"); time.sleep(1)
         S.click_text(NAME); time.sleep(3)
         back(); time.sleep(3)

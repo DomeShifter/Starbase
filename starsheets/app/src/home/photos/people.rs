@@ -6,7 +6,7 @@ use egui::{Color32, Pos2, Rect, RichText, Sense, TextureId, Ui, pos2, vec2};
 use serde_json::{Value as Json, json};
 
 use super::albums::{Card, Tab};
-use super::{Got, PhotoMode, SMALL, link};
+use super::{Got, PhotoMode, SMALL};
 use crate::house;
 use crate::store::{Backend, Method};
 use crate::theme;
@@ -24,7 +24,6 @@ pub(in crate::home) struct FaceCard {
 enum Ask {
     #[default]
     None,
-    Name,
     Merge,
 }
 
@@ -80,7 +79,7 @@ impl People {
                 .map(|c| json!({"id": c.id, "name": c.name, "count": c.count, "face": c.face, "cover": c.cover.as_ref().map(|x| &x.0)}))
                 .collect::<Vec<_>>()
         };
-        json!({"named": c(&self.named), "groups": c(&self.groups), "on": self.state["on"], "faces": self.faces.len(), "can_download": self.state["can_download"], "download": self.state["download"], "missing": self.state["missing"].as_array().map_or(0, Vec::len), "progress": self.state["progress"], "editing": self.editing, "scan": self.scan.test_state()})
+        json!({"named": c(&self.named), "groups": c(&self.groups), "on": self.state["on"], "faces": self.faces.len(), "can_download": self.state["can_download"], "download": self.state["download"], "missing": self.state["missing"].as_array().map_or(0, Vec::len), "progress": self.state["progress"], "editing": self.editing, "merging": self.ask == Ask::Merge, "scan": self.scan.test_state()})
     }
 }
 
@@ -192,55 +191,78 @@ impl PhotoMode {
         }
     }
 
+    /// One card on the People page (144 × 184): a 120 px round face, padding [`house::M`], the
+    /// name (typed in place) and the picture count [`house::XS`] apart under it.
     fn person_card(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend, c: &Card, n: usize) -> bool {
-        let side = 128.0;
-        let (rect, resp) = ui.allocate_exact_size(vec2(side, side + 40.0), Sense::click());
+        let (rect, resp) = ui.allocate_exact_size(vec2(CARD_W, CARD_H), Sense::click());
         house::target(ctx, &format!("person:{n}"), rect);
         let p = ui.painter_at(rect);
-        let centre = rect.min + vec2(side / 2.0, side / 2.0);
+        if resp.hovered() {
+            p.rect_filled(rect, house::PANEL_RADIUS, theme::menu_hover());
+        }
+        let centre = rect.min + vec2(CARD_W / 2.0, house::M + CARD_FACE / 2.0);
         if let (Some((id, v)), Some(bx)) = (&c.cover, c.bx) {
-            self.face_ui(ctx, store, &p, (id, v, bx), c.face, centre, side / 2.0 - 4.0);
+            self.face_ui(ctx, store, &p, (id, v, bx), c.face, centre, CARD_FACE / 2.0);
         }
         if resp.hovered() {
-            p.circle_stroke(centre, side / 2.0 - 3.0, egui::Stroke::new(3.0, theme::SHARE));
+            p.circle_stroke(centre, CARD_FACE / 2.0 + 1.0, egui::Stroke::new(3.0, theme::SHARE));
         }
-        self.card_name(ui, ctx, store, c, n, Rect::from_min_size(rect.min + vec2(0.0, side + 2.0), vec2(side, 20.0)));
-        let n = format!("{} {}", c.count, if c.count == 1 { "picture" } else { "pictures" });
-        p.text(rect.min + vec2(side / 2.0, side + 22.0), egui::Align2::CENTER_TOP, n, egui::FontId::proportional(house::NOTE), theme::text_dim());
+        let top = house::M + CARD_FACE + house::XS;
+        self.card_name(ui, ctx, store, c, n, Rect::from_min_size(rect.min + vec2(house::M, top), vec2(CARD_FACE, NAME_H)));
+        let count = Rect::from_min_size(rect.min + vec2(house::M, top + NAME_H + house::XS), vec2(CARD_FACE, 14.0));
+        one_line(&p, count.center_top(), &pictures(c.count), CARD_FACE, house::NOTE, theme::text_dim());
         resp.clicked()
     }
 
-    /// A card's name on the People list, typed in place: click it (or "Add a name"), Enter or
-    /// clicking elsewhere saves (the person page's name call), Esc puts it back.
+    /// The name box typed in place, for the card on the People list (`at`) or the person page's
+    /// title (`at` None: laid out in the row, title size). Enter or clicking elsewhere saves (the
+    /// person page's name call), Esc puts it back.
+    fn name_box(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend, c: &Card, at: Option<Rect>, targets: &[&str]) {
+        let size = if at.is_some() { house::BODY } else { house::TITLE };
+        let w = at.map_or(280.0, |r| r.width());
+        let edit = egui::TextEdit::singleline(&mut self.alb.ppl.text).hint_text("Name").desired_width(w).font(egui::FontId::proportional(size));
+        let t = match at {
+            Some(r) => ui.put(r, edit),
+            None => ui.add(edit),
+        };
+        for name in targets {
+            house::target(ctx, name, t.rect);
+        }
+        if std::mem::take(&mut self.alb.ppl.focus) {
+            t.request_focus();
+        } else if t.lost_focus() {
+            let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+            self.alb.ppl.editing = None;
+            if let Some(name) = name_commit(esc, &self.alb.ppl.text, &c.name) {
+                self.people_post(ctx, store, &format!("api/photos/people/{}/name", c.id), json!({"name": name}));
+                let open = self.alb.open.as_mut().filter(|o| o.id == c.id);
+                for o in self.alb.ppl.named.iter_mut().chain(self.alb.ppl.groups.iter_mut()).chain(open).filter(|o| o.id == c.id) {
+                    o.name = name.clone();
+                }
+            }
+        }
+    }
+
+    /// Start typing a name for `c` in place.
+    fn start_naming(&mut self, c: &Card) {
+        self.alb.ppl.editing = Some(c.id.clone());
+        self.alb.ppl.text = c.name.clone();
+        self.alb.ppl.focus = true;
+    }
+
+    /// A card's name on the People list: click it (or "Add a name") to type it in place.
     fn card_name(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend, c: &Card, n: usize, r: Rect) {
         let target = format!("people:name:{n}");
         if self.alb.ppl.editing.as_deref() == Some(c.id.as_str()) {
-            let t = ui.put(r, egui::TextEdit::singleline(&mut self.alb.ppl.text).hint_text("Name").desired_width(r.width()));
-            house::target(ctx, &target, t.rect);
-            if std::mem::take(&mut self.alb.ppl.focus) {
-                t.request_focus();
-            } else if t.lost_focus() {
-                let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
-                let name = self.alb.ppl.text.trim().to_string();
-                self.alb.ppl.editing = None;
-                if !esc && !name.is_empty() && name != c.name {
-                    self.people_post(ctx, store, &format!("api/photos/people/{}/name", c.id), json!({"name": name}));
-                    for o in self.alb.ppl.named.iter_mut().chain(self.alb.ppl.groups.iter_mut()).filter(|o| o.id == c.id) {
-                        o.name = name.clone();
-                    }
-                }
-            }
+            self.name_box(ui, ctx, store, c, Some(r), &[&target]);
             return;
         }
         let resp = ui.interact(r, ui.scope_id().with(("people-name", &c.id)), Sense::click()).on_hover_cursor(egui::CursorIcon::Text);
         house::target(ctx, &target, r);
-        let name = if c.name.is_empty() { "Add a name".to_string() } else { c.name.clone() };
         let col = if c.name.is_empty() || resp.hovered() { theme::text_dim() } else { theme::text() };
-        ui.painter_at(r).text(r.center_top() + vec2(0.0, 2.0), egui::Align2::CENTER_TOP, name, egui::FontId::proportional(house::BODY), col);
+        one_line(&ui.painter_at(r), r.center_top() + vec2(0.0, 2.0), shown_name(&c.name), r.width(), house::BODY, col);
         if resp.clicked() {
-            self.alb.ppl.editing = Some(c.id.clone());
-            self.alb.ppl.text = c.name.clone();
-            self.alb.ppl.focus = true;
+            self.start_naming(c);
         }
     }
 
@@ -272,68 +294,101 @@ impl PhotoMode {
         true
     }
 
-    /// Off, models missing, progress: one clear path to turn it on, then a progress bar.
-    fn people_status(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend) {
-        let st = self.alb.ppl.state.clone();
-        let dim = |ui: &mut Ui, t: String| ui.label(RichText::new(t).size(house::NOTE).color(theme::text_dim()));
-        if st.is_null() {
+    /// Turn face recognition on (fetching the models first when they are missing).
+    fn turn_on(&mut self, ctx: &egui::Context, store: &Backend, st: &Json) {
+        self.people_post(ctx, store, "api/photos/faces", json!({"on": true}));
+        if needs_models(st) {
+            self.people_post(ctx, store, "api/photos/faces/models", json!({}));
+        }
+    }
+
+    /// The page title row: "People" on the left; Scan now and the one "Face recognition" menu
+    /// button (on/off, download models, the privacy note) on the right.
+    fn people_header(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend, st: &Json) {
+        let on = st["on"].as_bool() == Some(true);
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("People").size(house::TITLE).color(theme::text()));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = house::S;
+                if !st.is_null() && (on || st["can_toggle"].as_bool() == Some(true)) {
+                    let b = ui.add(house::quiet_with(Some("expand_more"), fr_label(st), false));
+                    house::target(ctx, "people:fr-menu", b.rect);
+                    egui::Popup::menu(&b).show(|ui| {
+                        house::menu(ui, 320.0);
+                        self.fr_menu_ui(ui, ctx, store, st);
+                    });
+                }
+                if on {
+                    self.alb.ppl.scan.ui(ui, store);
+                }
+            });
+        });
+    }
+
+    /// The rows of the face recognition menu.
+    fn fr_menu_ui(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend, st: &Json) {
+        let on = st["on"].as_bool() == Some(true);
+        let busy = st["download"]["busy"].as_bool() == Some(true);
+        if st["can_toggle"].as_bool() == Some(true) {
+            if on {
+                if house::menu_row(ui, Some("visibility_off"), "Turn off face recognition", "", true) {
+                    self.people_post(ctx, store, "api/photos/faces", json!({"on": false}));
+                }
+            } else if !busy && house::menu_row(ui, Some("visibility"), off_view(st).2.unwrap_or("Turn on face recognition"), "", true) {
+                self.turn_on(ctx, store, st);
+            }
+        }
+        if needs_models(st) && !busy && house::menu_row(ui, Some("download"), "Download face models", "", true) {
+            self.people_post(ctx, store, "api/photos/faces/models", json!({}));
+        }
+        house::menu_sep(ui);
+        let r = egui::Frame::NONE
+            .inner_margin(egui::Margin::symmetric(house::MENU_INSET, 6))
+            .show(ui, |ui| {
+                let dim = |ui: &mut Ui, t: &str| ui.label(RichText::new(t).size(house::NOTE).color(theme::text_dim()));
+                if on {
+                    let note = st["note"].as_str().unwrap_or("");
+                    dim(ui, format!("{} faces found. {note}", st["progress"]["faces"].as_u64().unwrap_or(0)).trim_end());
+                    ui.add_space(house::XS);
+                }
+                dim(ui, PRIVACY);
+                if on && st["can_toggle"].as_bool() == Some(true) {
+                    ui.add_space(house::XS);
+                    dim(ui, "Turning off stops the scan. Names and groups are kept.");
+                }
+            })
+            .response;
+        house::target(ctx, "people:fr-note", r.rect);
+    }
+
+    /// Work in progress and problems under the title: the model download, missing model files,
+    /// the scan bar. Asks the list again while something runs.
+    fn people_working(&mut self, ui: &mut Ui, ctx: &egui::Context, st: &Json) {
+        let on = st["on"].as_bool() == Some(true);
+        self.download_ui(ui, ctx, st);
+        if !on {
             return;
         }
-        if st["on"].as_bool() != Some(true) {
-            dim(ui, "Face recognition groups the same face across your pictures. It runs on this server only; nothing is sent anywhere.".into());
-            let downloading = st["download"]["busy"].as_bool() == Some(true);
-            if st["can_toggle"].as_bool() == Some(true) {
-                if downloading || st["download"]["error"].is_string() {
-                    self.models_ui(ui, ctx, store, &st);
-                }
-                let need = st["can_download"].as_bool() == Some(true) && st["missing"].as_array().is_some_and(|m| !m.is_empty());
-                let label = if need { "Download face models and turn on" } else { "Turn on face recognition" };
-                if !downloading && self.pill(ui, label, false) {
-                    self.people_post(ctx, store, "api/photos/faces", json!({"on": true}));
-                    if need {
-                        self.people_post(ctx, store, "api/photos/faces/models", json!({}));
-                    }
+        let missing = st["missing"].as_array().filter(|m| !m.is_empty());
+        if let Some(m) = missing {
+            if st["can_download"].as_bool() == Some(true) {
+                if st["download"]["busy"].as_bool() != Some(true) {
+                    let files: Vec<String> = m.iter().map(|f| format!("{} ({})", f["what"].as_str().unwrap_or(""), f["licence"].as_str().unwrap_or(""))).collect();
+                    let t = format!("Face recognition needs model files: {}. Download them from the Face recognition menu.", files.join(", "));
+                    ui.label(RichText::new(t).size(house::NOTE).color(theme::text_dim()));
                 }
             } else {
-                dim(ui, "It is off. Ask the owner of this server to turn it on (in Photos, People).".into());
+                let files: Vec<String> = m
+                    .iter()
+                    .map(|f| format!("{} ({}, {})", f["file"].as_str().unwrap_or(""), f["what"].as_str().unwrap_or(""), f["url"].as_str().unwrap_or("")))
+                    .collect();
+                let t = format!("Model files are missing. Put them in {}: {}.", st["models"].as_str().unwrap_or("the models folder"), files.join("; "));
+                ui.label(RichText::new(t).size(house::NOTE).color(house::ERROR));
             }
-            return;
         }
-        self.models_ui(ui, ctx, store, &st);
-        if let Some(m) = st["missing"].as_array().filter(|m| !m.is_empty() && st["can_download"].as_bool() != Some(true)) {
-            let files: Vec<String> = m
-                .iter()
-                .map(|f| format!("{} ({}, {})", f["file"].as_str().unwrap_or(""), f["what"].as_str().unwrap_or(""), f["url"].as_str().unwrap_or("")))
-                .collect();
-            ui.label(
-                RichText::new(format!(
-                    "Model files are missing. Put them in {}: {}.",
-                    st["models"].as_str().unwrap_or("the models folder"),
-                    files.join("; ")
-                ))
-                .size(house::NOTE)
-                .color(house::ERROR),
-            );
-        }
-        let pr = &st["progress"];
-        let waiting = st["missing"].as_array().is_some_and(|m| !m.is_empty());
-        ui.horizontal(|ui| self.alb.ppl.scan.ui(ui, store));
-        let scanning = self.scan_bar(ui, &st, true);
-        if scanning || waiting {
+        let scanning = self.scan_bar(ui, st, true);
+        if scanning || missing.is_some() {
             self.people_poll(ui, 2.0);
-        }
-        ui.horizontal(|ui| {
-            if !scanning {
-                dim(ui, format!("Done: {} faces found. {}", pr["faces"].as_u64().unwrap_or(0), st["note"].as_str().unwrap_or("")));
-            } else if let Some(n) = st["note"].as_str().filter(|n| !n.is_empty()) {
-                dim(ui, n.to_string());
-            }
-            if st["can_toggle"].as_bool() == Some(true) && self.pill(ui, "Turn off", false) {
-                self.people_post(ctx, store, "api/photos/faces", json!({"on": false}));
-            }
-        });
-        if st["can_toggle"].as_bool() == Some(true) {
-            dim(ui, "Turning off stops the scan. Names and groups are kept.".into());
         }
     }
 
@@ -343,13 +398,15 @@ impl PhotoMode {
         self.viewer = None;
         self.alb.ppl.faces.clear();
         self.alb.ppl.ask = Ask::None;
+        self.alb.ppl.editing = None;
         self.loading = true;
         let key = c.id.clone();
         self.alb.open = Some(c);
         super::albums::get(ctx, store, &self.inbox, &format!("api/photos/people/{key}"), move |v| Got::Opened(Tab::People, key, v));
     }
 
-    /// A row of round faces at the top of Photos; a tap opens the person, "See all" opens People.
+    /// The People strip at the top of Photos: a "People … See all" heading row, then round 64 px
+    /// faces with their name under; a click opens the person, "See all" opens People.
     pub(in crate::home) fn people_strip(&mut self, ui: &mut Ui, store: &Backend) {
         let ctx = ui.ctx().clone();
         self.people_boot(&ctx, store);
@@ -365,14 +422,25 @@ impl PhotoMode {
         if all.is_empty() {
             return;
         }
-        let (side, gap) = (64.0, house::M);
-        let fit = (((ui.available_width() - 90.0) / (side + gap)) as usize).clamp(1, 12);
-        let mut open = None;
         let mut see_all = false;
+        ui.horizontal(|ui| {
+            let h = ui.label(RichText::new("People").size(house::BODY).strong().color(theme::text()));
+            house::target(&ctx, "people:strip-heading", h.rect);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let b = ui.add(house::quiet_with(Some("chevron_right"), "See all", false));
+                house::target(&ctx, "pill-See all", b.rect);
+                house::target(&ctx, "people:see-all", b.rect);
+                see_all = b.clicked();
+            });
+        });
+        ui.add_space(house::S);
+        let (side, gap) = (STRIP_FACE, house::M);
+        let fit = ((ui.available_width() / (side + gap)) as usize).clamp(1, 12);
+        let mut open = None;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = gap;
             for (n, c) in all.iter().take(fit).enumerate() {
-                let (rect, resp) = ui.allocate_exact_size(vec2(side, side + 20.0), Sense::click());
+                let (rect, resp) = ui.allocate_exact_size(vec2(side, side + house::XS + 16.0), Sense::click());
                 house::target(&ctx, &format!("people-strip:{n}"), rect);
                 let p = ui.painter_at(rect);
                 let centre = rect.min + vec2(side / 2.0, side / 2.0);
@@ -382,20 +450,11 @@ impl PhotoMode {
                 if resp.hovered() {
                     p.circle_stroke(centre, side / 2.0 - 1.0, egui::Stroke::new(2.0, theme::SHARE));
                 }
-                let name = if c.name.is_empty() { "Unnamed".to_string() } else { c.name.clone() };
-                p.text(
-                    rect.min + vec2(side / 2.0, side + 4.0),
-                    egui::Align2::CENTER_TOP,
-                    name,
-                    egui::FontId::proportional(house::NOTE),
-                    theme::text_dim(),
-                );
-                if resp.clicked() {
+                let col = if c.name.is_empty() { theme::text_dim() } else { theme::text() };
+                one_line(&p, rect.min + vec2(side / 2.0, side + house::XS), shown_name(&c.name), side + gap - 2.0, house::NOTE, col);
+                if resp.on_hover_text(shown_name(&c.name)).clicked() {
                     open = Some(c.clone());
                 }
-            }
-            if self.pill(ui, "See all", false) {
-                see_all = true;
             }
         });
         if let Some(c) = open {
@@ -404,11 +463,12 @@ impl PhotoMode {
         } else if see_all {
             self.go(super::albums::Tab::People);
         }
-        ui.add_space(house::S);
+        ui.add_space(house::XL);
     }
 
-    /// The owner's "Download face models" button, its progress and errors.
-    fn models_ui(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend, st: &Json) {
+    /// The model download's progress and errors (the button itself is in the face recognition
+    /// menu, or the off page's main button).
+    fn download_ui(&mut self, ui: &mut Ui, ctx: &egui::Context, st: &Json) {
         if st["can_download"].as_bool() != Some(true) {
             return;
         }
@@ -417,7 +477,8 @@ impl PhotoMode {
         if d["busy"].as_bool() == Some(true) {
             let (got, total) = (d["got"].as_u64().unwrap_or(0), d["total"].as_u64().unwrap_or(0).max(1));
             ui.horizontal_wrapped(|ui| {
-                ui.add(egui::ProgressBar::new(got as f32 / total as f32).desired_width(160.0));
+                let r = ui.add(egui::ProgressBar::new(got as f32 / total as f32).desired_width(160.0));
+                house::target(ctx, "people:download", r.rect);
                 ui.label(
                     RichText::new(format!("Downloading {}: {:.0} of {:.0} MB", d["file"].as_str().unwrap_or("the models"), mb(got), mb(total)))
                         .size(house::NOTE)
@@ -436,63 +497,56 @@ impl PhotoMode {
         if let Some(e) = d["error"].as_str() {
             ui.label(RichText::new(format!("The download failed: {e}")).size(house::NOTE).color(house::ERROR));
         }
-        let files: Vec<String> = st["missing"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|f| format!("{} ({})", f["what"].as_str().unwrap_or(""), f["licence"].as_str().unwrap_or("")))
-            .collect();
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(format!("Face recognition needs model files: {}.", files.join(", "))).size(house::NOTE).color(theme::text_dim()));
-            if self.pill(ui, "Download face models", false) {
-                self.people_post(ctx, store, "api/photos/faces/models", json!({}));
-            }
-        });
     }
 
     /// The people and groups, or the opened one.
     pub(super) fn people_ui(&mut self, ui: &mut Ui, store: &Backend) {
         let ctx = ui.ctx().clone();
         self.people_boot(&ctx, store);
-        if let Some(e) = self.error.clone() {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(e).size(house::NOTE).color(house::ERROR));
-                if ui.add(house::link("OK")).clicked() {
-                    self.error = None;
-                }
-            });
+        if let Some(e) = self.error.clone()
+            && house::status_line(ui, house::Status::Error, &e)
+        {
+            self.error = None;
         }
         if let Some(c) = self.alb.open.clone() {
             self.person_ui(ui, &ctx, store, &c);
             return;
         }
-        ui.label(RichText::new("People").size(house::TITLE).color(theme::text()));
-        self.people_status(ui, &ctx, store);
+        let st = self.alb.ppl.state.clone();
+        self.people_header(ui, &ctx, store, &st);
         ui.add_space(house::S);
+        if st.is_null() {
+            house::status_line(ui, house::Status::Loading, "Loading…");
+            return;
+        }
+        self.people_working(ui, &ctx, &st);
+        if st["on"].as_bool() != Some(true) {
+            let (title, hint, button) = off_view(&st);
+            if house::empty_state(ui, Some("groups"), title, hint, button) {
+                self.turn_on(&ctx, store, &st);
+            }
+            return;
+        }
         let (named, groups) = (self.alb.ppl.named.clone(), self.alb.ppl.groups.clone());
         if named.is_empty() && groups.is_empty() {
-            ui.add_space(house::XL);
-            let on = self.alb.ppl.state["on"].as_bool() == Some(true);
-            let scanning = self.alb.ppl.state["progress"]["done"].as_u64() < self.alb.ppl.state["progress"]["all"].as_u64();
-            let t = if !on {
-                ""
-            } else if scanning {
-                "Still looking. People appear here as they are found."
-            } else {
-                "No faces found in these pictures."
-            };
-            ui.label(RichText::new(t).size(house::BODY).color(theme::text_dim()));
+            let scanning = st["progress"]["done"].as_u64() < st["progress"]["all"].as_u64();
+            let (title, hint) =
+                if scanning { ("Still looking", "People appear here as they are found.") } else { ("No faces found", "No faces were found in these pictures.") };
+            house::empty_state(ui, Some("groups"), title, hint, None);
             return;
         }
         let (mut open, mut n) = (None, 0);
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            for (title, list) in [("", &named), ("Not named yet", &groups)] {
+            for (title, list) in [("", &named), ("Unnamed groups", &groups)] {
                 if list.is_empty() {
                     continue;
                 }
                 if !title.is_empty() {
-                    ui.add_space(house::L);
-                    ui.label(RichText::new(title).size(house::BODY).color(theme::text_dim()));
+                    ui.add_space(house::XL);
+                    let h = ui.label(RichText::new(title).size(house::BODY).strong().color(theme::text()));
+                    house::target(&ctx, "people:groups-heading", h.rect);
+                    ui.label(RichText::new("Name these: click \"Add a name\" under a face.").size(house::NOTE).color(theme::text_dim()));
+                    ui.add_space(house::M);
                 }
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = vec2(house::L, house::L);
@@ -510,68 +564,76 @@ impl PhotoMode {
         }
     }
 
+    /// A person's page: "‹ People", the name as a title you click to rename, the count, a More
+    /// menu (Rename, Merge with…), the faces and then the same grid as Photos.
     fn person_ui(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend, c: &Card) {
         let url = format!("api/photos/people/{}", c.id);
+        let back = ui.add(house::quiet_with(Some("chevron_left"), "People", false));
+        house::target(ctx, "people:back", back.rect);
+        if back.clicked() {
+            self.alb.open = None;
+            self.alb.ppl.ask = Ask::None;
+            self.alb.ppl.editing = None;
+            self.pics.clear();
+            self.viewer = None;
+            return;
+        }
+        ui.add_space(house::S);
         ui.horizontal(|ui| {
-            let back = ui.add(link("‹ People"));
-            house::target(ctx, "people:back", back.rect);
-            if back.clicked() {
-                self.alb.open = None;
-                self.alb.ppl.ask = Ask::None;
-                self.pics.clear();
-                self.viewer = None;
+            ui.spacing_mut().item_spacing.x = house::M;
+            if self.alb.ppl.editing.as_deref() == Some(c.id.as_str()) {
+                self.name_box(ui, ctx, store, c, None, &["name field", "people:title"]);
+            } else {
+                let col = if c.name.is_empty() { theme::text_dim() } else { theme::text() };
+                let t = ui
+                    .add(egui::Label::new(RichText::new(shown_name(&c.name)).size(house::TITLE).color(col)).sense(Sense::click()))
+                    .on_hover_cursor(egui::CursorIcon::Text)
+                    .on_hover_text("Click to rename");
+                house::target(ctx, "people:title", t.rect);
+                if t.clicked() {
+                    self.start_naming(c);
+                }
             }
-            let title = if c.name.is_empty() { "Not named yet" } else { c.name.as_str() };
-            ui.label(RichText::new(title).size(house::TITLE).color(theme::text()));
-            if self.pill(ui, if c.name.is_empty() { "Add a name" } else { "Rename" }, false) {
-                self.alb.ppl.text = c.name.clone();
-                self.alb.ppl.ask = Ask::Name;
-            }
-            if self.pill(ui, "Merge with…", self.alb.ppl.ask == Ask::Merge) {
-                self.alb.ppl.ask = if self.alb.ppl.ask == Ask::Merge { Ask::None } else { Ask::Merge };
-            }
+            ui.label(RichText::new(pictures(c.count)).size(house::NOTE).color(theme::text_dim()));
+            let more = ui.add(house::quiet_with(Some("more_vert"), "More", self.alb.ppl.ask == Ask::Merge));
+            house::target(ctx, "people:more", more.rect);
+            egui::Popup::menu(&more).show(|ui| {
+                house::menu(ui, 220.0);
+                if house::menu_row(ui, Some("edit"), if c.name.is_empty() { "Add a name" } else { "Rename" }, "", true) {
+                    self.start_naming(c);
+                }
+                if house::menu_row(ui, Some("call_split"), "Merge with…", "", true) {
+                    self.alb.ppl.ask = Ask::Merge;
+                }
+            });
         });
-        match self.alb.ppl.ask {
-            Ask::Name => {
-                ui.horizontal(|ui| {
-                    let r = ui.add(egui::TextEdit::singleline(&mut self.alb.ppl.text).hint_text("Name").desired_width(220.0));
-                    house::target(ctx, "name field", r.rect);
-                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if (self.pill(ui, "Save", false) || enter) && !self.alb.ppl.text.trim().is_empty() {
-                        let name = self.alb.ppl.text.trim().to_string();
-                        self.people_post(ctx, store, &format!("{url}/name"), json!({"name": name}));
-                        if let Some(o) = self.alb.open.as_mut() {
-                            o.name = name;
-                        }
-                        self.alb.ppl.ask = Ask::None;
-                    }
-                    if ui.add(link("Cancel")).clicked() {
-                        self.alb.ppl.ask = Ask::None;
-                    }
-                });
-            }
-            Ask::Merge => {
+        if self.alb.ppl.ask == Ask::Merge {
+            ui.add_space(house::S);
+            ui.horizontal(|ui| {
                 ui.label(RichText::new("The same person as:").size(house::NOTE).color(theme::text_dim()));
-                let others: Vec<Card> = self.alb.ppl.named.iter().chain(&self.alb.ppl.groups).filter(|o| o.id != c.id).cloned().collect();
-                ui.horizontal_wrapped(|ui| {
-                    for o in others.iter().take(60) {
-                        let label = if o.name.is_empty() { format!("Not named ({})", o.count) } else { o.name.clone() };
-                        if self.pill(ui, &label, false) {
-                            self.people_post(ctx, store, &format!("{url}/merge"), json!({"into": o.id}));
-                            if let Some(op) = self.alb.open.as_mut()
-                                && op.name.is_empty()
-                            {
-                                op.name = o.name.clone();
-                            }
-                            self.alb.ppl.ask = Ask::None;
+                if ui.add(house::quiet("Cancel")).clicked() {
+                    self.alb.ppl.ask = Ask::None;
+                }
+            });
+            let others: Vec<Card> = self.alb.ppl.named.iter().chain(&self.alb.ppl.groups).filter(|o| o.id != c.id).cloned().collect();
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(house::S, house::S);
+                for o in others.iter().take(60) {
+                    let label = if o.name.is_empty() { format!("Unnamed ({})", o.count) } else { o.name.clone() };
+                    if self.pill(ui, &label, false) {
+                        self.people_post(ctx, store, &format!("{url}/merge"), json!({"into": o.id}));
+                        if let Some(op) = self.alb.open.as_mut()
+                            && op.name.is_empty()
+                        {
+                            op.name = o.name.clone();
                         }
+                        self.alb.ppl.ask = Ask::None;
                     }
-                });
-            }
-            Ask::None => {}
+                }
+            });
         }
         // The faces: × takes a wrong one out.
-        ui.add_space(house::S);
+        ui.add_space(house::M);
         let faces = self.alb.ppl.faces.clone();
         let mut out = None;
         ui.horizontal_wrapped(|ui| {
@@ -582,7 +644,7 @@ impl PhotoMode {
                 self.face_ui(ctx, store, &p, (&f.id, &f.v, f.bx), Some(f.face), rect.center(), 26.0);
                 if resp.hovered() {
                     p.circle_filled(rect.right_top() + vec2(-9.0, 9.0), 8.0, theme::text());
-                    p.text(rect.right_top() + vec2(-9.0, 9.0), egui::Align2::CENTER_CENTER, "×", egui::FontId::proportional(13.0), Color32::WHITE);
+                    p.text(rect.right_top() + vec2(-9.0, 9.0), egui::Align2::CENTER_CENTER, "×", egui::FontId::proportional(house::NOTE), Color32::WHITE);
                 }
                 if resp.on_hover_text("Not this person: take this face out").clicked() {
                     out = Some(f.face);
@@ -593,12 +655,122 @@ impl PhotoMode {
             self.alb.ppl.faces.retain(|f| f.face != face);
             self.people_post(ctx, store, &format!("{url}/remove"), json!({"face": face}));
         }
-        ui.add_space(house::S);
+        ui.add_space(house::L);
         if self.pics.is_empty() {
-            let text = if self.loading { "Loading…" } else { "No pictures." };
-            ui.label(RichText::new(text).size(house::BODY).color(theme::text_dim()));
+            if self.loading {
+                house::status_line(ui, house::Status::Loading, "Loading…");
+            } else {
+                house::empty_state(ui, Some("image"), "No pictures", "", None);
+            }
         } else {
             self.grid(ui, store);
         }
+    }
+}
+
+/// People page card: width, height, face circle (spec 3.7).
+const CARD_W: f32 = 144.0;
+const CARD_H: f32 = 184.0;
+const CARD_FACE: f32 = 120.0;
+/// The name line's height under a card's face.
+const NAME_H: f32 = 18.0;
+/// A face in the People strip.
+const STRIP_FACE: f32 = 64.0;
+/// Said wherever face recognition is offered.
+const PRIVACY: &str = "It runs on this server only; nothing is sent anywhere.";
+
+/// How a person without a name is shown, everywhere (strip, cards, person page).
+fn shown_name(name: &str) -> &str {
+    if name.trim().is_empty() { "Add a name" } else { name }
+}
+
+/// "1 picture", "5 pictures".
+fn pictures(n: u64) -> String {
+    format!("{n} {}", if n == 1 { "picture" } else { "pictures" })
+}
+
+/// The name to save after typing in place, or None (Esc, empty or unchanged).
+fn name_commit(esc: bool, typed: &str, old: &str) -> Option<String> {
+    let t = typed.trim();
+    (!esc && !t.is_empty() && t != old).then(|| t.to_string())
+}
+
+/// True when model files are missing and this user may download them.
+fn needs_models(st: &Json) -> bool {
+    st["can_download"].as_bool() == Some(true) && st["missing"].as_array().is_some_and(|m| !m.is_empty())
+}
+
+/// The face recognition menu button's words.
+fn fr_label(st: &Json) -> &'static str {
+    if st["download"]["busy"].as_bool() == Some(true) {
+        "Face recognition: downloading"
+    } else if st["on"].as_bool() == Some(true) {
+        "Face recognition: On"
+    } else {
+        "Face recognition: Off"
+    }
+}
+
+/// The off page (an empty state): title, hint and the one main button (none while the models
+/// download, or for someone who may not turn it on).
+fn off_view(st: &Json) -> (&'static str, &'static str, Option<&'static str>) {
+    const TITLE: &str = "Face recognition is off";
+    if st["can_toggle"].as_bool() != Some(true) {
+        return (TITLE, "Ask the owner of this server to turn it on (in Photos, People).", None);
+    }
+    let hint = "It groups the same face across your pictures. It runs on this server only; nothing is sent anywhere.";
+    if st["download"]["busy"].as_bool() == Some(true) {
+        (TITLE, hint, None)
+    } else if needs_models(st) {
+        (TITLE, hint, Some("Download face models and turn on"))
+    } else {
+        (TITLE, hint, Some("Turn on face recognition"))
+    }
+}
+
+/// `text` on one line centred under `top`, cut with "…" when wider than `width`.
+fn one_line(p: &egui::Painter, top: Pos2, text: &str, width: f32, size: f32, colour: Color32) {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), egui::FontId::proportional(size), colour);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(width);
+    let g = p.layout_job(job);
+    p.galley(top - vec2(g.size().x / 2.0, 0.0), g, colour);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unnamed_reads_add_a_name() {
+        assert_eq!(shown_name(""), "Add a name");
+        assert_eq!(shown_name("  "), "Add a name");
+        assert_eq!(shown_name("Ada"), "Ada");
+        assert_eq!(pictures(1), "1 picture");
+        assert_eq!(pictures(3), "3 pictures");
+    }
+
+    #[test]
+    fn typed_name_saves_only_when_new() {
+        assert_eq!(name_commit(false, " Ada ", ""), Some("Ada".into()));
+        assert_eq!(name_commit(true, "Ada", ""), None);
+        assert_eq!(name_commit(false, "  ", "Ben"), None);
+        assert_eq!(name_commit(false, "Ben", "Ben"), None);
+    }
+
+    #[test]
+    fn face_menu_and_off_page() {
+        let owner = json!({"on": false, "can_toggle": true, "can_download": true, "missing": [{"file": "a"}], "download": {}});
+        assert_eq!(fr_label(&owner), "Face recognition: Off");
+        assert_eq!(off_view(&owner).2, Some("Download face models and turn on"));
+        let ready = json!({"on": false, "can_toggle": true, "can_download": true, "missing": [], "download": {}});
+        assert_eq!(off_view(&ready).2, Some("Turn on face recognition"));
+        let busy = json!({"on": false, "can_toggle": true, "download": {"busy": true}});
+        assert_eq!(fr_label(&busy), "Face recognition: downloading");
+        assert_eq!(off_view(&busy).2, None);
+        let guest = json!({"on": false, "can_toggle": false});
+        assert_eq!(off_view(&guest).2, None);
+        assert!(off_view(&guest).1.contains("owner"));
+        assert_eq!(fr_label(&json!({"on": true})), "Face recognition: On");
+        assert!(off_view(&ready).1.contains(PRIVACY));
     }
 }

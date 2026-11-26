@@ -413,6 +413,7 @@ impl PhotoMode {
         } else if t == Tab::Albums {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Albums").size(house::TITLE).color(theme::text()));
+                ui.add_space(house::L);
                 if self.pill(ui, "New album", false) {
                     self.alb.text.clear();
                     self.alb.ask = Ask::New;

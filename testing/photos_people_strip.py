@@ -20,7 +20,7 @@ def main():
     pe = lambda: S.snapshot("home.photos.people") or {}
     tg = lambda: S.snapshot("targets") or {}
     S.shot(f"{br}-strip-0-off")
-    label = next((k for k in tg() if k.startswith("pill-") and ("turn on" in k.lower())), None)
+    label = next((k for k in tg() if (k.startswith("pill-") or k.startswith("empty:")) and ("turn on" in k.lower())), None)
     rec("one turn-on button", label is not None, str(label))
     if label: S.click_text(label)
     rec("bar shown or already done", S.wait_for(lambda: "people:progress" in tg() or pe().get("on") is True, secs=60))
