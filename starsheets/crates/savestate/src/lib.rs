@@ -130,7 +130,7 @@ pub fn save_icon(ui: &mut Ui, info: &SaveInfo, pal: &SavePalette) -> SaveIcon {
     let now = ctx.input(|i| i.time);
     // When nobody says when it was saved, time it from the moment the save was seen to finish.
     // One icon per window.
-    let id = egui::Id::new("starbase_save_icon");
+    let id = egui::Id::unique("starbase_save_icon");
     let (last_kind, saved_at) = ctx.data(|d| d.get_temp::<(SaveKind, Option<f64>)>(id)).unwrap_or((info.kind, None));
     let saved_at = match info.kind {
         SaveKind::Saved if matches!(last_kind, SaveKind::Saving | SaveKind::Unsaved) => Some(now),

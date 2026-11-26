@@ -1141,9 +1141,9 @@ pub fn save_info(ctx: &egui::Context, dirty: bool) -> starbase_savestate::SaveIn
         None if dirty => (SaveKind::Unsaved, String::new()),
         None => (SaveKind::Saved, String::new()),
         Some(s) => match s.state {
-            SaveState::Saved => (SaveKind::Saved, get(crate::files::LAST_EDIT)),
+            SaveState::Saved => (SaveKind::Saved, get("starsheets_last_edit")),
             SaveState::Saving => (SaveKind::Saving, String::new()),
-            SaveState::ViewOnly => (SaveKind::ViewOnly, get(crate::files::LAST_EDIT)),
+            SaveState::ViewOnly => (SaveKind::ViewOnly, get("starsheets_last_edit")),
             SaveState::Connecting => (SaveKind::Offline, "Connecting…".to_string()),
             SaveState::Offline => (SaveKind::Offline, String::new()),
             SaveState::Problem => (SaveKind::Problem, s.text.trim_start_matches("Not saved").trim_start_matches(':').trim().to_string()),
