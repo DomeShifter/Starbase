@@ -83,6 +83,8 @@ def run(testn):
                 s.sign_in("ada"); s.open("drive", tab="photos"); time.sleep(2)
                 s.hook("home:folder", path=FOLDER); time.sleep(2)
                 s.hook("home:photos:enable"); time.sleep(6)
+                ph = find(s.snapshot(), "photos")
+                print(f"  [{br}] photos state: { {k: (v if not isinstance(v, (list, dict)) else len(v)) for k, v in (ph or {}).items()} }", flush=True)
                 s.hook("home:photos:open", index=0); time.sleep(3)
                 s.hook("home:photos:edit", open=True); time.sleep(3)
                 s.hook("home:photos:edit:rotate"); time.sleep(0.5)
@@ -90,6 +92,7 @@ def run(testn):
                 s.hook("home:photos:edit:copy"); time.sleep(4)
                 st = find(s.snapshot(), "photo_edit") or {}
                 s.shot(f"{br}-after-copy")
+                print(f"  [{br}] after copy: photo_edit={ {k: v for k, v in st.items() if k != 'rows'} }", flush=True)
                 s.hook("home:photos:edit:cancel"); time.sleep(1)
                 after = find(s.snapshot(), "photo_edit") or {}
                 clean = (before.get("dirty") is True and st.get("copied") is True and st.get("dirty") is False

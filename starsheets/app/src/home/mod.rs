@@ -31,6 +31,7 @@ mod input;
 mod items;
 mod photo_edit;
 mod photos;
+#[cfg(target_arch = "wasm32")]
 pub(crate) use photos::said;
 mod sidebar;
 mod templates;
