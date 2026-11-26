@@ -155,9 +155,10 @@ impl PhotoMode {
         }
     }
 
-    fn person_card(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend, c: &Card) -> bool {
+    fn person_card(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend, c: &Card, n: usize) -> bool {
         let side = 128.0;
         let (rect, resp) = ui.allocate_exact_size(vec2(side, side + 40.0), Sense::click());
+        house::target(ctx, &format!("person:{n}"), rect);
         let p = ui.painter_at(rect);
         let centre = rect.min + vec2(side / 2.0, side / 2.0);
         if let (Some((id, v)), Some(bx)) = (&c.cover, c.bx) {
@@ -301,7 +302,7 @@ impl PhotoMode {
             ui.label(RichText::new("No faces yet.").size(house::BODY).color(theme::TEXT_DIM));
             return;
         }
-        let mut open = None;
+        let (mut open, mut n) = (None, 0);
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             for (title, list) in [("", &named), ("Not named yet", &groups)] {
                 if list.is_empty() {
@@ -314,7 +315,8 @@ impl PhotoMode {
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = vec2(house::L, house::L);
                     for c in list {
-                        if self.person_card(ui, &ctx, store, c) {
+                        n += 1;
+                        if self.person_card(ui, &ctx, store, c, n - 1) {
                             open = Some(c.clone());
                         }
                     }
@@ -356,6 +358,7 @@ impl PhotoMode {
             Ask::Name => {
                 ui.horizontal(|ui| {
                     let r = ui.add(egui::TextEdit::singleline(&mut self.alb.ppl.text).hint_text("Name").desired_width(220.0));
+                    house::target(ctx, "name field", r.rect);
                     let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     if (self.pill(ui, "Save", false) || enter) && !self.alb.ppl.text.trim().is_empty() {
                         let name = self.alb.ppl.text.trim().to_string();
@@ -395,8 +398,9 @@ impl PhotoMode {
         let faces = self.alb.ppl.faces.clone();
         let mut out = None;
         ui.horizontal_wrapped(|ui| {
-            for f in faces.iter().take(200) {
+            for (i, f) in faces.iter().take(200).enumerate() {
                 let (rect, resp) = ui.allocate_exact_size(vec2(56.0, 56.0), Sense::click());
+                house::target(ctx, &format!("face:{i}"), rect);
                 let p = ui.painter_at(rect);
                 self.face_ui(ctx, store, &p, (&f.id, &f.v, f.bx), rect.center(), 26.0);
                 if resp.hovered() {
