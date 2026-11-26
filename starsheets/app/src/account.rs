@@ -29,6 +29,8 @@ pub struct Me {
 thread_local! {
     static ME: RefCell<Option<Me>> = const { RefCell::new(None) };
     /// Set when a request came back "please sign in".
+    /// The People dialog's link-preview checkbox as last drawn, for the test hook (None until drawn).
+    static LINK_PREVIEW_SHOWN: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
     static SIGN_IN: RefCell<bool> = const { RefCell::new(false) };
     /// Set when a request came back "please sign in" for a single sign-on session that can be
     /// renewed at the provider without asking (files.rs `fetch`).
@@ -141,6 +143,7 @@ pub fn test_state(ctx: &egui::Context) -> Json {
         "user": me().map(|m| json!({ "username": m.username, "name": m.name })),
         "signInPage": page,
         "menuOpen": egui::Popup::is_id_open(ctx, menu_id()),
+        "linkPreviewChecked": LINK_PREVIEW_SHOWN.with(std::cell::Cell::get),
         "next": crate::continueto::from_address(),
     })
 }
@@ -1761,6 +1764,7 @@ impl Account {
             );
             let r = ui.checkbox(&mut self.link_preview_on, "Show a page preview when hovering a link");
             house::target(ui.ctx(), "people:link-preview", r.rect);
+            LINK_PREVIEW_SHOWN.with(|c| c.set(Some(self.link_preview_on)));
             if r.changed() {
                 save_preview = true;
             }
