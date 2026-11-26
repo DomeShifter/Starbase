@@ -57,6 +57,10 @@ pub(super) struct Pic {
     pub modified: i64,
     pub width: u32,
     pub height: u32,
+    pub size: u64,
+    pub camera: Option<String>,
+    /// Where it was taken, only when the server says this person may see it.
+    pub gps: Option<(f64, f64)>,
 }
 
 /// Answers, from the network or a decoder (possibly another thread on the desktop).
@@ -315,6 +319,9 @@ impl PhotoMode {
                 modified: p["modified"].as_i64().unwrap_or(0),
                 width: p["width"].as_u64().unwrap_or(0) as u32,
                 height: p["height"].as_u64().unwrap_or(0) as u32,
+                size: p["size"].as_u64().unwrap_or(0),
+                camera: p["camera"].as_str().map(str::to_string),
+                gps: p["gps"]["lat"].as_f64().zip(p["gps"]["lon"].as_f64()),
             })
             .collect()
     }
@@ -722,7 +729,7 @@ impl PhotoMode {
                 let p = self.pics.get(v.index());
                 json!({
                     "index": v.index(), "pos": v.pos, "id": p.map(|p| &p.id), "name": p.map(|p| &p.name),
-                    "zoom": v.zoom, "playing": v.playing, "shuffle": v.shuffle, "every": v.every, "showing": v.showing,
+                    "info": v.info, "menu": v.menu, "toast": crate::house::toast_text(), "info_rows": p.map(|p| super::viewer::info_lines(p).iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>()), "zoom": v.zoom, "playing": v.playing, "shuffle": v.shuffle, "every": v.every, "showing": v.showing,
                 })
             }),
         })
