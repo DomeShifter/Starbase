@@ -36,11 +36,13 @@ def main():
     items = lambda: len(S.snapshot("home.photos.items") or [])
     # Faces on (models fetched once per server).
     S.hook("home:photos:tab", tab="people"); time.sleep(3)
-    if pe().get("can_download") and pe().get("missing"):
-        S.click_text("Download face models")
-        S.wait_for(lambda: not pe().get("missing") and not (pe().get("download") or {}).get("busy"), secs=400)
-    if pe().get("on") is not True and "Turn on" in (S.snapshot("targets") or {}):
-        S.click_text("Turn on")
+    tg = lambda: S.snapshot("targets") or {}
+    for label in ("Download face models and turn on", "Turn on face recognition", "Download face models", "Turn on"):
+        if pe().get("on") is not True and label in tg():
+            S.click_text(label); time.sleep(2)
+    S.wait_for(lambda: not pe().get("missing") and not (pe().get("download") or {}).get("busy"), secs=400, every=3)
+    if pe().get("on") is not True and "Turn on face recognition" in tg():
+        S.click_text("Turn on face recognition")
     rec("faces on", S.wait_for(lambda: pe().get("on") is True, secs=30), json.dumps(pe().get("note")))
     S.hook("home:photos:tab", tab="photos"); time.sleep(2)
     before = items()
