@@ -18,6 +18,7 @@ use egui::{Color32, Rect, RichText, Sense, Ui, pos2, vec2};
 use serde_json::Value as Json;
 
 pub(super) mod albums;
+mod dups;
 mod pick;
 
 pub(super) use pick::{Act, Out};
@@ -68,6 +69,42 @@ pub(super) struct Pic {
     pub gps: Option<(f64, f64)>,
     /// The town (or rounded position) of `gps`, named by the server.
     pub place: Option<String>,
+    /// The media type ("image/jpeg", "video/mp4"...).
+    pub media: String,
+    /// A video's length, seconds.
+    pub duration: Option<f64>,
+}
+
+impl Pic {
+    pub fn is_video(&self) -> bool {
+        self.media.starts_with("video/")
+    }
+}
+
+/// A video's length as the tile shows it: `0:07`, `12:30`, `1:02:03`.
+pub(super) fn duration_label(secs: f64) -> String {
+    let t = secs.max(0.0).round() as u64;
+    let (h, m, s) = (t / 3600, t / 60 % 60, t % 60);
+    if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m}:{s:02}") }
+}
+
+/// A video's tile: a play triangle in a dark disc in the middle, its length at the bottom right.
+fn video_badge(painter: &egui::Painter, rect: Rect, duration: Option<f64>) {
+    let c = rect.center();
+    let r = (rect.width() * 0.16).clamp(14.0, 30.0);
+    painter.circle_filled(c, r, Color32::from_black_alpha(150));
+    painter.add(egui::Shape::convex_polygon(
+        vec![c + vec2(-r * 0.3, -r * 0.45), c + vec2(-r * 0.3, r * 0.45), c + vec2(r * 0.5, 0.0)],
+        Color32::WHITE,
+        egui::Stroke::NONE,
+    ));
+    if let Some(d) = duration {
+        let font = egui::FontId::proportional(house::NOTE);
+        let g = painter.layout_no_wrap(duration_label(d), font, Color32::WHITE);
+        let pos = rect.right_bottom() - vec2(6.0, 6.0) - g.size();
+        painter.rect_filled(Rect::from_min_size(pos, g.size()).expand2(vec2(4.0, 2.0)), 4, Color32::from_black_alpha(170));
+        painter.galley(pos, g, Color32::WHITE);
+    }
 }
 
 /// Whether a Favourite click turns stars on: like Google Photos, any not yet a favourite → all
@@ -87,6 +124,8 @@ pub(super) enum Got {
     Error(String),
     /// The album or place list (albums.rs), and one opened.
     Cards(albums::Tab, Json),
+    /// The Duplicates list for a folder (dups.rs).
+    Dups(String, Json),
     Opened(albums::Tab, String, Json),
     /// An album changed: ask again.
     Changed,
@@ -208,6 +247,8 @@ pub(super) struct PhotoMode {
     pub editor: Option<super::photo_edit::Editor>,
     /// Albums and Places beside the grid (albums.rs).
     pub alb: albums::Albums,
+    /// The Duplicates tab (dups.rs).
+    pub dups: dups::Dups,
     /// Selecting, the right-click menu, Add to album (pick.rs).
     pub pick: pick::Pick,
     /// What the Drive around Photos is asked to do (stars, the bin, Details).
@@ -239,6 +280,7 @@ impl Default for PhotoMode {
             viewer: None,
             editor: None,
             alb: albums::Albums::default(),
+            dups: dups::Dups::default(),
             pick: pick::Pick::default(),
             out: Vec::new(),
         }
@@ -348,6 +390,8 @@ impl PhotoMode {
                 camera: p["camera"].as_str().map(str::to_string),
                 gps: p["gps"]["lat"].as_f64().zip(p["gps"]["lon"].as_f64()),
                 place: p["gps"]["place"].as_str().map(str::to_string),
+                media: s(p, "media"),
+                duration: p["duration"].as_f64(),
             })
             .collect()
     }
@@ -381,6 +425,7 @@ impl PhotoMode {
             match g {
                 Got::Cards(t, v) => self.alb.take_cards(t, &v),
                 Got::Opened(t, key, v) => self.take_opened(t, &key, &v),
+                Got::Dups(f, v) => self.dups.take(&f, &v),
                 Got::Changed => self.alb.changed(ctx, store, &self.inbox),
                 Got::Added(c, n, asked, ids) => self.added(ctx, store, c, n, asked, ids),
                 Got::Picker(v) => self.take_picker(&v),
@@ -533,6 +578,7 @@ impl PhotoMode {
             ui.separator();
             ui.vertical(|ui| match self.alb.tab {
                 albums::Tab::Photos => self.folder_ui(ui, store, folder),
+                albums::Tab::Duplicates => self.dups_ui(ui, store, folder),
                 _ => self.cards_ui(ui, store),
             });
         });
@@ -652,6 +698,8 @@ impl PhotoMode {
         if let Some((t, _)) = self.best(i, SMALL) {
             let [w, h] = t.size();
             painter.image(t.id(), rect, cover_uv(w as f32, h as f32), Color32::WHITE);
+        } else if self.pics[i].is_video() {
+            painter.rect_filled(rect, 0, Color32::from_rgb(0x3C, 0x40, 0x43));
         } else if state == "failed" || state == "unsupported" {
             if let Some(img) = crate::icons::icon("image") {
                 img.paint_at(ui, Rect::from_center_size(rect.center() - vec2(0.0, 10.0), vec2(40.0, 40.0)));
@@ -664,6 +712,9 @@ impl PhotoMode {
                 egui::FontId::proportional(house::NOTE),
                 theme::TEXT_DIM,
             );
+        }
+        if self.pics[i].is_video() {
+            video_badge(&painter, rect, self.pics[i].duration);
         }
         if resp.hovered() {
             painter.rect_filled(rect, 0, Color32::from_black_alpha(40));
@@ -798,10 +849,11 @@ impl PhotoMode {
             "error": self.error,
             "count": self.pics.len(),
             "albums": self.alb.test_state(),
+            "dups": self.dups.test_state(),
             "pick": self.pick.test_state(),
             "textures": { "count": self.tex.len(), "bytes": self.tex.total, "budget": self.tex.budget, "asking": self.asking.len() },
             "items": self.pics.iter().take(60).map(|p| json!({
-                "id": p.id, "name": p.name, "taken": p.taken, "state": p.state, "v": p.v,
+                "id": p.id, "name": p.name, "taken": p.taken, "state": p.state, "v": p.v, "media": p.media, "duration": p.duration,
                 "thumb": has(&p.id, SMALL), "large": has(&p.id, LARGE), "original": has(&p.id, ORIGINAL),
             })).collect::<Vec<_>>(),
             "photo_edit": self.editor.as_ref().map_or_else(|| json!({ "open": false }), |e| e.test_state()),
@@ -895,6 +947,11 @@ pub(super) async fn decode_web(bytes: Vec<u8>, max: u32) -> Option<egui::ColorIm
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn video_lengths_read_like_a_player() {
+        assert_eq!([duration_label(7.4), duration_label(750.0), duration_label(3723.0)], ["0:07", "12:30", "1:02:03"]);
+    }
 
     #[test]
     fn favourite_reads_the_star_of_pictures_in_subfolders() {

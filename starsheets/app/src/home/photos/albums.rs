@@ -20,6 +20,7 @@ pub(in crate::home) enum Tab {
     Albums,
     Places,
     Events,
+    Duplicates,
 }
 
 impl Tab {
@@ -30,6 +31,7 @@ impl Tab {
             Tab::Albums => "albums",
             Tab::Places => "places",
             Tab::Events => "events",
+            Tab::Duplicates => "duplicates",
         }
     }
 }
@@ -158,7 +160,7 @@ impl Albums {
             Tab::Albums => self.albums = cards(v, "albums"),
             Tab::Places => self.places = cards(v, "places"),
             Tab::Events => self.events = cards(v, "events"),
-            Tab::Photos => {}
+            Tab::Photos | Tab::Duplicates => {}
         }
     }
 
@@ -194,6 +196,7 @@ impl PhotoMode {
             self.alb.open = None;
             self.clear_selection();
             self.alb.ask = Ask::None;
+            self.dups.reset();
             self.pics.clear();
             self.viewer = None;
             // Back to the folder: listed again.
@@ -211,6 +214,7 @@ impl PhotoMode {
             (Tab::Albums, "Albums", "collections"),
             (Tab::Places, "Places", "location_on"),
             (Tab::Events, "Events", "event"),
+            (Tab::Duplicates, "Duplicates", "content_copy"),
         ] {
             let on = self.alb.tab == t;
             let b = egui::Button::new(RichText::new(format!("  {label}")).size(house::BODY).color(theme::TEXT))
@@ -489,7 +493,8 @@ impl PhotoMode {
                     "albums" => Tab::Albums,
                     "places" => Tab::Places,
                     "events" => Tab::Events,
-                    _ => return Err("tab is photos, albums, places or events".into()),
+                    "duplicates" => Tab::Duplicates,
+                    _ => return Err("tab is photos, albums, places, events or duplicates".into()),
                 };
                 self.go(t);
             }
@@ -504,6 +509,14 @@ impl PhotoMode {
                         self.alb.selected.insert(x.id.clone());
                     }
                 }
+            }
+            "home:photos:dups:keep" => {
+                let g = p.get("group").and_then(Json::as_u64).unwrap_or(0) as usize;
+                let i = p.get("index").and_then(Json::as_u64).unwrap_or(0) as usize;
+                if self.dups.groups.get(g).and_then(|x| x.pics.get(i)).is_none() {
+                    return Err("no such duplicate".into());
+                }
+                self.keep_dup(g, i);
             }
             "home:photos:album:new" => {
                 let n = s("name");

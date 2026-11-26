@@ -259,6 +259,7 @@ fn with_pictures() -> (Store, Arc<Photos>) {
     put("ann/Trip/map.png", &encoded(&image::DynamicImage::ImageRgb8(halves(300, 200)), image::ImageFormat::Png));
     put("ann/Trip/iphone.heic", b"not decoded yet");
     put("ann/Trip/broken.jpg", b"\xFF\xD8\xFF\xE0 this is not really a jpeg");
+    put("ann/Trip/clip.mp4", b"\0\0\0\x08free");
     put("ann/Trip/notes.txt", b"not a picture");
     put("ann/Trip/.hidden.jpg", &jpeg(&halves(8, 8)));
     put("ann/Private/me.jpg", &jpeg(&halves(8, 8)));
@@ -306,7 +307,15 @@ fn the_index_and_thumbnails_of_a_store() {
     paths.sort();
     assert_eq!(
         paths,
-        ["ann/Trip/beach.jpg", "ann/Trip/broken.jpg", "ann/Trip/iphone.heic", "ann/Trip/map.png", "ann/Trip/sunset.JPG", "bob/me.gif"],
+        [
+            "ann/Trip/beach.jpg",
+            "ann/Trip/broken.jpg",
+            "ann/Trip/clip.mp4",
+            "ann/Trip/iphone.heic",
+            "ann/Trip/map.png",
+            "ann/Trip/sunset.JPG",
+            "bob/me.gif"
+        ],
         "no hidden files, bins, text, anything through a link, or folders Photos is off for"
     );
     let beach = &rows["ann/Trip/beach.jpg"];
@@ -314,6 +323,7 @@ fn the_index_and_thumbnails_of_a_store() {
     assert_eq!(rows["ann/Trip/sunset.JPG"].meta.orientation, 8);
     assert_eq!((rows["ann/Trip/sunset.JPG"].meta.width, rows["ann/Trip/sunset.JPG"].meta.height), (600, 800));
     assert_eq!(rows["ann/Trip/iphone.heic"].state, State::Unsupported);
+    assert_eq!((rows["ann/Trip/clip.mp4"].state, rows["ann/Trip/clip.mp4"].media.as_str()), (State::Unsupported, "video/mp4"), "videos are listed");
     assert_eq!(rows["ann/Trip/broken.jpg"].state, State::Failed);
     assert!(rows["ann/Trip/broken.jpg"].error.is_some());
     for p in ["ann/Trip/beach.jpg", "ann/Trip/map.png", "bob/me.gif"] {
@@ -438,6 +448,8 @@ fn inotify_sees_a_new_picture() {
 
 #[path = "albums_tests.rs"]
 mod albums_tests;
+#[path = "dups_tests.rs"]
+mod dups_tests;
 #[path = "edits_tests.rs"]
 mod edits_tests;
 #[path = "export_tests.rs"]
