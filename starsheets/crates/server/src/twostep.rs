@@ -169,14 +169,6 @@ pub fn turn_off(store: &Store, username: &str) -> Result<(), String> {
     auth::save(store, &users).map_err(|e| e.to_string())
 }
 
-/// The authenticator code for the secret and moment (for the tests).
-#[cfg(test)]
-pub fn code_now(store: &Store, username: &str, secret_b32: &str) -> String {
-    let _ = (store, username);
-    let secret = unbase32(secret_b32);
-    format!("{:06}", code_at(&secret, (now() / 30.0) as u64))
-}
-
 #[cfg(test)]
 pub fn unbase32(s: &str) -> Vec<u8> {
     let (mut out, mut buf, mut bits) = (Vec::new(), 0u32, 0);
