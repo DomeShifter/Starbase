@@ -64,7 +64,7 @@ opens the viewer; `home:photos:key {key}` with `next`, `prev`, `zoomin`, `zoomou
 
 **Photo editor** (`src/home/photo_edit.rs`, over the viewer): `home:photos:edit {open}` opens or
 closes it on the picture shown; `home:photos:edit:<what>` drives it: `tab {tab}` (crop, adjust,
-filters), `slider {key, value}`, `set {…edit fields…}`, `aspect {name}`, `rotate`, `flip`,
+filters), `slider {key, value}`, `set {…edit fields…}`, `aspect {name}`, `rotate`, `flip`, `auto`, `redeye {x, y, r}`, `redeye_tool {on}`,
 `undo`, `redo`, `reset`, `compare {on}`, `cancel`, `save`, `copy {strip_location, max_side}` and
 `answer {yes}` (the open question). The snapshot's `home.photos.photo_edit` has `open`, `tab`,
 `edits`, `dirty`, `writable`, `whyNot`, `foreign`, `ask`, `error`, `message`, `canUndo`,

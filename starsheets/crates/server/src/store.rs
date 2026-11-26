@@ -25,7 +25,7 @@ use serde_json::{Map, Value, json};
 pub const BIN_DAYS: i64 = 30;
 
 /// Files the apps edit (Sheets, Docs and Slides). Every other file is stored, listed, shared, moved and
-/// binned the same way, but has no versions and is never opened in a live room: the Drive
+/// binned and versioned the same way, but is never opened in a live room: the Drive
 /// previews it (preview.rs) or downloads it.
 pub const EXTS: [&str; 8] = [".xlsx", ".xlsm", ".xls", ".csv", ".ods", ".docx", ".odt", ".pptx"];
 
@@ -40,7 +40,11 @@ pub fn is_doc(name: &str) -> bool {
     DOC_EXTS.iter().any(|x| lower.ends_with(x))
 }
 
-/// Whether a file is one the apps edit (a spreadsheet or a document): only these keep versions.
+/// The biggest file of another type (photo, PDF, video...) that keeps versions: copies of bigger
+/// ones would eat the disk, so their old content goes to the bin instead.
+pub const MAX_VERSIONED_OTHER: u64 = 64 * 1024 * 1024;
+
+/// Whether a file is one the apps edit (a spreadsheet, document or presentation).
 pub fn is_editable(name: &str) -> bool {
     let lower = name.to_lowercase();
     EXTS.iter().any(|x| lower.ends_with(x))
@@ -883,6 +887,17 @@ impl Store {
         json!({"ok": true, "bin": name, "original": relpath, "space": if self.spaces { space_of(relpath) } else { "" }})
     }
 
+    /// A file in `folder` (not below it) whose bytes are exactly `body`: sizes first, then the bytes.
+    fn same_bytes_in(&self, folder: &str, body: &[u8]) -> Option<String> {
+        for e in fs::read_dir(self.full(folder)).ok()?.flatten() {
+            let Ok(m) = e.metadata() else { continue };
+            if m.is_file() && m.len() == body.len() as u64 && fs::read(e.path()).is_ok_and(|b| b == body) {
+                return Some(join(folder, &e.file_name().to_string_lossy()));
+            }
+        }
+        None
+    }
+
     /// Reserves a free file name in `folder` (stem.ext, stem (2).ext, …) by creating it exclusively.
     pub fn claim_name(&self, folder: &str, stem: &str, ext: &str, own: Option<&str>) -> R<String> {
         use std::os::unix::fs::OpenOptionsExt;
@@ -1008,6 +1023,14 @@ impl Store {
         if p.len() == 1 && method == "POST" {
             let folder = rel(qs(q, "folder"))?;
             self.need_folder(&folder)?;
+            // ?skip_dup=1 (phone uploads): a file already in this folder with exactly these bytes
+            // is not saved again; the reply says which one it is ("duplicate", no new "id").
+            if qs(q, "skip_dup") == Some("1")
+                && let Some(same) = self.same_bytes_in(&folder, body)
+            {
+                let id = index.iter().find(|(_, p)| **p == same).map(|(i, _)| i.clone()).unwrap_or_default();
+                return Ok(Reply::Json(json!({"duplicate": true, "existing": id, "name": base_of(&same), "folder": folder}), 200));
+            }
             // ?as_is=1: a file uploaded to the Drive keeps its name and type, whatever it is
             // (photo.jpg stays photo.jpg); otherwise a name that isn't a spreadsheet or document
             // gets .xlsx, as before.
@@ -1042,8 +1065,9 @@ impl Store {
                 {
                     return Ok(Reply::Json(json!({"error": "changed elsewhere", "name": base_of(&path)}), 409));
                 }
-                // Versions are for Sheets and Docs files; another file's old content goes to the bin.
-                if is_editable(&path) {
+                // Every file keeps its earlier versions (Drive's "Manage versions"); only a big file the
+                // apps don't edit goes to the bin instead, so versions can't fill the disk.
+                if is_editable(&path) || fs::metadata(&fpath).map_or(0, |m| m.len()) <= MAX_VERSIONED_OTHER {
                     self.keep_version(fid, &fpath)?;
                 } else {
                     self.copy_to_bin(&path)?;

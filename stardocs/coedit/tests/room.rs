@@ -159,3 +159,23 @@ fn fingerprint_follows_the_document() {
     applied(b.receive(1, 2, 1, ins(0, "y")));
     assert_eq!(a.hash(), b.hash(), "same changes, same fingerprint");
 }
+
+#[test]
+fn fingerprint_is_the_same_for_separately_built_rooms() {
+    // The base document holds clock-stamped parts (comment, tracked change); rooms built from
+    // it a second apart must still agree, so build several with a pause across a second.
+    let a = room(usize::MAX, 0);
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let b = room(usize::MAX, 0);
+    assert_eq!(a.hash(), b.hash());
+    assert_eq!(base_docx(), base_docx());
+}
+
+#[test]
+fn fingerprint_of_a_tiny_document_is_fixed() {
+    // FNV-1a 64 of the saved bytes of a fixed, clock-free document (no comments or tracking).
+    let bytes = wordcraft_engine::io::save_bytes("t.txt", &wordcraft_doc::Document::new()).unwrap();
+    assert_eq!(starbase_docs_sync::hash(&bytes), starbase_docs_sync::hash(&bytes));
+    assert_eq!(starbase_docs_sync::hash(b"a"), 0xaf63_dc4c_8601_ec8c, "FNV-1a 64 of \"a\"");
+    assert_eq!(starbase_docs_sync::hash(b""), 0xcbf2_9ce4_8422_2325);
+}

@@ -85,6 +85,18 @@ pub struct Filter {
     pub amount: f32,
 }
 
+/// Most red-eye spots on one photo.
+pub const MAX_RED_EYE: usize = 64;
+
+/// A red-eye spot: centre as fractions of the upright source picture, radius as a fraction of its
+/// shorter side. Applied before rotating and cropping, so it stays on the eye.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RedEye {
+    pub x: f32,
+    pub y: f32,
+    pub r: f32,
+}
+
 /// One photo's edits. `Edits::default()` changes nothing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "RawEdits", into = "RawEdits")]
@@ -109,6 +121,8 @@ pub struct Edits {
     /// Positive = magenta, negative = green (as Lightroom).
     pub tint: i32,
     pub filter: Option<Filter>,
+    /// Red-eye spots, applied first (on the source frame).
+    pub red_eye: Vec<RedEye>,
 }
 
 impl Default for Edits {
@@ -128,6 +142,7 @@ impl Default for Edits {
             temperature: 0,
             tint: 0,
             filter: None,
+            red_eye: Vec::new(),
         }
     }
 }
@@ -135,7 +150,7 @@ impl Default for Edits {
 impl Edits {
     /// True when rendering gives back the same pixels (the aspect hint doesn't count).
     pub fn is_identity(&self) -> bool {
-        self.geometry_is_identity() && self.pixels_are_identity()
+        self.geometry_is_identity() && self.pixels_are_identity() && self.red_eye.is_empty()
     }
 
     /// No rotation, flip, straighten or crop.
@@ -184,6 +199,14 @@ impl Edits {
             if !(-MAX_SLIDER..=MAX_SLIDER).contains(&v) {
                 return Err(EditError(format!("{name} must be -100..=100")));
             }
+        }
+        if self.red_eye.len() > MAX_RED_EYE {
+            return Err(EditError(format!("at most {MAX_RED_EYE} red-eye spots")));
+        }
+        for s in &self.red_eye {
+            check_f("red_eye.x", s.x as f64, 0.0, 1.0)?;
+            check_f("red_eye.y", s.y as f64, 0.0, 1.0)?;
+            check_f("red_eye.r", s.r as f64, 0.001, 0.5)?;
         }
         if let Some(f) = self.filter {
             check_f("filter.amount", f.amount as f64, 0.0, 1.0)?;
@@ -238,6 +261,13 @@ struct RawFilter {
     amount: Option<f64>,
 }
 
+#[derive(Serialize, Deserialize)]
+struct RawRedEye {
+    x: f64,
+    y: f64,
+    r: f64,
+}
+
 #[derive(Serialize, Deserialize, Default)]
 #[serde(default)]
 struct RawEdits {
@@ -256,6 +286,7 @@ struct RawEdits {
     temperature: Option<i64>,
     tint: Option<i64>,
     filter: Option<RawFilter>,
+    red_eye: Option<Vec<RawRedEye>>,
 }
 
 /// f32 → f64 by its shortest decimal form, so 0.1 is written as 0.1, not 0.10000000149011612.
@@ -307,6 +338,18 @@ impl TryFrom<RawEdits> for Edits {
             None => None,
             Some(rf) => Some(Filter { name: rf.name, amount: f("filter.amount", rf.amount, 1.0, 0.0, 1.0)? }),
         };
+        let raw_eyes = r.red_eye.unwrap_or_default();
+        if raw_eyes.len() > MAX_RED_EYE {
+            return Err(EditError(format!("at most {MAX_RED_EYE} red-eye spots")));
+        }
+        let mut red_eye = Vec::with_capacity(raw_eyes.len());
+        for s in raw_eyes {
+            red_eye.push(RedEye {
+                x: f("red_eye.x", Some(s.x), 0.0, 0.0, 1.0)?,
+                y: f("red_eye.y", Some(s.y), 0.0, 0.0, 1.0)?,
+                r: f("red_eye.r", Some(s.r), 0.0, 0.001, 0.5)?,
+            });
+        }
         let e = Edits {
             rot90,
             flip_h: r.flip_h.unwrap_or(false),
@@ -322,6 +365,7 @@ impl TryFrom<RawEdits> for Edits {
             temperature: slider("temperature", r.temperature)?,
             tint: slider("tint", r.tint)?,
             filter,
+            red_eye,
         };
         e.validate()?;
         Ok(e)
@@ -346,6 +390,11 @@ impl From<Edits> for RawEdits {
             temperature: Some(e.temperature as i64),
             tint: Some(e.tint as i64),
             filter: e.filter.map(|f| RawFilter { name: f.name, amount: Some(wide(f.amount)) }),
+            red_eye: if e.red_eye.is_empty() {
+                None
+            } else {
+                Some(e.red_eye.iter().map(|s| RawRedEye { x: wide(s.x), y: wide(s.y), r: wide(s.r) }).collect())
+            },
         }
     }
 }
