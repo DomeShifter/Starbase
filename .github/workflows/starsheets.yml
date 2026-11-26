@@ -102,7 +102,7 @@ jobs:
             rustup target add aarch64-unknown-linux-gnu
             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
             # --features ml: face recognition (Photos > People). ort links ONNX Runtime statically from
-            # pyke's prebuilt archive (fetched at build time, SHA-256 checked by ort-sys); the binary then
+            # the pyke prebuilt archive (fetched at build time, SHA-256 checked by ort-sys); the binary then
             # needs only glibc and libstdc++6 (both in debian slim). Desktop/Flatpak builds never enable it.
             cargo build --release -p starsheets-server --features ml --target x86_64-unknown-linux-gnu --target aarch64-unknown-linux-gnu
             mkdir -p server-bin/amd64 server-bin/arm64
