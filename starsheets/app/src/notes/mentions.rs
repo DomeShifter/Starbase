@@ -31,6 +31,9 @@ struct State {
     /// Where the list was drawn: pressing on it takes the keyboard focus off the box, which must
     /// not make the list vanish before the click lands.
     area: Option<Rect>,
+    /// Frames left in which the box takes the focus back (the press-release on the list takes it
+    /// off again after the pick).
+    refocus: u8,
 }
 
 thread_local! {
@@ -194,10 +197,28 @@ pub fn list(ui: &mut Ui, field: Rect, has_focus: bool, text: &mut String) -> boo
     });
     if let Some(i) = chosen {
         *text = insert(text, at, &rows[i].1);
-        STATE.with(|s| s.borrow_mut().shown = None);
+        STATE.with(|s| {
+            let mut s = s.borrow_mut();
+            s.shown = None;
+            s.refocus = 6;
+        });
         return true;
     }
     false
+}
+
+/// True for a few frames after a pick: the comment box asks for the focus back.
+pub fn refocus(ctx: &egui::Context) -> bool {
+    let on = STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        let on = s.refocus > 0;
+        s.refocus = s.refocus.saturating_sub(1);
+        on
+    });
+    if on {
+        ctx.request_repaint();
+    }
+    on
 }
 
 /// A comment was sent: record the people it names (a failure is ignored; the comment is saved
