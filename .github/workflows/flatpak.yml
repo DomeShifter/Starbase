@@ -3,7 +3,7 @@
 # would (offline, from pinned sources), checks it with Flathub's linter, and runs the installed
 # bundle on a clean runner. The bundle is kept as the `starbase-flatpak` artifact.
 #
-# Three jobs:
+# Three jobs (on pull requests only `sources` runs; build + smoke run on main, tags and by hand):
 #   sources: generates the two cargo-sources-*.json files from the lockfiles (they are not
 #            committed; see the manifest header) and checks the engine commits in the manifest
 #            equal the upstream.pin files.
@@ -79,7 +79,9 @@ jobs:
 
   build:
     name: Build the Flatpak (x86_64)
-    if: ${{ github.event.pull_request.draft != true }}
+    # PRs run only the quick `sources` job (engine pins + cargo sources): the full build + smoke run after the merge on
+    # main, on release tags and by hand (James 2026-11-26: nobody installs a per-PR Flatpak; it slowed every packaging PR).
+    if: ${{ github.event_name != 'pull_request' }}
     needs: sources
     runs-on: ubuntu-24.04
     timeout-minutes: 180
@@ -181,7 +183,7 @@ jobs:
 
   smoke:
     name: Smoke test (install the bundle)
-    if: ${{ github.event.pull_request.draft != true }}
+    if: ${{ github.event_name != 'pull_request' }}
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 30
