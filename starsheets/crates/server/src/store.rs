@@ -951,12 +951,12 @@ impl Store {
             Some("files") => self.route_files(method, p, q, if_match, body, &mut index),
             Some("folders") => self.route_folders(method, p, q, &mut index),
             Some("bin") => self.route_bin(method, p, q, &mut index),
-            Some("storage") if p.len() == 1 && method == "GET" => self.storage(q),
+            Some("usage") if p.len() == 1 && method == "GET" => self.storage(q),
             _ => Err(Bad::new(404, "not found")),
         }
     }
 
-    /// GET /api/storage: bytes used by the person's own files (their space, hidden folders and the
+    /// GET /api/usage: bytes used by the person's own files (their space, hidden folders and the
     /// bin left out), what their bin holds, and the free space of the disk. There is no quota.
     fn storage(&self, q: &HashMap<String, String>) -> R<Reply> {
         let space = if self.spaces { rel(qs(q, "space"))? } else { String::new() };
@@ -1599,10 +1599,10 @@ mod tests {
         fs::write(dir.join("ann/.bin/old.xlsx"), vec![0u8; 7]).unwrap();
         fs::write(dir.join("bob/c.xlsx"), vec![0u8; 1000]).unwrap();
         let store = Store { root: dir.clone(), keep: 3, spaces: true };
-        let (code, v) = call(&store, "GET", "storage?space=ann");
+        let (code, v) = call(&store, "GET", "usage?space=ann");
         assert_eq!((code, v["used"].as_u64(), v["bin"].as_u64(), v["files"].as_u64()), (200, Some(150), Some(7), Some(2)), "{v}");
         assert!(v["free"].as_u64().is_some());
-        assert_eq!(call(&store, "GET", "storage").0, 400, "no space named");
+        assert_eq!(call(&store, "GET", "usage").0, 400, "no space named");
         let _ = fs::remove_dir_all(&dir);
     }
 

@@ -163,7 +163,7 @@ pub struct Home {
     files: Vec<FileRow>,
     folders: Vec<FolderRow>,
     bin: Vec<BinRow>,
-    /// Bytes used by my files, bytes in my bin, free bytes on the disk (from api/storage).
+    /// Bytes used by my files, bytes in my bin, free bytes on the disk (from api/usage).
     storage: Option<(u64, u64, Option<u64>)>,
     /// My own folder ("" without accounts), whether I'm the server's owner, the tops of "Shared
     /// with me", and everyone's names.
@@ -369,7 +369,7 @@ impl Home {
     }
 
     fn load_storage(&mut self, ctx: &egui::Context) {
-        call(&self.store, &self.inbox, ctx, Method::Get, "api/storage".into(), None, |b| {
+        call(&self.store, &self.inbox, ctx, Method::Get, "api/usage".into(), None, |b| {
             let v: Json = serde_json::from_slice(&b).unwrap_or_default();
             Reply::Storage(v["used"].as_u64().unwrap_or(0), v["bin"].as_u64().unwrap_or(0), v["free"].as_u64())
         });
