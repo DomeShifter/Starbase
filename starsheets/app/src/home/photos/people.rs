@@ -73,7 +73,11 @@ impl People {
 
     #[cfg(target_arch = "wasm32")]
     pub fn test_state(&self) -> Json {
-        let c = |v: &Vec<Card>| v.iter().map(|c| json!({"id": c.id, "name": c.name, "count": c.count, "face": c.face, "cover": c.cover.as_ref().map(|x| &x.0)})).collect::<Vec<_>>();
+        let c = |v: &Vec<Card>| {
+            v.iter()
+                .map(|c| json!({"id": c.id, "name": c.name, "count": c.count, "face": c.face, "cover": c.cover.as_ref().map(|x| &x.0)}))
+                .collect::<Vec<_>>()
+        };
         json!({"named": c(&self.named), "groups": c(&self.groups), "on": self.state["on"], "faces": self.faces.len(), "can_download": self.state["can_download"], "download": self.state["download"], "missing": self.state["missing"].as_array().map_or(0, Vec::len), "progress": self.state["progress"], "editing": self.editing})
     }
 }
@@ -152,7 +156,16 @@ impl PhotoMode {
     /// id, the server's sharp face picture (cut from the big thumbnail); while it loads, the small
     /// thumbnail when it is already here; without (or when that fails), cut from the small one.
     #[allow(clippy::too_many_arguments)]
-    fn face_ui(&mut self, ctx: &egui::Context, store: &Backend, p: &egui::Painter, (id, v, bx): (&str, &str, [f32; 4]), face: Option<i64>, c: Pos2, r: f32) {
+    fn face_ui(
+        &mut self,
+        ctx: &egui::Context,
+        store: &Backend,
+        p: &egui::Painter,
+        (id, v, bx): (&str, &str, [f32; 4]),
+        face: Option<i64>,
+        c: Pos2,
+        r: f32,
+    ) {
         p.circle_filled(c, r, Color32::from_rgb(0xE8, 0xEA, 0xED));
         let frame = self.frame;
         if let Some(f) = face {
@@ -217,7 +230,7 @@ impl PhotoMode {
             }
             return;
         }
-        let resp = ui.interact(r, ui.id().with(("people-name", &c.id)), Sense::click()).on_hover_cursor(egui::CursorIcon::Text);
+        let resp = ui.interact(r, ui.scope_id().with(("people-name", &c.id)), Sense::click()).on_hover_cursor(egui::CursorIcon::Text);
         house::target(ctx, &target, r);
         let name = if c.name.is_empty() { "Add a name".to_string() } else { c.name.clone() };
         let col = if c.name.is_empty() || resp.hovered() { theme::text_dim() } else { theme::text() };

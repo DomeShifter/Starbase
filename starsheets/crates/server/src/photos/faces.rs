@@ -537,7 +537,9 @@ pub fn plan(s: &Snapshot, t: Thresholds) -> Plan {
     for i in 0..n {
         let Some((p, _)) = best[i].filter(|(_, sim)| *sim >= t.auto) else { continue };
         let ok = match label_of[i].and_then(|l| members.get(&l).map(|m| (l, m))) {
-            Some((l, m)) if m.len() >= 2 => *mean.entry((l, p)).or_insert_with(|| m.iter().map(|&j| like(j, p)).sum::<f32>() / m.len() as f32) >= t.auto,
+            Some((l, m)) if m.len() >= 2 => {
+                *mean.entry((l, p)).or_insert_with(|| m.iter().map(|&j| like(j, p)).sum::<f32>() / m.len() as f32) >= t.auto
+            }
             _ => true,
         };
         if ok {

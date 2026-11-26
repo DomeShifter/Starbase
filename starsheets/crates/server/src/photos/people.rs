@@ -282,7 +282,8 @@ pub async fn face_image(app: &Shared, me: Option<auth::User>, face: &str, id: St
             return Err(error(403, "You don't have access to that."));
         }
         let path = acc.file_paths.get(&id).cloned().ok_or_else(|| error(404, "no such file"))?;
-        let key = s.row(&path).filter(|_| s.covers(&path)).and_then(|r| r.thumb_key().map(str::to_string)).ok_or_else(|| error(404, "no such file"))?;
+        let key =
+            s.row(&path).filter(|_| s.covers(&path)).and_then(|r| r.thumb_key().map(str::to_string)).ok_or_else(|| error(404, "no such file"))?;
         let f = s.with_db(|ix| faces::face(ix, face)).ok().flatten().filter(|f| f.thumb == key).ok_or_else(|| error(404, "No such face."))?;
         let bytes = s.face_file(&f, FACE_PX).ok_or_else(|| error(404, "No thumbnail yet."))?;
         Ok((bytes, tag(&key).to_string()))
