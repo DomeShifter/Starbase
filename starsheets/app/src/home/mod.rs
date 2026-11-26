@@ -33,6 +33,7 @@ mod templates;
 #[cfg(target_arch = "wasm32")]
 mod test;
 mod undo;
+mod video;
 mod viewer;
 
 const LEFT: f32 = 256.0;
