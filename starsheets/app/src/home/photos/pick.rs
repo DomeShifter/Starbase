@@ -611,7 +611,9 @@ impl PhotoMode {
                             ui.label(RichText::new(&note.text).size(house::BODY).color(Color32::WHITE));
                             ui.add_space(house::L);
                             if note.undo
-                                && ui.add(egui::Button::new(RichText::new("Undo").size(house::BODY).strong().color(theme::SHARE)).frame(false)).clicked()
+                                && ui
+                                    .add(egui::Button::new(RichText::new("Undo").size(house::BODY).strong().color(theme::SHARE)).frame(false))
+                                    .clicked()
                             {
                                 self.pick.note = None;
                                 self.out.push(Out::Undo);

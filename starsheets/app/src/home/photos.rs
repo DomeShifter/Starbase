@@ -624,9 +624,8 @@ impl PhotoMode {
         }
         // Delete moves the selection to the bin (Shift-Delete: out of the open album only).
         if free && !self.alb.selected.is_empty() {
-            let (shift, plain) = ctx.input_mut(|i| {
-                (i.consume_key(egui::Modifiers::SHIFT, egui::Key::Delete), i.consume_key(egui::Modifiers::NONE, egui::Key::Delete))
-            });
+            let (shift, plain) = ctx
+                .input_mut(|i| (i.consume_key(egui::Modifiers::SHIFT, egui::Key::Delete), i.consume_key(egui::Modifiers::NONE, egui::Key::Delete)));
             let ids = self.selection();
             if shift && self.open_album().is_some() {
                 self.act(&ctx, store, Act::Remove, ids, None);
