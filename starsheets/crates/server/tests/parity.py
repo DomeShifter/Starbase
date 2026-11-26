@@ -197,6 +197,13 @@ STEPS = [
     ("GET", "/build.json", None, None, None),
 ]
 
+# Extra reply keys the Rust server added on purpose: (method, path prefix, key, why).
+# The Python reply must still be a subset of the Rust one; anything not listed is a difference.
+ALLOWED_EXTRA = [
+    ("DELETE", "/api/files/", "original", "Photos' Undo: where the file was, to put it back from the bin"),
+    ("DELETE", "/api/folders", "original", "Photos' Undo: where the folder was, to put it back from the bin"),
+]
+
 def compare(label, steps, auth):
     results, trees = [], []
     for cmd in ([sys.executable, "-u", PY], [RUST]):
@@ -223,6 +230,9 @@ def compare(label, steps, auth):
         # with its name in the bin and whose bin it is. New fields only: the old ones must match.
         if a[0] in ("POST", "DELETE") and isinstance(a[3], dict) and isinstance(b[3], dict):
             b = (*b[:3], {k: v for k, v in b[3].items() if k in a[3] or k not in ("id", "bin", "space")}, b[4])
+        if isinstance(a[3], dict) and isinstance(b[3], dict):
+            extra = {k for m, p, k, _ in ALLOWED_EXTRA if a[0] == m and a[1].startswith(p)}
+            b = (*b[:3], {k: v for k, v in b[3].items() if k in a[3] or k not in extra}, b[4])
         a_cmp, b_cmp = list(a), list(b)
         # A file restored from the bin keeps its id in the Rust server (its versions and sharing
         # come back); files.py gave it a new one. Ids are compared as names, so drop them here.

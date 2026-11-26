@@ -75,6 +75,16 @@ pub trait Drive {
     fn history(&self) {}
     /// Draws the Share and Version history dialogs when open (every frame).
     fn dialogs(&self, _ctx: &egui::Context) {}
+    /// Insert › Image › From Drive: opens the picker of the person's Drive pictures.
+    fn pick_image(&self) {}
+    /// The picture chosen in that picker since the last call (file name, bytes), once.
+    fn take_picture(&self) -> Option<(String, Vec<u8>)> {
+        None
+    }
+    /// Whether the Drive picture picker is open.
+    fn picking(&self) -> bool {
+        false
+    }
 }
 
 /// A menu entry: a command (label, id, params as JSON text, shortcut shown), a sub-menu, a line,
@@ -163,7 +173,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
     (
         "Insert",
         &[
-            Cmd("Image", "app.insertPictureDialog", NO, ""),
+            Sub("Image", &[Cmd("Upload from computer", "app.insertPictureDialog", NO, ""), Cmd("From Drive", "slides.driveImage", NO, "")]),
             Cmd("Text box", "slides.textBox", NO, ""),
             Sub(
                 "Shape",
@@ -398,6 +408,10 @@ impl Shell {
             });
         if let Some(d) = drive {
             d.dialogs(&ctx);
+            if let Some((name, bytes)) = d.take_picture() {
+                let data = deckcraft_engine::cmd::base64_encode(&bytes);
+                self.run(app, drive, "insert.picture", json!({"name": name, "data": data}));
+            }
         }
     }
 
@@ -595,9 +609,20 @@ impl Shell {
         if tool(ui, pal, "text_fields", "Text box", matches!(kind, ToolKind::TextBox)) {
             self.run(app, drive, "slides.textBox", json!({}));
         }
-        if tool(ui, pal, "image", "Insert image", false) {
-            self.run(app, drive, "app.insertPictureDialog", json!({}));
-        }
+        // Insert image: upload from this computer, or pick one from the Drive (browser only).
+        let r = icon_button(ui, "image", false, pal);
+        named(ui, &r, "Insert image");
+        let r = r.on_hover_text("Insert image");
+        egui::Popup::menu(&r).show(|ui| {
+            if ui.button("Upload from computer").clicked() {
+                self.run(app, drive, "app.insertPictureDialog", json!({}));
+                ui.close();
+            }
+            if drive.is_some_and(|d| !d.desktop()) && ui.button("From Drive").clicked() {
+                self.run(app, drive, "slides.driveImage", json!({}));
+                ui.close();
+            }
+        });
         let r = icon_button(ui, "shapes", matches!(kind, ToolKind::Shape { .. }), pal);
         named(ui, &r, "Shape");
         let r = r.on_hover_text("Shape");
@@ -742,6 +767,8 @@ impl Shell {
             match item {
                 // Templates live in the Drive: the desktop program hides the item (its Drive has them).
                 Cmd(_, "slides.templates", ..) if drive.is_none_or(|d| d.desktop()) => {}
+                // So are the Drive's pictures.
+                Cmd(_, "slides.driveImage", ..) if drive.is_none_or(|d| d.desktop()) => {}
                 Cmd(label, id, p, keys) => {
                     let enabled = self.allowed(app, drive, id);
                     // The desktop program opens files on this computer.
@@ -824,7 +851,7 @@ impl Shell {
 
     /// Whether a menu entry can be used now: DeckCraft's own check for its commands; nothing that
     /// changes the presentation for someone who may only view it.
-    fn allowed(&self, app: &SlideApp, drive: Option<&dyn Drive>, id: &str) -> bool {
+    pub(crate) fn allowed(&self, app: &SlideApp, drive: Option<&dyn Drive>, id: &str) -> bool {
         if drive.is_some_and(|d| d.view_only())
             && !READ_ONLY_OK.contains(&id)
             && !matches!(id, "slides.share" | "slides.print" | "slides.home")
@@ -883,6 +910,7 @@ impl Shell {
                 }
             },
             "home" => drive.ok_or("not opened from Starbase")?.home(),
+            "driveImage" => drive.filter(|d| !d.desktop()).ok_or("the Drive's pictures need a presentation opened from Starbase")?.pick_image(),
             "templates" => drive.ok_or("not opened from Starbase")?.templates(),
             "share" => drive.filter(|d| d.file_id().is_some()).ok_or("sharing needs a presentation saved on a Starbase server")?.share(),
             "history" => drive.filter(|d| d.file_id().is_some()).ok_or("version history needs a presentation saved on a Starbase server")?.history(),
@@ -955,6 +983,7 @@ impl Shell {
             }),
             "serverName": drive.map(|d| d.name()),
             "viewOnly": drive.is_some_and(|d| d.view_only()),
+            "picking": drive.is_some_and(|d| d.picking()),
         })
     }
 }
