@@ -3,12 +3,17 @@
 //! the server (`STARBASE_MAP_TILES`), and the pictures stacked where they were taken. Clicking a
 //! stack opens it in a strip along the bottom of the map; a picture there opens the viewer.
 
+// The stack and strip rects are kept for the web test hook only.
+#![cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use egui::epaint::{Mesh, Vertex, WHITE_UV};
 use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2, pos2, vec2};
-use serde_json::{Value as Json, json};
+use serde_json::Value as Json;
+#[cfg(target_arch = "wasm32")]
+use serde_json::json;
 
 use super::{Got, PhotoMode, Pic, SMALL, Viewer};
 use crate::house;
@@ -201,9 +206,7 @@ pub(super) fn triangulate(ring: &[[f32; 2]]) -> Vec<u32> {
             out.extend([a, b, c]);
             idx.remove(i % m);
             tries = 0;
-            if i > 0 {
-                i -= 1;
-            }
+            i = i.saturating_sub(1);
         } else {
             i = (i + 1) % m;
             tries += 1;
@@ -317,6 +320,7 @@ impl PlacesMap {
         self.centre[1] = self.centre[1].clamp(half, 1.0 - half);
     }
 
+    #[cfg(target_arch = "wasm32")]
     pub fn test_state(&self) -> Json {
         let r = |r: &Rect| json!([r.min.x, r.min.y, r.width(), r.height()]);
         json!({
@@ -569,7 +573,7 @@ impl PhotoMode {
             Color32::WHITE,
         );
         let close = Rect::from_center_size(head.right_center() - vec2(22.0, 0.0), Vec2::splat(28.0));
-        let cr = ui.interact(close, ui.id().with("map-strip-close"), Sense::click());
+        let cr = ui.interact(close, egui::Id::new("map-strip-close"), Sense::click());
         painter.text(close.center(), egui::Align2::CENTER_CENTER, "×", egui::FontId::proportional(22.0), Color32::WHITE);
         if cr.clicked() {
             self.map.open = None;
