@@ -629,13 +629,13 @@ struct Flags {
     loaded: bool,
 }
 
-/// View › Pages side by side: one page per row (the default), two, or as many whole pages as
+/// View › Pages side by side: one page per row, two, or (the default, as before) as many whole pages as
 /// fit the window's width. Kept with the other flags, so each browser remembers its user's pick.
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
 enum Pages {
-    #[default]
     One,
     Two,
+    #[default]
     Auto,
 }
 
@@ -712,16 +712,16 @@ impl Flags {
             if let Some(v) = store::get(FLAGS_KEY) {
                 self.words = v.contains("words");
                 self.compact = v.contains("compact");
-                self.pages = if v.contains("pagesAuto") {
-                    Pages::Auto
+                self.pages = if v.contains("pages1") {
+                    Pages::One
                 } else if v.contains("pages2") {
                     Pages::Two
                 } else {
-                    Pages::One
+                    Pages::Auto
                 };
             }
         } else if (self.words, self.compact, self.pages) != (before.words, before.compact, before.pages) {
-            let pages = (self.pages != Pages::One).then_some(self.pages.word());
+            let pages = (self.pages != Pages::Auto).then_some(self.pages.word());
             let v = [("words", self.words), ("compact", self.compact)]
                 .iter()
                 .filter(|(_, on)| *on)
@@ -1086,6 +1086,7 @@ impl Shell {
             "pagesSideBySide": self.flags.pages.word(),
             "pageCols": app.canvas.cols,
             "canvasRect": app.canvas.canvas_rect.map(|r| [r.min.x, r.min.y, r.width(), r.height()]),
+            "pageRects": app.canvas.page_rects.iter().map(|r| [r.min.x, r.min.y, r.width(), r.height()]).collect::<Vec<_>>(),
             "renaming": self.renaming,
             "dialogs": {
                 "share": self.share.is_open(),
@@ -1189,7 +1190,8 @@ impl Shell {
                 egui::Frame::popup(ui.style()).inner_margin(egui::vec2(6.0, 3.0)).show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
-                        let choices = [(Pages::One, "1", "one page per row"), (Pages::Two, "2", "two pages"), (Pages::Auto, "Auto", "as many as fit")];
+                        let choices =
+                            [(Pages::One, "1", "one page per row"), (Pages::Two, "2", "two pages"), (Pages::Auto, "Auto", "as many as fit")];
                         for (p, label, tip) in choices {
                             let text = egui::RichText::new(label).size(12.0);
                             let r = ui.selectable_label(self.flags.pages == p, text).on_hover_text(format!("Pages side by side: {tip}"));

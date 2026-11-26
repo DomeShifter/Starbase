@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Docs: View › Pages side by side (1 / 2 / Auto) with real input, via starbase_ui (on the build box).
-Args: BASE_URL --browser chromium|firefox [--shots DIR]. Needs starbase_ui.py next to this file or on PYTHONPATH.
-A 3-page document, at 2560x1080 and 1600x900: default = 1 page per row; "2" in the bottom-right switch puts two
+default Auto = as before. Args: BASE_URL --browser chromium|firefox [--shots DIR]. Needs starbase_ui.py next to this file or on PYTHONPATH.
+A 3-page document, at 2560x1080 and 1600x900: "2" in the bottom-right switch puts two
 pages side by side; a click on page 2 and typing lands in page 2's text; Ctrl+End then typing reaches the end;
 Auto shows as many as fit; zoom still works; the choice survives a reload (kept per browser)."""
 import json, os, sys, time
@@ -38,18 +38,17 @@ with U.Session(br, base=base, outdir="shots") as s:
         call('type("Charlie page three")'); time.sleep(1)
         st = s.snapshot("shell")
         if w == 2560:
-            check(f"{tag} default is 1 page per row", st.get("pagesSideBySide") == "pages1" and st.get("pageCols") == 1, st)
+            check(f"{tag} default is Auto (3 across at 100 %, as before)", st.get("pagesSideBySide") == "pagesAuto" and st.get("pageCols") == 3, st)
         # The bottom-right switch, by a real click on its "2".
         cr = st.get("canvasRect") or [0, 0, w, h]
         s.click_text("pages 2"); time.sleep(1.5)
         st = s.snapshot("shell")
         check(f"{tag} 2 pages side by side", st.get("pagesSideBySide") == "pages2" and st.get("pageCols") == 2, st)
         s.shot(f"{tag}-two")
-        # Click in page 2 (right of the canvas centre, near the top), then type.
-        cr = st.get("canvasRect") or cr
-        zoom = (s.snapshot("view") or {}).get("zoom", 1.0)
-        slot = 816 * zoom
-        x, y = cr[0] + cr[2] / 2 + (slot + 18) / 2, cr[1] + 130
+        # Click in page 2 where the app says it was drawn (pageRects, screen points), then type.
+        pr = st.get("pageRects") or []
+        check(f"{tag} page 2 right of page 1 in one row", len(pr) >= 2 and pr[1][0] > pr[0][0] + pr[0][2] and abs(pr[1][1] - pr[0][1]) < 2, pr)
+        x, y = pr[1][0] + pr[1][2] / 2, pr[1][1] + pr[1][3] * 0.3
         s.pg.mouse.click(x, y); time.sleep(0.8)
         s.pg.keyboard.type(" TWO", delay=40); time.sleep(1)
         text = s.snapshot("text") or ""
@@ -68,9 +67,12 @@ with U.Session(br, base=base, outdir="shots") as s:
         st = s.snapshot("shell")
         check(f"{tag} Auto at 60 % shows all 3", st.get("pageCols") == 3, st)
         s.shot(f"{tag}-auto")
-    # Remembered: reload, still Auto.
-    s.open("docs", path="/docs/?new=1&test"); time.sleep(2)
-    check("choice remembered after reload", s.snapshot("shell.pagesSideBySide") == "pagesAuto", s.snapshot("shell"))
     s.hook("stardocs.pages1"); time.sleep(1)
+    check("1 page: one per row", s.snapshot("shell.pageCols") == 1, s.snapshot("shell"))
+    s.hook("stardocs.pages2"); time.sleep(1)
+    # Remembered: reload, still 2 pages.
+    s.open("docs", path="/docs/?new=1&test"); time.sleep(2)
+    check("choice remembered after reload", s.snapshot("shell.pagesSideBySide") == "pages2", s.snapshot("shell"))
+    s.hook("stardocs.pagesAuto"); time.sleep(1)
     print("shell", json.dumps(s.snapshot("shell"))[:300], flush=True)
 sys.exit(1 if fails else 0)
