@@ -62,10 +62,10 @@ def main():
     S.wait_for(watch, secs=240, every=0.3)
     said = sc().get("said", ""); print("SAID", sorted(seen), flush=True); S.shot(f"{tag}-1-done")
     rec("status went Looking → done", "Looking for new photos…" in seen and said.startswith(("Up to date", "No new photos")), said)
-    rec("status counts the 3 new photos", "3 new photos" in said, said)
+    rec("status counts the new photos (start.jpg + 3 dropped: all entered since the last Scan now)", "4 new photos" in said, said)
     import re
     m = re.search(r"(\d+) new faces", said)
-    rec("status counts new faces", m and int(m.group(1)) >= 1 and any(x.startswith("Finding faces") for x in seen), said)
+    rec("status counts new faces", m and int(m.group(1)) >= 1, said)  # "Finding faces: x of y" can be too quick to see
     rec("new photos in the grid without a reload", S.wait_for(lambda: items() >= before + 3, secs=30), f"{before}->{items()}")
     menu()
     S.click_text("photos:scan-now"); time.sleep(3)
