@@ -407,7 +407,7 @@ async fn thumb(app: &Shared, me: Option<auth::User>, id: String, size: &str, v: 
         return error(400, "size is 256 or 1024");
     };
     let path = blocking(app, move |a| -> Result<String, Response<Body>> {
-        let acc = sharing::Access::new(&a.store, a.auth, me.as_ref());
+        let acc = sharing::Access::with_locked(&a.store, a.auth, me.as_ref());
         if acc.file_role(&id) < sharing::Role::View {
             return Err(error(403, "You don't have access to that."));
         }

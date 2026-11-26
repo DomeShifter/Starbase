@@ -211,7 +211,9 @@ pub fn serve(store: &Store, token: &str, what: &str, grant: &str) -> Reply {
             return password_page(token, false);
         }
     }
-    let Some(rel) = store.path_of(id).ok().flatten() else { return page(404, "File not found", "<p>That file is gone.</p>") };
+    let Some(rel) = store.path_of(id).ok().flatten().filter(|_| !crate::photos::locked::is_locked(store, id)) else {
+        return page(404, "File not found", "<p>That file is gone.</p>");
+    };
     let name = rel.rsplit('/').next().unwrap_or("file").to_string();
     let no_download = entry["no_download"].as_bool().unwrap_or(false);
     let base = format!("/api/public/{token}");

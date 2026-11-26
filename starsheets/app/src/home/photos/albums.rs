@@ -21,6 +21,7 @@ pub(in crate::home) enum Tab {
     Places,
     Events,
     Duplicates,
+    Locked,
 }
 
 impl Tab {
@@ -32,6 +33,7 @@ impl Tab {
             Tab::Places => "places",
             Tab::Events => "events",
             Tab::Duplicates => "duplicates",
+            Tab::Locked => "locked",
         }
     }
 }
@@ -89,7 +91,7 @@ fn cards(v: &Json, key: &str) -> Vec<Card> {
         .collect()
 }
 
-type Inbox = Arc<Mutex<Vec<Got>>>;
+pub(super) type Inbox = Arc<Mutex<Vec<Got>>>;
 
 pub(super) fn get(ctx: &egui::Context, store: &Backend, inbox: &Inbox, url: &str, wrap: impl FnOnce(Json) -> Got + 'static) {
     let (inbox, ctx2) = (inbox.clone(), ctx.clone());
@@ -160,7 +162,7 @@ impl Albums {
             Tab::Albums => self.albums = cards(v, "albums"),
             Tab::Places => self.places = cards(v, "places"),
             Tab::Events => self.events = cards(v, "events"),
-            Tab::Photos | Tab::Duplicates => {}
+            Tab::Photos | Tab::Duplicates | Tab::Locked => {}
         }
     }
 
@@ -197,6 +199,7 @@ impl PhotoMode {
             self.clear_selection();
             self.alb.ask = Ask::None;
             self.dups.reset();
+            self.lk.reset();
             self.pics.clear();
             self.viewer = None;
             // Back to the folder: listed again.
@@ -215,6 +218,7 @@ impl PhotoMode {
             (Tab::Places, "Places", "location_on"),
             (Tab::Events, "Events", "event"),
             (Tab::Duplicates, "Duplicates", "content_copy"),
+            (Tab::Locked, "Locked", "lock"),
         ] {
             let on = self.alb.tab == t;
             let b = egui::Button::new(RichText::new(format!("  {label}")).size(house::BODY).color(theme::TEXT))
@@ -494,7 +498,8 @@ impl PhotoMode {
                     "places" => Tab::Places,
                     "events" => Tab::Events,
                     "duplicates" => Tab::Duplicates,
-                    _ => return Err("tab is photos, albums, places, events or duplicates".into()),
+                    "locked" => Tab::Locked,
+                    _ => return Err("tab is photos, albums, places, events, duplicates or locked".into()),
                 };
                 self.go(t);
             }
