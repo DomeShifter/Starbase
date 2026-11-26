@@ -6,8 +6,10 @@
 
 use std::sync::Mutex;
 
+use hmac::{Hmac, KeyInit, Mac};
 use serde_json::{Map, Value, json};
-use sha1::{Digest, Sha1};
+use sha1::Sha1;
+use subtle::ConstantTimeEq;
 
 use crate::auth;
 use crate::store::{Store, now, random_hex};
@@ -20,19 +22,9 @@ fn lock() -> std::sync::MutexGuard<'static, ()> {
 }
 
 fn hmac_sha1(key: &[u8], msg: &[u8]) -> [u8; 20] {
-    let mut k = [0u8; 64];
-    if key.len() > 64 {
-        k[..20].copy_from_slice(&Sha1::digest(key));
-    } else {
-        k[..key.len()].copy_from_slice(key);
-    }
-    let mut inner = Sha1::new();
-    inner.update(k.map(|b| b ^ 0x36));
-    inner.update(msg);
-    let mut outer = Sha1::new();
-    outer.update(k.map(|b| b ^ 0x5c));
-    outer.update(inner.finalize());
-    outer.finalize().into()
+    let mut m = <Hmac<Sha1> as KeyInit>::new_from_slice(key).expect("HMAC takes any key length");
+    m.update(msg);
+    m.finalize().into_bytes().into()
 }
 
 /// The 6-digit code for a 30-second step.
@@ -64,7 +56,7 @@ pub fn base32(bytes: &[u8]) -> String {
 fn matching_step(secret: &[u8], code: &str, at: f64, after: u64) -> Option<u64> {
     let typed: u32 = code.parse().ok().filter(|_| code.len() == 6)?;
     let cur = (at / 30.0) as u64;
-    (cur.saturating_sub(1)..=cur + 1).find(|&s| s > after && code_at(secret, s) == typed)
+    (cur.saturating_sub(1)..=cur + 1).find(|&s| s > after && bool::from(code_at(secret, s).to_be_bytes().ct_eq(&typed.to_be_bytes())))
 }
 
 fn plain(code: &str) -> String {
@@ -126,7 +118,7 @@ pub fn turn_on(store: &Store, username: &str, code: &str) -> Result<Vec<String>,
     let u = entry(&mut users, username)?;
     let secret = hex::decode(field(u, "totp_pending")).ok().filter(|s| !s.is_empty()).ok_or("Start again: ask for a new QR code first.")?;
     let step = matching_step(&secret, &plain(code), now(), 0).ok_or("That code isn't right. Check the code in your app and try again.")?;
-    let codes: Vec<String> = (0..10).map(|_| random_hex(5)).map(|c| format!("{}-{}", &c[..5], &c[5..])).collect();
+    let codes: Vec<String> = (0..10).map(|_| random_hex(8)).map(|c| format!("{}-{}", &c[..8], &c[8..])).collect();
     u.remove("totp_pending");
     u.insert("totp".into(), json!(hex::encode(&secret)));
     u.insert("totp_on".into(), json!(true));
@@ -152,7 +144,9 @@ pub fn check(store: &Store, username: &str, code: &str) -> bool {
     }
     let h = backup_hash(&code);
     let mut left: Vec<Value> = u.get("backup").and_then(Value::as_array).cloned().unwrap_or_default();
-    let Some(i) = left.iter().position(|v| v.as_str() == Some(h.as_str())) else { return false };
+    let Some(i) = left.iter().position(|v| v.as_str().is_some_and(|v| v.len() == h.len() && bool::from(v.as_bytes().ct_eq(h.as_bytes())))) else {
+        return false;
+    };
     left.remove(i);
     u.insert("backup".into(), json!(left));
     auth::save(store, &users).is_ok()
@@ -193,6 +187,11 @@ mod tests {
     fn rfc6238_vector() {
         // RFC 6238 appendix B, SHA-1, T = 59 s: 94287082, so 287082 as 6 digits.
         assert_eq!(code_at(b"12345678901234567890", 59 / 30), 287082);
+        // The full 8-digit vector from the RFC (94287082).
+        let h = hmac_sha1(b"12345678901234567890", &1u64.to_be_bytes());
+        let o = (h[19] & 15) as usize;
+        let n = u32::from_be_bytes([h[o] & 0x7f, h[o + 1], h[o + 2], h[o + 3]]);
+        assert_eq!(n % 100_000_000, 94287082);
         assert_eq!(base32(b"12345678901234567890"), "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ");
         assert_eq!(unbase32("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"), b"12345678901234567890");
     }
