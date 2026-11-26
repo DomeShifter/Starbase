@@ -93,7 +93,7 @@ jobs:
       - name: Fetch WordCraft at the pinned commit of our fork
         run: scripts/fetch-upstream.sh
       - name: System libraries for egui's native backends, and a headless X server with OpenGL
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-dev libxkbcommon-dev libwayland-dev pkg-config xvfb libgl1-mesa-dri libxkbcommon-x11-0
+        run: sudo rm -f /etc/apt/sources.list.d/microsoft*; sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-dev libxkbcommon-dev libwayland-dev pkg-config xvfb libgl1-mesa-dri libxkbcommon-x11-0
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
@@ -141,7 +141,7 @@ jobs:
       - name: Fetch WordCraft at the pinned commit of our fork
         run: scripts/fetch-upstream.sh
       - name: System libraries for egui's native backends, and a headless X server with OpenGL
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-dev libxkbcommon-dev libwayland-dev pkg-config xvfb libgl1-mesa-dri libxkbcommon-x11-0
+        run: sudo rm -f /etc/apt/sources.list.d/microsoft*; sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-dev libxkbcommon-dev libwayland-dev pkg-config xvfb libgl1-mesa-dri libxkbcommon-x11-0
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:

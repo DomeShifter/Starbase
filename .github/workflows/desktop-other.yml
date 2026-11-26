@@ -186,7 +186,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Render and pack
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq librsvg2-bin
+          sudo rm -f /etc/apt/sources.list.d/microsoft*; sudo apt-get update -qq && sudo apt-get install -y -qq librsvg2-bin
           packaging/linux/icons.sh "$RUNNER_TEMP/icons"
           mkdir ico
           for pair in drive:io.github.DomeShifter.Starbase sheets:io.github.DomeShifter.Starbase.Sheets docs:io.github.DomeShifter.Starbase.Docs; do

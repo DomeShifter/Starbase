@@ -77,7 +77,7 @@ jobs:
 
       - name: Install LibreOffice and poppler
         run: |
-          sudo apt-get update -qq
+          sudo rm -f /etc/apt/sources.list.d/microsoft*; sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends libreoffice-impress poppler-utils fonts-liberation fonts-dejavu-core fonts-noto-cjk
           soffice --version
 

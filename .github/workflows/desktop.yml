@@ -53,7 +53,7 @@ jobs:
       - name: Fetch GridCraft at the pinned commit of our fork
         run: scripts/fetch-upstream.sh
       - name: System libraries for egui's native backends
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-dev libxkbcommon-dev libwayland-dev pkg-config libxkbcommon-x11-0
+        run: sudo rm -f /etc/apt/sources.list.d/microsoft*; sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-dev libxkbcommon-dev libwayland-dev pkg-config libxkbcommon-x11-0
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -100,7 +100,7 @@ jobs:
       - name: Fetch WordCraft at the pinned commit of our fork
         run: scripts/fetch-upstream.sh
       - name: System libraries for egui's native backends
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-dev libxkbcommon-dev libwayland-dev pkg-config libxkbcommon-x11-0
+        run: sudo rm -f /etc/apt/sources.list.d/microsoft*; sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-dev libxkbcommon-dev libwayland-dev pkg-config libxkbcommon-x11-0
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -145,7 +145,7 @@ jobs:
       - name: Fetch DeckCraft at the pinned commit of our fork
         run: scripts/fetch-upstream.sh
       - name: System libraries for egui's native backends
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-dev libxkbcommon-dev libwayland-dev pkg-config libxkbcommon-x11-0
+        run: sudo rm -f /etc/apt/sources.list.d/microsoft*; sudo apt-get update -qq && sudo apt-get install -y -qq libgtk-3-dev libxkbcommon-dev libwayland-dev pkg-config libxkbcommon-x11-0
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -174,7 +174,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Tools (icons, checks, delta updates)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq librsvg2-bin desktop-file-utils appstream zsync
+        run: sudo rm -f /etc/apt/sources.list.d/microsoft*; sudo apt-get update -qq && sudo apt-get install -y -qq librsvg2-bin desktop-file-utils appstream zsync
       - uses: actions/download-artifact@v8
         with:
           name: desktop-starsheets
@@ -241,7 +241,7 @@ jobs:
       # OpenGL. Runners have no GPU: Mesa's software drivers (lavapipe for Vulkan, llvmpipe for
       # GL) stand in, as on a desktop with no GPU driver installed.
       - name: Headless X server, software Vulkan and OpenGL
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb libgl1-mesa-dri libegl1 libegl-mesa0 libvulkan1 mesa-vulkan-drivers libxkbcommon-x11-0
+        run: sudo rm -f /etc/apt/sources.list.d/microsoft*; sudo apt-get update -qq && sudo apt-get install -y -qq xvfb libgl1-mesa-dri libegl1 libegl-mesa0 libvulkan1 mesa-vulkan-drivers libxkbcommon-x11-0
       - uses: actions/download-artifact@v8
         with:
           name: starbase-appimage
