@@ -718,7 +718,7 @@ pub(super) fn file_kind(name: &str) -> &'static str {
     }
     let ext = lower.rsplit_once('.').map_or("", |(_, e)| e);
     match ext {
-        "png" | "jpg" | "jpeg" | "jfif" | "gif" | "webp" | "avif" | "bmp" | "ico" => "image",
+        "png" | "jpg" | "jpeg" | "jfif" | "gif" | "webp" | "avif" | "bmp" | "ico" | "tif" | "tiff" => "image",
         "mp3" | "wav" | "ogg" | "oga" | "opus" | "flac" | "m4a" | "aac" => "audio",
         "mp4" | "m4v" | "webm" | "ogv" | "mov" => "video",
         "pdf" => "pdf",
