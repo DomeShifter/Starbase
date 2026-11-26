@@ -203,6 +203,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+      - name: Flatpak manifest commits equal the upstream.pin files
+        run: ../packaging/linux/flatpak/pin-engines.sh --check
       - name: Fetch GridCraft at the pinned commit of our fork
         run: scripts/fetch-upstream.sh
       # starbase-open asks its one question with the system's dialogs (rfd: Wayland/GTK).
