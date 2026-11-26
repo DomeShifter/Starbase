@@ -210,7 +210,7 @@ impl Home {
                 ui.label(RichText::new("Photo Mode").size(house::TITLE).color(theme::text()));
                 ui.add_space(house::M);
             }
-            let reserve = if narrow { 130.0 } else { 520.0 };
+            let reserve = if narrow { 130.0 } else { 640.0 };
             let w = (ui.available_width() - reserve).clamp(120.0, 700.0);
             let search = house::field(&mut self.search, house::SEARCH_TEXT)
                 .id(egui::Id::unique("photo_search"))
