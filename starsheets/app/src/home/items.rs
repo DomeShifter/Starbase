@@ -486,7 +486,7 @@ impl Home {
                 continue;
             }
             let edge = Rect::from_center_size(egui::pos2(h.left() + x - 6.0, h.center().y), vec2(10.0, h.height()));
-            let r = ui.interact(edge, egui::Id::new(("home_col_edge", key)), Sense::drag()).on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+            let r = ui.interact(edge, egui::Id::unique(("home_col_edge", key)), Sense::drag()).on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
             house::target(ui.ctx(), &format!("List column edge {}", super::viewopts::col_label(key, storage)), edge);
             if r.hovered() || r.dragged() {
                 ui.painter().vline(edge.center().x, h.y_range(), Stroke::new(2.0, theme::DIVIDER));
