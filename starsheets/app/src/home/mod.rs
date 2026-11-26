@@ -480,6 +480,38 @@ impl Home {
         call(&self.store, &self.inbox, ctx, Method::Get, format!("api/files/{id}"), None, move |b| Reply::Download(name, b));
     }
 
+    /// Downloads what is selected: a single file as itself, anything else (several items, or a
+    /// folder) as ONE .zip made by the server (`api/zip`), folders with everything below them.
+    pub(crate) fn download_items(&mut self, ctx: &egui::Context, items: &[Item]) {
+        if let [Item::File(id)] = items {
+            let name = self.label_of(&items[0]);
+            return self.download(ctx, id, &name);
+        }
+        let url = Self::zip_url(items);
+        #[cfg(target_arch = "wasm32")]
+        {
+            // The browser saves it as it arrives; the server names it.
+            if let Some(w) = web_sys::window() {
+                let _ = w.location().set_href(&url);
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let name = match items {
+                [Item::Folder(p)] => format!("{}.zip", name_of(p)),
+                _ => "Starbase.zip".to_string(),
+            };
+            call(&self.store, &self.inbox, ctx, Method::Get, url, None, move |b| Reply::Download(name, b));
+        }
+    }
+
+    /// The address of the zip of `items` (files by id, folders by path, one per line).
+    pub(crate) fn zip_url(items: &[Item]) -> String {
+        let files: Vec<&str> = items.iter().filter_map(|i| if let Item::File(id) = i { Some(id.as_str()) } else { None }).collect();
+        let folders: Vec<&str> = items.iter().filter_map(|i| if let Item::Folder(p) = i { Some(p.as_str()) } else { None }).collect();
+        format!("api/zip?files={}&folders={}", enc(&files.join(",")), enc(&folders.join("\n")))
+    }
+
     /// A new spreadsheet or document in `folder` (it opens in its own tab or window).
     fn new_file(&mut self, folder: &str, document: bool) {
         if let Err(e) = self.store.new_file(folder, document) {

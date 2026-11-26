@@ -77,6 +77,18 @@ impl Home {
                 }
             }
             "home:undo" => self.undo(ctx),
+            // `home:download` {files: [id], folders: [path]}: Download as the menu does it (one
+            // file as itself, else one zip); says which address it fetches.
+            "home:download" => {
+                let list = |k: &str| params.get(k).and_then(Json::as_array).into_iter().flatten().filter_map(Json::as_str).map(str::to_string);
+                let items: Vec<Item> = list("files").map(Item::File).chain(list("folders").map(Item::Folder)).collect();
+                if items.is_empty() {
+                    return Err("home:download needs {files} or {folders}".into());
+                }
+                let url = if let [Item::File(id)] = items.as_slice() { format!("api/files/{id}") } else { Self::zip_url(&items) };
+                self.download_items(ctx, &items);
+                return Ok(json!({ "url": url }));
+            }
             "home:opens" => {
                 let id = text("id").ok_or("home:opens needs {id}")?;
                 let f = self.file(&id).ok_or("no such file listed")?;
