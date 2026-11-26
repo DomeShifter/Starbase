@@ -45,6 +45,9 @@ pub fn start() {
         {
             log::error!("no unsaved-changes guard: {e}");
         }
+        if let Err(e) = keep_app_shortcuts() {
+            log::error!("browser shortcuts not held back: {e}");
+        }
         // WebGL2 through glow: no WebGPU path, a smaller download (docs/research/wordcraft-trim.md).
         let options = eframe::WebOptions::default();
         let result = eframe::WebRunner::new()
@@ -474,6 +477,29 @@ fn guard_unload(dirty: Rc<Cell<bool>>, saves: AsyncSaves) -> Result<(), String> 
     // The listener lives as long as the page.
     on_unload.forget();
     Ok(())
+}
+
+/// The browser's own Ctrl/Cmd+letter shortcuts that are also WordCraft's (Word's): Ctrl+K
+/// (Insert Link) went to Chromium's search box and took the keyboard away from the page. The
+/// listener only stops the browser's action; eframe still receives the key.
+fn keep_app_shortcuts() -> Result<(), String> {
+    let document = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;
+    let on_key = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
+        if is_app_shortcut(&e.key(), e.ctrl_key() || e.meta_key(), e.alt_key(), e.shift_key()) {
+            e.prevent_default();
+        }
+    });
+    document.add_event_listener_with_callback("keydown", on_key.as_ref().unchecked_ref()).map_err(|e| format!("{e:?}"))?;
+    // The listener lives as long as the page.
+    on_key.forget();
+    Ok(())
+}
+
+/// Whether a key with these modifiers is one of WordCraft's shortcuts the browser would take:
+/// Link (K), Underline (U), Replace (H), Font (D), Center (E), Justify (J), Go To (G), Find (F).
+/// Shift and Alt combinations stay the browser's (Ctrl+Shift+J opens its tools).
+fn is_app_shortcut(key: &str, command: bool, alt: bool, shift: bool) -> bool {
+    command && !alt && !shift && matches!(key.to_ascii_lowercase().as_str(), "k" | "u" | "h" | "d" | "e" | "j" | "g" | "f")
 }
 
 /// Trigger a browser save dialog or download of `bytes` named after the last component of `path`.
