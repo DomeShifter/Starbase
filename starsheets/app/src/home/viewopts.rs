@@ -1,5 +1,5 @@
 //! Drive's view options, remembered in the local settings: the List view's columns (which show,
-//! how wide; drag a header edge) and the Grid view's cards (previews, dates, size, sort). Both are
+//! how wide; drag a header edge) and the Grid view's cards (previews, dates, size). Both are
 //! set from the ▾ half of the view buttons, [List | ▾] and [Grid | ▾].
 
 use super::*;
@@ -124,7 +124,9 @@ impl ViewOpts {
     pub fn card(&self) -> (f32, f32, f32) {
         let f = [0.78, 1.0, 1.32][usize::from(self.size.min(2))];
         let pic = (PIC_H * f).round();
-        ((CARD_W * f).round(), pic + (CARD_H - PIC_H), pic)
+        // Without the date line the card loses that line's height too, instead of leaving a gap.
+        let tail = if self.dates { CARD_H - PIC_H } else { CARD_H - PIC_H - SUB_H };
+        ((CARD_W * f).round(), pic + tail, pic)
     }
 }
 
@@ -214,7 +216,7 @@ impl Home {
         });
     }
 
-    /// The Grid ▾ menu: previews, dates, card size, sort by.
+    /// The Grid ▾ menu: previews, dates, card size. No sort here: Drive's own Sort menu orders the grid too.
     pub(super) fn grid_menu(&mut self, more: &egui::Response) {
         egui::Popup::menu(more).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
             house::menu(ui, 240.0);
@@ -236,9 +238,6 @@ impl Home {
                     self.vo.save(&self.store);
                 }
             }
-            house::menu_sep(ui);
-            house::menu_inset(ui, |ui| house::caps(ui, "Sort by"));
-            self.sort_by_rows(ui);
         });
     }
 
@@ -252,6 +251,20 @@ impl Home {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn card_without_dates_is_shorter_and_keeps_the_picture() {
+        let mut o = ViewOpts::default();
+        for size in 0..3 {
+            o.size = size;
+            o.dates = true;
+            let (w, h, pic) = o.card();
+            o.dates = false;
+            let (w2, h2, pic2) = o.card();
+            assert_eq!((w, pic), (w2, pic2));
+            assert_eq!(h - h2, SUB_H);
+        }
+    }
 
     #[test]
     fn view_options_survive_a_save_and_load() {

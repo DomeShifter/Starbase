@@ -46,6 +46,8 @@ const TOP: f32 = 64.0;
 const CARD_W: f32 = 216.0;
 const CARD_H: f32 = 196.0;
 const PIC_H: f32 = 144.0;
+/// Height of a card's second text line (date / owner), dropped when dates are off.
+const SUB_H: f32 = 16.0;
 const CHIP_H: f32 = 48.0;
 const ROW: f32 = 40.0;
 /// Starbase Drive's accent: Google Drive's blue (drop targets, dialog buttons), not Sheets' green.

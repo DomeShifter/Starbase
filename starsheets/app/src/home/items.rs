@@ -378,8 +378,10 @@ impl Home {
             p.galley(egui::pos2(line.left() + 28.0, line.top() + 6.0), name, theme::TEXT);
         }
         let (newest, _) = self.folder_stats(&f.path);
-        let sub = if newest > 0 && self.vo.dates { format!("Folder · {}", ago(newest)) } else { "Folder".into() };
-        p.text(egui::pos2(line.left() + 28.0, line.top() + 36.0), Align2::LEFT_CENTER, sub, FontId::proportional(12.0), theme::TEXT_DIM);
+        if self.vo.dates {
+            let sub = if newest > 0 { format!("Folder · {}", ago(newest)) } else { "Folder".into() };
+            p.text(egui::pos2(line.left() + 28.0, line.top() + 36.0), Align2::LEFT_CENTER, sub, FontId::proportional(12.0), theme::TEXT_DIM);
+        }
         let resp = resp.on_hover_text(self.folder_label(&f.path));
         self.interact(ui, &item, &resp, clicked_item);
     }
@@ -447,11 +449,16 @@ impl Home {
             _ if !self.vo.dates => String::new(),
             _ => format!("Modified {}", ago(f.modified)),
         };
-        p.text(egui::pos2(line.left() + 28.0, line.top() + 36.0), Align2::LEFT_CENTER, sub, FontId::proportional(12.0), theme::TEXT_DIM);
+        let has_sub = self.vo.dates;
+        if has_sub {
+            p.text(egui::pos2(line.left() + 28.0, line.top() + 36.0), Align2::LEFT_CENTER, sub, FontId::proportional(12.0), theme::TEXT_DIM);
+        }
         if f.shared
             && let Some(img) = crate::icons::icon("group")
         {
-            img.paint_at(ui, Rect::from_center_size(egui::pos2(line.right() - 10.0, line.top() + 36.0), vec2(14.0, 14.0)));
+            // Without a second line the shared mark sits on the name line, left of the star.
+            let (x, y) = if has_sub { (line.right() - 10.0, line.top() + 36.0) } else { (line.right() - 30.0, line.top() + 16.0) };
+            img.paint_at(ui, Rect::from_center_size(egui::pos2(x, y), vec2(14.0, 14.0)));
         }
         let resp = resp.on_hover_text(&f.name);
         self.interact(ui, &item, &resp, clicked_item);
