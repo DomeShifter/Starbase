@@ -473,7 +473,8 @@ async fn accounts(
                 return Some(error(403, "Only the owner can do that."));
             }
             let want = json.get("on").and_then(Value::as_bool).unwrap_or(false);
-            let r = blocking(app, move |app| if posting { auth::set_link_preview(&app.store, want) } else { Ok(auth::link_preview(&app.store)) }).await;
+            let r =
+                blocking(app, move |app| if posting { auth::set_link_preview(&app.store, want) } else { Ok(auth::link_preview(&app.store)) }).await;
             match r {
                 Some(Ok(on)) => send_json(&json!({ "on": on }), 200),
                 Some(Err(why)) => error(400, &why),

@@ -315,7 +315,10 @@ impl LinkCard {
         // A page preview only for a web link the pointer rests on (never ahead of time).
         let web = matches!(&kind, LinkKind::External(u) if u.starts_with("http://") || u.starts_with("https://"));
         let preview = (via_hover && web).then(|| preview_for(&link.target, &ctx));
-        let fade = preview.as_ref().filter(|p| p.state == "ok").map_or(0.0, |p| ctx.animate_bool(egui::Id::new(("link-preview-fade", &link.target)), !p.title.is_empty() || p.picture.is_some()));
+        let fade = preview
+            .as_ref()
+            .filter(|p| p.state == "ok")
+            .map_or(0.0, |p| ctx.animate_bool(egui::Id::unique(("link-preview-fade", &link.target)), !p.title.is_empty() || p.picture.is_some()));
         SHOWN.with(|s| {
             *s.borrow_mut() = json!({
                 "cell": cell.a1(),
@@ -502,7 +505,8 @@ async fn fetch_preview(url: &str, ctx: &egui::Context) -> Preview {
     let Ok((200, _, bytes)) = fetch(Method::Get, &format!("api/link-preview?url={q}"), None, None).await else { return error };
     let v: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_default();
     let text = |k: &str| v[k].as_str().unwrap_or("").chars().filter(|c| !c.is_control()).take(120).collect::<String>();
-    let mut p = Preview { state: v["state"].as_str().unwrap_or("error").to_string(), title: text("title"), site: text("site"), icon: None, picture: None };
+    let mut p =
+        Preview { state: v["state"].as_str().unwrap_or("error").to_string(), title: text("title"), site: text("site"), icon: None, picture: None };
     for kind in ["icon", "picture"] {
         if v[kind].as_bool() != Some(true) {
             continue;

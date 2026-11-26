@@ -27,8 +27,24 @@ fn page(body: &str) -> Vec<u8> {
 #[test]
 fn private_and_odd_addresses_are_not_public() {
     for a in [
-        "127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "224.0.0.1", "255.255.255.255",
-        "::1", "::", "fc00::1", "fe80::1", "::ffff:127.0.0.1", "::ffff:192.168.0.1", "::127.0.0.1", "64:ff9b::a00:1", "2002:c0a8:0101::1",
+        "127.0.0.1",
+        "10.1.2.3",
+        "172.16.0.1",
+        "192.168.1.1",
+        "169.254.169.254",
+        "100.64.0.1",
+        "0.0.0.0",
+        "224.0.0.1",
+        "255.255.255.255",
+        "::1",
+        "::",
+        "fc00::1",
+        "fe80::1",
+        "::ffff:127.0.0.1",
+        "::ffff:192.168.0.1",
+        "::127.0.0.1",
+        "64:ff9b::a00:1",
+        "2002:c0a8:0101::1",
     ] {
         assert!(!is_public(a.parse().unwrap()), "{a} must be refused");
     }
@@ -40,7 +56,15 @@ fn private_and_odd_addresses_are_not_public() {
 #[test]
 fn only_public_web_addresses_pass_the_check() {
     assert!(check_url("https://example.com/a", false).is_ok());
-    for bad in ["file:///etc/passwd", "ftp://example.com", "http://127.0.0.1/", "http://[::1]/", "http://192.168.0.5:8080/x", "http://localhost/", "javascript:alert(1)"] {
+    for bad in [
+        "file:///etc/passwd",
+        "ftp://example.com",
+        "http://127.0.0.1/",
+        "http://[::1]/",
+        "http://192.168.0.5:8080/x",
+        "http://localhost/",
+        "javascript:alert(1)",
+    ] {
         assert!(check_url(bad, false).is_err(), "{bad}");
     }
 }
@@ -108,7 +132,9 @@ fn fetches_a_page_cuts_a_huge_one_and_refuses_a_redirect_inward() {
 #[test]
 fn pictures_become_small_pngs_and_svg_is_refused() {
     let mut big = Vec::new();
-    image::RgbaImage::from_pixel(900, 600, image::Rgba([1, 2, 3, 255])).write_to(&mut std::io::Cursor::new(&mut big), image::ImageFormat::Png).unwrap();
+    image::RgbaImage::from_pixel(900, 600, image::Rgba([1, 2, 3, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut big), image::ImageFormat::Png)
+        .unwrap();
     let small = small_png(&big, PICTURE_PX).unwrap();
     let img = image::load_from_memory(&small).unwrap();
     assert_eq!((img.width(), img.height()), (320, 213));

@@ -243,6 +243,7 @@ enum Reply {
         signed_in: bool,
         sso: Option<Sso>,
     },
+    LinkPreview(bool),
     Signup {
         on: bool,
         code: String,
@@ -463,6 +464,7 @@ pub struct Account {
     /// The owner's sign-up setting, as shown in People.
     signup_on: bool,
     signup_secret: String,
+    link_preview_on: bool,
     dialog: Dialog,
     busy: bool,
     error: Option<String>,
@@ -571,6 +573,10 @@ fn ago(secs: f64) -> String {
         ((s / 86_400.0) as u64, "day")
     };
     format!("{n} {unit}s ago")
+}
+
+fn link_preview_reply(v: Json) -> Reply {
+    Reply::LinkPreview(v["on"].as_bool().unwrap_or(false))
 }
 
 fn signup_reply(v: Json) -> Reply {
@@ -758,6 +764,7 @@ impl Account {
                     self.dialog = Dialog::None;
                     self.restarting = Some(ctx.input(|i| i.time));
                 }
+                Reply::LinkPreview(on) => self.link_preview_on = on,
                 Reply::Signup { on, code } => {
                     self.signup_on = on;
                     self.signup_secret = code;
@@ -806,6 +813,7 @@ impl Account {
                     self.open(Dialog::People);
                     call(&self.inbox, ctx, Method::Get, "api/users", None, people_from);
                     call(&self.inbox, ctx, Method::Get, "api/signup/settings", None, signup_reply);
+                    call(&self.inbox, ctx, Method::Get, "api/link-preview/settings", None, link_preview_reply);
                 }
                 "signout" => call(&self.inbox, ctx, Method::Post, "api/logout", None, |v| {
                     Reply::SignedOut(v["logout_url"].as_str().filter(|u| u.starts_with("https://") || u.starts_with("http://")).map(str::to_string))
@@ -1678,6 +1686,7 @@ impl Account {
         let mut remove = None;
         let mut unlink: Option<String> = None;
         let mut save_signup = false;
+        let mut save_preview = false;
         let mut devices_of = None;
         let me = me().unwrap_or_default();
         house::dialog(ctx, "starsheets_people", 460.0, "People", Some(&mut close), |ui| {
@@ -1745,6 +1754,17 @@ impl Account {
                 save_signup = true;
             }
             house::gap(ui);
+            house::label(
+                ui,
+                "Link previews",
+                "When someone rests the pointer on a link in a sheet, the server fetches that page's title and picture to show on a card. Off by default; web addresses on your own network are never fetched.",
+            );
+            let r = ui.checkbox(&mut self.link_preview_on, "Show a page preview when hovering a link");
+            house::target(ui.ctx(), "people:link-preview", r.rect);
+            if r.changed() {
+                save_preview = true;
+            }
+            house::gap(ui);
             house::label(ui, "Add someone", "Give them their username and this password; they can change the password after signing in.");
             Self::field(ui, &mut self.name, "Their name", false);
             ui.add_space(house::S);
@@ -1780,6 +1800,11 @@ impl Account {
             let on = self.signup_on;
             call(&self.inbox, ctx, Method::Post, "api/signup/settings", Some(body), move |_| {
                 Reply::Done(if on { "Sign-up is on.".into() } else { "Sign-up is off.".into() })
+            });
+        } else if save_preview {
+            let on = self.link_preview_on;
+            call(&self.inbox, ctx, Method::Post, "api/link-preview/settings", Some(json!({ "on": on })), move |_| {
+                Reply::Done(if on { "Link previews are on.".into() } else { "Link previews are off.".into() })
             });
         } else if let Some(who) = remove {
             self.remove_armed = None;

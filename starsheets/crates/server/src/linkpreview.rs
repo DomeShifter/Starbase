@@ -18,7 +18,7 @@
 //! - a disk cache keyed by the address: 7 days for a preview, 1 hour for a failure, 200 MB at
 //!   most (oldest removed first). A stale preview is still served when a fresh fetch fails.
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime};
@@ -152,7 +152,11 @@ impl Fetcher {
             .timeout_connect(Some(CONNECT.min(left)))
             .user_agent(concat!("Starbase/", env!("CARGO_PKG_VERSION")))
             .build();
-        Ok(ureq::Agent::with_parts(config, DefaultConnector::default(), GuardResolver { inner: DefaultResolver::default(), allow_private: self.allow_private }))
+        Ok(ureq::Agent::with_parts(
+            config,
+            DefaultConnector::default(),
+            GuardResolver { inner: DefaultResolver::default(), allow_private: self.allow_private },
+        ))
     }
 
     /// GETs `url`, following up to MAX_HOPS redirects by hand (each checked), reading at most `max`
@@ -383,7 +387,10 @@ pub fn small_png(bytes: &[u8], px: u32) -> Option<Vec<u8>> {
 // ---------------------------------------------------------------- the preview + cache
 
 /// What the card gets: `{"state": "ok"|"none"|"off"|"busy", "title", "site", "icon", "picture"}`.
-pub fn fetch_preview(url: &str, allow_private: bool) -> Result<(Value, Option<Vec<u8>>, Option<Vec<u8>>), String> {
+/// The preview JSON, then the site icon and the picture bytes when fetched.
+pub type Fetched = (Value, Option<Vec<u8>>, Option<Vec<u8>>);
+
+pub fn fetch_preview(url: &str, allow_private: bool) -> Result<Fetched, String> {
     let f = Fetcher::new(allow_private);
     let (final_url, kind, bytes) = f.get(url, MAX_PAGE)?;
     if !(kind.is_empty() || kind.contains("html")) {
