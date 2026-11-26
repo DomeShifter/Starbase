@@ -23,7 +23,7 @@
 //! again each time; someone whose access is taken away keeps only what their browser already
 //! showed them, and gets nothing new.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use axum::body::Body;
@@ -50,7 +50,7 @@ pub async fn route(
     if p.first().map(String::as_str) != Some("photos") {
         return None;
     }
-    if p.len() >= 2 && (p[1] == "albums" || p[1] == "places") {
+    if p.len() >= 2 && (p[1] == "albums" || p[1] == "places" || p[1] == "events") {
         return Some(super::albums::route(app, m, p, q, me, body).await);
     }
     if p.len() == 3 && p[1] == "edits" {
@@ -156,6 +156,7 @@ async fn list(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>)
     if !["taken", "name", "modified"].contains(&sort.as_str()) {
         return error(400, "sort is taken, name or modified");
     }
+    let stars = stars_of(app, me.as_ref()).await;
     let q2 = q.clone();
     // Who may see the folder, and the store's ids of the files in it (under the store lock).
     let checked = blocking(app, move |a| -> Result<Checked, Response<Body>> {
@@ -213,7 +214,8 @@ async fn list(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>)
     if desc {
         items.reverse();
     }
-    let photos: Vec<Value> = items.into_iter().map(|(_, v)| v).collect();
+    let mut photos: Vec<Value> = items.into_iter().map(|(_, v)| v).collect();
+    mark_stars(&mut photos, &stars);
     send_json(
         &json!({
             "folder": folder, "sub": deep, "role": role.name(), "enabled": enabled,
@@ -222,6 +224,21 @@ async fn list(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>)
         }),
         200,
     )
+}
+
+/// `me`'s starred files (`f:<file id>`), to mark pictures in a listing with [`mark_stars`].
+pub(super) async fn stars_of(app: &Shared, me: Option<&auth::User>) -> HashSet<String> {
+    let Some(me) = me.cloned() else { return HashSet::new() };
+    blocking(app, move |a| crate::spaces::starred(&a.store, &me).into_iter().collect()).await.unwrap_or_default()
+}
+
+/// Sets each listed picture's `starred`. Photos reads the star from here: a picture in a subfolder,
+/// an album, an event or a place isn't in the Drive's listing of the open folder.
+pub(super) fn mark_stars(photos: &mut [Value], stars: &HashSet<String>) {
+    for p in photos {
+        let on = p["id"].as_str().is_some_and(|id| stars.contains(&format!("f:{id}")));
+        p["starred"] = json!(on);
+    }
 }
 
 /// One picture as the listings show it (`gps` only when `places`: people who may edit).

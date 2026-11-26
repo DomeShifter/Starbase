@@ -1143,6 +1143,13 @@ fn named(ui: &Ui, r: &egui::Response, name: &str) {
 }
 
 /// Every command id the menus use (the tests check that each one exists).
+/// Whether leaving the page now would lose something: a presentation with unsaved changes, or a
+/// save not yet on the server. All saved: never prompt.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn should_guard_unload(dirty: bool, server_unsaved: bool) -> bool {
+    dirty || server_unsaved
+}
+
 #[cfg(test)]
 pub fn menu_ids() -> Vec<&'static str> {
     fn walk(items: &[Item], out: &mut Vec<&'static str>) {

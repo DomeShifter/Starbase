@@ -23,18 +23,27 @@ impl Home {
             "view": view,
             "loading": self.loading,
             "search": self.search,
+            "filters": { "kind": self.filters.kind, "who": self.filters.who, "when": self.filters.when },
             "error": self.error,
             "undo": self.undo.done.iter().map(|a| a.label.clone()).collect::<Vec<_>>(),
             "note": self.note_text(),
             "folders": folders.iter().map(|f| json!({ "path": f.path, "name": name_of(&f.path) })).collect::<Vec<_>>(),
             "files": files
                 .iter()
-                .map(|f| json!({ "id": f.id, "name": f.name, "folder": f.folder, "starred": f.starred, "kind": super::items::file_kind(&f.name) }))
+                .map(|f| {
+                    // The tile picture: "ready" (texture loaded), "loading", "none" (plain icon) or null.
+                    let thumb = self.thumbs.get(&f.id).map(|(_, t)| match t {
+                        super::Thumb::Ready(_) => "ready",
+                        super::Thumb::Loading => "loading",
+                        super::Thumb::None => "none",
+                    });
+                    json!({ "id": f.id, "name": f.name, "folder": f.folder, "starred": f.starred, "kind": super::items::file_kind(&f.name), "thumb": thumb })
+                })
                 .collect::<Vec<_>>(),
         })
     }
 
-    /// `home:folder` {path}, `home:search` {text}, `home:refresh`, `home:move`, `home:delete`, `home:undo`, `home:recent`, `home:starred`,
+    /// `home:folder` {path}, `home:search` {text}, `home:filter` {kind, who, when}, `home:refresh`, `home:move`, `home:delete`, `home:undo`, `home:recent`, `home:starred`,
     /// `home:shared`, `home:bin`; `home:opens` {id} says what opening that file does (without
     /// opening it): `{"opens": "editor" | "preview" | "download", "url"}`.
     pub(crate) fn test_run(&mut self, ctx: &egui::Context, id: &str, params: &Json) -> Result<Json, String> {
@@ -45,6 +54,12 @@ impl Home {
                 self.go_folder(&path);
             }
             "home:search" => self.search = text("text").unwrap_or_default(),
+            // {kind: folder|sheet|doc|slides|image|pdf|null, who: 0..2, when: 0..4}
+            "home:filter" => {
+                self.filters.kind = super::filters::KINDS.iter().map(|(k, _)| *k).find(|k| Some(*k) == text("kind").as_deref());
+                let n = |k: &str| params.get(k).and_then(Json::as_u64).unwrap_or(0) as u8;
+                (self.filters.who, self.filters.when) = (n("who").min(2), n("when").min(4));
+            }
             "home:refresh" => self.refresh(ctx),
             // Undo (undo.rs): `home:move` {files: [id], folders: [path], to} moves as a drag
             // does, `home:delete` {files, folders} bins, `home:undo` is Ctrl+Z.
@@ -127,6 +142,9 @@ impl Home {
                 ed.test_run(ctx, &self.store, &id["home:photos:edit:".len()..], params)?;
             }
             "home:photos:tab" | "home:photos:select" | "home:photos:place:open" => pm.alb_test(ctx, &self.store, id, params)?,
+            "home:photos:click" | "home:photos:menu" | "home:photos:bar" | "home:photos:addto" | "home:photos:picker" | "home:photos:note:open" => {
+                pm.pick_test(ctx, &self.store, id, params)?
+            }
             id if id.starts_with("home:photos:album:") => pm.alb_test(ctx, &self.store, id, params)?,
             "home:photos:open" => {
                 let i = params.get("index").and_then(Json::as_u64).unwrap_or(0) as usize;

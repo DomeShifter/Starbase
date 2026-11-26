@@ -1141,6 +1141,21 @@ async fn gate(
                             Err(why) => error(400, &why),
                         });
                     }
+                    // External content (IMAGE pictures from the web): blocked in files that
+                    // aren't the person's own until they allow it (docs/privacy.md).
+                    (["external"], "GET") => {
+                        need(role, Role::View)?;
+                        let own = store::space_of(&path) == home && spaces::last_change(store, id).is_none_or(|(by, _)| by == home);
+                        return Err(send_json(&json!({ "allowed": spaces::external_allowed(store, &me, id, own) }), 200));
+                    }
+                    (["external"], "POST") => {
+                        need(role, Role::View)?;
+                        let on = json.get("allow").and_then(Value::as_bool).unwrap_or(false);
+                        return Err(match spaces::set_external(store, &me, id, on) {
+                            Ok(()) => send_json(&json!({ "allowed": on }), 200),
+                            Err(e) => error(500, &e.to_string()),
+                        });
+                    }
                     (["star"], "POST") => {
                         need(role, Role::View)?;
                         let on = json.get("on").and_then(Value::as_bool).unwrap_or(true);
@@ -1549,9 +1564,13 @@ async fn add_sheets(app: &Shared, me: Option<auth::User>, file: String, q: &Hash
 /// GET /api/files/ID/thumb: the file's preview picture (thumbs.rs), drawn if there isn't one for
 /// this version yet (a document's is the one StarDocs sent, if it shows this version). Outside the store lock while drawing. 404: no picture (the app shows an icon).
 async fn thumb(app: &Shared, me: Option<auth::User>, file: String, headers: &HeaderMap) -> Response<Body> {
+    /// Draws one picture (run on a blocking thread).
+    type DrawJob = Box<dyn FnOnce(&App) -> Result<Vec<u8>, String> + Send>;
     enum Got {
         Have(Vec<u8>, String),
         Draw(String, Vec<u8>, String),
+        Photo(String, String),
+        Pdf(Vec<u8>, String),
     }
     let f2 = file.clone();
     let got = blocking(app, move |app| -> Result<Got, Response<Body>> {
@@ -1564,7 +1583,18 @@ async fn thumb(app: &Shared, me: Option<auth::User>, file: String, headers: &Hea
         if let Some(png) = thumbs::cached(&app.store, &f2, &version) {
             return Ok(Got::Have(png, version));
         }
-        // Other files (photos, PDFs…) have no picture here: the Drive shows their type's icon.
+        // Photos: their Photos thumbnail as a tile; PDFs: the top of page 1. Other files (videos:
+        // no ffmpeg in the server) have no picture here: the Drive shows their type's icon.
+        if photos::media_of(&path).is_some_and(|(_, thumbs)| thumbs) {
+            return Ok(Got::Photo(path, version));
+        }
+        if path.to_ascii_lowercase().ends_with(".pdf") {
+            if std::fs::metadata(&full).map(|m| m.len()).unwrap_or(u64::MAX) > thumbs::MAX_PDF {
+                return Err(error(404, "too big for a picture"));
+            }
+            let bytes = std::fs::read(&full).map_err(|_| error(404, "no such file"))?;
+            return Ok(Got::Pdf(bytes, version));
+        }
         if !store::is_editable(&path) {
             return Err(error(404, "no picture for this kind of file"));
         }
@@ -1583,10 +1613,17 @@ async fn thumb(app: &Shared, me: Option<auth::User>, file: String, headers: &Hea
     let (png, version) = match got {
         Err(resp) => return resp,
         Ok(Got::Have(png, v)) => (png, v),
-        Ok(Got::Draw(name, bytes, v)) => {
-            let (store_root, f3, v2) = (app.clone(), file.clone(), v.clone());
+        Ok(got) => {
+            let (store_root, f3) = (app.clone(), file.clone());
+            let (job, v): (DrawJob, String) = match got {
+                Got::Draw(name, bytes, v) => (Box::new(move |_| thumbs::from_bytes(&name, &bytes)), v),
+                Got::Photo(path, v) => (Box::new(move |a| thumbs::tile(&photos::drive_thumb(&a.store, &path)?)), v),
+                Got::Pdf(bytes, v) => (Box::new(move |_| thumbs::from_pdf(bytes)), v),
+                Got::Have(..) => unreachable!(),
+            };
+            let v2 = v.clone();
             let drawn = tokio::task::spawn_blocking(move || {
-                let png = thumbs::from_bytes(&name, &bytes)?;
+                let png = job(&store_root)?;
                 let _ = thumbs::keep(&store_root.store, &f3, &v2, &png);
                 Ok::<_, String>(png)
             })
@@ -1930,6 +1967,11 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
     // A file replaced through the API (a version restored) is read again by its live room.
     let restored = m == "POST" && p.len() == 5 && p[0] == "files" && p[2] == "versions" && p[4] == "restore";
     let replaced = ((m == "PUT" && p.len() == 2 && p[0] == "files") || restored).then(|| p[1].clone());
+    // A file uploaded from this computer, or a copy, came from outside: its external content
+    // stays blocked for the person who brought it in until they allow it.
+    let from_outside = m == "POST"
+        && ((p.len() == 1 && p[0] == "files" && (q.get("as_is").is_some_and(|v| v == "1") || q.get("imported").is_some_and(|v| v == "1")))
+            || (p.len() == 3 && p[0] == "files" && p[2] == "copy"));
     let (m2, p2) = (m.clone(), p.clone());
     let app2 = app.clone();
     let out = tokio::task::spawn_blocking(move || {
@@ -1959,6 +2001,10 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
                 };
                 if let Some(id) = made {
                     let who = me.username.clone();
+                    if from_outside {
+                        let (u, id) = (me.clone(), id.clone());
+                        blocking(&app, move |a| spaces::set_external(&a.store, &u, &id, false)).await;
+                    }
                     blocking(&app, move |a| spaces::note_changed(&a.store, &id, &who)).await;
                 }
             }
@@ -2284,6 +2330,24 @@ mod tests {
         }
         let g = post(&app, &other, "/api/signup", "", json!({"username": "new9", "name": "N", "password": "longenough"})).await;
         assert_eq!(g.status, 429);
+    }
+
+    #[tokio::test]
+    async fn external_content_is_blocked_in_files_from_outside_until_allowed() {
+        let (app, ip, boss) = owned().await;
+        let ext = |id: &str| format!("/api/files/{id}/external");
+        let made = send(&app, &ip, "POST", "/api/files?name=Mine.xlsx", &boss, &[], b"one".to_vec()).await;
+        let mine = made.json["id"].as_str().unwrap().to_string();
+        assert_eq!(send(&app, &ip, "GET", &ext(&mine), &boss, &[], vec![]).await.json["allowed"], true, "own file: as before");
+        let up = send(&app, &ip, "POST", "/api/files?name=From%20mail.xlsx&as_is=1", &boss, &[], b"two".to_vec()).await;
+        let up = up.json["id"].as_str().unwrap().to_string();
+        assert_eq!(send(&app, &ip, "GET", &ext(&up), &boss, &[], vec![]).await.json["allowed"], false, "uploaded: blocked");
+        let copy = send(&app, &ip, "POST", &format!("/api/files/{mine}/copy"), &boss, &[], vec![]).await;
+        let copy = copy.json["id"].as_str().unwrap().to_string();
+        assert_eq!(send(&app, &ip, "GET", &ext(&copy), &boss, &[], vec![]).await.json["allowed"], false, "a copy: blocked");
+        assert_eq!(post(&app, &ip, &ext(&up), &boss, json!({"allow": true})).await.status, 200);
+        assert_eq!(send(&app, &ip, "GET", &ext(&up), &boss, &[], vec![]).await.json["allowed"], true, "remembered");
+        assert_eq!(send(&app, &ip, "GET", &ext(&up), "", &[], vec![]).await.status, 401);
     }
 
     #[tokio::test]

@@ -245,6 +245,7 @@ impl eframe::App for WebShell {
             // The home screen: no spreadsheet runs; dropped files are uploaded where you are.
             self.home.logic(ctx);
             crate::account::set_typing(false);
+            crate::unload_guard::set(false);
             self.share.logic(&self.app, ctx, &self.files);
             let dropped: Vec<(String, Vec<u8>)> = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(|e| e.into_inner()));
             for (name, bytes) in dropped {
@@ -254,10 +255,16 @@ impl eframe::App for WebShell {
             return;
         }
         self.files.logic(&mut self.app, ctx);
+        // External content (IMAGE pictures): blocked in spreadsheets that aren't this person's own.
+        if let Some(d) = self.app.session.active() {
+            let file = self.files.linked().filter(|(uid, _)| *uid == d.uid).map(|(_, id)| id);
+            crate::external::note_doc(d.uid, file.as_deref(), d.path.is_some(), ctx);
+        }
         // Live editing: send this tab's changes, apply everyone else's (live.rs).
         self.live.logic(&mut self.app, ctx, &self.files);
         self.share.logic(&self.app, ctx, &self.files);
         self.copyto.logic(&self.app, ctx, &self.files);
+        take_menu_paste(&mut self.app);
         self.files.take_imports(&mut self.app, &self.inbox, ctx);
         self.webfonts.logic(&self.app, ctx);
         crate::spelling::logic(&self.app, ctx);
@@ -266,6 +273,10 @@ impl eframe::App for WebShell {
         self.app.logic(ctx);
         // A cell being typed in: renewing the sign-in waits (account.rs).
         crate::account::set_typing(self.app.editor.is_some());
+        // Leaving the tab (Ctrl+W, close, reload) asks first while a cell is being typed in or the
+        // open file has changes not saved yet; never when everything is saved.
+        let dirty = self.app.session.active().is_some_and(|d| d.is_dirty());
+        crate::unload_guard::set(crate::unload_guard::should_guard(self.app.editor.is_some(), dirty));
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#1562).
         // Settings change after input (the frame of a click or key and the one after it, as the
         // change happens in `ui`), so only then, and once a second for anything else.
@@ -295,6 +306,7 @@ impl eframe::App for WebShell {
 
     /// Forwards a browser frame's raw input to the shared app before eframe handles it.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        crate::emacs_keys::strip(ctx, raw);
         drop_alt_text(raw);
         self.input.raw_input(raw);
         self.autolink.saw_input(raw);
@@ -450,12 +462,71 @@ fn page_copy(text: &str, html: Option<&str>) -> bool {
     f.call2(&JsValue::NULL, &JsValue::from_str(text), &html).is_ok_and(|v| v.is_truthy())
 }
 
+/// What a page clipboard read gave: text and HTML, or nothing.
+type PageClip = Option<(String, Option<String>)>;
+
+thread_local! {
+    /// Answers of the page's clipboard reads, waiting for the next frame (`take_menu_paste`).
+    static MENU_PASTE: std::cell::RefCell<Vec<PageClip>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Menu Paste (Edit > Paste, a cell's right-click Paste): start the page's async clipboard read
+/// (index.html `__ssPasteRead`) inside the click; the answer is queued and `take_menu_paste`
+/// pastes it next frame the way Ctrl+V does. False when the page can't read at all.
+fn menu_paste_start(ctx: &egui::Context) -> bool {
+    let Some(w) = web_sys::window() else { return false };
+    if !w.is_secure_context() {
+        return false;
+    }
+    let Some(f) = js_sys::Reflect::get(&w, &"__ssPasteRead".into()).ok().and_then(|f| f.dyn_into::<js_sys::Function>().ok()) else {
+        return false;
+    };
+    let Ok(promise) = f.call0(&JsValue::NULL).and_then(|p| p.dyn_into::<js_sys::Promise>()) else { return false };
+    let ctx = ctx.clone();
+    wasm_bindgen_futures::spawn_local(async move {
+        let got = wasm_bindgen_futures::JsFuture::from(promise).await.ok().and_then(|v| {
+            let text = js_sys::Reflect::get(&v, &"text".into()).ok()?.as_string().filter(|t| !t.is_empty())?;
+            let html = js_sys::Reflect::get(&v, &"html".into()).ok().and_then(|h| h.as_string());
+            Some((text, html))
+        });
+        MENU_PASTE.with(|q| q.borrow_mut().push(got));
+        ctx.request_repaint();
+    });
+    true
+}
+
+/// Applies the clipboard read a menu Paste started: its text and HTML through the same
+/// `paste_external` as Ctrl+V; when the page couldn't read, StarSheets' own last copy, else the
+/// engine's own clipboard (which says "Nothing to paste." if empty).
+fn take_menu_paste(app: &mut gridcraft_ui_egui::SheetApp) {
+    let answers: Vec<_> = MENU_PASTE.with(|q| std::mem::take(&mut *q.borrow_mut()));
+    for answer in answers {
+        match answer {
+            Some((text, html)) => {
+                if let Some(w) = web_sys::window() {
+                    let _ = js_sys::Reflect::set(&w, &"__ssPasteHtml".into(), &html.map_or(JsValue::NULL, |h| JsValue::from_str(&h)));
+                }
+                app.paste_external(text.replace("\r\n", "\n"));
+            }
+            None => match crate::editmenu::last_copy() {
+                Some(text) => app.paste_external(text),
+                None => app.run_or_alert("edit.paste", serde_json::json!({})),
+            },
+        }
+    }
+}
+
 fn services(inbox: Inbox, ctx: egui::Context) -> Services {
     let open_inbox = inbox.clone();
     let picture_ctx = ctx.clone();
     Services {
         copy_html: Some(Box::new(copy_html)),
-        // Menu Paste: StarSheets' own last copy (the page can't read the clipboard on http).
+        // Menu Paste: read the real clipboard when chosen (answered next frame, take_menu_paste);
+        // plain http / no clipboard API: StarSheets' own last copy.
+        paste_start: Some(Box::new({
+            let ctx = ctx.clone();
+            move || menu_paste_start(&ctx)
+        })),
         paste_text: Some(Box::new(crate::editmenu::last_copy)),
         // The HTML that came with this paste (index.html keeps it from the browser's paste event).
         paste_html: Some(Box::new(take_paste_html)),

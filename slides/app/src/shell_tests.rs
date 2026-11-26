@@ -279,3 +279,12 @@ fn the_text_toolbar_sets_size_and_colour_and_they_survive_a_pptx() {
     let shapes = format!("{:?}", back.active().unwrap().doc.slides[0].shapes);
     assert!(shapes.contains("255, g: 0") || shapes.to_uppercase().contains("FF0000"), "the red fill reopened");
 }
+
+#[test]
+fn leave_page_guard_only_while_something_is_unsaved() {
+    use crate::shell::should_guard_unload as g;
+    // (a presentation is dirty, not yet on the server)
+    for (d, s, want) in [(false, false, false), (true, false, true), (false, true, true), (true, true, true)] {
+        assert_eq!(g(d, s), want, "dirty={d} server={s}");
+    }
+}

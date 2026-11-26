@@ -25,9 +25,7 @@ use axum::http::Response;
 use serde_json::{Map, Value, json};
 
 use super::index::Row;
-
-type Seen3 = (String, Row, bool);
-use super::routes::photo_json;
+use super::routes::{mark_stars, photo_json, stars_of};
 use super::{media_of, service};
 use crate::{App, Shared, auth, blocking, error, send_json, sharing};
 
@@ -100,9 +98,12 @@ fn clean_name(v: &Value) -> Result<String, Response<Body>> {
 }
 
 /// A picture I may see (id, path, whether its position may be given to me).
-type Seen = (String, String, bool);
+pub(super) type Seen = (String, String, bool);
 
-fn seen(a: &App, acc: &sharing::Access, id: &str) -> Option<Seen> {
+/// A picture as listed: id, index row, whether its position may be given.
+pub(super) type Pic = (String, Row, bool);
+
+pub(super) fn seen(a: &App, acc: &sharing::Access, id: &str) -> Option<Seen> {
     let path = acc.file_paths.get(id)?;
     if media_of(path).is_none() || acc.file_role(id) < sharing::Role::View || a.store.safe_file(path).is_none() {
         return None;
@@ -112,7 +113,7 @@ fn seen(a: &App, acc: &sharing::Access, id: &str) -> Option<Seen> {
 }
 
 /// Pictures as the listing shows them, newest first, and how many are still being read.
-fn rows_of(a: &Shared, seen: Vec<Seen>) -> (Vec<(String, Row, bool)>, u64) {
+pub(super) fn rows_of(a: &Shared, seen: Vec<Seen>) -> (Vec<(String, Row, bool)>, u64) {
     let Some(svc) = service(&a.store) else { return (Vec::new(), 0) };
     let mut out: Vec<(String, Row, bool)> = seen.into_iter().filter_map(|(id, path, gps)| svc.row(&path).map(|r| (id, r, gps))).collect();
     let key = |r: &Row| r.meta.taken.clone().map(|t| t.chars().take(19).collect::<String>()).unwrap_or_default();
@@ -121,7 +122,7 @@ fn rows_of(a: &Shared, seen: Vec<Seen>) -> (Vec<(String, Row, bool)>, u64) {
     (out, (q + w) as u64)
 }
 
-fn cover(rows: &[(String, Row, bool)]) -> Value {
+pub(super) fn cover(rows: &[(String, Row, bool)]) -> Value {
     rows.iter()
         .find_map(|(id, r, g)| photo_json(r, id, *g).get("v").filter(|v| v.is_string()).map(|v| json!({"id": id, "v": v})))
         .unwrap_or(Value::Null)
@@ -148,6 +149,7 @@ pub async fn route(
         (Some("albums"), "GET", Some(id), None, 3) => open_album(app, me, id).await,
         (Some("albums"), "POST", Some(id), Some(act @ ("rename" | "add" | "remove" | "delete")), 4) => change(app, me, id, act.to_string(), b).await,
         (Some("places"), "GET", None, _, 2) => places(app, me, q.get("place").cloned()).await,
+        (Some("events"), "GET", None, _, 2) => super::events::events(app, me, q.get("event").cloned()).await,
         _ => error(404, "not found"),
     }
 }
@@ -210,6 +212,7 @@ async fn create(app: &Shared, me: Option<auth::User>, b: Value) -> Response<Body
 }
 
 async fn open_album(app: &Shared, me: Option<auth::User>, id: String) -> Response<Body> {
+    let stars = stars_of(app, me.as_ref()).await;
     let got = blocking(app, move |a| -> Result<(Value, Vec<Seen>), Response<Body>> {
         let acc = sharing::Access::new(&a.store, a.auth, me.as_ref());
         let al = load(a, &me).into_iter().find(|al| al["id"] == id.as_str()).ok_or_else(|| error(404, "no such album"))?;
@@ -224,7 +227,8 @@ async fn open_album(app: &Shared, me: Option<auth::User>, id: String) -> Respons
     };
     let app = app.clone();
     let (rows, waiting) = tokio::task::spawn_blocking(move || rows_of(&app, vis)).await.unwrap_or_default();
-    let photos: Vec<Value> = rows.iter().map(|(id, r, g)| photo_json(r, id, *g)).collect();
+    let mut photos: Vec<Value> = rows.iter().map(|(id, r, g)| photo_json(r, id, *g)).collect();
+    mark_stars(&mut photos, &stars);
     send_json(&json!({"id": al["id"], "name": al["name"], "photos": photos, "waiting": waiting}), 200)
 }
 
@@ -234,6 +238,7 @@ async fn change(app: &Shared, me: Option<auth::User>, id: String, act: String, b
         let mut all = load(a, &me);
         let at = all.iter().position(|al| al["id"] == id.as_str()).ok_or_else(|| error(404, "no such album"))?;
         let ids: Vec<String> = b["files"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
+        let mut added = 0;
         match act.as_str() {
             "delete" => {
                 all.remove(at);
@@ -242,7 +247,6 @@ async fn change(app: &Shared, me: Option<auth::User>, id: String, act: String, b
             "add" => {
                 let mut files = files_of(&all[at]);
                 let have: HashSet<String> = files.iter().cloned().collect();
-                let mut added = 0;
                 for f in ids.iter().filter(|f| !have.contains(*f)) {
                     // Only pictures I may see (no hint about files I may not).
                     if seen(a, &acc, f).is_some() && files.len() < MAX_FILES && !files[files.len().saturating_sub(added)..].contains(f) {
@@ -261,7 +265,8 @@ async fn change(app: &Shared, me: Option<auth::User>, id: String, act: String, b
         let out = if act == "delete" {
             json!({"deleted": true})
         } else {
-            json!({"id": all[at]["id"], "name": all[at]["name"], "count": files_of(&all[at]).len()})
+            // `added`: how many were new (pictures already in the album aren't added twice).
+            json!({"id": all[at]["id"], "name": all[at]["name"], "count": files_of(&all[at]).len(), "added": added})
         };
         save(a, &me, all)?;
         Ok(out)
@@ -275,6 +280,7 @@ async fn change(app: &Shared, me: Option<auth::User>, id: String, act: String, b
 }
 
 async fn places(app: &Shared, me: Option<auth::User>, place: Option<String>) -> Response<Body> {
+    let stars = stars_of(app, me.as_ref()).await;
     // Pictures whose position I may know: ids by path, under the store lock.
     let mine = blocking(app, move |a| {
         let acc = sharing::Access::new(&a.store, a.auth, me.as_ref());
@@ -286,7 +292,7 @@ async fn places(app: &Shared, me: Option<auth::User>, place: Option<String>) -> 
     let (groups, waiting) = tokio::task::spawn_blocking(move || {
         let (rows, waiting) = rows_of(&app, mine);
         let mut cache: HashMap<(i64, i64), String> = HashMap::new();
-        let mut groups: Vec<(String, Vec<Seen3>)> = Vec::new();
+        let mut groups: Vec<(String, Vec<Pic>)> = Vec::new();
         for x in rows {
             let Some((lat, lon)) = x.1.meta.lat.zip(x.1.meta.lon) else { continue };
             let name = cache.entry(((lat * 20.0).round() as i64, (lon * 20.0).round() as i64)).or_insert_with(|| place_name(lat, lon)).clone();
@@ -302,7 +308,8 @@ async fn places(app: &Shared, me: Option<auth::User>, place: Option<String>) -> 
     .unwrap_or_default();
     if let Some(name) = place {
         let Some(g) = groups.iter().find(|g| g.0 == name) else { return error(404, "no such place") };
-        let photos: Vec<Value> = g.1.iter().map(|(id, r, gps)| photo_json(r, id, *gps)).collect();
+        let mut photos: Vec<Value> = g.1.iter().map(|(id, r, gps)| photo_json(r, id, *gps)).collect();
+        mark_stars(&mut photos, &stars);
         return send_json(&json!({"place": name, "photos": photos, "waiting": waiting}), 200);
     }
     let out: Vec<Value> = groups.iter().map(|(n, rows)| json!({"name": n, "count": rows.len(), "cover": cover(rows)})).collect();

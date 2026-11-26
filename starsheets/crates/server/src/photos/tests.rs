@@ -554,6 +554,25 @@ mod http {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+        // Stars show for pictures in folders inside too (Photos can't find those in the Drive listing).
+        let deep = "/api/photos?folder=ann/Trip&sub=1&sort=name";
+        let top = get(&app, "/api/photos?folder=ann/Trip", Some("ann"), &[]).await.json["photos"].clone();
+        let g = get(&app, deep, Some("ann"), &[]).await;
+        let inner = g.json["photos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| !top.as_array().unwrap().iter().any(|t| t["id"] == p["id"]))
+            .expect("one in a subfolder")
+            .clone();
+        assert_eq!(inner["starred"], false, "{}", g.json);
+        let id = inner["id"].as_str().unwrap();
+        assert_eq!(send(&app, "POST", &format!("/api/files/{id}/star"), Some("ann"), &[], r#"{"on":true}"#).await.status, 200);
+        let g = get(&app, deep, Some("ann"), &[]).await;
+        let stars: Vec<(String, bool)> =
+            g.json["photos"].as_array().unwrap().iter().map(|p| (p["name"].as_str().unwrap().into(), p["starred"].as_bool().unwrap())).collect();
+        let want: Vec<(String, bool)> = stars.iter().map(|(n, _)| (n.clone(), *n == inner["name"].as_str().unwrap())).collect();
+        assert_eq!(stars, want, "only the starred one, found by id");
         assert_eq!(get(&app, "/api/photos?folder=ann/Trip", None, &[]).await.status, 401, "signed in only");
         assert_eq!(get(&app, "/api/photos?folder=ann/Trip", Some("bob"), &[]).await.status, 403);
         assert_eq!(get(&app, "/api/photos?folder=ann", Some("bob"), &[]).await.status, 403);
@@ -587,7 +606,7 @@ mod http {
         sharing::set(
             &app.store,
             sharing::Item::Folder(&folder_id),
-            &sharing::Share { people: vec![("bob".into(), sharing::Role::View)], link: sharing::Role::None },
+            &sharing::Share { people: vec![("bob".into(), sharing::Role::View)], link: sharing::Role::None, ..Default::default() },
         )
         .unwrap();
         let g = get(&app, &format!("/api/photos?folder_id={folder_id}"), Some("bob"), &[]).await;
@@ -634,4 +653,22 @@ fn cache_dir_choice() {
     assert!(pick(None, false, true, None, Some("/home/u")).starts_with("/home/u/.cache/starbase/photos"));
     assert!(pick(None, false, true, None, None).starts_with("/var/cache/starbase/photos"));
     assert_eq!(pick(None, false, false, Some("/xdg"), None), PathBuf::from("/data/.starsheets/photos-cache"));
+}
+
+#[test]
+fn drive_tiles_get_an_upright_thumbnail_without_photos_turned_on() {
+    // Stored 40 × 20 (red left, blue right) with EXIF 6: shown 20 × 40, red at the top.
+    let dir = tmp("drive");
+    std::fs::write(dir.join("p.jpg"), with_exif(&jpeg(&halves(40, 20)), &exif_block(6, "2024:07:14 18:30:05", None))).unwrap();
+    std::fs::write(dir.join("notes.bmp"), b"BM").unwrap();
+    let store = Store { root: dir.clone(), keep: 3, spaces: false };
+    let t = image::load_from_memory(&drive_thumb(&store, "p.jpg").unwrap()).unwrap().to_rgb8();
+    assert_eq!(t.dimensions(), (20, 40));
+    assert!(t.get_pixel(10, 3)[0] > 200 && t.get_pixel(10, 36)[2] > 200, "upright");
+    // As a tile: the card's shape, cut around the middle.
+    let tile = image::load_from_memory(&crate::thumbs::tile(&drive_thumb(&store, "p.jpg").unwrap()).unwrap()).unwrap();
+    assert_eq!((tile.width(), tile.height()), (crate::thumbs::TILE_W, crate::thumbs::TILE_H));
+    assert!(drive_thumb(&store, "notes.bmp").is_err());
+    assert!(drive_thumb(&store, "missing.jpg").is_err());
+    let _ = std::fs::remove_dir_all(dir);
 }

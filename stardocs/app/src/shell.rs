@@ -162,6 +162,34 @@ pub const MENUS: &[(&str, &[Item])] = &[
         "Insert",
         &[
             Cmd("Image", "insert.picture", NO, ""),
+            Sub(
+                "Drawing",
+                &[
+                    Cmd("New drawing canvas", "insert.canvas", NO, ""),
+                    Sep,
+                    Cmd("Rectangle", "insert.shape", r#"{"kind":"rectangle"}"#, ""),
+                    Cmd("Rounded rectangle", "insert.shape", r#"{"kind":"roundedRectangle"}"#, ""),
+                    Cmd("Ellipse", "insert.shape", r#"{"kind":"ellipse"}"#, ""),
+                    Cmd("Triangle", "insert.shape", r#"{"kind":"triangle"}"#, ""),
+                    Cmd("Diamond", "insert.shape", r#"{"kind":"diamond"}"#, ""),
+                    Cmd("Star", "insert.shape", r#"{"kind":"star"}"#, ""),
+                    Cmd("Heart", "insert.shape", r#"{"kind":"heart"}"#, ""),
+                    Cmd("Line", "insert.shape", r#"{"kind":"line"}"#, ""),
+                    Cmd("Arrow", "insert.shape", r#"{"kind":"arrow"}"#, ""),
+                ],
+            ),
+            Sub(
+                "Chart",
+                &[
+                    Cmd("Column", "insert.chart", r#"{"type":"column"}"#, ""),
+                    Cmd("Bar", "insert.chart", r#"{"type":"bar"}"#, ""),
+                    Cmd("Line", "insert.chart", r#"{"type":"line"}"#, ""),
+                    Cmd("Area", "insert.chart", r#"{"type":"area"}"#, ""),
+                    Cmd("Pie", "insert.chart", r#"{"type":"pie"}"#, ""),
+                    Cmd("Scatter", "insert.chart", r#"{"type":"scatter"}"#, ""),
+                ],
+            ),
+            Cmd("Emoji", "stardocs.emoji", NO, ""),
             Sub("Table", &[TableGrid, Sep, Cmd("Table options", "ui.dialog:insertTable", NO, "")]),
             Cmd("Date", "insert.dateTime", r#"{"format":"d MMMM yyyy"}"#, ""),
             Sep,
@@ -386,7 +414,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
                             Cmd("1.  2.  3.", "para.numbering", r#"{"kind":"numbered"}"#, ""),
                             Cmd("1)  2)  3)", "para.numbering", r#"{"kind":"numberedParen"}"#, ""),
                             Cmd("A.  B.  C.", "para.numbering", r#"{"kind":"upperLetter"}"#, ""),
-                            Cmd("a.  b.  c.", "para.numbering", r#"{"kind":"lowerLetter"}"#, ""),
+                            Cmd("a.  b.  c.", "para.numbering", r#"{"kind":"lowerLetterDot"}"#, ""),
                             Cmd("i.  ii.  iii.", "para.numbering", r#"{"kind":"lowerRoman"}"#, ""),
                             Cmd("1.  a.  i.", "para.numbering", r#"{"kind":"outline"}"#, ""),
                         ],
@@ -522,6 +550,8 @@ pub struct Shell {
     restart: Option<String>,
     /// The dialog has just opened: its box takes the keyboard.
     restart_focus: bool,
+    /// Insert › Emoji's picker.
+    emoji: crate::emoji::Emoji,
     /// Each toolbar group's width last frame, to decide which fit.
     widths: Widths,
     /// The same for the picture tools' groups, shown while a picture is selected.
@@ -579,6 +609,8 @@ struct Flags {
     shortcuts: bool,
     /// Asks for the Restart numbering dialog (Format › Bullets and numbering › List options).
     restart: bool,
+    /// Asks for Insert › Emoji.
+    emoji: bool,
     /// Asks for File › Version history: the panel, or the Name current version dialog.
     history: bool,
     name_version: bool,
@@ -657,7 +689,7 @@ fn is_on(app: &mut WordApp, flags: &Flags, key: &str) -> bool {
 }
 
 /// The caret paragraph's formatting, its style's included (what WordCraft's own buttons read).
-fn selection_para(app: &WordApp) -> wordcraft_doc::resolve::ResolvedPara {
+pub(crate) fn selection_para(app: &WordApp) -> wordcraft_doc::resolve::ResolvedPara {
     wordcraft_engine::cmd::para::selection_para(&app.session)
 }
 
@@ -743,6 +775,7 @@ fn is_own(id: &str) -> bool {
             | "stardocs.makeCopy"
             | "stardocs.rename"
             | "stardocs.restartNumbering"
+            | "stardocs.emoji"
             | "stardocs.versionHistory"
             | "stardocs.nameVersion"
             | "stardocs.saveMyStyles"
@@ -758,6 +791,7 @@ fn run_menu(app: &mut WordApp, ctx: &egui::Context, flags: &mut Flags, link: Opt
         ("stardocs.compact", _) => flags.compact = !flags.compact,
         ("stardocs.shortcuts", _) => flags.shortcuts = true,
         ("stardocs.restartNumbering", _) => flags.restart = true,
+        ("stardocs.emoji", _) => flags.emoji = true,
         ("stardocs.versionHistory", _) => flags.history = true,
         ("stardocs.nameVersion", _) => flags.name_version = true,
         ("stardocs.saveMyStyles", _) => crate::mystyles::save(app),
@@ -835,8 +869,28 @@ fn params(text: &str) -> Value {
     serde_json::from_str(text).unwrap_or_else(|_| json!({}))
 }
 
+/// With exactly one object (picture, shape, chart, drawing) selected, puts the caret at the end
+/// of its paragraph, so a page break typed next goes after the object instead of replacing it.
+pub fn caret_off_object(app: &mut WordApp) {
+    let (a, b) = app.session.sel.ordered();
+    if a.story != b.story || a.path != b.path || b.off != a.off + wordcraft_doc::para::OBJ.len_utf8() {
+        return;
+    }
+    let Some(para) = app.session.doc.para_at(&a) else { return };
+    if para.object_at(a.off).is_none() {
+        return;
+    }
+    let end = wordcraft_doc::Pos { off: para.len(), ..a.clone() };
+    if let Err(e) = app.run("caret.set", json!({ "pos": end })) {
+        log::warn!("caret.set: {e}");
+    }
+}
+
 /// Runs a command; a refusal goes to the app's status line instead of vanishing.
 pub fn run(app: &mut WordApp, id: &str, p: Value) {
+    if matches!(id, "insert.pageBreak" | "text.pageBreak") {
+        caret_off_object(app);
+    }
     let r = match id.strip_prefix("ui.dialog:") {
         Some(name) => app.run("ui.dialog", json!({ "name": name })),
         None => app.run(id, p),
@@ -952,6 +1006,7 @@ impl Shell {
                 "shortcuts": self.shortcuts.open,
                 "customColour": self.custom.is_some(),
                 "restartNumbering": self.restart.is_some(),
+                "emoji": self.emoji.open,
                 "wordcraft": app.dialog.is_some(),
             },
             "toolbar": {
@@ -1019,6 +1074,10 @@ impl Shell {
             self.restart_focus = true;
         }
         self.restart_numbering(app, ui.ctx());
+        if std::mem::take(&mut self.flags.emoji) {
+            self.emoji.open = true;
+        }
+        self.emoji.ui(app, ui.ctx());
         self.shortcuts.ui(ui.ctx(), MENUS);
         if self.flags.words {
             self.word_count.ui(app, ui.ctx());
@@ -1125,6 +1184,17 @@ impl Shell {
         // would otherwise match it too (egui ignores an extra Shift).
         if ctx.input_mut(|i| i.consume_shortcut(&KeyboardShortcut::new(ctrl_alt | Modifiers::SHIFT, Key::H))) {
             self.flags.history = true;
+        }
+        // Ctrl+Enter on a selected picture, shape or chart: Docs keeps the object and breaks the
+        // page after it. WordCraft would type the break over the selection (deleting the object),
+        // so move the caret off it first; WordCraft's own Ctrl+Enter then inserts the break.
+        let brk = ctx.input(|i| {
+            i.events
+                .iter()
+                .any(|e| matches!(e, egui::Event::Key { key: Key::Enter, pressed: true, modifiers: m, .. } if m.command && !m.shift && !m.alt))
+        });
+        if brk && app.dialog.is_none() {
+            caret_off_object(app);
         }
         let (menus, outline, help, count) = ctx.input_mut(|i| {
             (
@@ -1514,8 +1584,10 @@ impl Tools<'_> {
             }
             Group::Lists => {
                 tool(app, ui, "format_list_bulleted", "Bulleted list (Ctrl+Shift+8)", "para.bullets", json!({}), false);
-                tool(app, ui, "checklist", "Checklist (Ctrl+Shift+9)", "list.checklist", json!({}), false);
+                list_styles(app, ui, "Bullet styles", "para.bullets", BULLET_STYLES);
                 tool(app, ui, "format_list_numbered", "Numbered list (Ctrl+Shift+7)", "para.numbering", json!({}), false);
+                list_styles(app, ui, "Numbering styles", "para.numbering", NUMBER_STYLES);
+                tool(app, ui, "checklist", "Checklist (Ctrl+Shift+9)", "list.checklist", json!({}), false);
                 tool(app, ui, "format_indent_decrease", "Decrease indent (Ctrl+[)", "para.outdent", json!({}), false);
                 tool(app, ui, "format_indent_increase", "Increase indent (Ctrl+])", "para.indent", json!({}), false);
                 tool(app, ui, "format_clear", "Clear formatting (Ctrl+\\)", "format.clear", json!({}), false);
@@ -2094,6 +2166,47 @@ fn tool(app: &mut WordApp, ui: &mut Ui, icon: &str, tip: &str, id: &str, p: Valu
     }
 }
 
+/// Bullet styles of the toolbar's little arrow beside the bulleted-list button (label, kind).
+const BULLET_STYLES: &[(&str, &str)] = &[
+    ("\u{25CF}", "bullet"),
+    ("\u{25CB}", "\u{25CB}"),
+    ("\u{25A0}", "\u{25A0}"),
+    ("\u{25B6}", "\u{27A2}"),
+    ("\u{25C6}", "\u{2756}"),
+    ("\u{2605}", "\u{2605}"),
+];
+/// Numbering styles of the arrow beside the numbered-list button (label, kind).
+const NUMBER_STYLES: &[(&str, &str)] = &[
+    ("1. 2. 3.", "numbered"),
+    ("1) 2) 3)", "numberedParen"),
+    ("a. b. c.", "lowerLetterDot"),
+    ("i. ii. iii.", "lowerRoman"),
+    ("A. B. C.", "upperLetter"),
+    ("1. 1.1. 1.1.1.", "legal"),
+];
+
+/// Docs' small arrow after a list button: a grid of styles applied to the caret's list.
+fn list_styles(app: &mut WordApp, ui: &mut Ui, tip: &str, id: &str, styles: &[(&str, &str)]) {
+    // Narrow, so the arrow reads as part of the list button before it.
+    ui.scope(|ui| {
+        ui.spacing_mut().button_padding = vec2(0.0, 4.0);
+        ui.spacing_mut().item_spacing.x = 0.0;
+        icon_menu(ui, "arrow_drop_down", tip, |ui| {
+            egui::Grid::new(tip).spacing(vec2(4.0, 4.0)).show(ui, |ui| {
+                for (i, (label, kind)) in styles.iter().enumerate() {
+                    if ui.add(Button::new(RichText::new(*label).size(15.0)).min_size(vec2(64.0, 36.0))).on_hover_text(*label).clicked() {
+                        run(app, id, json!({ "kind": kind, "apply": true }));
+                        ui.close();
+                    }
+                    if i % 3 == 2 {
+                        ui.end_row();
+                    }
+                }
+            });
+        });
+    });
+}
+
 fn icon_menu(ui: &mut Ui, icon: &str, tip: &str, add: impl FnOnce(&mut Ui)) {
     let img = icons::icon(icon);
     let r = match img {
@@ -2237,4 +2350,11 @@ fn palette<'a>(ui: &mut Ui, colours: impl Iterator<Item = (&'a str, &'a str)>, m
             }
         }
     });
+}
+
+/// Whether leaving the page now would lose something: the editor's unsaved flag, a save still in the
+/// browser's picker, or one not yet on the server. All saved: never prompt.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn should_guard_unload(dirty: bool, save_pending: bool, server_unsaved: bool) -> bool {
+    dirty || save_pending || server_unsaved
 }

@@ -5,6 +5,7 @@
 
 use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, col_to_letters};
+use gridcraft_engine::model::Visibility;
 use serde_json::{Value as Json, json};
 
 /// Commands to run, in order.
@@ -20,6 +21,8 @@ pub const IDS: &[&str] = &[
     "panel:moveColumnRight",
     "panel:randomise",
     "panel:trimWhitespace",
+    "panel:unhideSheets",
+    "panel:sparkline",
 ];
 
 /// Whether `id` is one of ours.
@@ -70,6 +73,8 @@ pub fn enabled(s: &Session, id: &str) -> Option<bool> {
         "panel:moveColumnLeft" => sel.start.col > 0,
         "panel:moveColumnRight" => sel.end.col + 1 < MAX_COLS,
         "panel:randomise" => used_part(s).is_some_and(|r| r.height() > 1),
+        "panel:unhideSheets" => !hidden_sheets(s).is_empty(),
+        "panel:sparkline" => sel.end.col + 1 < MAX_COLS && sel.width() > 1,
         _ => true,
     })
 }
@@ -85,8 +90,48 @@ pub fn steps(s: &Session, id: &str, p: &Json) -> Result<Steps, String> {
         "panel:moveColumnRight" => move_columns(s, false),
         "panel:randomise" => randomise(s, p.get("seed").and_then(Json::as_u64).unwrap_or_else(seed)),
         "panel:trimWhitespace" => trim_whitespace(s),
+        "panel:unhideSheets" => unhide_sheets(s),
+        "panel:sparkline" => sparklines(s),
         _ => Err(format!("unknown menu entry {id}")),
     }
+}
+
+/// Positions of the sheets hidden from the tab bar (not the "very hidden" ones, which only the
+/// file's author can reveal).
+fn hidden_sheets(s: &Session) -> Vec<usize> {
+    let Some(d) = s.active() else { return Vec::new() };
+    (0..d.wb.sheets.len()).filter(|&i| d.wb.sheet(i).is_some_and(|sh| sh.visibility == Visibility::Hidden)).collect()
+}
+
+/// View › Hidden sheets › Show all: unhides every hidden sheet.
+fn unhide_sheets(s: &Session) -> Result<Steps, String> {
+    let hidden = hidden_sheets(s);
+    if hidden.is_empty() {
+        return Err("No sheets are hidden.".into());
+    }
+    Ok(hidden.into_iter().map(|i| ("sheet.unhide", json!({ "sheet": i }))).collect())
+}
+
+/// Insert › Sparkline: for each row of the selection, a `=SPARKLINE(...)` chart of its cells in
+/// the column just right of the selection.
+fn sparklines(s: &Session) -> Result<Steps, String> {
+    let (sel, _, _) = here(s)?;
+    if sel.width() < 2 {
+        return Err("Select the cells of a row to draw a sparkline from them.".into());
+    }
+    if sel.end.col + 1 >= MAX_COLS {
+        return Err("There's no room to the right of the selection for a sparkline.".into());
+    }
+    if sel.height() > 100 {
+        return Err("Select at most 100 rows of cells for sparklines.".into());
+    }
+    Ok((sel.start.row..=sel.end.row)
+        .map(|row| {
+            let src = RangeRef::new(CellRef::new(row, sel.start.col), CellRef::new(row, sel.end.col));
+            let at = CellRef::new(row, sel.end.col + 1);
+            ("cell.set", json!({ "cell": at.to_string(), "input": format!("=SPARKLINE({src})") }))
+        })
+        .collect())
 }
 
 /// Data › Sort sheet: every row below the frozen ones, by the active cell's column.
@@ -287,6 +332,26 @@ mod tests {
 
     fn select(s: &mut Session, range: &str) {
         s.execute("selection.set", json!({"range": range})).unwrap();
+    }
+
+    #[test]
+    fn hidden_sheets_come_back_and_sparklines_sit_beside_their_rows() {
+        let mut s = sheet(&[("A1", "1"), ("B1", "5"), ("C1", "3"), ("A2", "2"), ("B2", "4"), ("C2", "9")]);
+        assert_eq!(enabled(&s, "panel:unhideSheets"), Some(false), "nothing hidden yet");
+        s.execute("home.insertSheet", json!({})).unwrap();
+        s.execute("sheet.hide", json!({"sheet": 0})).unwrap();
+        assert_eq!(enabled(&s, "panel:unhideSheets"), Some(true));
+        run(&mut s, "panel:unhideSheets", json!({}));
+        assert_eq!(enabled(&s, "panel:unhideSheets"), Some(false));
+        s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+        select(&mut s, "A1:C2");
+        assert_eq!(enabled(&s, "panel:sparkline"), Some(true));
+        run(&mut s, "panel:sparkline", json!({}));
+        assert_eq!(input(&s, "D1"), "=SPARKLINE(A1:C1)");
+        assert_eq!(input(&s, "D2"), "=SPARKLINE(A2:C2)");
+        assert_eq!(input(&s, "A1"), "1", "the source is untouched");
+        select(&mut s, "A1");
+        assert_eq!(enabled(&s, "panel:sparkline"), Some(false), "one cell has no trend");
     }
 
     #[test]

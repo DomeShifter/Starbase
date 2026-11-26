@@ -2,7 +2,7 @@
 # commit per StarDocs change. Bump `commit` after pushing to the fork, then run
 # scripts/fetch-upstream.sh (it also regenerates Cargo.toml from upstream's).
 repo = "https://github.com/DomeShifter/wordcraft.git"
-branch = "stardocs-checklist-grey"
+branch = "stardocs"
 commit = "7da02810c3ddd67734dbeaff4d13fc776dda0d8a"
 base = "v0.18.1"
 upstream = "https://github.com/storytold/wordcraft.git"
