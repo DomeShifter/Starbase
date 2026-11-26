@@ -538,11 +538,18 @@ impl Home {
                     resp = resp.on_hover_text(&name);
                 }
                 p.galley(at, galley, theme::TEXT);
+                let star_room = if starred { 24.0 } else { 0.0 };
                 if starred {
                     p.text(egui::pos2(end + 8.0, r.center().y), Align2::LEFT_CENTER, "★", FontId::proportional(14.0), theme::TEXT);
                 }
-                // A match inside the file: the words around it, dim, after the name.
-                if let Some(s) = snippet {
+                // "@ name": that person mentioned you in a comment (gone once you open the file).
+                if let Item::File(id) = &item
+                    && let Some(f) = self.file(id).filter(|f| !f.mentioned_by.is_empty())
+                {
+                    let text = format!("@ {} mentioned you", self.person(&f.mentioned_by));
+                    p.text(egui::pos2(end + 8.0 + star_room, r.center().y), Align2::LEFT_CENTER, text, FontId::proportional(12.0), house::BLUE);
+                } else if let Some(s) = snippet {
+                    // A match inside the file: the words around it, dim, after the name.
                     let x = end + if starred { 30.0 } else { 14.0 };
                     let left = r.left() + room + 44.0 - x;
                     if left > 40.0 {
