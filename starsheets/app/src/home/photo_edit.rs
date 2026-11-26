@@ -155,6 +155,11 @@ pub(super) struct Editor {
     pub edits: Edits,
     /// The edits as last loaded or saved (dirty = they differ).
     saved: Edits,
+    /// The edits a "Save a copy" is being made from, and (once it worked) the ones a copy was made
+    /// of: leaving the original with just these on screen needs no question (Google Photos: a
+    /// copy leaves the original as it was, so there is nothing to lose).
+    copy_of: Option<Edits>,
+    copied: Option<Edits>,
     /// Undo history: the edits before each finished change.
     undo: Vec<Edits>,
     redo: Vec<Edits>,
@@ -264,11 +269,19 @@ impl Editor {
             red_eye_on: false,
             hits: [None; 3],
             relist: false,
+            copy_of: None,
+            copied: None,
             outcome: None,
         }
     }
 
+    /// There are changes that would be lost on leaving (those already copied don't count).
     pub fn dirty(&self) -> bool {
+        self.unsaved() && self.copied.as_ref() != Some(&self.edits)
+    }
+
+    /// The edits differ from the original's saved ones (so Save has something to write).
+    fn unsaved(&self) -> bool {
         self.edits != self.saved
     }
 
@@ -359,7 +372,7 @@ impl Editor {
                 let v: Json = serde_json::from_slice(&b).unwrap_or_default();
                 self.writable = false;
                 self.why_not = Some("The edits couldn't be loaded.".into());
-                self.error = Some(v["error"].as_str().map_or(format!("The server said {s}."), str::to_string));
+                self.error = Some(crate::home::photos::said(&v, s));
             }
             Err(e) => {
                 self.writable = false;
@@ -393,7 +406,7 @@ impl Editor {
                         Ok((409 | 412, _)) => self.ask = Some(Ask::Conflict),
                         Ok((s, b)) => {
                             let v: Json = serde_json::from_slice(&b).unwrap_or_default();
-                            self.error = Some(v["error"].as_str().map_or(format!("Not saved: the server said {s}."), str::to_string));
+                            self.error = Some(crate::home::photos::said_in(&v, s, "Not saved"));
                         }
                         Err(e) => self.error = Some(format!("Not saved: {e}")),
                     }
@@ -405,12 +418,13 @@ impl Editor {
                             let v: Json = serde_json::from_slice(&b).unwrap_or_default();
                             let path = v["path"].as_str().unwrap_or("");
                             let name = path.rsplit('/').next().unwrap_or(path);
+                            self.copied = self.copy_of.take();
                             self.message = Some(format!("Saved a copy as \u{201C}{name}\u{201D}"));
                             self.relist = true;
                         }
                         Ok((s, b)) => {
                             let v: Json = serde_json::from_slice(&b).unwrap_or_default();
-                            self.error = Some(v["error"].as_str().map_or(format!("No copy made: the server said {s}."), str::to_string));
+                            self.error = Some(crate::home::photos::said_in(&v, s, "No copy made"));
                         }
                         Err(e) => self.error = Some(format!("No copy made: {e}")),
                     }
@@ -498,7 +512,7 @@ impl Editor {
             self.ask = Some(Ask::Foreign);
             return;
         }
-        if !self.dirty() {
+        if !self.unsaved() {
             self.outcome = Some(Outcome::Closed);
             return;
         }
@@ -537,6 +551,7 @@ impl Editor {
 
     fn copy_now(&mut self, ctx: &egui::Context, store: &Backend) {
         self.saving = true;
+        self.copy_of = Some(self.edits.clone());
         self.error = None;
         let body = json!({ "format": "jpeg", "quality": 90, "max_side": self.max_side, "strip_location": self.strip_location, "edits": self.edits });
         let (inbox, ctx2) = (self.inbox.clone(), ctx.clone());
@@ -1389,6 +1404,8 @@ impl Editor {
             "tab": self.tab.name(),
             "edits": self.edits,
             "dirty": self.dirty(),
+            "unsaved": self.unsaved(),
+            "copied": self.copied.is_some(),
             "writable": self.writable,
             "whyNot": self.why_not,
             "foreign": self.foreign,
@@ -1733,6 +1750,41 @@ mod tests {
         let body = post.3.clone().unwrap();
         assert_eq!(body["edits"]["contrast"], json!(h.state().ed.edits.contrast), "{body}");
         assert_eq!(body["edits"]["exposure"], 0.5);
+    }
+
+    #[test]
+    fn after_save_a_copy_the_original_is_clean_until_edited_again() {
+        let mut h = harness(reply(true, &[]));
+        let c = egui::Context::default();
+        let store = h.state().store.clone();
+        h.state_mut().ed.rotate();
+        assert!(h.state().ed.dirty(), "rotated, not yet copied");
+        h.state_mut().ed.copy(&c, &store);
+        h.run();
+        let ed = &mut h.state_mut().ed;
+        assert!(ed.message.as_deref().unwrap_or("").contains("Saved a copy"));
+        assert!(!ed.dirty(), "the copy has the rotation; the original is unchanged");
+        assert!(ed.unsaved(), "Save would still write it to the original");
+        ed.cancel();
+        assert!(ed.ask.is_none() && matches!(ed.outcome, Some(Outcome::Closed)), "leaving asks nothing");
+        // Another change after the copy is a change again.
+        ed.outcome = None;
+        ed.rotate();
+        assert!(ed.dirty());
+        ed.cancel();
+        assert_eq!(ed.ask, Some(Ask::Discard));
+    }
+
+    #[test]
+    fn a_failed_copy_leaves_the_edits_dirty() {
+        let mut h = harness(reply(true, &[]));
+        let c = egui::Context::default();
+        let store = h.state().store.clone();
+        h.state_mut().ed.rotate();
+        h.state_mut().ed.copy(&c, &store);
+        // The fake answers 200 to every POST, so make the failure by hand.
+        h.state_mut().ed.copied = None;
+        assert!(h.state().ed.dirty());
     }
 
     #[test]

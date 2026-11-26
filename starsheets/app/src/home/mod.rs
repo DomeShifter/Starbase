@@ -327,7 +327,7 @@ fn call_any(
                 }
                 Ok((s, bytes)) => {
                     let v: Json = serde_json::from_slice(&bytes).unwrap_or_default();
-                    then(Err((s, v["error"].as_str().map_or(format!("The server said {s}."), str::to_string))))
+                    then(Err((s, crate::home::photos::said(&v, s))))
                 }
                 Err(e) => then(Err((0, e))),
             };

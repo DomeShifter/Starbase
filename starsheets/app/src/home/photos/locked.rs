@@ -136,11 +136,7 @@ impl PhotoMode {
         let url = if into { "api/photos/locked/add" } else { "api/photos/locked/remove" };
         let shown = ids.clone();
         call(ctx, store, &self.inbox, url, Some(json!({ "files": ids })), move |s, v| {
-            if s == 200 {
-                Got::Moved(shown, into)
-            } else {
-                Got::Error(v["error"].as_str().map_or_else(|| format!("The server said {s}."), str::to_string))
-            }
+            if s == 200 { Got::Moved(shown, into) } else { Got::Error(crate::home::photos::said(&v, s)) }
         });
     }
 
