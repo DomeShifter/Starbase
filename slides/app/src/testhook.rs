@@ -167,6 +167,8 @@ fn snapshot(app: &mut SlideApp, shell: &Shell, drive: Option<&dyn Drive>, ctx: &
         "author": app.session.prefs.author,
         "fonts": crate::fonts::families(),
         "fullscreen": crate::fullscreen::is_on(),
+        "pastePromptShown": starbase_clipboard::prompt_shown(),
+        "ownCopyCurrent": starbase_clipboard::own_copy_current(),
         "presenterView": app.ui.presenter_view,
         "perf": {"frameMs": app.perf.frame_ms, "renderMs": app.perf.render_ms, "fps": app.perf.fps},
         "theme": crate::theme::state(app, shell.mode, ctx),

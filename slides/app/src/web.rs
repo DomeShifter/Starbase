@@ -59,6 +59,7 @@ pub fn start() {
                         let presenter = crate::presenter::Popup::new(token, cc.egui_ctx.clone()).map_err(std::io::Error::other)?;
                         return Ok(Box::new(presenter) as Box<dyn eframe::App>);
                     }
+                    starbase_clipboard::watch_focus();
                     let inbox: Inbox = Inbox::default();
                     let mode = crate::theme::Mode::default();
                     let shell = Shell::new(mode);
@@ -214,6 +215,7 @@ impl eframe::App for WebShell {
         }
         self.shell.ui(&mut self.app, ui, drive);
         self.app.ui(ui);
+        crate::pasteprompt::ui(ui.ctx());
     }
 }
 
@@ -227,7 +229,11 @@ fn services(inbox: Inbox, ctx: egui::Context, asked_presenter: Rc<Cell<bool>>) -
             None
         }
     };
+    let paste_inbox = inbox.clone();
+    let paste_ctx = ctx.clone();
     Services {
+        menu_paste: Some(crate::pasteprompt::menu_paste_hook(paste_inbox, paste_ctx)),
+        copied: Some(crate::pasteprompt::copied_hook()),
         presenter,
         open_async: Some(Box::new(move |purpose: &str, request: u64| {
             let inbox = open_inbox.clone();

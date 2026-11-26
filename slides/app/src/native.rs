@@ -267,7 +267,11 @@ fn spawn(file: Option<&Path>) {
 /// DeckCraft's own file needs (Insert › Image, Audio, Video, a theme; Export): the system's file
 /// dialogs and the disk.
 pub fn services() -> Services {
+    let inbox = deckcraft_ui_egui::Inbox::default();
     Services {
+        menu_paste: Some(crate::pasteprompt::menu_paste_hook(inbox.clone())),
+        copied: Some(crate::pasteprompt::copied_hook()),
+        inbox: Some(inbox),
         pick_open: Some(Box::new(|purpose: &str| {
             let d = rfd::FileDialog::new();
             let d = match purpose {
@@ -470,6 +474,7 @@ impl eframe::App for Desktop {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.shell.ui(&mut self.app, ui, Some(&self.link));
         self.app.ui(ui);
+        crate::pasteprompt::ui(ui.ctx());
         let pal = self.shell.palette();
         let app = &mut self.app;
         if let Some(server) = self.connect.ui(ui.ctx(), &pal, &mut |msg| app.set_status(msg)) {

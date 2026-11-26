@@ -195,7 +195,7 @@ modules:
       # two equal (pin-engines.sh). slides/Cargo.toml is committed, so gen-cargo.py need not run.
       - type: git
         url: https://github.com/DomeShifter/deckcraft.git
-        commit: c66e5c9f1141a9e628749564d93de6baf9bbbbd1
+        commit: 5fa9990308f9dc80b5de7a26d3de396e0c696614
         dest: slides/upstream/deckcraft
       - cargo-sources-slides.json
 

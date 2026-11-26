@@ -3,6 +3,6 @@
 # scripts/fetch-upstream.sh (it also regenerates Cargo.toml from upstream's).
 repo = "https://github.com/DomeShifter/deckcraft.git"
 branch = "starslides"
-commit = "c66e5c9f1141a9e628749564d93de6baf9bbbbd1"
+commit = "5fa9990308f9dc80b5de7a26d3de396e0c696614"
 base = "v0.18.1"
 upstream = "https://github.com/storytold/deckcraft.git"
