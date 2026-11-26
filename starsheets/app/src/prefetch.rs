@@ -13,6 +13,8 @@ use std::cell::RefCell;
 pub const SETTLE_SECS: f64 = 4.0;
 
 /// What the browser says about the connection (all optional: Firefox gives none of it).
+// Only the web build reads the connection; native builds just compile it for the tests.
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
 #[derive(Default, Clone, Debug)]
 pub struct Conn {
     pub save_data: bool,
@@ -22,6 +24,7 @@ pub struct Conn {
 }
 
 /// Whether a quiet background download is welcome on this connection.
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
 pub fn allowed(c: &Conn) -> bool {
     if c.save_data {
         return false;
@@ -36,6 +39,7 @@ pub fn allowed(c: &Conn) -> bool {
 
 /// The program files an app's `index.html` names: every `.js` and `.wasm` address in a `href` or `src`,
 /// made absolute under `base` (e.g. `/docs/`), once each, in order.
+#[cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
 pub fn assets(html: &str, base: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for attr in ["href=\"", "src=\""] {
@@ -57,7 +61,8 @@ pub fn assets(html: &str, base: &str) -> Vec<String> {
     out
 }
 
-/// Where one app's prefetch stands.
+/// Where one app's prefetch stands. (Started and Done are only set by the web build.)
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Stage {
     Skipped,
@@ -158,11 +163,7 @@ fn conn() -> Conn {
 fn set(app: &str, st: Stage, ctx: &egui::Context) {
     STATE.with(|s| {
         let mut s = s.borrow_mut();
-        if app == "docs" {
-            s.docs = Some(st)
-        } else {
-            s.slides = Some(st)
-        }
+        if app == "docs" { s.docs = Some(st) } else { s.slides = Some(st) }
     });
     ctx.request_repaint();
 }
