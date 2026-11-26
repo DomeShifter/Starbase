@@ -493,3 +493,168 @@ fn when(secs: i64) -> String {
     let month = MONTHS.get(t.get_month() as usize).copied().unwrap_or("");
     format!("{} {month} {}, {:02}:{:02}", t.get_date(), t.get_full_year(), t.get_hours(), t.get_minutes())
 }
+
+/// Image types the picker lists (what Insert › Image › Upload from computer accepts).
+const IMAGE_EXTS: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
+/// Bigger pictures are not offered (they would make the deck slow to open).
+const MAX_IMAGE_BYTES: u64 = 25 * 1024 * 1024;
+
+/// Whether a file name is a picture the deck can hold.
+fn is_image(name: &str) -> bool {
+    name.rsplit_once('.').is_some_and(|(_, e)| IMAGE_EXTS.contains(&e.to_lowercase().as_str()))
+}
+
+#[derive(Clone)]
+struct Img {
+    id: String,
+    name: String,
+    folder: String,
+}
+
+enum PickReply {
+    Listed(Vec<Img>),
+    Got(Vec<u8>),
+    Error(String),
+}
+
+/// Insert › Image › From Drive: the person's own Drive pictures, searchable; a click takes the
+/// picture and hands it to the shell ([`Pick::take`]), which puts it on the current slide.
+#[derive(Default)]
+pub struct Pick {
+    inbox: Rc<RefCell<Vec<PickReply>>>,
+    open: bool,
+    loaded: bool,
+    files: Vec<Img>,
+    filter: String,
+    error: Option<String>,
+    /// The file being fetched (name), so a second click waits.
+    fetching: Option<String>,
+    chosen: Rc<RefCell<Option<(String, Vec<u8>)>>>,
+}
+
+impl Pick {
+    pub fn start(&mut self, ctx: &egui::Context) {
+        *self = Pick { inbox: self.inbox.clone(), chosen: self.chosen.clone(), open: true, ..Pick::default() };
+        let (inbox, ctx) = (self.inbox.clone(), ctx.clone());
+        wasm_bindgen_futures::spawn_local(async move {
+            let r = match fetch("GET", &api("api/files"), None, None).await {
+                Ok((200, _, bytes)) => {
+                    let v: Json = serde_json::from_slice(&bytes).unwrap_or_default();
+                    let mut files: Vec<Img> = v["files"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter(|f| is_image(f["name"].as_str().unwrap_or("")) && f["size"].as_u64().unwrap_or(0) <= MAX_IMAGE_BYTES)
+                        .map(|f| Img {
+                            id: f["id"].as_str().unwrap_or("").into(),
+                            name: f["name"].as_str().unwrap_or("").into(),
+                            folder: f["folder"].as_str().unwrap_or("").into(),
+                        })
+                        .collect();
+                    files.sort_by_key(|f| f.name.to_lowercase());
+                    PickReply::Listed(files)
+                }
+                Ok((code, ..)) => PickReply::Error(format!("Couldn't list your Drive ({code}).")),
+                Err(e) => PickReply::Error(format!("Couldn't reach the server: {e}")),
+            };
+            inbox.borrow_mut().push(r);
+            ctx.request_repaint();
+        });
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
+    /// The picture chosen since the last call: (file name, bytes).
+    pub fn take(&self) -> Option<(String, Vec<u8>)> {
+        self.chosen.borrow_mut().take()
+    }
+
+    pub fn ui(&mut self, ctx: &egui::Context) {
+        for r in std::mem::take(&mut *self.inbox.borrow_mut()) {
+            match r {
+                PickReply::Listed(f) => {
+                    self.files = f;
+                    self.loaded = true;
+                }
+                PickReply::Got(bytes) => {
+                    if let Some(name) = self.fetching.take() {
+                        *self.chosen.borrow_mut() = Some((name, bytes));
+                        self.open = false;
+                    }
+                }
+                PickReply::Error(e) => {
+                    self.fetching = None;
+                    self.error = Some(e);
+                }
+            }
+        }
+        if !self.open {
+            return;
+        }
+        let mut close = false;
+        let mut pick: Option<Img> = None;
+        let id = egui::Id::unique("starslides_pick");
+        let top = (ctx.content_rect().height() * 0.12).clamp(24.0, 120.0);
+        let modal = egui::Modal::new(id)
+            .area(egui::Modal::default_area(id).anchor(egui::Align2::CENTER_TOP, vec2(0.0, top)))
+            .frame(egui::Frame::popup(&ctx.global_style()).fill(Color32::WHITE).corner_radius(8.0).inner_margin(24.0));
+        let shown = modal.show(ctx, |ui| {
+            ui.set_width(460.0);
+            ui.label(RichText::new("Insert image from Drive").size(22.0).color(TEXT));
+            ui.add_space(8.0);
+            ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("Search your images").desired_width(f32::INFINITY));
+            ui.add_space(8.0);
+            let needle = self.filter.trim().to_lowercase();
+            if !self.loaded {
+                note(ui, "Loading…");
+            } else {
+                let shown: Vec<&Img> = self.files.iter().filter(|f| needle.is_empty() || f.name.to_lowercase().contains(&needle)).collect();
+                if shown.is_empty() {
+                    note(ui, if self.files.is_empty() { "No pictures in your Drive yet." } else { "No picture matches." });
+                }
+                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                    for f in shown {
+                        let b =
+                            egui::Button::new(RichText::new(&f.name).size(14.0).color(TEXT)).frame(false).min_size(vec2(ui.available_width(), 28.0));
+                        let r = ui.add_enabled(self.fetching.is_none(), b);
+                        let r = if f.folder.is_empty() { r } else { r.on_hover_text(&f.folder) };
+                        if r.clicked() {
+                            pick = Some(f.clone());
+                        }
+                    }
+                });
+            }
+            if self.fetching.is_some() {
+                note(ui, "Adding the picture…");
+            }
+            if let Some(e) = &self.error {
+                ui.label(RichText::new(e).size(12.0).color(ERROR));
+            }
+            ui.add_space(12.0);
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if ui.add(button("Cancel", SHARE, TEXT)).clicked() {
+                    close = true;
+                }
+            });
+        });
+        if close || shown.should_close() {
+            self.open = false;
+        }
+        if let Some(f) = pick {
+            self.error = None;
+            self.fetching = Some(f.name.clone());
+            let (inbox, ctx) = (self.inbox.clone(), ctx.clone());
+            wasm_bindgen_futures::spawn_local(async move {
+                let r = match fetch("GET", &api(&format!("api/files/{}", f.id)), None, None).await {
+                    Ok((200, _, bytes)) => PickReply::Got(bytes),
+                    Ok((code, ..)) => PickReply::Error(format!("Couldn't get that picture ({code}).")),
+                    Err(e) => PickReply::Error(format!("Couldn't reach the server: {e}")),
+                };
+                inbox.borrow_mut().push(r);
+                ctx.request_repaint();
+            });
+        }
+    }
+}

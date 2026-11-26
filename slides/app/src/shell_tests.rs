@@ -167,6 +167,10 @@ fn download_hands_over_a_pptx() {
 /// A pretend server link, to see the title row and what a viewer may do.
 struct FakeDrive {
     view_only: bool,
+    /// The Drive picker was asked for.
+    asked: std::cell::Cell<bool>,
+    /// A picture "chosen" in it, waiting for the shell.
+    picked: RefCell<Option<(String, Vec<u8>)>>,
 }
 
 impl Drive for FakeDrive {
@@ -185,6 +189,12 @@ impl Drive for FakeDrive {
     fn home(&self) {}
     fn new_presentation(&self) {}
     fn rename(&self, _stem: &str) {}
+    fn pick_image(&self) {
+        self.asked.set(true);
+    }
+    fn take_picture(&self) -> Option<(String, Vec<u8>)> {
+        self.picked.borrow_mut().take()
+    }
 }
 
 fn harness_on_server(view_only: bool) -> Harness<'static, (State, FakeDrive)> {
@@ -194,7 +204,10 @@ fn harness_on_server(view_only: bool) -> Harness<'static, (State, FakeDrive)> {
             s.shell.ui(&mut s.app, ui, Some(&*d));
             s.app.ui(ui);
         },
-        (State { app: app_with(Services::default()), shell: Shell::new(Mode::Light) }, FakeDrive { view_only }),
+        (
+            State { app: app_with(Services::default()), shell: Shell::new(Mode::Light) },
+            FakeDrive { view_only, asked: Default::default(), picked: Default::default() },
+        ),
     );
     egui_extras::install_image_loaders(&h.ctx);
     h.run_steps(4);
@@ -287,4 +300,39 @@ fn leave_page_guard_only_while_something_is_unsaved() {
     for (d, s, want) in [(false, false, false), (true, false, true), (false, true, true), (true, true, true)] {
         assert_eq!(g(d, s), want, "dirty={d} server={s}");
     }
+}
+
+/// A 1x1 PNG.
+const PNG: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+    0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0x00,
+    0x00, 0x03, 0x01, 0x01, 0x00, 0xC9, 0xFE, 0x92, 0xEF, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+];
+
+#[test]
+fn insert_image_from_drive_opens_the_picker_and_puts_the_chosen_picture_on_the_slide() {
+    let mut h = harness_on_server(false);
+    {
+        let (s, d) = h.state_mut();
+        s.shell.command(&mut s.app, Some(&*d), "slides.driveImage", json!({})).unwrap();
+        assert!(d.asked.get(), "the command opens the picker");
+    }
+    let before = format!("{:?}", h.state().0.app.session.active().unwrap().doc);
+    *h.state().1.picked.borrow_mut() = Some(("logo.png".into(), PNG.to_vec()));
+    h.run_steps(3);
+    let after = format!("{:?}", h.state().0.app.session.active().unwrap().doc);
+    assert_ne!(before, after, "the chosen picture was inserted: {:?}", h.state().0.app.status);
+    assert!(after.contains("logo.png") || after.len() > before.len());
+    // Nothing is left to insert a second time.
+    assert!(h.state().1.picked.borrow().is_none());
+}
+
+#[test]
+fn insert_image_from_drive_needs_the_server_and_an_editor() {
+    let mut h = harness();
+    let s = h.state_mut();
+    assert!(s.shell.command(&mut s.app, None, "slides.driveImage", json!({})).is_err(), "no server, no Drive");
+    let mut v = harness_on_server(true);
+    let (s, d) = v.state_mut();
+    assert!(!s.shell.allowed(&s.app, Some(&*d), "slides.driveImage"), "a viewer can't insert");
 }
