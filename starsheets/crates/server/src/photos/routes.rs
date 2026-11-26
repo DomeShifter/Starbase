@@ -338,7 +338,7 @@ pub(super) fn photo_json(r: &super::index::Row, id: &str, places: bool) -> Value
         "height": if ready { Some(r.meta.height) } else { None },
         "orientation": if ready { Some(r.meta.orientation) } else { None },
         "camera": (!camera.is_empty()).then_some(camera),
-        "gps": r.meta.lat.zip(r.meta.lon).filter(|_| places).map(|(lat, lon)| json!({"lat": lat, "lon": lon, "alt": r.meta.alt})),
+        "gps": r.meta.lat.zip(r.meta.lon).filter(|_| places).map(|(lat, lon)| json!({"lat": lat, "lon": lon, "alt": r.meta.alt, "place": super::albums::place_name(lat, lon)})),
     })
 }
 

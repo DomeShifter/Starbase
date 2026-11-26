@@ -45,6 +45,8 @@ pub(in crate::home) struct Card {
     pub count: u64,
     /// The cover picture's id and content tag.
     pub cover: Option<(String, String)>,
+    /// An album's pictures (ids), so the Info panel can say which albums a picture is in.
+    pub files: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -82,6 +84,7 @@ fn cards(v: &Json, key: &str) -> Vec<Card> {
             name: c["name"].as_str().unwrap_or("").to_string(),
             count: c["count"].as_u64().unwrap_or(0),
             cover: c["cover"]["id"].as_str().zip(c["cover"]["v"].as_str()).map(|(a, b)| (a.to_string(), b.to_string())),
+            files: c["files"].as_array().into_iter().flatten().filter_map(|f| f.as_str().map(str::to_string)).collect(),
         })
         .collect()
 }
@@ -131,6 +134,11 @@ pub(super) fn post(ctx: &egui::Context, store: &Backend, inbox: &Inbox, url: &st
 }
 
 impl Albums {
+    /// The albums holding a picture (from the list asked for at start and after every change).
+    pub(in crate::home) fn albums_of(&self, id: &str) -> Vec<&Card> {
+        self.albums.iter().filter(|c| c.files.iter().any(|f| f == id)).collect()
+    }
+
     /// Asks for the album list once (the "Add to album" choices need it).
     pub fn boot_cards(&mut self, ctx: &egui::Context, store: &Backend, inbox: &Inbox) {
         if !self.asked {
@@ -182,7 +190,7 @@ impl Albums {
 }
 
 impl PhotoMode {
-    pub(super) fn go(&mut self, t: Tab) {
+    pub(in crate::home) fn go(&mut self, t: Tab) {
         if self.alb.tab != t {
             self.alb.tab = t;
             self.alb.open = None;
@@ -239,7 +247,7 @@ impl PhotoMode {
         self.set_pics(pics);
     }
 
-    pub(super) fn open_card(&mut self, ctx: &egui::Context, store: &Backend, c: Card) {
+    pub(in crate::home) fn open_card(&mut self, ctx: &egui::Context, store: &Backend, c: Card) {
         self.pics.clear();
         self.viewer = None;
         self.clear_selection();

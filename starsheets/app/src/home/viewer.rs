@@ -184,6 +184,8 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
     let mut open = true;
     let mut edit = false;
     let mut menu_at: Option<Rect> = None;
+    // An album clicked in the Info panel: opened once the viewer is closed.
+    let mut goto: Option<super::photos::albums::Card> = None;
     // What the person asked for on this picture (keys or buttons): L add to album, Shift-L out of
     // the open album, F favourite, Delete move to bin. Run after drawing, on the picture shown.
     let mut acts: Vec<super::photos::Act> = Vec::new();
@@ -472,7 +474,7 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
         if v.info
             && let Some(p) = pm.pics.get(v.index())
         {
-            info_panel(ui, rect, p);
+            goto = info_panel(ui, rect, p, &pm.alb.albums_of(&p.id));
         }
         // Arrows at the sides (the right one beside the Info panel).
         if n > 1 {
@@ -506,6 +508,12 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
     } else {
         super::video::hide();
     }
+    if let Some(c) = goto {
+        pm.viewer = None;
+        pm.go(super::photos::albums::Tab::Albums);
+        pm.open_card(ctx, store, c);
+        return false;
+    }
     open
 }
 
@@ -521,8 +529,8 @@ fn p_has_size(w: f32, h: f32) -> bool {
 }
 
 /// The facts about a picture. Where it was taken only when the server sent it (people who may edit).
-pub(super) fn info_lines(p: &super::photos::Pic) -> Vec<(&'static str, String)> {
-    let mut rows = vec![("Date taken", super::photos::date_label(p.taken.as_deref(), p.modified))];
+pub(super) fn info_lines(p: &super::photos::Pic, albums: &[&super::photos::albums::Card]) -> Vec<(&'static str, String)> {
+    let mut rows = vec![("File name", p.name.clone()), ("Date taken", super::photos::date_label(p.taken.as_deref(), p.modified))];
     if let Some(c) = &p.camera {
         rows.push(("Camera", c.clone()));
     }
@@ -530,7 +538,10 @@ pub(super) fn info_lines(p: &super::photos::Pic) -> Vec<(&'static str, String)> 
         rows.push(("Size", format!("{} × {} px, {}", p.width, p.height, human(p.size))));
     }
     if let Some((lat, lon)) = p.gps {
-        rows.push(("Location", format!("{lat:.5}, {lon:.5}")));
+        rows.push(("Place", p.place.clone().unwrap_or_else(|| format!("{lat:.2}, {lon:.2}"))));
+    }
+    if !albums.is_empty() {
+        rows.push(("Albums", albums.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", ")));
     }
     rows
 }
@@ -543,17 +554,32 @@ fn human(b: u64) -> String {
     }
 }
 
-fn info_panel(ui: &mut egui::Ui, rect: Rect, p: &super::photos::Pic) {
+/// The Info panel; returns the album whose name was clicked.
+fn info_panel(ui: &mut egui::Ui, rect: Rect, p: &super::photos::Pic, albums: &[&super::photos::albums::Card]) -> Option<super::photos::albums::Card> {
     let panel = Rect::from_min_max(pos2(rect.right() - INFO_W, rect.top() + 56.0), pos2(rect.right(), rect.bottom()));
     ui.painter().rect_filled(panel, 0, Color32::from_black_alpha(190));
     let mut c = ui.new_child(egui::UiBuilder::new().max_rect(panel.shrink(16.0)));
     c.label(RichText::new("Info").size(16.0).strong().color(Color32::WHITE));
     c.add_space(8.0);
-    for (k, v) in info_lines(p) {
+    let mut go = None;
+    for (k, v) in info_lines(p, albums) {
         c.label(RichText::new(k).size(12.0).color(Color32::from_gray(170)));
-        c.label(RichText::new(v).size(14.0).color(Color32::WHITE));
+        if k == "Albums" {
+            // One link per album (a name may hold a comma, so the cards, not the joined text).
+            for a in albums {
+                let r = c.add(
+                    egui::Label::new(RichText::new(&a.name).size(14.0).color(Color32::from_rgb(138, 180, 248)).underline()).sense(Sense::click()),
+                );
+                if r.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                    go = Some((*a).clone());
+                }
+            }
+        } else {
+            c.label(RichText::new(v).size(14.0).color(Color32::WHITE));
+        }
         c.add_space(6.0);
     }
+    go
 }
 
 /// A white icon button on the dark bar.
