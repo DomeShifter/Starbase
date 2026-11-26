@@ -2614,6 +2614,7 @@ mod tests {
         let id = send(&app, &ip, "POST", "/api/files?name=Letter.docx", &boss, &[], b"one".to_vec()).await.json["id"].as_str().unwrap().to_string();
         let url = format!("/api/files/{id}/activity");
         assert_eq!(send(&app, &ip, "GET", &url, &ann, &[], vec![]).await.status, 403, "no access yet");
+        assert_eq!(send(&app, &ip, "GET", &url, &vic, &[], vec![]).await.status, 403, "a stranger sees nothing");
         assert_eq!(post(&app, &ip, &format!("/api/files/{id}/sharing"), &boss, json!({"people": {"ann": "view"}, "link": "view"})).await.status, 200);
         assert_eq!(send(&app, &ip, "POST", &format!("/api/files/{id}/rename?name=Memo"), &boss, &[], vec![]).await.status, 200);
         assert_eq!(send(&app, &ip, "PUT", &format!("/api/files/{id}"), &boss, &[], b"two".to_vec()).await.status, 200);
@@ -2623,7 +2624,6 @@ mod tests {
         assert_eq!(kinds, ["edited", "renamed", "link", "shared", "created"], "newest first");
         assert_eq!(g.json["activity"][0]["by"], "boss");
         assert_eq!(g.json["activity"][3]["detail"], "ann (can view)");
-        assert_eq!(send(&app, &ip, "GET", &url, &vic, &[], vec![]).await.status, 403, "a stranger sees nothing");
         let _ = std::fs::remove_dir_all(&app.store.root);
     }
 
