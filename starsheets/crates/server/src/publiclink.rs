@@ -101,6 +101,8 @@ pub fn update(store: &Store, id: &str, body: &Value) -> Result<(), String> {
 pub struct Reply {
     /// The password page needs its form to work: the page's CSP then allows forms.
     pub form: bool,
+    /// The slide viewer runs its own fixed script (publicdeck.rs): the page CSP allows it.
+    pub script: bool,
     pub set_cookie: Option<String>,
     pub location: Option<String>,
     pub code: u16,
@@ -119,6 +121,7 @@ fn page(code: u16, title: &str, inner: &str) -> Reply {
     );
     Reply {
         form: false,
+        script: false,
         set_cookie: None,
         location: None,
         code,
@@ -212,6 +215,9 @@ pub fn serve(store: &Store, token: &str, what: &str, grant: &str) -> Reply {
     let name = rel.rsplit('/').next().unwrap_or("file").to_string();
     let no_download = entry["no_download"].as_bool().unwrap_or(false);
     let base = format!("/api/public/{token}");
+    if name.to_lowercase().ends_with(".pptx") {
+        return deck(store, &rel, &name, &base, what);
+    }
     match what {
         "" => {
             let shown = match viewable(&name) {
@@ -239,6 +245,7 @@ pub fn serve(store: &Store, token: &str, what: &str, grant: &str) -> Reply {
             if what == "view" {
                 Reply {
                     form: false,
+                    script: false,
                     set_cookie: None,
                     location: None,
                     code: 200,
@@ -250,6 +257,7 @@ pub fn serve(store: &Store, token: &str, what: &str, grant: &str) -> Reply {
                 let safe: String = name.chars().filter(|c| !c.is_control() && !matches!(c, '"' | '\\' | '/')).collect();
                 Reply {
                     form: false,
+                    script: false,
                     set_cookie: None,
                     location: None,
                     code: 200,
@@ -262,3 +270,45 @@ pub fn serve(store: &Store, token: &str, what: &str, grant: &str) -> Reply {
         _ => page(404, "Not found", ""),
     }
 }
+
+/// A presentation: the signed-out slide viewer (publicdeck.rs), never the file itself.
+fn deck(store: &Store, rel: &str, name: &str, base: &str, what: &str) -> Reply {
+    let mut r = page(200, name, "");
+    let bytes = || {
+        let mut f = store.open_safe(rel)?;
+        let mut data = Vec::new();
+        std::io::Read::read_to_end(&mut f, &mut data).ok().map(|_| data)
+    };
+    if what == "viewer.js" {
+        r.content_type = "text/javascript; charset=utf-8";
+        r.body = crate::publicdeck::SCRIPT.as_bytes().to_vec();
+        return r;
+    }
+    if let Some(n) = what.strip_prefix("media/").and_then(|n| n.parse::<usize>().ok()) {
+        let got = bytes().and_then(crate::publicdeck::open).and_then(|mut z| crate::publicdeck::media(&mut z, n));
+        return match got {
+            Some((data, t)) => {
+                r.content_type = t;
+                r.disposition = Some("inline".into());
+                r.body = data;
+                r
+            }
+            None => page(404, "Not found", ""),
+        };
+    }
+    if !what.is_empty() {
+        return page(403, "Download is turned off", "<p>Presentations open in the viewer only.</p>");
+    }
+    match bytes().and_then(|d| crate::publicdeck::viewer(d, name, base)) {
+        Some(html) => {
+            r.script = true;
+            r.body = html.into_bytes();
+            r
+        }
+        None => page(415, "No preview", "<p>This presentation can't be shown here.</p>"),
+    }
+}
+
+#[cfg(test)]
+#[path = "publicdeck_tests.rs"]
+mod tests;

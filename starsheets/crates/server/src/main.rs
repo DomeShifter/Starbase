@@ -25,6 +25,7 @@ mod log;
 mod oidc;
 mod photos;
 mod preview;
+mod publicdeck;
 mod publiclink;
 mod sharing;
 mod spaces;
@@ -1900,7 +1901,9 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
         };
         return match reply {
             Some(r) => {
-                let csp = if r.form {
+                let csp = if r.script {
+                    "sandbox allow-scripts allow-same-origin; default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'self'"
+                } else if r.form {
                     "sandbox allow-forms allow-same-origin; default-src 'none'; style-src 'unsafe-inline'; form-action 'self'"
                 } else {
                     "sandbox allow-same-origin; default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; frame-src 'self'"
