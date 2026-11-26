@@ -38,12 +38,12 @@ def tif():
 
 
 def ico():
-    raw = b"".join(b"\0" + b"".join(bytes(px(x, y)) for x in range(W)) for y in range(H))
+    raw = b"".join(b"\0" + b"".join(bytes(px(x, y) + (255,)) for x in range(W)) for y in range(H))
 
     def chunk(t, d):
         return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
 
-    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", W, H, 8, 2, 0, 0, 0))
+    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", W, H, 8, 6, 0, 0, 0))
            + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
     return struct.pack("<HHH", 0, 1, 1) + struct.pack("<BBBBHHII", W, H, 0, 0, 1, 32, len(png), 22) + png
 

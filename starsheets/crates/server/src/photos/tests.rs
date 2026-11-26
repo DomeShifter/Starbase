@@ -707,6 +707,8 @@ fn drive_tiles_and_viewer_pictures_of_bmp_tiff_and_ico() {
     let dir = tmp("drive-formats");
     let img = image::DynamicImage::ImageRgb8(halves(40, 20));
     for (name, format) in [("p.bmp", image::ImageFormat::Bmp), ("p.tif", image::ImageFormat::Tiff), ("p.ico", image::ImageFormat::Ico)] {
+        // An icon's PNG is RGBA (the decoder refuses others), as real icons are.
+        let img = if format == image::ImageFormat::Ico { image::DynamicImage::ImageRgba8(img.to_rgba8()) } else { img.clone() };
         let mut bytes = std::io::Cursor::new(Vec::new());
         img.write_to(&mut bytes, format).unwrap();
         std::fs::write(dir.join(name), bytes.into_inner()).unwrap();
