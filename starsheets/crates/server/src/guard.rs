@@ -275,6 +275,8 @@ pub const DEVICE_IP: Bucket = Bucket { burst: 10.0, every: Duration::from_secs(3
 /// A desktop app asking whether it was allowed yet (every 5 seconds), per address.
 pub const DEVICE_POLL_IP: Bucket = Bucket { burst: 30.0, every: Duration::from_secs(2) };
 /// Wrong device codes typed by one account.
+/// Link previews a person may ask the server to fetch: 30 a minute (linkpreview.rs).
+pub const LINK_PREVIEW_USER: Bucket = Bucket { burst: 30.0, every: Duration::from_secs(2) };
 pub const DEVICE_CODE_USER: Bucket = Bucket { burst: 10.0, every: Duration::from_secs(30) };
 
 #[derive(Default)]
