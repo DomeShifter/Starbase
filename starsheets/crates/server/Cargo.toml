@@ -62,6 +62,13 @@ fast_image_resize = "6.2"
 # Drive tiles: a picture of the first page of a PDF (pure Rust, no system libraries; arm64 too).
 hayro = "0.9"
 notify = "9.0"
+# Face recognition (photos/ml.rs): ONNX Runtime, only with `--features ml`. 2.0 is still a
+# release candidate; using it was agreed by the project owner (2026-11).
+ort = { version = "=2.0.0-rc.10", optional = true }
+
+[features]
+# Face recognition in Photos (downloads the ONNX Runtime library at build time).
+ml = ["dep:ort"]
 
 [dev-dependencies]
 # Already in the build through axum; lets the tests send requests through the router.

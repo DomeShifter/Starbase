@@ -22,6 +22,7 @@ mod dups;
 mod justify;
 mod locked;
 mod map;
+mod people;
 mod pick;
 pub(super) mod shell;
 mod timeline;
@@ -196,6 +197,8 @@ pub(super) enum Got {
     Opened(albums::Tab, String, Json),
     /// An album changed: ask again.
     Changed,
+    /// A person changed (people.rs): what the opened one is called now.
+    PersonIs(Option<String>),
     /// Pictures went into an album (pick.rs): the album, how many were new, how many were asked.
     Added(albums::Card, u64, u64, Vec<String>),
     /// The "Add photos" picker's list (pick.rs).
@@ -583,6 +586,7 @@ impl PhotoMode {
                 Got::Opened(t, key, v) => self.take_opened(t, &key, &v),
                 Got::Dups(f, v) => self.dups.take(&f, &v),
                 Got::Changed => self.alb.changed(ctx, store, &self.inbox),
+                Got::PersonIs(id) => self.people_changed(ctx, store, id),
                 Got::Added(c, n, asked, ids) => self.added(ctx, store, c, n, asked, ids),
                 Got::Picker(v) => self.take_picker(&v),
                 Got::LockedState(v) => self.take_locked(ctx, &v),
@@ -822,6 +826,7 @@ impl PhotoMode {
     fn tab_ui(&mut self, ui: &mut Ui, store: &Backend, folder: &str) {
         match self.alb.tab {
             albums::Tab::Photos | albums::Tab::Timeline => self.folder_ui(ui, store, folder),
+            albums::Tab::People => self.people_ui(ui, store),
             albums::Tab::Duplicates => self.dups_ui(ui, store, folder),
             albums::Tab::Locked => self.locked_ui(ui, store),
             _ => self.cards_ui(ui, store),
@@ -859,6 +864,7 @@ impl PhotoMode {
         self.pick_ui(ui, store);
         self.upload_ui(ui);
         ui.add_space(house::S);
+        self.people_strip(ui, store);
         if self.pics.is_empty() {
             ui.add_space(house::XL);
             let text = if self.loading {
@@ -1135,6 +1141,7 @@ impl PhotoMode {
             "count": self.pics.len(),
             "timeline": self.tl.test_state(),
             "albums": self.alb.test_state(),
+            "people": self.alb.ppl.test_state(),
             "map": self.map.test_state(),
             "dups": self.dups.test_state(),
             "pick": self.pick.test_state(),

@@ -5,8 +5,8 @@
 //! `cargo build -p starsheets` builds the desktop program instead (native.rs).
 // Windows release builds are windowed programs: no console window opens beside them.
 // `--version`/`--help` join the terminal that started them (starbase_connect::attach_terminal).
+#![recursion_limit = "256"] // the Photos test-state json! has grown past the default
 #![cfg_attr(all(windows, not(debug_assertions), not(test)), windows_subsystem = "windows")]
-#![recursion_limit = "256"]
 
 #[cfg(target_arch = "wasm32")]
 mod account;

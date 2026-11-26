@@ -20,6 +20,7 @@ pub(in crate::home) enum Tab {
     Timeline,
     Albums,
     Places,
+    People,
     Events,
     Duplicates,
     Locked,
@@ -33,6 +34,7 @@ impl Tab {
             Tab::Timeline => "timeline",
             Tab::Albums => "albums",
             Tab::Places => "places",
+            Tab::People => "people",
             Tab::Events => "events",
             Tab::Duplicates => "duplicates",
             Tab::Locked => "locked",
@@ -49,6 +51,8 @@ pub(in crate::home) struct Card {
     pub count: u64,
     /// The cover picture's id and content tag.
     pub cover: Option<(String, String)>,
+    /// People: the face on the cover (x, y, w, h, 0..1).
+    pub bx: Option<[f32; 4]>,
     /// An album's pictures (ids), so the Info panel can say which albums a picture is in.
     pub files: Vec<String>,
 }
@@ -76,9 +80,10 @@ pub(in crate::home) struct Albums {
     pub selected: HashSet<String>,
     text: String,
     ask: Ask,
+    pub ppl: super::people::People,
 }
 
-fn cards(v: &Json, key: &str) -> Vec<Card> {
+pub(super) fn cards(v: &Json, key: &str) -> Vec<Card> {
     v[key]
         .as_array()
         .into_iter()
@@ -88,6 +93,10 @@ fn cards(v: &Json, key: &str) -> Vec<Card> {
             name: c["name"].as_str().unwrap_or("").to_string(),
             count: c["count"].as_u64().unwrap_or(0),
             cover: c["cover"]["id"].as_str().zip(c["cover"]["v"].as_str()).map(|(a, b)| (a.to_string(), b.to_string())),
+            bx: c["cover"]["box"].as_array().filter(|b| b.len() == 4).map(|b| {
+                let n = |i: usize| b[i].as_f64().unwrap_or(0.0) as f32;
+                [n(0), n(1), n(2), n(3)]
+            }),
             files: c["files"].as_array().into_iter().flatten().filter_map(|f| f.as_str().map(str::to_string)).collect(),
         })
         .collect()
@@ -163,6 +172,7 @@ impl Albums {
         match t {
             Tab::Albums => self.albums = cards(v, "albums"),
             Tab::Places => self.places = cards(v, "places"),
+            Tab::People => self.ppl.take(v),
             Tab::Events => self.events = cards(v, "events"),
             Tab::Photos | Tab::Timeline | Tab::Duplicates | Tab::Locked => {}
         }
@@ -219,6 +229,7 @@ impl PhotoMode {
             (Tab::Timeline, "Timeline", "schedule"),
             (Tab::Albums, "Albums", "collections"),
             (Tab::Places, "Places", "location_on"),
+            (Tab::People, "People", "face"),
             (Tab::Events, "Events", "event"),
             (Tab::Duplicates, "Duplicates", "content_copy"),
             (Tab::Locked, "Locked", "lock"),
@@ -251,6 +262,12 @@ impl PhotoMode {
         }
         self.loading = false;
         self.waiting = v["waiting"].as_u64().unwrap_or(0);
+        if t == Tab::People {
+            self.alb.ppl.take_faces(v);
+            if let (Some(o), Some(n)) = (self.alb.open.as_mut(), v["name"].as_str()) {
+                o.name = n.to_string();
+            }
+        }
         let pics = Self::parse_pics(v);
         self.alb.selected.retain(|id| pics.iter().any(|p| &p.id == id));
         self.set_pics(pics);
@@ -517,11 +534,12 @@ impl PhotoMode {
                     "photos" => Tab::Photos,
                     "timeline" => Tab::Timeline,
                     "albums" => Tab::Albums,
+                    "people" => Tab::People,
                     "places" => Tab::Places,
                     "events" => Tab::Events,
                     "duplicates" => Tab::Duplicates,
                     "locked" => Tab::Locked,
-                    _ => return Err("tab is photos, timeline, albums, places, events, duplicates or locked".into()),
+                    _ => return Err("tab is photos, timeline, albums, people, places, events, duplicates or locked".into()),
                 };
                 self.go(t);
             }

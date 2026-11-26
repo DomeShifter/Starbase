@@ -58,6 +58,9 @@ pub async fn route(
     if p.len() >= 2 && (p[1] == "albums" || p[1] == "places" || p[1] == "events" || p[1] == "tiles") {
         return Some(super::albums::route(app, m, p, q, me, body).await);
     }
+    if p.len() >= 2 && (p[1] == "people" || p[1] == "faces") {
+        return Some(super::people::route(app, m, p, me, body).await);
+    }
     if p.len() == 3 && p[1] == "edits" {
         return Some(super::edits::route(app, m, p[2].clone(), me, headers, body).await);
     }

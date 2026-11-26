@@ -35,9 +35,14 @@ pub mod edits;
 mod events;
 mod everything;
 pub mod export;
+pub mod faces;
+#[cfg(test)]
+mod faces_tests;
 pub mod index;
 pub mod locked;
+pub mod ml;
 pub mod model;
+pub mod people;
 pub mod raw;
 pub mod routes;
 pub mod sidecar;
@@ -289,6 +294,8 @@ pub struct Photos {
     made: AtomicU64,
     cache_bytes: AtomicU64,
     stop: AtomicBool,
+    /// The face worker's state (ml.rs).
+    pub ml: ml::State,
 }
 
 static SERVICES: LazyLock<Mutex<HashMap<PathBuf, Arc<Photos>>>> = LazyLock::new(Default::default);
@@ -398,6 +405,7 @@ impl Photos {
             made: AtomicU64::new(0),
             cache_bytes: AtomicU64::new(0),
             stop: AtomicBool::new(false),
+            ml: ml::State::new(ml::MlConfig::from_env()),
         });
         let waiting = p.db().pending().unwrap_or_default();
         p.enqueue(waiting, false);
@@ -408,11 +416,25 @@ impl Photos {
         p.start_watching();
         let me = p.clone();
         std::thread::Builder::new().name("photos-scan".into()).spawn(move || me.scanner()).map_err(|e| e.to_string())?;
+        let me = p.clone();
+        std::thread::Builder::new().name("photos-faces".into()).spawn(move || me.face_worker()).map_err(|e| e.to_string())?;
         Ok(p)
     }
 
     pub fn cache_dir(&self) -> &Path {
         &self.cache
+    }
+
+    fn with_db<T>(&self, f: impl FnOnce(&Index) -> T) -> T {
+        f(&self.db())
+    }
+
+    fn db_lock(&self) -> &Mutex<Index> {
+        &self.db
+    }
+
+    fn stopped(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
     }
 
     fn db(&self) -> std::sync::MutexGuard<'_, Index> {

@@ -409,6 +409,7 @@ fn clone_for_test(p: &Photos) -> Photos {
         made: AtomicU64::new(0),
         cache_bytes: AtomicU64::new(0),
         stop: AtomicBool::new(true),
+        ml: super::ml::State::new(super::ml::MlConfig::from_env()),
     }
 }
 
@@ -456,6 +457,8 @@ mod edits_tests;
 mod export_tests;
 #[path = "locked_tests.rs"]
 mod locked_tests;
+#[path = "people_tests.rs"]
+mod people_tests;
 
 mod http {
     use super::*;
@@ -499,6 +502,35 @@ mod http {
 
     pub(super) async fn get(app: &Shared, uri: &str, who: Option<&str>, extra: &[(header::HeaderName, &str)]) -> Got {
         ask(app, "GET", uri, who, extra).await
+    }
+
+    #[tokio::test]
+    async fn only_the_owner_may_download_face_models() {
+        let root = tmp("facemodels");
+        let s = Store { root: root.clone(), keep: 3, spaces: true };
+        for (u, n) in [("boss", "Boss"), ("ann", "Ann")] {
+            auth::add(&s, u, n, &format!("{u}password")).unwrap();
+        }
+        let app: Shared = Arc::new(crate::App {
+            store: s,
+            base: root.clone(),
+            lock: std::sync::Mutex::new(()),
+            location: "here".into(),
+            auth: true,
+            site: None,
+            rooms: crate::live::Rooms::default(),
+            oidc: None,
+        });
+        assert_eq!(ask(&app, "POST", "/api/photos/faces/models", None, &[]).await.status, 401);
+        let g = ask(&app, "POST", "/api/photos/faces/models", Some("ann"), &[]).await;
+        assert_eq!(g.status, 403, "not the owner: {}", g.json);
+        let g = get(&app, "/api/photos/faces", Some("ann"), &[]).await;
+        assert_ne!(g.json["can_download"].as_bool(), Some(true), "{}", g.json);
+        assert!(g.json["download"].is_null(), "no download details for others: {}", g.json);
+        let g = ask(&app, "POST", "/api/photos/faces/models", Some("boss"), &[]).await;
+        assert_ne!(g.status, 200, "no models fetched in tests (no ml feature or no Photos here): {}", g.json);
+        assert_eq!(get(&app, "/api/photos/faces/models", Some("boss"), &[]).await.status, 404);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]

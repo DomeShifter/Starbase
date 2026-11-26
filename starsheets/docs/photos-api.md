@@ -250,3 +250,12 @@ Albums are virtual (one small JSON file per person next to the server's other se
 | `GET /api/photos/places?place=NAME` | `{"place", "photos", "waiting"}` |
 | `GET /api/photos/events` | `{"events": [{"id", "name", "count", "cover"}], "waiting"}`: pictures I may see, with a capture time, grouped into runs: a new event after a gap of 6 h or more, or a jump of more than 50 km between pictures whose position I may know; fewer than 5 pictures is no event. Named `Whitby · 3–5 Aug 2026` (nearest town) or `Sunday 3 Aug 2026`. Computed on every request, nothing stored; newest first |
 | `GET /api/photos/events?event=ID` | `{"event", "id", "name", "photos", "waiting"}` (ID = the first picture's capture time). "Save as album" = `POST /api/photos/albums` with these picture ids |
+
+## People (faces)
+
+Off by default. The server owner turns it on in Photos › People (`POST /api/photos/faces {"on": true}`), or `STARBASE_PHOTOS_FACES=on|off` decides. Needs a build with `--features ml` (ONNX Runtime) and the model files in `STARBASE_ML_MODELS` (default `<photos cache>/models`): `face_detection_yunet_2023mar.onnx` (YuNet, MIT) and `glintr100.onnx` (AuraFace v1, Apache-2.0) or, with `STARBASE_FACES_MODEL=sface`, `face_recognition_sface_2021dec.onnx` (Apache-2.0). `STARBASE_ML_THREADS` sets the ONNX threads (default a quarter of the cores). Faces, embeddings and names are kept in the photo index in the cache folder, never in anyone's folder. A name is per account: only the account that gave it sees it (someone else who can see the same picture sees the face unnamed, or with their own name).
+
+- `GET /api/photos/faces`, `POST /api/photos/faces {"on"}` (owner): on/off, missing model files, progress.
+- `GET /api/photos/people`: named `people` and unnamed `groups`, each `{"id", "name", "count", "cover": {"id", "v", "box"}}`; only faces in pictures I may see.
+- `GET /api/photos/people/ID`: its `faces` and `photos`.
+- `POST /api/photos/people/ID/name {"name"}`, `/merge {"into"}`, `/remove {"face"}`.
