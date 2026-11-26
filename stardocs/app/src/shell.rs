@@ -898,6 +898,9 @@ pub fn run(app: &mut WordApp, id: &str, p: Value) {
     if matches!(id, "insert.pageBreak" | "text.pageBreak") {
         caret_off_object(app);
     }
+    if matches!(id, "edit.copy" | "edit.cut") {
+        crate::pasting::copied();
+    }
     let r = match id.strip_prefix("ui.dialog:") {
         Some(name) => app.run("ui.dialog", json!({ "name": name })),
         None => app.run(id, p),
@@ -1068,8 +1071,11 @@ impl Shell {
             app.ui.mini_toolbar = false;
             // A selected picture's right-click menu: Format › Image's items.
             app.set_picture_menu(Some(picture_menu));
+            // Menu Paste by the Paste standard (pasting.rs, crate starbase-clipboard).
+            app.set_menu_paste(Some(crate::pasting::menu_paste));
         }
         self.flags.sync(before);
+        crate::pasting::frame(app, ui.ctx());
         self.keys(app, ui.ctx());
         egui::Panel::top("stardocs_head")
             .frame(egui::Frame::NONE.fill(PAGE).inner_margin(egui::Margin { left: 12, right: 16, top: 8, bottom: 6 }))
@@ -1931,7 +1937,7 @@ struct Targets(std::collections::BTreeMap<String, (u64, egui::Rect)>);
 
 /// Remembers where a menu or menu entry was drawn, for the test hook's `targets`: real-click
 /// tests read the spot from there instead of guessing positions (as in Starbase Sheets).
-fn target(ctx: &egui::Context, label: &str, rect: egui::Rect) {
+pub(crate) fn target(ctx: &egui::Context, label: &str, rect: egui::Rect) {
     let pass = ctx.cumulative_pass_nr();
     ctx.data_mut(|d| d.get_temp_mut_or_default::<Targets>(egui::Id::NULL).0.insert(label.to_owned(), (pass, rect)));
 }

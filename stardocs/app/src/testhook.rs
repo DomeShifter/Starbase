@@ -228,6 +228,9 @@ fn snapshot(app: &mut WordApp, shell: &mut Shell, link: Option<&Link>, ctx: &egu
         "text": text,
         "textTruncated": truncated,
         "dirty": app.session.dirty,
+        // The Paste standard (pasting.rs, crate starbase-clipboard).
+        "pastePromptShown": starbase_clipboard::prompt_shown(),
+        "ownCopyCurrent": starbase_clipboard::own_copy_current(),
         "title": app.title_stem(),
         "me": link.and_then(Link::me).map(|(name, username, _)| json!({ "name": name, "username": username })),
         "status": app.session.status,
