@@ -190,6 +190,21 @@ async fn edits_are_saved_in_a_sidecar_by_people_who_may_edit() {
     }
     std::fs::remove_file(app.store.full("ann/Trip/a.jpg.xmp")).unwrap();
 
+    // Rotate: a quarter turn saved as an edit, and the other way undoes it.
+    let turns = || async { get(&app, &url(c), Some("ann"), &[]).await.json["edits"]["rot90"].as_u64().unwrap_or(0) };
+    let before = turns().await;
+    let rot = |who: &'static str, dir: &'static str| {
+        let (app, uri) = (app.clone(), format!("/api/photos/rotate/{c}"));
+        async move { send(&app, "POST", &uri, Some(who), &[], &format!("{{\"dir\":\"{dir}\"}}")).await }
+    };
+    let r = rot("ann", "left").await;
+    assert_eq!(r.status, 200, "{}", r.json);
+    assert_eq!(turns().await, (before + 3) % 4);
+    let r = rot("ann", "right").await;
+    assert_eq!((r.status, turns().await), (200, before), "{}", r.json);
+    assert_eq!(rot("ann", "up").await.status, 400);
+    assert_eq!(rot("bob", "left").await.status, 403, "not theirs");
+
     // A folder the server can't write in (not testable as root, who may write anywhere).
     // SAFETY: geteuid only reads this process's user id.
     if unsafe { libc::geteuid() } != 0 {
