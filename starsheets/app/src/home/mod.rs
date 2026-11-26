@@ -106,6 +106,8 @@ enum View {
     Recent,
     Starred,
     Bin,
+    /// Storage used, and my files biggest first.
+    Storage,
     /// The server owner's view of every folder ("" = everyone's folders).
     Everyone(String),
 }
@@ -113,6 +115,8 @@ enum View {
 enum Reply {
     Listed(Json),
     Bin(Vec<BinRow>),
+    /// Storage figures: used, in the bin, free on the disk (None: unknown).
+    Storage(u64, u64, Option<u64>),
     Refresh,
     NewFolder(String),
     Thumb(String, String, Option<egui::ColorImage>),
@@ -159,6 +163,8 @@ pub struct Home {
     files: Vec<FileRow>,
     folders: Vec<FolderRow>,
     bin: Vec<BinRow>,
+    /// Bytes used by my files, bytes in my bin, free bytes on the disk (from api/usage).
+    storage: Option<(u64, u64, Option<u64>)>,
     /// My own folder ("" without accounts), whether I'm the server's owner, the tops of "Shared
     /// with me", and everyone's names.
     space: String,
@@ -359,6 +365,14 @@ impl Home {
         if self.view == Some(View::Bin) {
             self.load_bin(ctx);
         }
+        self.load_storage(ctx);
+    }
+
+    fn load_storage(&mut self, ctx: &egui::Context) {
+        call(&self.store, &self.inbox, ctx, Method::Get, "api/usage".into(), None, |b| {
+            let v: Json = serde_json::from_slice(&b).unwrap_or_default();
+            Reply::Storage(v["used"].as_u64().unwrap_or(0), v["bin"].as_u64().unwrap_or(0), v["free"].as_u64())
+        });
     }
 
     fn load_bin(&mut self, ctx: &egui::Context) {
@@ -688,6 +702,12 @@ impl Home {
                 files.truncate(60);
                 return (Vec::new(), files);
             }
+            Some(View::Storage) => {
+                let mut files: Vec<FileRow> = self.files.iter().filter(|f| !self.accounts || f.owner == self.space).cloned().collect();
+                files.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
+                files.truncate(200);
+                return (Vec::new(), files);
+            }
             Some(View::Bin) | None => (Vec::new(), Vec::new()),
         };
         self.sorted(folders, files)
@@ -742,7 +762,7 @@ impl Home {
     fn shown(&self, folders: &[FolderRow], files: &[FileRow]) -> Vec<Item> {
         let mut items: Vec<Item> =
             folders.iter().map(|f| Item::Folder(f.path.clone())).chain(files.iter().map(|f| Item::File(f.id.clone()))).collect();
-        if self.mixed && self.view != Some(View::Recent) {
+        if self.mixed && !matches!(self.view, Some(View::Recent | View::Storage)) {
             self.sort_items(&mut items);
         }
         items
@@ -831,6 +851,7 @@ impl Home {
             Some(View::Recent) => parts.push(("Recent".into(), None)),
             Some(View::Starred) => parts.push(("Starred".into(), None)),
             Some(View::Bin) => parts.push(("Bin".into(), None)),
+            Some(View::Storage) => parts.push(("Storage".into(), None)),
             None => {}
         }
         parts
@@ -875,6 +896,7 @@ impl Home {
                     self.bin = b;
                     self.loading = false;
                 }
+                Reply::Storage(u, b, f) => self.storage = Some((u, b, f)),
                 Reply::Refresh => self.refresh(ctx),
                 Reply::NewFolder(path) => {
                     self.refresh(ctx);
@@ -1100,7 +1122,8 @@ fn size_text(n: u64) -> String {
     match n {
         0..=1023 => format!("{n} B"),
         1024..=1_048_575 => format!("{:.0} KB", n as f64 / 1024.0),
-        _ => format!("{:.1} MB", n as f64 / 1_048_576.0),
+        1_048_576..=1_073_741_823 => format!("{:.1} MB", n as f64 / 1_048_576.0),
+        _ => format!("{:.1} GB", n as f64 / 1_073_741_824.0),
     }
 }
 
