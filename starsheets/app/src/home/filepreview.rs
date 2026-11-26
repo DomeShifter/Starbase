@@ -19,6 +19,7 @@ use std::sync::{Arc, Mutex};
 use egui::{Color32, Key, Modifiers, Order, Rect, RichText, Sense, Vec2, pos2, vec2};
 
 use super::textpreview;
+use crate::house;
 use crate::store::{Backend, Method};
 #[cfg(target_arch = "wasm32")]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,7 +30,7 @@ pub(super) const TEXT_MAX: u64 = 16 * 1024 * 1024;
 /// Pictures read whole into memory, at most.
 pub(super) const IMAGE_MAX: u64 = 64 * 1024 * 1024;
 const MAX_ZOOM: f32 = 8.0;
-const BAR: f32 = 64.0;
+const BAR: f32 = house::VIEW_BAR_HEIGHT;
 const INFO_W: f32 = 320.0;
 
 /// How a file is shown in the preview.
@@ -323,22 +324,20 @@ impl FilePreview {
             self.content_ui(ui, &resp, area, ctx);
             // The bar at the top.
             let bar = Rect::from_min_size(rect.min, vec2(rect.width(), BAR));
-            let mut b =
-                ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(16.0, 10.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+            let mut b = ui.new_child(
+                egui::UiBuilder::new().max_rect(bar.shrink2(vec2(house::L, 0.0))).layout(egui::Layout::left_to_right(egui::Align::Center)),
+            );
+            house::view_bar_style(&mut b);
+            b.spacing_mut().item_spacing.x = house::XS;
             if let Some(img) = crate::icons::icon_in(super::items::kind_icon(&self.name), Color32::WHITE) {
-                b.add(img.fit_to_exact_size(vec2(24.0, 24.0)));
+                b.add(img.fit_to_exact_size(vec2(house::ICON, house::ICON)));
             }
-            b.add_space(8.0);
-            b.add(egui::Label::new(RichText::new(&self.name).size(16.0).color(Color32::WHITE)).truncate());
+            b.add_space(house::S);
+            b.add(egui::Label::new(RichText::new(&self.name).size(house::BODY).color(house::VIEW_BAR_TEXT)).truncate());
             b.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 // Always works, wherever the keyboard is (a PDF frame may hold it): a filled circle
                 // so it is easy to see on any file.
-                let close = match crate::icons::icon("white_close") {
-                    Some(img) => egui::Button::image(img.fit_to_exact_size(vec2(24.0, 24.0))),
-                    None => egui::Button::new(RichText::new("×").size(22.0).color(Color32::WHITE)),
-                };
-                let close =
-                    ui.add(close.fill(Color32::from_white_alpha(48)).corner_radius(20).min_size(vec2(40.0, 40.0))).on_hover_text("Close (Esc)");
+                let close = house::icon_button(ui, "white_close", "Close (Esc)", true);
                 self.close_rect = close.rect;
                 if close.clicked() {
                     act = Some(Act::Close);
@@ -349,7 +348,7 @@ impl FilePreview {
                 if icon_button(ui, "white_download", "Download") {
                     act = Some(Act::Download(self.id.clone(), self.name.clone()));
                 }
-                ui.menu_button(RichText::new("Open with  ▾").size(14.0).color(Color32::WHITE), |ui| {
+                ui.menu_button(RichText::new("Open with  ▾").size(house::BODY).color(house::VIEW_BAR_TEXT), |ui| {
                     if cfg!(target_arch = "wasm32") && ui.button("A new tab (the browser's own viewer)").clicked() {
                         act = Some(Act::NewTab(self.id.clone()));
                         ui.close();
@@ -360,7 +359,7 @@ impl FilePreview {
                     }
                 });
                 if self.at.1 > 1 {
-                    ui.label(RichText::new(format!("{} of {}", self.at.0 + 1, self.at.1)).size(13.0).color(Color32::from_gray(200)));
+                    ui.label(RichText::new(format!("{} of {}", self.at.0 + 1, self.at.1)).size(house::NOTE).color(house::VIEW_BAR_DIM));
                 }
             });
             if self.info {
@@ -514,12 +513,7 @@ fn icon_button(ui: &mut egui::Ui, icon: &str, tip: &str) -> bool {
 }
 
 fn icon_toggle(ui: &mut egui::Ui, icon: &str, tip: &str, on: bool) -> bool {
-    let b = match crate::icons::icon(icon) {
-        Some(img) => egui::Button::image(img.fit_to_exact_size(vec2(24.0, 24.0))),
-        None => egui::Button::new(RichText::new(tip).color(Color32::WHITE)),
-    };
-    let b = if on { b.fill(Color32::from_white_alpha(60)).corner_radius(20) } else { b.frame(false) };
-    ui.add(b.min_size(vec2(40.0, 40.0))).on_hover_text(tip).clicked()
+    house::icon_button(ui, icon, tip, on).clicked()
 }
 
 // ------------------------------------------------------------ the page element (web)
