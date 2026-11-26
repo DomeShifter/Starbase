@@ -153,6 +153,7 @@ fn snapshot(app: &mut SlideApp, shell: &Shell, drive: Option<&dyn Drive>, ctx: &
     let format = app.session.execute("format.state", &json!({})).unwrap_or_else(|e| json!({ "err": e.to_string() }));
     json!({
         "shell": shell.state(app, drive),
+        "targets": crate::shell::targets(ctx),
         "documents": docs,
         "slides": slides,
         "current": current,

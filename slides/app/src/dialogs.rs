@@ -371,6 +371,10 @@ pub struct History {
 }
 
 impl History {
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+
     pub fn start(&mut self, id: &str, ctx: &egui::Context) {
         *self = History { inbox: self.inbox.clone(), restored: self.restored.clone(), open: true, id: id.to_string(), ..History::default() };
         let (inbox, ctx, id) = (self.inbox.clone(), ctx.clone(), id.to_string());
