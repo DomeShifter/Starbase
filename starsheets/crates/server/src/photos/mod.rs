@@ -36,6 +36,7 @@ mod events;
 pub mod export;
 pub mod index;
 pub mod model;
+pub mod raw;
 pub mod routes;
 pub mod sidecar;
 pub mod strip;
@@ -75,11 +76,12 @@ pub fn media_of(name: &str) -> Option<(&'static str, bool)> {
         "png" => ("image/png", true),
         "webp" => ("image/webp", true),
         "gif" => ("image/gif", true),
-        // Listed, no thumbnails yet (job 5: HEIC through the system's libheif, RAW, AVIF).
+        // Camera RAW: thumbnails from the embedded JPEG preview (raw.rs). CR3 (not TIFF), HEIC (needs libheif), AVIF, TIFF: listed, no thumbnails yet.
         "heic" | "heif" => ("image/heic", false),
         "avif" => ("image/avif", false),
         "tif" | "tiff" => ("image/tiff", false),
-        "dng" | "cr2" | "cr3" | "nef" | "arw" | "orf" | "rw2" | "raf" | "pef" | "srw" => ("image/x-raw", false),
+        "dng" | "cr2" | "nef" | "arw" | "orf" | "rw2" | "raf" | "pef" | "srw" => ("image/x-raw", true),
+        "cr3" => ("image/x-raw", false),
         _ => return None,
     })
 }

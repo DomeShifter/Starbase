@@ -152,8 +152,21 @@ pub fn make(bytes: &[u8], limits: &Limits) -> Result<Made, String> {
 /// [`make`], the thumbnails showing `edits`.
 pub fn make_with(bytes: &[u8], limits: &Limits, edits: Option<&Edits>) -> Result<Made, String> {
     let edits = edits.filter(|e| !e.is_identity());
+    // A camera RAW file: the JPEG preview inside it is shown; date, camera and orientation
+    // come from the RAW's own EXIF.
+    let (bytes, raw_meta) = match sniff(bytes) {
+        Some(_) => (bytes, None),
+        None => match super::raw::preview(bytes) {
+            Some(jpeg) => (jpeg, Some(exif_meta(bytes))),
+            None => return Err("not a JPEG, PNG, WebP or GIF picture, or a RAW file with a preview".into()),
+        },
+    };
     let format = sniff(bytes).ok_or("not a JPEG, PNG, WebP or GIF picture")?;
-    let mut meta = if format == ImageFormat::Gif { Meta::default() } else { exif_meta(bytes) };
+    let mut meta = match raw_meta {
+        Some(m) => m,
+        None if format == ImageFormat::Gif => Meta::default(),
+        None => exif_meta(bytes),
+    };
     let (w, h) = image::ImageReader::with_format(Cursor::new(bytes), format).into_dimensions().map_err(|e| format!("unreadable: {e}"))?;
     if w == 0 || h == 0 {
         return Err("the picture has no pixels".into());
