@@ -380,6 +380,9 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
                     "note": remark.filter(|c| !c.threaded).map(|c| &c.text),
                     "comment": comment,
                     "validation": validation,
+                    // Sheets draws no "number stored as text" marker or warning button (fork 0109): always 0.
+                    "numberTextMarkers": 0,
+                    "isText": matches!(sheet.value(active), gridcraft_engine::core::Value::Text(_)),
                 }),
                 json!({
                     "bold": st.font.bold,
