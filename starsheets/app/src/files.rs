@@ -1279,6 +1279,9 @@ fn get_then(url: String, inbox: Rc<RefCell<Vec<Reply>>>, ctx: egui::Context, the
 /// The server's `error` text, or `what` and the status.
 fn server_error(status: u16, body: &[u8], what: &str) -> String {
     let v: Json = serde_json::from_slice(body).unwrap_or_default();
+    if v["error"].as_str().is_some_and(|e| e.trim().eq_ignore_ascii_case("no such file")) {
+        return crate::home::said(&v, status);
+    }
     v["error"].as_str().map_or_else(|| format!("{what} ({status})"), str::to_string)
 }
 

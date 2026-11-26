@@ -102,6 +102,43 @@ impl Pic {
     }
 }
 
+/// What to show for a failed request: the server's own words, except "no such file" (a picture
+/// moved or deleted since the list was drawn), which read like a leaked internal message at the
+/// top of Photos (To-do 3 row 43).
+pub(crate) fn said(v: &Json, status: u16) -> String {
+    said_in(v, status, "")
+}
+
+/// Like [`said`], with a prefix for the fallback ("Not saved: the server said 500.").
+pub(crate) fn said_in(v: &Json, status: u16, what: &str) -> String {
+    match v["error"].as_str() {
+        Some(e) if e.trim().eq_ignore_ascii_case("no such file") => "That picture isn't there any more. It was moved or deleted.".to_string(),
+        Some(e) => e.to_string(),
+        None if what.is_empty() => format!("The server said {status}."),
+        None => format!("{what}: the server said {status}."),
+    }
+}
+
+#[cfg(test)]
+mod said_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn no_such_file_is_never_shown_raw() {
+        let t = said(&json!({"error": "no such file"}), 404);
+        assert!(!t.contains("no such file") && t.contains("isn't there"), "{t}");
+        assert_eq!(said_in(&json!({"error": "no such file"}), 404, "Not saved"), t);
+    }
+
+    #[test]
+    fn other_messages_pass_through() {
+        assert_eq!(said(&json!({"error": "You don't have access to that."}), 403), "You don't have access to that.");
+        assert_eq!(said(&json!({}), 500), "The server said 500.");
+        assert_eq!(said_in(&json!({}), 500, "No copy made"), "No copy made: the server said 500.");
+    }
+}
+
 /// A video's length as the tile shows it: `0:07`, `12:30`, `1:02:03`.
 pub(super) fn duration_label(secs: f64) -> String {
     let t = secs.max(0.0).round() as u64;
@@ -436,7 +473,7 @@ impl PhotoMode {
                     Ok((200, b)) => Got::Listed(f, sub, serde_json::from_slice(&b).unwrap_or_default()),
                     Ok((s, b)) => {
                         let v: Json = serde_json::from_slice(&b).unwrap_or_default();
-                        Got::Error(v["error"].as_str().map_or(format!("The server said {s}."), str::to_string))
+                        Got::Error(crate::home::photos::said(&v, s))
                     }
                     Err(e) => Got::Error(e),
                 };
@@ -459,7 +496,7 @@ impl PhotoMode {
                     Ok((200, _)) => Got::Switched,
                     Ok((s, b)) => {
                         let v: Json = serde_json::from_slice(&b).unwrap_or_default();
-                        Got::Error(v["error"].as_str().map_or(format!("The server said {s}."), str::to_string))
+                        Got::Error(crate::home::photos::said(&v, s))
                     }
                     Err(e) => Got::Error(e),
                 };
@@ -695,7 +732,7 @@ impl PhotoMode {
                         Ok((200, b)) => Ok(serde_json::from_slice::<Json>(&b).ok().and_then(|v| v["thumb_v"].as_str().map(str::to_string))),
                         Ok((s, b)) => {
                             let v: Json = serde_json::from_slice(&b).unwrap_or_default();
-                            Err(v["error"].as_str().map_or(format!("The server said {s}."), str::to_string))
+                            Err(crate::home::photos::said(&v, s))
                         }
                         Err(e) => Err(e),
                     };
