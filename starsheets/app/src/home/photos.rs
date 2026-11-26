@@ -20,7 +20,7 @@ use serde_json::Value as Json;
 mod albums;
 mod pick;
 
-pub(super) use pick::Out;
+pub(super) use pick::{Act, Out};
 
 use super::viewer::Viewer;
 use crate::house;
@@ -89,7 +89,7 @@ pub(super) enum Got {
     /// An album changed: ask again.
     Changed,
     /// Pictures went into an album (pick.rs): the album, how many were new, how many were asked.
-    Added(albums::Card, u64, u64),
+    Added(albums::Card, u64, u64, Vec<String>),
     /// The "Add photos" picker's list (pick.rs).
     Picker(Json),
 }
@@ -379,7 +379,7 @@ impl PhotoMode {
                 Got::Cards(t, v) => self.alb.take_cards(t, &v),
                 Got::Opened(t, key, v) => self.take_opened(t, &key, &v),
                 Got::Changed => self.alb.changed(ctx, store, &self.inbox),
-                Got::Added(c, n, asked) => self.added(ctx, store, c, n, asked),
+                Got::Added(c, n, asked, ids) => self.added(ctx, store, c, n, asked, ids),
                 Got::Picker(v) => self.take_picker(&v),
                 Got::Listed(f, sub, v) => {
                     if Some(&f) == self.folder.as_ref() && sub == self.sub && self.alb.tab == albums::Tab::Photos {
@@ -621,6 +621,21 @@ impl PhotoMode {
         }
         if free && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::A)) {
             self.select_all();
+        }
+        // Delete moves the selection to the bin (Shift-Delete: out of the open album only).
+        if free && !self.alb.selected.is_empty() {
+            let (shift, plain) = ctx.input_mut(|i| {
+                (i.consume_key(egui::Modifiers::SHIFT, egui::Key::Delete), i.consume_key(egui::Modifiers::NONE, egui::Key::Delete))
+            });
+            let ids = self.selection();
+            if shift && self.open_album().is_some() {
+                self.act(&ctx, store, Act::Remove, ids, None);
+            } else if plain || shift {
+                self.act(&ctx, store, Act::Delete, ids, None);
+            }
+        }
+        if free && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z)) {
+            self.out.push(Out::Undo);
         }
     }
 
