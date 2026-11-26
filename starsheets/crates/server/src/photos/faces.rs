@@ -306,6 +306,39 @@ pub fn faces(ix: &Index, model: &str) -> rusqlite::Result<Vec<Face>> {
     .collect()
 }
 
+/// Face `id` (not one hidden by the worker), or none.
+pub fn face(ix: &Index, id: i64) -> rusqlite::Result<Option<Face>> {
+    let mut st = conn(ix).prepare("SELECT id, thumb, x, y, w, h, person, grp, suggest FROM faces WHERE id = ?1 AND hidden != 1")?;
+    let mut rows = st.query_map([id], |r| {
+        Ok(Face {
+            id: r.get(0)?,
+            thumb: r.get(1)?,
+            bx: [r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?],
+            person: r.get(6)?,
+            grp: r.get(7)?,
+            suggest: r.get(8)?,
+        })
+    })?;
+    rows.next().transpose()
+}
+
+/// The square People shows around face box `bx` (0..1 of `img`): 1.5 times the face's longer
+/// side, moved inside the picture when it would stick out, scaled to `size` × `size`.
+pub fn face_crop(img: &image::RgbImage, bx: [f32; 4], size: u32) -> image::RgbImage {
+    let (iw, ih) = (img.width(), img.height());
+    if iw == 0 || ih == 0 {
+        return image::RgbImage::new(size, size);
+    }
+    let (w, h) = (iw as f32, ih as f32);
+    let side = ((bx[2] * w).max(bx[3] * h) * 1.5).clamp(1.0, w.min(h));
+    let (cx, cy) = ((bx[0] + bx[2] / 2.0) * w, (bx[1] + bx[3] / 2.0) * h);
+    let x0 = (cx - side / 2.0).clamp(0.0, w - side).round() as u32;
+    let y0 = (cy - side / 2.0).clamp(0.0, h - side).round() as u32;
+    let s = (side.round() as u32).max(1).min(iw - x0.min(iw - 1)).min(ih - y0.min(ih - 1));
+    let sub = image::imageops::crop_imm(img, x0.min(iw - 1), y0.min(ih - 1), s, s).to_image();
+    image::imageops::resize(&sub, size, size, image::imageops::FilterType::CatmullRom)
+}
+
 /// The people `user` named: id → name (`user` is the account name, "" without sign-in).
 pub fn people(ix: &Index, user: &str) -> rusqlite::Result<HashMap<i64, String>> {
     let mut st = conn(ix).prepare("SELECT person, name FROM person_names WHERE user = ?1")?;
@@ -424,25 +457,37 @@ pub fn remove(ix: &Index, who: Who, face: i64) -> rusqlite::Result<bool> {
 
 /// What [`regroup`] needs, read under the index lock in one go.
 pub struct Snapshot {
-    /// Faces not with a person: (id, embedding, may it be grouped).
+    /// Faces not with a person, and the newest [`RECHECK`] put with one automatically:
+    /// (id, embedding, may it be grouped), newest first.
     pub loose: Vec<(i64, Vec<f32>, bool)>,
-    /// Named (or merged) people's faces, at most [`PROTOTYPES`] each, confirmed ones first.
+    /// People's faces that someone confirmed (named, merged), at most [`PROTOTYPES`] each.
+    /// Faces put with a person automatically are never compared with: one wrong automatic match
+    /// would otherwise pull in every later face of that other person (2026-11-26: new people in
+    /// new scans all vanished into existing ones).
     pub people: HashMap<i64, Vec<Vec<f32>>>,
     /// Face → people it was taken away from.
     pub not: HashMap<i64, HashSet<i64>>,
 }
 
+/// The most automatically matched faces looked at again in one pass (newest first).
+pub const RECHECK: usize = 1000;
+
 pub fn snapshot(ix: &Index, model: &str) -> rusqlite::Result<Snapshot> {
     let c = conn(ix);
-    let mut st = c.prepare("SELECT id, emb, score, px, hidden FROM faces WHERE model = ?1 AND person IS NULL AND hidden != 1 ORDER BY id DESC")?;
+    let mut st = c.prepare(
+        "SELECT id, emb, score, px, hidden FROM faces WHERE model = ?1 AND person IS NULL AND hidden != 1
+         UNION ALL SELECT * FROM (SELECT id, emb, score, px, hidden FROM faces
+           WHERE model = ?1 AND person IS NOT NULL AND auto = 1 AND hidden != 1 ORDER BY id DESC LIMIT ?2)
+         ORDER BY id DESC",
+    )?;
     let loose = st
-        .query_map([model], |r| {
+        .query_map(params![model, RECHECK as i64], |r| {
             let (score, px, hidden): (f32, f32, i64) = (r.get(2)?, r.get(3)?, r.get(4)?);
             Ok((r.get(0)?, blob_to_emb(&r.get::<_, Vec<u8>>(1)?), hidden == 0 && good(score, px)))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut people: HashMap<i64, Vec<Vec<f32>>> = HashMap::new();
-    let mut st = c.prepare("SELECT person, emb FROM faces WHERE model = ?1 AND person IS NOT NULL ORDER BY auto, id DESC")?;
+    let mut st = c.prepare("SELECT person, emb FROM faces WHERE model = ?1 AND person IS NOT NULL AND auto = 0 ORDER BY id DESC")?;
     for r in st.query_map([model], |r| Ok((r.get::<_, i64>(0)?, blob_to_emb(&r.get::<_, Vec<u8>>(1)?))))? {
         let (p, e) = r?;
         let v = people.entry(p).or_default();
@@ -462,33 +507,52 @@ pub fn snapshot(ix: &Index, model: &str) -> rusqlite::Result<Snapshot> {
 /// What a regroup decided for each loose face: (face, person it joins, person offered, group).
 pub type Plan = Vec<(i64, Option<i64>, Option<i64>, Option<i64>)>;
 
-/// Matches loose faces to people, then groups what is left (no index lock held: pure).
+/// Groups the loose faces the way a first scan does, then matches them to people: a face joins
+/// its best person (at [`Thresholds::auto`]) unless it is in a group of two or more that, on
+/// average, isn't like that person: then the group stays a new, unnamed group and the person is
+/// only offered. Pure (no index lock held).
 pub fn plan(s: &Snapshot, t: Thresholds) -> Plan {
     let empty = HashSet::new();
-    let mut out: Plan = Vec::with_capacity(s.loose.len());
-    let mut rest: Vec<usize> = Vec::new();
-    for (i, (id, e, ok)) in s.loose.iter().enumerate() {
-        let best = best_person(e, &s.people, s.not.get(id).unwrap_or(&empty));
-        match best {
-            Some((p, sim)) if sim >= t.auto => out.push((*id, Some(p), None, None)),
-            other => {
-                let sug = other.filter(|(_, sim)| *sim >= t.suggest).map(|(p, _)| p);
-                out.push((*id, None, sug, None));
-                if *ok && rest.len() < MAX_GROUP {
-                    rest.push(i);
-                }
-            }
-        }
-    }
+    let n = s.loose.len();
+    let not = |i: usize| s.not.get(&s.loose[i].0).unwrap_or(&empty);
+    let best: Vec<Option<(i64, f32)>> = (0..n).map(|i| best_person(&s.loose[i].1, &s.people, not(i))).collect();
+    let rest: Vec<usize> = (0..n).filter(|&i| s.loose[i].2).take(MAX_GROUP).collect();
     let embs: Vec<Vec<f32>> = rest.iter().map(|&i| s.loose[i].1.clone()).collect();
     let labels = average_linkage(&embs, t.group_cut);
-    // A group is named by its smallest face id; groups of one stay loose.
-    let mut members: HashMap<usize, Vec<i64>> = HashMap::new();
+    let mut label_of: Vec<Option<usize>> = vec![None; n];
+    let mut members: HashMap<usize, Vec<usize>> = HashMap::new();
     for (k, &i) in rest.iter().enumerate() {
-        members.entry(labels[k]).or_default().push(s.loose[i].0);
+        label_of[i] = Some(labels[k]);
+        members.entry(labels[k]).or_default().push(i);
+    }
+    // How like person `p` face `i` is (its best face of `p`; nothing when taken away from `p`).
+    let like = |i: usize, p: i64| -> f32 {
+        match s.people.get(&p) {
+            Some(protos) if !not(i).contains(&p) => protos.iter().map(|q| similarity(&s.loose[i].1, q)).fold(f32::MIN, f32::max),
+            _ => 0.0,
+        }
+    };
+    let mut mean: HashMap<(usize, i64), f32> = HashMap::new();
+    let mut joins: Vec<Option<i64>> = vec![None; n];
+    for i in 0..n {
+        let Some((p, _)) = best[i].filter(|(_, sim)| *sim >= t.auto) else { continue };
+        let ok = match label_of[i].and_then(|l| members.get(&l).map(|m| (l, m))) {
+            Some((l, m)) if m.len() >= 2 => *mean.entry((l, p)).or_insert_with(|| m.iter().map(|&j| like(j, p)).sum::<f32>() / m.len() as f32) >= t.auto,
+            _ => true,
+        };
+        if ok {
+            joins[i] = Some(p);
+        }
+    }
+    // Groups of what is left, named by their smallest face id; groups of one stay loose.
+    let mut left: HashMap<usize, Vec<i64>> = HashMap::new();
+    for &i in &rest {
+        if let (None, Some(l)) = (joins[i], label_of[i]) {
+            left.entry(l).or_default().push(s.loose[i].0);
+        }
     }
     let mut grp_of: HashMap<i64, i64> = HashMap::new();
-    for ids in members.values() {
+    for ids in left.values() {
         if ids.len() >= 2 {
             let g = *ids.iter().min().unwrap_or(&0);
             for id in ids {
@@ -496,21 +560,24 @@ pub fn plan(s: &Snapshot, t: Thresholds) -> Plan {
             }
         }
     }
-    for row in &mut out {
-        if row.1.is_none() {
-            row.3 = grp_of.get(&row.0).copied();
-        }
-    }
-    out
+    (0..n)
+        .map(|i| {
+            let id = s.loose[i].0;
+            match joins[i] {
+                Some(p) => (id, Some(p), None, None),
+                None => (id, None, best[i].filter(|(_, sim)| *sim >= t.suggest).map(|(p, _)| p), grp_of.get(&id).copied()),
+            }
+        })
+        .collect()
 }
 
 /// Writes a plan (faces changed by someone since the snapshot are left alone: only faces still
-/// loose are touched).
+/// loose, or still put with a person automatically, are touched).
 pub fn apply(ix: &Index, plan: &Plan) -> rusqlite::Result<()> {
     let c = conn(ix);
     c.execute_batch("SAVEPOINT regroup")?;
     let r = (|| {
-        let mut st = c.prepare("UPDATE faces SET person = ?2, auto = ?3, suggest = ?4, grp = ?5 WHERE id = ?1 AND person IS NULL")?;
+        let mut st = c.prepare("UPDATE faces SET person = ?2, auto = ?3, suggest = ?4, grp = ?5 WHERE id = ?1 AND (person IS NULL OR auto = 1)")?;
         for (id, person, sug, grp) in plan {
             st.execute(params![id, person, person.is_some() as i64, sug, grp])?;
         }

@@ -692,6 +692,9 @@ impl PhotoMode {
         }
         let url = if let Some(t) = id.strip_prefix("tile/") {
             format!("api/photos/tiles/{t}.png")
+        } else if id.starts_with("face/") {
+            // People's sharp face pictures: "face/FACE/FILE".
+            format!("api/photos/people/{id}?v={}", v.unwrap_or(""))
         } else if size == ORIGINAL {
             format!("api/files/{id}/raw")
         } else {

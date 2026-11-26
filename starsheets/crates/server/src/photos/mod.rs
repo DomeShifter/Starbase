@@ -554,6 +554,30 @@ impl Photos {
         ["jpg", "png"].into_iter().map(|ext| (base.with_extension(ext), ext)).find(|(p, _)| p.is_file())
     }
 
+    /// Face `f` as a square JPEG of `size` px, cut from the 1024 thumbnail (the one faces were
+    /// found in; the 256 one when it isn't kept) so it stays sharp on HiDPI screens. Kept with the
+    /// thumbnails (same name start, so clearing them clears it too).
+    pub fn face_file(&self, f: &faces::Face, size: u32) -> Option<Vec<u8>> {
+        let (src, _) = self.thumb_file(&f.thumb, 1024).or_else(|| self.thumb_file(&f.thumb, 256))?;
+        let bx = f.bx.iter().fold(0u64, |h, v| h.rotate_left(17) ^ u64::from(v.to_bits()));
+        let to = self.cache.join("thumbs").join(&f.thumb[..2]).join(format!("{}-{}-face{}-{bx:x}-{size}.jpg", f.thumb, decode::RENDER, f.id));
+        if let Ok(bytes) = std::fs::read(&to) {
+            self.used(&to);
+            return Some(bytes);
+        }
+        let img = image::load_from_memory(&std::fs::read(src).ok()?).ok()?.to_rgb8();
+        let crop = faces::face_crop(&img, f.bx, size);
+        let mut out = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 85).encode_image(&crop).ok()?;
+        let tmp = to.with_extension(format!("jpg.{}.tmp", crate::store::random_hex(4)));
+        if std::fs::write(&tmp, &out).is_ok() && std::fs::rename(&tmp, &to).is_ok() {
+            self.cache_bytes.fetch_add(out.len() as u64, Ordering::Relaxed);
+        } else {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        Some(out)
+    }
+
     /// A thumbnail was shown: it counts as recently used (its modified time, at most daily).
     pub fn used(&self, file: &Path) {
         let old = std::fs::metadata(file).and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().unwrap_or_default() > Duration::from_secs(86_400));
