@@ -1809,6 +1809,25 @@ fn takes_a_file(m: &str, p: &[String]) -> bool {
 
 /// Paths answered before (or without) sign-in: accounts (single sign-on too) and, while
 /// setting up, storage.
+/// The request after "New from a template": `POST api/templates/<key>?folder=…` becomes
+/// `POST api/files?name=<name> (copy).<ext>&folder=…` with the template's file as the body.
+type Upload = (Vec<String>, HashMap<String, String>, Bytes);
+
+/// See [`Upload`]; any other request passes through unchanged.
+fn template_upload(m: &str, p: Vec<String>, mut q: HashMap<String, String>, body: Bytes) -> Result<Upload, Response<Body>> {
+    if p.first().map(String::as_str) != Some("templates") {
+        return Ok((p, q, body));
+    }
+    let t = match (m, p.as_slice()) {
+        ("POST", [_, key]) => starbase_templates::find(key).ok_or_else(|| error(404, "no such template"))?,
+        _ => return Err(error(404, "not found")),
+    };
+    let bytes = starbase_templates::bytes(t.key).ok_or_else(|| error(404, "no such template"))?;
+    q.insert("name".into(), starbase_templates::upload_name(t));
+    q.remove("as_is");
+    Ok((vec!["files".into()], q, Bytes::from_static(bytes)))
+}
+
 fn before_sign_in(p: &[String]) -> bool {
     matches!(p.first().map(String::as_str), Some("info" | "setup" | "signup" | "login" | "logout" | "me" | "users" | "storage" | "oidc" | "devices"))
 }
@@ -1901,6 +1920,12 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
             Ok(b) => b,
             Err(resp) => return resp,
         }
+    };
+    // New from a template: made exactly like an upload of the template's file, so the folder
+    // checks, naming ("CV (copy).docx", then "(2)") and reply are the Drive's own.
+    let (p, q, body) = match template_upload(&m, p, q, body) {
+        Ok(x) => x,
+        Err(resp) => return resp,
     };
     if let Some(resp) = accounts(&app, &m, &p, &q, &headers, &body, ask).await {
         return resp;
@@ -2444,6 +2469,45 @@ mod tests {
         let id = g.json["id"].as_str().unwrap().to_string();
         let put = [("origin", "http://192.168.1.5:8080"), ("content-type", "application/octet-stream")];
         assert_eq!(send(&app, &ip, "PUT", &format!("/api/files/{id}"), &boss, &put, b"two".to_vec()).await.status, 200);
+    }
+
+    /// New from a template (every template): a copy "<name> (copy).<ext>" in the folder asked
+    /// for, holding the template's file; again → "(copy) (2)"; the templates themselves are
+    /// unchanged; someone without edit access to the folder can't; an unknown key is a 404.
+    #[tokio::test]
+    async fn new_from_template_copies_into_the_folder() {
+        let (app, ip, boss) = owned().await;
+        let g = post(&app, &ip, "/api/users", &boss, json!({"username": "vic", "name": "vic", "password": "vicpassword"})).await;
+        assert_eq!(g.status, 200);
+        let vic = cookie_of(&post(&app, &ip, "/api/login", "", json!({"username": "vic", "password": "vicpassword"})).await);
+        let folder = send(&app, &ip, "POST", "/api/folders?name=Work", &boss, &[], vec![]).await.json["path"].as_str().unwrap().to_string();
+        let before: Vec<Vec<u8>> = starbase_templates::ALL.iter().map(|t| starbase_templates::bytes(t.key).unwrap().to_vec()).collect();
+        for t in starbase_templates::ALL {
+            let url = format!("/api/templates/{}?folder={folder}", t.key);
+            let g = send(&app, &ip, "POST", &url, &boss, &[], vec![]).await;
+            assert_eq!(g.status, 201, "{}: {:?}", t.key, g.json);
+            assert_eq!(g.json["name"], format!("{} (copy).{}", t.name, t.kind.ext()), "{}", t.key);
+            assert_eq!(g.json["folder"], folder.as_str(), "{}", t.key);
+            let id = g.json["id"].as_str().unwrap().to_string();
+            let got = send(&app, &ip, "GET", &format!("/api/files/{id}"), &boss, &[], vec![]).await;
+            assert_eq!(got.status, 200, "{}", t.key);
+            assert_eq!(got.bytes, starbase_templates::bytes(t.key).unwrap(), "{}: the copy is the template", t.key);
+            let again = send(&app, &ip, "POST", &url, &boss, &[], vec![]).await;
+            assert_eq!(again.json["name"], format!("{} (copy) (2).{}", t.name, t.kind.ext()), "{}", t.key);
+            assert_eq!(send(&app, &ip, "POST", &url, &vic, &[], vec![]).await.status, 403, "{}: not vic's folder", t.key);
+        }
+        let after: Vec<Vec<u8>> = starbase_templates::ALL.iter().map(|t| starbase_templates::bytes(t.key).unwrap().to_vec()).collect();
+        assert_eq!(before, after, "the templates are unchanged");
+        // The Drive opened without `dir` (no folder known yet): the copy goes to the person's
+        // own top folder, never to a folder with an empty name.
+        for url in ["/api/templates/monthly-budget", "/api/templates/monthly-budget?folder="] {
+            let g = send(&app, &ip, "POST", url, &boss, &[], vec![]).await;
+            assert_eq!(g.status, 201, "{url}: {:?}", g.json);
+            assert_eq!(g.json["folder"], "boss", "{url}: into the top folder");
+            assert_eq!(send(&app, &ip, "POST", url, &vic, &[], vec![]).await.json["folder"], "vic", "{url}: vic's own top folder");
+        }
+        assert_eq!(send(&app, &ip, "POST", "/api/templates/nope", &boss, &[], vec![]).await.status, 404);
+        assert_eq!(send(&app, &ip, "GET", "/api/templates/cv", &boss, &[], vec![]).await.status, 404);
     }
 
     /// Docs' version history: a document's saves become versions with who saved them; editors

@@ -21,6 +21,7 @@ impl Home {
                 ui.add(button.fill(theme::ON).corner_radius(16).min_size(vec2(104.0, 48.0)).stroke(Stroke::NONE))
             })
             .inner;
+        house::target(ui.ctx(), "New", new.rect);
         egui::Popup::menu(&new).show(|ui| {
             house::menu(ui, 260.0);
             let folder = here.clone().unwrap_or_else(|| self.space.clone());
@@ -35,6 +36,9 @@ impl Home {
                 && let Err(e) = self.store.new_presentation(&folder)
             {
                 self.error = Some(e);
+            }
+            if house::menu_row(ui, Some("description"), "From a template…", "", true) {
+                templates::open(ui.ctx(), &folder);
             }
             if house::menu_row(ui, Some("create_new_folder"), "New folder", "", true) {
                 call(&self.store, &self.inbox, ui.ctx(), Method::Post, format!("api/folders?path={}&name=New%20folder", enc(&folder)), None, |b| {

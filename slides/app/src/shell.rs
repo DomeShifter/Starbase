@@ -41,6 +41,9 @@ pub trait Drive {
     fn home(&self);
     /// File › New presentation: a new, named .pptx in this presentation's folder, in a new tab.
     fn new_presentation(&self);
+    /// File › New from a template…: the Drive's gallery, for this presentation's folder (the
+    /// browser only; the desktop hides the item).
+    fn templates(&self) {}
     fn rename(&self, stem: &str);
     /// What the title row says once saved.
     fn saved_text(&self) -> String {
@@ -96,6 +99,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
         "File",
         &[
             Cmd("New presentation", "slides.new", NO, ""),
+            Cmd("New from a template…", "slides.templates", NO, ""),
             Cmd("Open from Starbase", "slides.home", NO, ""),
             Desktop,
             Sep,
@@ -736,6 +740,8 @@ impl Shell {
         let width = menu_width(ui, items);
         for item in items {
             match item {
+                // Templates live in the Drive: the desktop program hides the item (its Drive has them).
+                Cmd(_, "slides.templates", ..) if drive.is_none_or(|d| d.desktop()) => {}
                 Cmd(label, id, p, keys) => {
                     let enabled = self.allowed(app, drive, id);
                     // The desktop program opens files on this computer.
@@ -877,6 +883,7 @@ impl Shell {
                 }
             },
             "home" => drive.ok_or("not opened from Starbase")?.home(),
+            "templates" => drive.ok_or("not opened from Starbase")?.templates(),
             "share" => drive.filter(|d| d.file_id().is_some()).ok_or("sharing needs a presentation saved on a Starbase server")?.share(),
             "history" => drive.filter(|d| d.file_id().is_some()).ok_or("version history needs a presentation saved on a Starbase server")?.history(),
             "print" => {
@@ -958,6 +965,7 @@ const READ_ONLY_OK: &[&str] = &[
     "slides.theme",
     "slides.home",
     "slides.new",
+    "slides.templates",
     "app.exportDialog",
     "app.palette",
     "app.about",
