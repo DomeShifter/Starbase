@@ -25,6 +25,7 @@ mod log;
 mod oidc;
 mod photos;
 mod preview;
+mod publicdeck;
 mod publiclink;
 mod sharing;
 mod spaces;
@@ -1893,7 +1894,7 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
             let pw = form_urlencoded::parse(&b).find(|(k, _)| k == "pw").map(|(_, v)| v.into_owned()).unwrap_or_default();
             blocking(&app, move |a| publiclink::unlock(&a.store, &token, &pw)).await
         } else if method == Method::GET || method == Method::HEAD {
-            let what = p.get(2).cloned().unwrap_or_default();
+            let what = p.get(2..).map(|r| r.join("/")).unwrap_or_default();
             let cookies = headers.get_all(header::COOKIE).iter().filter_map(|v| v.to_str().ok()).collect::<Vec<_>>().join(";");
             blocking(&app, move |a| publiclink::serve(&a.store, &token, &what, &publiclink::grant_in(&cookies, &token))).await
         } else {
@@ -1901,7 +1902,9 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
         };
         return match reply {
             Some(r) => {
-                let csp = if r.form {
+                let csp = if r.script {
+                    "sandbox allow-scripts allow-same-origin; default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'self'"
+                } else if r.form {
                     "sandbox allow-forms allow-same-origin; default-src 'none'; style-src 'unsafe-inline'; form-action 'self'"
                 } else {
                     "sandbox allow-same-origin; default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; frame-src 'self'"
