@@ -519,7 +519,16 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
         if v.info
             && let Some(p) = pm.pics.get(v.index())
         {
-            goto = info_panel(ui, rect, p, &pm.alb.albums_of(&p.id));
+            let in_locked = pm.locked_tab();
+            let (g, lock) = info_panel(ui, rect, p, &pm.alb.albums_of(&p.id), in_locked);
+            goto = g;
+            if lock {
+                if in_locked {
+                    pm.lk.out_req.push(p.id.clone());
+                } else {
+                    pm.lk.ask = Some(vec![p.id.clone()]);
+                }
+            }
         }
         // Arrows at the sides (the right one beside the Info panel).
         if n > 1 {
@@ -605,7 +614,14 @@ fn human(b: u64) -> String {
 }
 
 /// The Info panel; returns the album whose name was clicked.
-fn info_panel(ui: &mut egui::Ui, rect: Rect, p: &super::photos::Pic, albums: &[&super::photos::albums::Card]) -> Option<super::photos::albums::Card> {
+/// The second answer is true when "Move to Locked folder" (or, inside Locked, "Move out") was clicked.
+fn info_panel(
+    ui: &mut egui::Ui,
+    rect: Rect,
+    p: &super::photos::Pic,
+    albums: &[&super::photos::albums::Card],
+    in_locked: bool,
+) -> (Option<super::photos::albums::Card>, bool) {
     let panel = Rect::from_min_max(pos2(rect.right() - INFO_W, rect.top() + 56.0), pos2(rect.right(), rect.bottom()));
     ui.painter().rect_filled(panel, 0, Color32::from_black_alpha(190));
     let mut c = ui.new_child(egui::UiBuilder::new().max_rect(panel.shrink(16.0)));
@@ -629,7 +645,10 @@ fn info_panel(ui: &mut egui::Ui, rect: Rect, p: &super::photos::Pic, albums: &[&
         }
         c.add_space(6.0);
     }
-    go
+    c.add_space(8.0);
+    let label = if in_locked { "Move out of Locked folder" } else { "Move to Locked folder" };
+    let lock = c.add(egui::Label::new(RichText::new(label).size(14.0).color(Color32::from_rgb(138, 180, 248)).underline()).sense(Sense::click()));
+    (go, lock.on_hover_cursor(egui::CursorIcon::PointingHand).clicked())
 }
 
 /// A white icon button on the dark bar.

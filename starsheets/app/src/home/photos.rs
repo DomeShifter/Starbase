@@ -19,6 +19,7 @@ use serde_json::Value as Json;
 
 pub(super) mod albums;
 mod dups;
+mod locked;
 mod pick;
 
 pub(super) use pick::{Act, Out};
@@ -156,6 +157,12 @@ pub(super) enum Got {
     Added(albums::Card, u64, u64, Vec<String>),
     /// The "Add photos" picker's list (pick.rs).
     Picker(Json),
+    /// Locked (locked.rs): its state, a password accepted or refused, pictures moved in (true) or out.
+    LockedState(Json),
+    Unlocked,
+    Wrong(String),
+    Moved(Vec<String>, bool),
+    Nothing,
 }
 
 /// Textures within a budget of bytes, least recently drawn going first.
@@ -274,6 +281,8 @@ pub(super) struct PhotoMode {
     pub dups: dups::Dups,
     /// Selecting, the right-click menu, Add to album (pick.rs).
     pub pick: pick::Pick,
+    /// The Locked tab (locked.rs).
+    pub lk: locked::Locked,
     /// What the Drive around Photos is asked to do (stars, the bin, Details).
     pub out: Vec<Out>,
 }
@@ -305,6 +314,7 @@ impl Default for PhotoMode {
             alb: albums::Albums::default(),
             dups: dups::Dups::default(),
             pick: pick::Pick::default(),
+            lk: locked::Locked::default(),
             out: Vec::new(),
         }
     }
@@ -463,6 +473,14 @@ impl PhotoMode {
                 Got::Changed => self.alb.changed(ctx, store, &self.inbox),
                 Got::Added(c, n, asked, ids) => self.added(ctx, store, c, n, asked, ids),
                 Got::Picker(v) => self.take_picker(&v),
+                Got::LockedState(v) => self.take_locked(ctx, &v),
+                Got::Unlocked => self.unlocked(ctx, store),
+                Got::Wrong(e) => {
+                    self.lk.busy = false;
+                    self.lk.error = Some(e);
+                }
+                Got::Moved(ids, into) => self.moved(ctx, store, &ids, into),
+                Got::Nothing => {}
                 Got::Listed(f, sub, v) => {
                     if Some(&f) == self.folder.as_ref() && sub == self.sub && self.alb.tab == albums::Tab::Photos {
                         self.take_list(&v);
@@ -525,6 +543,7 @@ impl PhotoMode {
         if self.waiting > 0 {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(RELIST));
         }
+        self.locked_logic(ctx, store);
         self.tex.evict(self.frame);
     }
 
@@ -619,6 +638,7 @@ impl PhotoMode {
             ui.vertical(|ui| match self.alb.tab {
                 albums::Tab::Photos => self.folder_ui(ui, store, folder),
                 albums::Tab::Duplicates => self.dups_ui(ui, store, folder),
+                albums::Tab::Locked => self.locked_ui(ui, store),
                 _ => self.cards_ui(ui, store),
             });
         });
@@ -773,7 +793,7 @@ impl PhotoMode {
         let mut chosen = None;
         resp.context_menu(|ui| {
             house::menu(ui, 240.0);
-            for (act, icon, label) in pick::menu_rows(in_album) {
+            for (act, icon, label) in pick::menu_rows(in_album, self.locked_tab()) {
                 if house::menu_row(ui, Some(icon), label, "", true) {
                     chosen = Some(act);
                     ui.close();
@@ -894,6 +914,7 @@ impl PhotoMode {
             "albums": self.alb.test_state(),
             "dups": self.dups.test_state(),
             "pick": self.pick.test_state(),
+            "locked": self.locked_state(),
             "textures": { "count": self.tex.len(), "bytes": self.tex.total, "budget": self.tex.budget, "asking": self.asking.len() },
             "items": self.pics.iter().take(60).map(|p| json!({
                 "id": p.id, "name": p.name, "taken": p.taken, "state": p.state, "v": p.v, "media": p.media, "duration": p.duration, "stack": p.stack.iter().map(|f| &f.name).collect::<Vec<_>>(),

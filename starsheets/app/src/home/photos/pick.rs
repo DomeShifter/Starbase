@@ -78,6 +78,9 @@ pub(in crate::home) enum Act {
     Download,
     Info,
     Delete,
+    /// Into the Locked folder, and back out of it (locked.rs).
+    Lock,
+    Unlock,
     /// Out of the open album only; the picture stays.
     Remove,
     /// Every picture listed (the bar's Select all, Ctrl/⌘-A).
@@ -85,7 +88,11 @@ pub(in crate::home) enum Act {
 }
 
 /// The right-click menu's rows: (command, icon, label). "Remove from album" only in an album.
-pub(super) fn menu_rows(in_album: bool) -> Vec<(Act, &'static str, &'static str)> {
+pub(super) fn menu_rows(in_album: bool, in_locked: bool) -> Vec<(Act, &'static str, &'static str)> {
+    // Inside Locked only what the Locked folder allows (no bin, no albums, no downloads).
+    if in_locked {
+        return vec![(Act::Open, "open_in_new", "Open"), (Act::Unlock, "lock", "Move out of Locked folder")];
+    }
     let mut v = vec![
         (Act::Open, "open_in_new", "Open"),
         (Act::AddTo, "photo_library", "Add to album…"),
@@ -96,6 +103,7 @@ pub(super) fn menu_rows(in_album: bool) -> Vec<(Act, &'static str, &'static str)
     if in_album {
         v.push((Act::Remove, "remove", "Remove from album"));
     }
+    v.push((Act::Lock, "lock", "Move to Locked folder…"));
     v.push((Act::Delete, "delete", "Move to bin"));
     v
 }
@@ -257,6 +265,9 @@ impl PhotoMode {
                 self.say(ctx, if n == 1 { "Downloading 1 picture".into() } else { format!("Downloading {n} pictures") }, None);
             }
             Act::Info => self.out.push(Out::Info(ids[0].clone())),
+            Act::Lock => self.lk.ask = Some(ids),
+            Act::Unlock => self.move_locked(ctx, store, ids, false),
+            Act::Delete if self.locked_tab() => self.say(ctx, "Move pictures out of the Locked folder first".into(), None),
             Act::Delete => {
                 // Deleting a stack moves both files (JPEG and RAW) to the bin, which Undo restores.
                 let ids: Vec<String> =
@@ -398,6 +409,7 @@ impl PhotoMode {
     /// The dialog, the picker and the note: over everything (the viewer too).
     pub(in crate::home) fn overlays(&mut self, ctx: &egui::Context, store: &Backend) {
         self.dialog_ui(ctx, store);
+        self.locked_dialog(ctx, store);
         self.picker_ui(ctx, store);
         self.note_ui(ctx, store);
     }
@@ -692,6 +704,8 @@ impl PhotoMode {
                 "download" => Act::Download,
                 "info" => Act::Info,
                 "delete" => Act::Delete,
+                "lock" => Act::Lock,
+                "unlock" => Act::Unlock,
                 "remove" => Act::Remove,
                 "selectall" => Act::SelectAll,
                 a => return Err(format!("unknown act `{a}`")),
@@ -903,10 +917,10 @@ mod tests {
     #[test]
     fn the_menu_has_every_command() {
         for (in_album, want) in [
-            (false, vec!["Open", "Add to album…", "Favourite", "Download", "Info", "Move to bin"]),
-            (true, vec!["Open", "Add to album…", "Favourite", "Download", "Info", "Remove from album", "Move to bin"]),
+            (false, vec!["Open", "Add to album…", "Favourite", "Download", "Info", "Move to Locked folder…", "Move to bin"]),
+            (true, vec!["Open", "Add to album…", "Favourite", "Download", "Info", "Remove from album", "Move to Locked folder…", "Move to bin"]),
         ] {
-            let rows = menu_rows(in_album);
+            let rows = menu_rows(in_album, false);
             assert_eq!(rows.iter().map(|r| r.2).collect::<Vec<_>>(), want);
             for (act, icon, label) in rows {
                 assert!(crate::icons::icon(icon).is_some(), "{label}: no icon `{icon}`");

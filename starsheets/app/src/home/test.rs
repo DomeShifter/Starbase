@@ -172,6 +172,9 @@ impl Home {
                 let ed = pm.editor.as_mut().ok_or("the editor isn't open")?;
                 ed.test_run(ctx, &self.store, &id["home:photos:edit:".len()..], params)?;
             }
+            "home:photos:locked:unlock" | "home:photos:locked:lock" | "home:photos:locked:idle" | "home:photos:locked:confirm" => {
+                pm.locked_test(ctx, &self.store, id, params)?
+            }
             "home:photos:tab" | "home:photos:dups:keep" | "home:photos:select" | "home:photos:place:open" => {
                 pm.alb_test(ctx, &self.store, id, params)?
             }
