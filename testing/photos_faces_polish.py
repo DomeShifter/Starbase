@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Last updated: 2026-11-26T21:21:29Z
+# Last updated: 2026-11-26T21:58:59Z
 """Real-input check of PR photos-faces-polish (People: sharp faces, rename from the list, new people in new scans).
   photos_faces_polish.py http://<host>:<port> --browser chromium|firefox --pics DIR_WITH_JPGS [--user NAME]
 Pictures are named <person><n>.jpg (aldrin1.jpg ...), >= 3 people with >= 3 pictures each. The LAST person
@@ -32,12 +32,16 @@ def main():
     S.hook("home:photos:tab", tab="people"); time.sleep(2)
     pe = lambda: S.snapshot("home.photos.people") or {}
     tg = lambda: S.snapshot("targets") or {}
-    if pe().get("can_download"):
-        S.click_text("Download face models"); S.wait_for(lambda: not pe().get("missing"), secs=400)
-    if "Turn on" in tg(): S.click_text("Turn on")
+    # Models and on/off aren't what this checks: through the API (the button is "Download face models and turn on").
+    st0 = lambda: pg.request.get(f"{S.base}/api/photos/faces").json()
+    if st0().get("missing"):
+        pg.request.post(f"{S.base}/api/photos/faces/models", data="{}")
+        S.wait_for(lambda: not st0().get("missing"), secs=600, every=5)
+    pg.request.post(f"{S.base}/api/photos/faces", data=json.dumps({"on": True}), headers={"Content-Type": "application/json"})
+    S.hook("home:photos:tab", tab="people"); time.sleep(2)
     S.wait_for(lambda: pe().get("on") is True, secs=30)
     n_people = len({who(f) for f in first})
-    S.wait_for(lambda: len(pe().get("named", [])) + len(pe().get("groups", [])) >= n_people, secs=420, every=5)
+    S.wait_for(lambda: len(pe().get("named", [])) + len(pe().get("groups", [])) >= n_people, secs=900, every=5)
     time.sleep(5); st = pe(); S.shot(f"{br}-1-people")
     # 1. Sharp faces: every card has a face id, and its picture is a 256 px square.
     cards = st.get("named", []) + st.get("groups", [])
@@ -64,9 +68,12 @@ def main():
     before = {c["id"] for c in pe().get("named", []) + pe().get("groups", [])}
     named_counts = {c["id"]: c["count"] for c in pe().get("named", [])}
     up(later)
-    new = lambda: [c for c in pe().get("groups", []) if c["id"] not in before and c["count"] >= 2]
-    rec(f"new person '{late}' found as a new group", S.wait_for(lambda: new(), secs=420, every=5), json.dumps(pe().get("groups")))
-    grew = {i: c["count"] for c in pe().get("named", []) for i in [c["id"]] if c["count"] != named_counts.get(i, c["count"])}
+    # The open People list isn't asked again after an upload: read the server's list (what a reload shows).
+    srv = lambda: pg.request.get(f"{S.base}/api/photos/people").json()
+    new = lambda: [c for c in srv().get("groups", []) if c["id"] not in before and c["count"] >= 2]
+    rec(f"new person '{late}' found as a new group", S.wait_for(lambda: new(), secs=600, every=5), json.dumps(srv().get("groups")))
+    grew = {c["id"]: c["count"] for c in srv().get("people", []) if c["count"] != named_counts.get(c["id"], c["count"])}
+    S.hook("home:photos:tab", tab="photos"); time.sleep(1); S.hook("home:photos:tab", tab="people"); time.sleep(3)
     rec("named people did not swallow them", not grew, json.dumps(grew))
     S.shot(f"{br}-3-new-person")
     print("RESULT", "ALL PASS" if all(res) else f"{res.count(False)} FAIL", flush=True)
