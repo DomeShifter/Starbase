@@ -104,7 +104,7 @@ fn password_deck_shows_its_pictures_with_the_unlock_cookie() {
     assert!(unlock(&st, &t, "wrong").form);
     let cookie = unlock(&st, &t, "open sesame").set_cookie.unwrap();
     assert!(cookie.contains("HttpOnly") && cookie.contains(&format!("Path=/api/public/{t}")), "{cookie}");
-    let grant = grant_in(&cookie.split(';').next().unwrap().to_string(), &t);
+    let grant = grant_in(cookie.split(';').next().unwrap(), &t);
     assert!(serve(&st, &t, "", &grant).script);
     let img = serve(&st, &t, "media/0", &grant);
     assert_eq!((img.code, img.content_type), (200, "image/png"));
