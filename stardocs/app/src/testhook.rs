@@ -195,6 +195,8 @@ fn stardocs_command(shell: &mut Shell, app: &mut WordApp, link: Option<&Link>, i
 /// the word count, the plain text (first 100 KB), unsaved changes and the status line.
 fn snapshot(app: &mut WordApp, shell: &mut Shell, link: Option<&Link>, ctx: &egui::Context) -> Value {
     let shell_state = shell.test_state(app, link);
+    // Alignment of the paragraph at the caret ("left", "center", "right", "justify"), as the engine resolves it.
+    let align = serde_json::to_value(wordcraft_engine::cmd::para::selection_para(&app.session).align).unwrap_or(Value::Null);
     let mut engine = |id: &str| app.session.run(id, &json!({})).unwrap_or_else(|e| json!({ "err": e.to_string() }));
     let format = engine("format.state");
     let view = engine("view.state");
@@ -223,6 +225,7 @@ fn snapshot(app: &mut WordApp, shell: &mut Shell, link: Option<&Link>, ctx: &egu
         // The comment drawn as active (its text highlighted): the clicked card, else the one at the caret.
         "shownComment": app.canvas.balloon.or_else(|| wordcraft_engine::cmd::review::comment_range_at_caret(&app.session)),
         "format": format,
+        "align": align,
         "view": view,
         "words": words,
         "text": text,
