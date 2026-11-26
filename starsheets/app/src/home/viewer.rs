@@ -612,6 +612,7 @@ pub(super) fn info_groups(p: &super::photos::Pic, albums: &[&super::photos::albu
 }
 
 /// The same facts as one list (the test hook's `info_rows`).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub(super) fn info_lines(p: &super::photos::Pic, albums: &[&super::photos::albums::Card]) -> Vec<(&'static str, String)> {
     info_groups(p, albums).into_iter().flat_map(|(_, rows)| rows).collect()
 }
