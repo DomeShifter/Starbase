@@ -161,7 +161,9 @@ async fn list_albums(app: &Shared, me: Option<auth::User>) -> Response<Body> {
             .into_iter()
             .map(|al| {
                 let vis: Vec<Seen> = files_of(&al).iter().filter_map(|f| seen(a, &acc, f)).collect();
-                (al["id"].clone(), al["name"].clone(), vis)
+                // The ids of the pictures I may see in it: the viewer's Info panel lists a picture's albums from these.
+                let files: Vec<String> = vis.iter().map(|s| s.0.clone()).collect();
+                (al["id"].clone(), al["name"].clone(), vis, files)
             })
             .collect::<Vec<_>>()
     })
@@ -170,9 +172,9 @@ async fn list_albums(app: &Shared, me: Option<auth::User>) -> Response<Body> {
     let app = app.clone();
     let out = tokio::task::spawn_blocking(move || {
         got.into_iter()
-            .map(|(id, name, vis)| {
+            .map(|(id, name, vis, files)| {
                 let (rows, _) = rows_of(&app, vis);
-                json!({"id": id, "name": name, "count": rows.len(), "cover": cover(&rows)})
+                json!({"id": id, "name": name, "count": rows.len(), "cover": cover(&rows), "files": files})
             })
             .collect::<Vec<_>>()
     })

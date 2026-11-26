@@ -63,6 +63,9 @@ async fn albums_are_virtual_and_show_only_what_the_viewer_may_see() {
     let names: Vec<&str> = g.json["photos"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap()).collect();
     assert_eq!(names, ["a.jpg", "b.jpg", "c.jpg"], "newest first, c has no date: last; {}", g.json);
     assert_eq!(get(&app, "/api/photos/albums", Some("ann"), &[]).await.json["albums"][0]["count"], 3);
+    // The list names each album's pictures: the viewer's Info panel says which albums a picture is in.
+    let g = get(&app, "/api/photos/albums", Some("ann"), &[]).await;
+    assert!(g.json["albums"][0]["files"].as_array().unwrap().iter().any(|f| f == &json!(a)), "{}", g.json);
 
     // Rename.
     assert_eq!(post(&app, &format!("{url}/rename"), "ann", json!({"name": "Summer 2024"})).await.json["name"], "Summer 2024");
