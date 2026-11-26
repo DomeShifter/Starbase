@@ -11,9 +11,25 @@ impl Home {
         let role = self.role_of(item).to_string();
         let can_edit = may_edit(&role);
         let is_space = matches!(item, Item::Folder(f) if !f.contains('/') && self.accounts);
-        let row = |ui: &mut Ui, icon: &str, label: &str, keys: &str, enabled: bool| house::menu_row(ui, Some(icon), label, keys, enabled);
+        // Each row's rect, for the test hook: tests click the row the app drew, never a guess.
+        let rects = std::cell::RefCell::new(Vec::new());
+        let row = |ui: &mut Ui, icon: &str, label: &str, keys: &str, enabled: bool| {
+            let top = ui.cursor().top();
+            let clicked = house::menu_row(ui, Some(icon), label, keys, enabled);
+            let r = egui::Rect::from_x_y_ranges(ui.min_rect().x_range(), top..=top + 32.0);
+            rects.borrow_mut().push((label.to_string(), r));
+            clicked
+        };
         if row(ui, "", "Open", "Enter", single) {
             self.activate(ui.ctx(), item);
+            ui.close();
+        }
+        if let Item::File(id) = item
+            && self.file(id).is_some_and(|f| super::items::opens_as(&f.name) != super::items::Opens::Editor)
+            && row(ui, "visibility", "Preview", "", single)
+        {
+            let id = id.clone();
+            self.preview(ui.ctx(), &id);
             ui.close();
         }
         house::menu_sep(ui);
@@ -103,6 +119,7 @@ impl Home {
             self.delete(ui.ctx(), targets);
             ui.close();
         }
+        self.menu_rects = rects.into_inner();
     }
 
     /// Folder colour ▸ : the house's folder colours as swatches (name on hover), and No colour.
@@ -181,6 +198,8 @@ impl Home {
                     group,
                     r.map(|b| {
                         let v: Json = serde_json::from_slice(&b).unwrap_or_default();
+                        // Pictures Photos lists from subfolders or albums aren't in the Drive's list: the server says where it was.
+                        let original = if original.is_empty() { v["original"].as_str().unwrap_or("").to_string() } else { original };
                         let bin = v["bin"].as_str().filter(|_| v["space"].as_str() == Some(mine.as_str()) && !original.is_empty())?;
                         Some(undo::Step::Binned { bin: bin.to_string(), original })
                     })
@@ -392,6 +411,7 @@ impl Home {
                     // Photos' own listing first: pictures in subfolders/albums aren't in `self.files`.
                     let on = photos::stars_on(&ids, &self.photos.pics, |id| self.file(id).map(|f| f.starred));
                     self.photos.set_starred(&ids, on);
+                    self.undo.record("Favourite".into(), ids.iter().map(|id| undo::Step::Star { id: id.clone(), on }).collect());
                     for id in &ids {
                         call(
                             &self.store,
@@ -406,8 +426,10 @@ impl Home {
                     let n = ids.len();
                     let what = if n == 1 { "1 picture".to_string() } else { format!("{n} pictures") };
                     let text = if on { format!("{what} added to Starred") } else { format!("{what} taken out of Starred") };
-                    self.photos.say(ctx, text, None);
+                    self.photos.say_undo(ctx, text);
                 }
+                photos::Out::Did(label, steps) => self.undo.record(label, steps),
+                photos::Out::Undo => self.undo(ctx),
                 photos::Out::Delete(ids) => self.delete(ctx, ids.into_iter().map(Item::File).collect()),
                 photos::Out::Info(id) => self.show_details(ctx, Item::File(id)),
             }

@@ -323,7 +323,11 @@ pub fn describe(store: &Store, item: Item, relpath: &str, you: Role) -> Value {
     let owner = owner_of(store, relpath);
     let mut people = vec![person(&owner, "owner")];
     people.extend(share.people.iter().filter(|(u, _)| *u != owner).map(|(u, r)| person(u, r.name())));
-    json!({ "people": people, "link": share.link.name(), "keep_location": share.keep_location, "you": you.name(), "folder": matches!(item, Item::Folder(_)) })
+    let public = match item {
+        Item::File(id) => crate::publiclink::describe(store, id),
+        Item::Folder(_) => json!({ "on": false }),
+    };
+    json!({ "people": people, "link": share.link.name(), "keep_location": share.keep_location, "you": you.name(), "folder": matches!(item, Item::Folder(_)), "public": public })
 }
 
 /// Applies the Share dialog's changes: `people` maps username → "view", "comment", "edit" or
@@ -356,6 +360,9 @@ pub fn update(store: &Store, item: Item, relpath: &str, body: &Value) -> Result<
     }
     if let Some(k) = body.get("keep_location").and_then(Value::as_bool) {
         share.keep_location = k;
+    }
+    if let Item::File(id) = item {
+        crate::publiclink::update(store, id, body)?;
     }
     set(store, item, &share).map_err(|e| e.to_string())
 }

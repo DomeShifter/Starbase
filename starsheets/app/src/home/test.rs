@@ -19,6 +19,9 @@ impl Home {
             None => Json::Null,
         };
         json!({
+            "preview": self.file_preview.as_ref().map(|p| p.test_state()),
+            // The last right-click menu's rows: [{label, rect: [x0, y0, x1, y1]}].
+            "menu": self.menu_rects.iter().map(|(l, r)| json!({ "label": l, "rect": [r.min.x, r.min.y, r.max.x, r.max.y] })).collect::<Vec<_>>(),
             "photos": self.photos.test_state(self.photo_folder().is_some()),
             "view": view,
             "loading": self.loading,
@@ -37,7 +40,7 @@ impl Home {
                         super::Thumb::Loading => "loading",
                         super::Thumb::None => "none",
                     });
-                    json!({ "id": f.id, "name": f.name, "folder": f.folder, "starred": f.starred, "kind": super::items::file_kind(&f.name), "thumb": thumb })
+                    json!({ "id": f.id, "name": f.name, "folder": f.folder, "starred": f.starred, "kind": super::items::file_kind(&f.name), "thumb": thumb, "rect": self.tile_rects.get(&f.id).map(|r| [r.min.x, r.min.y, r.max.x, r.max.y]) })
                 })
                 .collect::<Vec<_>>(),
         })
@@ -99,6 +102,13 @@ impl Home {
                 };
                 return Ok(json!({ "opens": opens, "url": url }));
             }
+            // The file preview (filepreview.rs): `home:preview` {id} opens it, `home:preview:close`.
+            "home:preview" => {
+                let id = text("id").ok_or("home:preview needs {id}")?;
+                self.file(&id).ok_or("no such file listed")?;
+                self.preview(ctx, &id);
+            }
+            "home:preview:close" => self.file_preview = None,
             "home:recent" => self.navigate(View::Recent),
             "home:starred" => self.navigate(View::Starred),
             "home:shared" => self.navigate(View::Shared(None)),
