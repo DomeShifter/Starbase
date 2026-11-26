@@ -197,6 +197,29 @@
       try { html = (e.clipboardData && e.clipboardData.getData('text/html')) || null; } catch (_) {}
       window.__ssPasteHtml = html;
     }, true);
+    // Menu Paste (Edit > Paste, a cell's right-click Paste) must paste what Ctrl+V would: the real
+    // clipboard. The app calls this when the item is chosen; it reads the clipboard (text + HTML)
+    // and the app then pastes it like Ctrl+V. Resolves {text, html}, or null when the page may not
+    // read (plain http, browser refused, empty): the app then uses its own last copy.
+    window.__ssPasteRead = async function () {
+      const c = navigator.clipboard;
+      if (!window.isSecureContext || !c) return null;
+      try {
+        let text = null, html = null;
+        if (c.read) {
+          for (const item of await c.read()) {
+            if (text === null && item.types.includes('text/plain')) text = await (await item.getType('text/plain')).text();
+            if (html === null && item.types.includes('text/html')) html = await (await item.getType('text/html')).text();
+          }
+        } else if (c.readText) {
+          text = await c.readText();
+        }
+        return text ? { text, html } : null;
+      } catch (_) {
+        try { const t = await c.readText(); return t ? { text: t, html: null } : null; }
+        catch (_) { return null; }
+      }
+    };
     window.__ssCopyEvent = null;
     for (const t of ['copy', 'cut']) {
       window.addEventListener(t, (e) => {
