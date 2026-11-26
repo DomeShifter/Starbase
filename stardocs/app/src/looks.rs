@@ -212,10 +212,15 @@ mod tests {
         }
         assert!(pages[1].min.y < pages[0].max.y, "pages are side by side: {pages:?}");
         let cards = h.state().canvas.balloon_rects.clone();
-        assert!(!cards.is_empty(), "the comment has a card");
+        assert!(
+            !cards.is_empty(),
+            "the comment has a card; pages {pages:?} avail {:?} comments {:?}",
+            h.state().canvas.page_rects,
+            h.state().session.doc.comments.keys().collect::<Vec<_>>()
+        );
         for (_, card) in &cards {
             for p in &pages {
-                assert!(!card.intersects(*p), "card {card:?} covers page {p:?}");
+                assert!(!card.intersects(*p), "card {card:?} covers page {p:?}; all pages {pages:?}");
             }
         }
     }
