@@ -31,6 +31,7 @@ mod customnumber;
 mod datepicker;
 mod dvpanel;
 mod editmenu;
+mod pasteprompt;
 mod emacs_keys;
 mod errortip;
 mod external;

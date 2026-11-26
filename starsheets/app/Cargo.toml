@@ -30,6 +30,7 @@ png = "0.18"
 # decoders: the browser decodes).
 starbase-photo-edit = { path = "../crates/photo-edit" }
 starbase-templates = { path = "../crates/templates" }
+starbase-clipboard = { path = "../crates/clipboard" }
 image = { version = "0.25", default-features = false }
 # Drive previews of Markdown files (home/textpreview.rs): parsing only, no HTML output.
 pulldown-cmark = { version = "0.13", default-features = false }
