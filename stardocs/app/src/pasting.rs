@@ -46,6 +46,7 @@ pub fn menu_paste(app: &mut WordApp) -> Option<Result<Value, String>> {
 
 /// Pastes by the route the Paste standard chose. Never pastes WordCraft's own older copy
 /// behind the person's back: without a current copy of ours it reads, or asks for Ctrl+V.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
 pub fn paste_by(app: &mut WordApp, route: PasteRoute) -> Result<Value, String> {
     match route {
         // The engine pastes its own copy (with formatting) when the text matches it.
@@ -132,7 +133,7 @@ fn prompt_ui(ctx: &egui::Context) {
         return;
     }
     let mut close = false;
-    let area = egui::Area::new(egui::Id::new("stardocs_paste_prompt"))
+    let area = egui::Area::new(egui::Id::unique("stardocs_paste_prompt"))
         .order(egui::Order::Foreground)
         .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, 72.0))
         .interactable(true)
