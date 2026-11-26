@@ -170,9 +170,11 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
     if pm.viewer.is_none() || pm.pics.is_empty() {
         pm.viewer = None;
         pm.editor = None;
+        super::video::hide();
         return false;
     }
     if pm.editor.is_some() {
+        super::video::hide();
         super::photo_edit::ui(pm, ctx, store);
         return true;
     }
@@ -313,14 +315,22 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
         let side = if v.info { INFO_W } else { 0.0 };
         let mut area = rect.shrink2(vec2(0.0, 56.0));
         area.max.x -= side;
-        let want_original = {
+        let is_video = p.is_video();
+        let want_original = !is_video && {
             let fit = (area.width() / pw).min(area.height() / ph);
             pw * fit * v.zoom * ctx.pixels_per_point() > LARGE as f32 + 1.0 && pw.max(ph) > LARGE as f32
         };
         if want_original {
             pm.want(ctx, store, v.index(), ORIGINAL);
         }
-        let best = pm.best(v.index(), if want_original { ORIGINAL } else { LARGE });
+        let best = if is_video { None } else { pm.best(v.index(), if want_original { ORIGINAL } else { LARGE }) };
+        if is_video {
+            // The browser's own player over the picture area; a slideshow would step away from it.
+            v.playing = false;
+            super::video::show(&id, area, ctx.pixels_per_point());
+        } else {
+            super::video::hide();
+        }
         v.showing = match best.as_ref().map(|b| b.1) {
             Some(ORIGINAL) => "original",
             Some(LARGE) => "1024",
@@ -340,6 +350,7 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
                 let r = Rect::from_center_size(area.center() + v.pan, size);
                 painter.image(t.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             }
+            None if is_video => {}
             None => {
                 painter.text(area.center(), egui::Align2::CENTER_CENTER, "Loading…", egui::FontId::proportional(16.0), Color32::from_gray(200));
             }
@@ -492,6 +503,8 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
         if edit {
             v_edit(pm, ctx, store);
         }
+    } else {
+        super::video::hide();
     }
     open
 }
