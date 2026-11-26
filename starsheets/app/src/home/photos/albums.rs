@@ -107,7 +107,7 @@ pub(super) fn get(ctx: &egui::Context, store: &Backend, inbox: &Inbox, url: &str
                 Ok((200, b)) => wrap(serde_json::from_slice(&b).unwrap_or_default()),
                 Ok((s, b)) => {
                     let v: Json = serde_json::from_slice(&b).unwrap_or_default();
-                    Got::Error(v["error"].as_str().map_or(format!("The server said {s}."), str::to_string))
+                    Got::Error(crate::home::photos::said(&v, s))
                 }
                 Err(e) => Got::Error(e),
             };
@@ -128,7 +128,7 @@ pub(super) fn post(ctx: &egui::Context, store: &Backend, inbox: &Inbox, url: &st
                 Ok((200, _)) => Got::Changed,
                 Ok((s, b)) => {
                     let v: Json = serde_json::from_slice(&b).unwrap_or_default();
-                    Got::Error(v["error"].as_str().map_or(format!("The server said {s}."), str::to_string))
+                    Got::Error(crate::home::photos::said(&v, s))
                 }
                 Err(e) => Got::Error(e),
             };
