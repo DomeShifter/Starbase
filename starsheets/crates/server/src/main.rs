@@ -23,6 +23,7 @@ mod docx_comments;
 mod findpath;
 mod guard;
 mod linkpreview;
+mod listcache;
 mod live;
 mod log;
 mod oidc;
@@ -2034,8 +2035,19 @@ async fn read_body(body: Body, headers: &HeaderMap, limit: u64, wait: Duration) 
     }
 }
 
-/// Every request but the live WebSocket.
+/// Every request but the live WebSocket. Whatever can change the Drive's file list tells the
+/// list cache once it is done (listcache.rs).
 async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
+    let parts: Vec<String> = req.uri().path().split('/').filter(|x| !x.is_empty()).map(str::to_string).collect();
+    let touches = parts.first().is_some_and(|a| a == "api") && listcache::may_change(req.method().as_str(), &parts[1..]);
+    let out = handle_inner(State(app), req).await;
+    if touches {
+        listcache::changed();
+    }
+    out
+}
+
+async fn handle_inner(State(app): State<Shared>, req: Request) -> Response<Body> {
     let (parts, body) = req.into_parts();
     let (method, uri, headers) = (parts.method, parts.uri, parts.headers);
     let peer = guard::peer(&parts.extensions);
@@ -2154,6 +2166,13 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
         return please_sign_in(&app, &headers);
     }
     let me = current_user(&app, &headers);
+    // The file list and the storage total: kept a few seconds per person (listcache.rs).
+    let cache_key =
+        (!app.auth || me.is_some()).then(|| listcache::key(&app.store.root, me.as_ref().map_or("", |u| u.username.as_str()), &m, &p, &q)).flatten();
+    let cache_gen = listcache::start();
+    if let Some(v) = cache_key.as_deref().and_then(listcache::get) {
+        return send_json(&v, 200);
+    }
     if let Some(resp) = contentsearch::route(&app, &m, &p, &q, me.clone()).await {
         return resp;
     }
@@ -2329,6 +2348,9 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
                 && let Some(me) = me
             {
                 r = blocking(&app, move |app| after_files(app, &me, &m2, &p2, r)).await.unwrap_or(Err(Bad::new(500, "server error")));
+            }
+            if let (Some(k), Ok(Reply::Json(v, 200))) = (cache_key, &r) {
+                listcache::put(k, cache_gen, v.clone());
             }
             reply(r)
         }
@@ -2843,6 +2865,64 @@ mod tests {
         assert_eq!(kinds, ["edited", "renamed", "link", "shared", "created"], "newest first");
         assert_eq!(g.json["activity"][0]["by"], "boss");
         assert_eq!(g.json["activity"][3]["detail"], "ann (can view)");
+        let _ = std::fs::remove_dir_all(&app.store.root);
+    }
+
+    /// The file list and storage total are kept a few seconds per person (listcache.rs), but a
+    /// change (upload, rename, move, share, delete, a save) shows at once, and nobody is ever
+    /// given another person's answer.
+    #[tokio::test]
+    async fn list_cache_never_stale_never_shared() {
+        let (app, ip, boss) = owned().await;
+        for who in ["ann", "vic"] {
+            let g = post(&app, &ip, "/api/users", &boss, json!({"username": who, "name": who, "password": format!("{who}password")})).await;
+            assert_eq!(g.status, 200);
+        }
+        let ann = cookie_of(&post(&app, &ip, "/api/login", "", json!({"username": "ann", "password": "annpassword"})).await);
+        let vic = cookie_of(&post(&app, &ip, "/api/login", "", json!({"username": "vic", "password": "vicpassword"})).await);
+        let names =
+            |g: &Got| -> Vec<String> { g.json["files"].as_array().unwrap().iter().map(|f| f["name"].as_str().unwrap().to_string()).collect() };
+        let list = |who: String| {
+            let (app, ip) = (app.clone(), ip.clone());
+            async move { send(&app, &ip, "GET", "/api/files", &who, &[], vec![]).await }
+        };
+        let used = |who: String| {
+            let (app, ip) = (app.clone(), ip.clone());
+            async move { send(&app, &ip, "GET", "/api/usage", &who, &[], vec![]).await.json["files"].as_u64().unwrap() }
+        };
+        // Warm the cache for everyone, twice (the second is a hit).
+        for who in [&boss, &ann, &vic] {
+            list(who.clone()).await;
+            assert!(names(&list(who.clone()).await).is_empty());
+        }
+        // Upload: shows at once for the uploader, and only for them.
+        let id = send(&app, &ip, "POST", "/api/files?name=Mine.xlsx", &ann, &[], b"one".to_vec()).await.json["id"].as_str().unwrap().to_string();
+        assert_eq!(names(&list(ann.clone()).await), ["Mine.xlsx"]);
+        assert!(names(&list(vic.clone()).await).is_empty(), "another person's file never shows");
+        assert_eq!(used(ann.clone()).await, 1);
+        assert_eq!(used(ann.clone()).await, 1);
+        assert_eq!(used(vic.clone()).await, 0);
+        // Rename.
+        assert_eq!(send(&app, &ip, "POST", &format!("/api/files/{id}/rename?name=Yours"), &ann, &[], vec![]).await.status, 200);
+        assert_eq!(names(&list(ann.clone()).await), ["Yours.xlsx"]);
+        // Share, then unshare: the other person's list changes at once.
+        assert_eq!(post(&app, &ip, &format!("/api/files/{id}/sharing"), &ann, json!({"people": {"vic": "view"}})).await.status, 200);
+        assert_eq!(names(&list(vic.clone()).await), ["Yours.xlsx"]);
+        assert_eq!(post(&app, &ip, &format!("/api/files/{id}/sharing"), &ann, json!({"people": {"vic": "remove"}})).await.status, 200);
+        assert!(names(&list(vic.clone()).await).is_empty(), "unsharing shows at once");
+        // Save (size changes).
+        let before = list(ann.clone()).await.json["files"][0]["size"].as_u64().unwrap();
+        assert_eq!(send(&app, &ip, "PUT", &format!("/api/files/{id}"), &ann, &[], b"longer bytes".to_vec()).await.status, 200);
+        assert_ne!(list(ann.clone()).await.json["files"][0]["size"].as_u64().unwrap(), before);
+        // Move into a new folder.
+        let made = send(&app, &ip, "POST", "/api/folders?name=Box&path=ann", &ann, &[], vec![]).await;
+        assert!(made.status < 300, "{:?}", made.json);
+        assert_eq!(send(&app, &ip, "POST", &format!("/api/files/{id}/move?folder=ann/Box"), &ann, &[], vec![]).await.status, 200);
+        assert_eq!(list(ann.clone()).await.json["files"][0]["folder"], "ann/Box");
+        // Delete.
+        assert_eq!(send(&app, &ip, "DELETE", &format!("/api/files/{id}"), &ann, &[], vec![]).await.status, 200);
+        assert!(names(&list(ann.clone()).await).is_empty());
+        assert_eq!(used(ann.clone()).await, 0);
         let _ = std::fs::remove_dir_all(&app.store.root);
     }
 

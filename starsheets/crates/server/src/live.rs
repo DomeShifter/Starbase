@@ -207,6 +207,7 @@ async fn connection(
         let (app, user, file) = (app.clone(), user.clone(), file.clone());
         tokio::task::spawn_blocking(move || {
             let _g = app.lock.lock().unwrap_or_else(|e| e.into_inner());
+            crate::listcache::changed();
             let role = crate::sharing::file_role(&app.store, app.auth, user.as_ref(), &file);
             if role == crate::sharing::Role::None {
                 crate::log::note(&app.store, &format!("{} was refused file {file:?} (no access)", who(&user)));
@@ -476,6 +477,7 @@ impl Room {
     fn open(&mut self) -> Result<(), String> {
         let (name, bytes) = {
             let _g = self.app.lock.lock().unwrap_or_else(|e| e.into_inner());
+            crate::listcache::changed();
             let path = self
                 .app
                 .store
@@ -855,6 +857,7 @@ impl Room {
         }
         let roles: Vec<(String, crate::sharing::Role)> = {
             let _g = self.app.lock.lock().unwrap_or_else(|e| e.into_inner());
+            crate::listcache::changed();
             // Accounts as they are now: removed ones are gone, owners may have changed.
             let users = crate::auth::users(&self.app.store);
             let mut seen: HashMap<Option<String>, crate::sharing::Role> = HashMap::new();
@@ -984,6 +987,7 @@ impl Room {
     /// The file's version on disk now (None: gone, moved to the bin, or unreadable).
     fn disk_now(&self) -> Option<String> {
         let _g = self.app.lock.lock().unwrap_or_else(|e| e.into_inner());
+        crate::listcache::changed();
         let path = self.app.store.path_of(&self.file).ok()??;
         self.app.store.version_of(&self.app.store.full(&path)).ok()
     }
@@ -1033,6 +1037,7 @@ impl Room {
     fn check_place(&mut self) {
         let now = {
             let _g = self.app.lock.lock().unwrap_or_else(|e| e.into_inner());
+            crate::listcache::changed();
             self.app.store.path_of(&self.file).ok().flatten()
         };
         if now == self.path {
@@ -1079,6 +1084,7 @@ impl Room {
     /// Saves the room's workbook as a new file next to this one; returns its name.
     fn keep_copy(&self, wb: &Workbook) -> Result<String, String> {
         let _g = self.app.lock.lock().unwrap_or_else(|e| e.into_inner());
+        crate::listcache::changed();
         let store = &self.app.store;
         let path = store.path_of(&self.file).map_err(|e| e.to_string())?.ok_or("the file is gone")?;
         let folder = crate::store::parent_of(&path);
@@ -1130,6 +1136,7 @@ fn save_file(
     let name = app.store.path_of(id).ok().flatten().map(|p| crate::store::base_of(&p)).unwrap_or_else(|| "file.xlsx".into());
     let bytes = gridcraft_engine::io::save_bytes(&wb, &name).map_err(|e| failed(e.to_string()))?;
     let _g = app.lock.lock().unwrap_or_else(|e| e.into_inner());
+    crate::listcache::changed();
     let path = app.store.path_of(id).map_err(|e| failed(e.to_string()))?.ok_or_else(|| failed("the file was moved to the bin".into()))?;
     let full = app.store.full(&path);
     if app.store.version_of(&full).ok().as_deref() != expected {
@@ -1377,6 +1384,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("Work")).unwrap();
         {
             let _g = app.lock.lock().unwrap();
+            crate::listcache::changed();
             let q: HashMap<String, String> = [("folder".to_string(), "Work".to_string())].into();
             app.store.route("POST", &["files".into(), file.clone(), "move".into()], &q, None, b"").unwrap();
         }
