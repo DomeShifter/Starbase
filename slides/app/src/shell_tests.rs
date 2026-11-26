@@ -218,7 +218,7 @@ fn harness_on_server(view_only: bool) -> Harness<'static, (State, FakeDrive)> {
 fn the_title_row_shows_the_server_name_without_pptx_and_the_save_state() {
     let h = harness_on_server(false);
     assert!(h.query_by_label("Quarterly plan").is_some(), "name without .pptx");
-    assert!(h.query_by_label("Saved to Starbase").is_some());
+    assert!(h.query_by_label("Saved").is_some(), "the save-state icon says it is saved");
 }
 
 #[test]
