@@ -29,6 +29,7 @@ mod items;
 mod photo_edit;
 mod photos;
 mod sidebar;
+mod templates;
 #[cfg(target_arch = "wasm32")]
 mod test;
 mod undo;
@@ -774,6 +775,10 @@ impl Home {
                 self.mixed = b[2] == b'1';
             }
             self.open_dir = self.store.start_dir();
+            if self.store.start_templates() {
+                let folder = self.open_dir.clone().unwrap_or_else(|| self.space.clone());
+                templates::open(ctx, &folder);
+            }
             self.photos.boot(&self.store);
             self.refresh(ctx);
         }
@@ -911,6 +916,7 @@ impl Home {
 
     pub fn ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        self.templates_ui(&ctx);
         ui.painter().rect_filled(ui.max_rect(), 0, theme::PAGE);
         egui::Panel::top("home_top")
             .show_separator_line(false)

@@ -87,6 +87,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
         "File",
         &[
             Cmd("New document", "file.new", NO, ""),
+            Cmd("New from a template…", "stardocs.templates", NO, ""),
             Cmd("Open", "file.open", NO, "Ctrl+O"),
             Cmd("Make a copy", "stardocs.makeCopy", NO, ""),
             Sep,
@@ -773,6 +774,7 @@ fn is_own(id: &str) -> bool {
             | "stardocs.download"
             | "stardocs.downloadAs"
             | "stardocs.makeCopy"
+            | "stardocs.templates"
             | "stardocs.rename"
             | "stardocs.restartNumbering"
             | "stardocs.emoji"
@@ -831,6 +833,11 @@ fn run_menu(app: &mut WordApp, ctx: &egui::Context, flags: &mut Flags, link: Opt
         ("file.open", Some(link)) => link.home(),
         // File › Make a copy: the server's copy (or, on this computer, the file's) in a new tab or
         // window; without either, a download of the copy.
+        // File › New from a template…: the Drive's gallery (in the browser; the desktop program
+        // hides the item, its Drive has the gallery).
+        #[cfg(target_arch = "wasm32")]
+        ("stardocs.templates", Some(link)) => link.templates(),
+        ("stardocs.templates", _) => {}
         ("stardocs.makeCopy", Some(link)) => link.make_copy(app),
         ("stardocs.makeCopy", None) => match crate::download::download_as(app, None, "docx", "Copy of ") {
             Ok(name) => app.status(format!("Downloaded \"{name}\"")),
@@ -1893,7 +1900,29 @@ fn docs_menu_style() -> egui::style::StyleModifier {
 /// One of the menu bar's menus with [`docs_menu_style`].
 fn menu_bar_menu(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
     let config = egui::containers::menu::MenuConfig::new().style(docs_menu_style());
-    let _ = egui::containers::menu::MenuButton::new(RichText::new(title).size(14.0).color(TEXT)).config(config).ui(ui, add);
+    let (r, _) = egui::containers::menu::MenuButton::new(RichText::new(title).size(14.0).color(TEXT)).config(config).ui(ui, add);
+    target(ui.ctx(), &format!("menu:{title}"), r.rect);
+}
+
+/// Where the labelled controls were last drawn, keyed by label, with the pass that drew them.
+#[derive(Clone, Default)]
+struct Targets(std::collections::BTreeMap<String, (u64, egui::Rect)>);
+
+/// Remembers where a menu or menu entry was drawn, for the test hook's `targets`: real-click
+/// tests read the spot from there instead of guessing positions (as in Starbase Sheets).
+fn target(ctx: &egui::Context, label: &str, rect: egui::Rect) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<Targets>(egui::Id::NULL).0.insert(label.to_owned(), (pass, rect)));
+}
+
+/// The controls drawn in the latest passes: label → centre `[x, y]` in points.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn targets(ctx: &egui::Context) -> serde_json::Value {
+    let all = ctx.data(|d| d.get_temp::<Targets>(egui::Id::NULL)).unwrap_or_default().0;
+    let last = all.values().map(|(p, _)| *p).max().unwrap_or(0);
+    let map: serde_json::Map<String, serde_json::Value> =
+        all.into_iter().filter(|(_, (p, _))| p + 1 >= last).map(|(k, (_, r))| (k, serde_json::json!([r.center().x, r.center().y]))).collect();
+    serde_json::Value::Object(map)
 }
 
 /// The wording a menu entry shows, and its shortcut.
@@ -1991,9 +2020,13 @@ fn menu_items(app: &mut WordApp, ui: &mut Ui, flags: &mut Flags, items: &[Item],
     for item in items {
         let (label, keys) = wording(app, flags, item);
         match item {
+            // Templates live in the Drive: only the browser can go there.
+            Cmd(_, "stardocs.templates", ..) if !cfg!(target_arch = "wasm32") || link.is_none() => {}
             Cmd(_, id, p, _) => {
                 let b = menu_row(icons::menu_icon_name(label), column, label, keys, width);
-                if ui.add_enabled(!greyed(app, id), b).clicked() {
+                let r = ui.add_enabled(!greyed(app, id), b);
+                target(ui.ctx(), label, r.rect);
+                if r.clicked() {
                     run_menu(app, ui.ctx(), flags, link, id, params(p));
                     ui.close();
                 }
