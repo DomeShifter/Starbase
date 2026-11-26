@@ -232,10 +232,17 @@ impl Home {
             let turned = if let Step::Rotate { id, .. } = &step { Some(id.clone()) } else { None };
             call_any(&self.store, &self.inbox, ctx, method, url, body, move |r| {
                 // A turned picture's new thumbnail version, so the grid and viewer redraw it.
-                Reply::Undone(r.map(|b| turned.map(|id| (id, serde_json::from_slice::<serde_json::Value>(&b).ok().and_then(|v| v["thumb_v"].as_str().map(str::to_string))))).map_err(|(status, msg)| match status {
-                    404 => format!("\u{201c}{label}\u{201d} isn't where it was left any more, so it was left as it is."),
-                    _ => msg,
-                }))
+                Reply::Undone(
+                    r.map(|b| {
+                        turned.map(|id| {
+                            (id, serde_json::from_slice::<serde_json::Value>(&b).ok().and_then(|v| v["thumb_v"].as_str().map(str::to_string)))
+                        })
+                    })
+                    .map_err(|(status, msg)| match status {
+                        404 => format!("\u{201c}{label}\u{201d} isn't where it was left any more, so it was left as it is."),
+                        _ => msg,
+                    }),
+                )
             });
         }
     }
