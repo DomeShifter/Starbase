@@ -431,6 +431,7 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
         "format": format,
         "saved": saving.state == crate::shell::SaveState::Saved,
         "saveStatus": saving.text,
+        "saveIcon": crate::shell::save_info(ctx, doc.is_dirty()).kind.word(),
         "dirty": doc.is_dirty(),
         "canUndo": !doc.undo.is_empty(),
         "canRedo": !doc.redo.is_empty(),

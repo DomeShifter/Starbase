@@ -19,6 +19,8 @@ path = "src/main.rs"
 wordcraft-engine = { workspace = true }
 wordcraft-ui-egui = { workspace = true }
 egui = { workspace = true }
+# The save-state icon on the title row (shared with Sheets and Slides).
+starbase-savestate = { path = "../../starsheets/crates/savestate" }
 log = { workspace = true }
 serde_json = { workspace = true }
 wordcraft-doc = { workspace = true }

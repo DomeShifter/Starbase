@@ -146,7 +146,7 @@ jobs:
       - name: exiftool (the GPS-stripping test needs the reference reader)
         run: sudo apt-get install -y -qq libimage-exiftool-perl
       - name: Test
-        run: cargo test -p starsheets -p starsheets-server -p starsheets-sync -p starbase-connect -p starbase-open -p starbase-photo-edit
+        run: cargo test -p starsheets -p starsheets-server -p starsheets-sync -p starbase-connect -p starbase-savestate -p starbase-open -p starbase-photo-edit
       # Web-only helpers (accounts, sharing, web fonts, the spelling list download) are behind
       # cfg(target_arch = "wasm32"), so the desktop build has no unused code either.
       - name: Clippy (desktop app)
@@ -221,11 +221,11 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Formatting
         # Our packages only: GridCraft (upstream/) keeps its own formatting.
-        run: cargo fmt -p starsheets -p starsheets-server -p starsheets-sync -p starbase-connect -p starbase-open -p starbase-photo-edit --check
+        run: cargo fmt -p starsheets -p starsheets-server -p starsheets-sync -p starbase-connect -p starbase-savestate -p starbase-open -p starbase-photo-edit --check
       - name: Clippy (web app)
         run: cargo clippy -p starsheets -p starbase-photo-edit --target wasm32-unknown-unknown -- -D warnings
       - name: Clippy (server and sync, with tests)
-        run: cargo clippy -p starsheets-server -p starsheets-sync -p starbase-connect -p starbase-open -p starbase-photo-edit --all-targets -- -D warnings
+        run: cargo clippy -p starsheets-server -p starsheets-sync -p starbase-connect -p starbase-savestate -p starbase-open -p starbase-photo-edit --all-targets -- -D warnings
 
   speed:
     # Speed and memory check on a big many-tab workbook (crates/sync/examples/bench.rs): the
