@@ -45,8 +45,18 @@ struct Person {
     role: String,
 }
 
+/// The public link of a file (anyone, even signed out): the server's `public` object.
+#[derive(Default)]
+struct Public {
+    on: bool,
+    token: String,
+    expires: String,
+    no_download: bool,
+    has_password: bool,
+}
+
 enum Reply {
-    Loaded { people: Vec<Person>, link: String, you: String, keep_location: bool },
+    Loaded { people: Vec<Person>, link: String, you: String, keep_location: bool, public: Public },
     Users(Vec<Me>),
     Saved,
     Error(String),
@@ -81,6 +91,10 @@ pub struct Share {
     /// Role picks per person (index in ROLES), as shown.
     picks: Vec<usize>,
     link: usize,
+    public: Public,
+    /// The password box: empty keeps the old password.
+    public_password: String,
+    public_no_password: bool,
     /// "Remove location when sharing" is ticked (the default).
     remove_location: bool,
     you: String,
@@ -134,6 +148,13 @@ fn loaded(v: Json) -> Reply {
         link: v["link"].as_str().unwrap_or("none").into(),
         you: v["you"].as_str().unwrap_or("view").into(),
         keep_location: v["keep_location"].as_bool().unwrap_or(false),
+        public: Public {
+            on: v["public"]["on"].as_bool().unwrap_or(false),
+            token: v["public"]["token"].as_str().unwrap_or("").into(),
+            expires: v["public"]["expires"].as_str().unwrap_or("").into(),
+            no_download: v["public"]["no_download"].as_bool().unwrap_or(false),
+            has_password: v["public"]["has_password"].as_bool().unwrap_or(false),
+        },
     }
 }
 
@@ -185,7 +206,10 @@ impl Share {
         for r in replies {
             self.busy = false;
             match r {
-                Reply::Loaded { people, link, you, keep_location } => {
+                Reply::Loaded { people, link, you, keep_location, public } => {
+                    self.public = public;
+                    self.public_password.clear();
+                    self.public_no_password = false;
                     self.remove_location = !keep_location;
                     self.picks = people.iter().map(|p| role_index(&p.role)).collect();
                     self.people = people;
@@ -294,6 +318,43 @@ impl Share {
             ui.add_enabled(owner, egui::Checkbox::new(&mut self.remove_location, "Remove location when sharing")).on_hover_text(
                 "Photos other people download, or open through the link, are sent without where they were taken. Your own downloads keep it.",
             );
+            if !self.url.contains("/folders/") {
+                house::gap(ui);
+                house::label(ui, "Public link", "Anyone with this address can open the file, signed in or not.");
+                ui.add_enabled(owner, egui::Checkbox::new(&mut self.public.on, "Anyone on the internet with the link can open it"));
+                if self.public.on {
+                    ui.horizontal(|ui| {
+                        house::text(ui, "Expires on");
+                        ui.add_sized(vec2(120.0, house::FIELD_HEIGHT), house::field(&mut self.public.expires, house::BODY).hint_text("2027-01-31"));
+                        house::note(ui, "Leave empty for no expiry.");
+                    });
+                    ui.add_enabled(owner, egui::Checkbox::new(&mut self.public.no_download, "View only: hide download, print and copy"));
+                    ui.horizontal(|ui| {
+                        house::text(ui, "Password");
+                        let hint = if self.public.has_password { "Set. Type a new one to change it." } else { "None" };
+                        ui.add_sized(vec2(220.0, house::FIELD_HEIGHT), house::field(&mut self.public_password, house::BODY).hint_text(hint));
+                        if self.public.has_password {
+                            ui.checkbox(&mut self.public_no_password, "Remove password");
+                        }
+                    });
+                    if !self.public.token.is_empty() {
+                        let origin = web_sys::window().and_then(|w| w.location().origin().ok()).unwrap_or_default();
+                        let mut url = format!("{origin}/api/public/{}", self.public.token);
+                        ui.horizontal(|ui| {
+                            let width = ui.available_width() - 104.0 - house::S;
+                            ui.add_sized(vec2(width, house::FIELD_HEIGHT), house::field(&mut url, house::BODY));
+                            if ui.add(house::secondary_in("Copy public link", house::BLUE).min_size(vec2(104.0, house::BUTTON_HEIGHT))).clicked() {
+                                if let Some(w) = web_sys::window() {
+                                    let _ = w.navigator().clipboard().write_text(&url);
+                                }
+                                house::toast(ctx, "Public link copied");
+                            }
+                        });
+                    } else {
+                        house::note(ui, "Press Done to create the link.");
+                    }
+                }
+            }
             house::gap(ui);
             ui.horizontal(|ui| {
                 let mut url = self.link_url();
@@ -333,7 +394,16 @@ impl Share {
                 }
             }
             let link = LINK_NAMES[self.link.min(3)];
-            let body = json!({ "people": people, "link": link, "keep_location": !self.remove_location });
+            let mut body = json!({ "people": people, "link": link, "keep_location": !self.remove_location });
+            if !self.url.contains("/folders/") {
+                let mut public = json!({ "on": self.public.on, "expires": self.public.expires.trim(), "no_download": self.public.no_download });
+                if self.public_no_password {
+                    public["password"] = json!("");
+                } else if !self.public_password.is_empty() {
+                    public["password"] = json!(self.public_password);
+                }
+                body["public"] = public;
+            }
             call(&self.inbox, ctx, Method::Post, self.url.clone(), Some(body), |_| Reply::Saved);
         }
     }
