@@ -34,23 +34,26 @@ def main():
     pe = lambda: S.snapshot("home.photos.people") or {}
     sc = lambda: pe().get("scan") or {}
     items = lambda: len(S.snapshot("home.photos.items") or [])
+    def menu():  # narrow window: Scan now sits in the photo-menu popup (open it unless it is open)
+        if phone and "photos:scan-now" not in (S.snapshot("targets") or {}):
+            S.click_text("photo-menu"); time.sleep(1)
     # Faces on (models fetched once per server).
     S.hook("home:photos:tab", tab="people"); time.sleep(3)
-    tg = lambda: S.snapshot("targets") or {}
-    for label in ("Download face models and turn on", "Turn on face recognition", "Download face models", "Turn on"):
-        if pe().get("on") is not True and label in tg():
-            S.click_text(label); time.sleep(2)
-    S.wait_for(lambda: not pe().get("missing") and not (pe().get("download") or {}).get("busy"), secs=400, every=3)
-    if pe().get("on") is not True and "Turn on face recognition" in tg():
-        S.click_text("Turn on face recognition")
-    rec("faces on", S.wait_for(lambda: pe().get("on") is True, secs=30), json.dumps(pe().get("note")))
+    # Models and on/off through the API, as photos_faces_polish.py does (not what this checks).
+    st0 = lambda: pg.request.get(f"{S.base}/api/photos/faces").json()
+    if st0().get("missing"):
+        pg.request.post(f"{S.base}/api/photos/faces/models", data="{}")
+        S.wait_for(lambda: not st0().get("missing"), secs=600, every=5)
+    pg.request.post(f"{S.base}/api/photos/faces", data=json.dumps({"on": True}), headers={"Content-Type": "application/json"})
+    S.hook("home:photos:tab", tab="people"); time.sleep(2)
+    rec("faces on", S.wait_for(lambda: pe().get("on") is True, secs=300, every=3), json.dumps(st0())[:300])
     S.hook("home:photos:tab", tab="photos"); time.sleep(2)
     before = items()
     # Three new portraits dropped on disk, then Scan now straight away.
+    time.sleep(31)  # one accepted Scan now per person per 30 s: an earlier run may have just asked
     for i, f in enumerate(first[1:4]):
         shutil.copy(f, os.path.join(data, folder, f"new{i}-{os.path.basename(f)}"))
-    if phone:
-        S.click_text("photo-menu"); time.sleep(1)
+    menu()
     S.click_text("photos:scan-now")
     seen = set()
     def watch():
@@ -60,9 +63,11 @@ def main():
     said = sc().get("said", ""); print("SAID", sorted(seen), flush=True); S.shot(f"{tag}-1-done")
     rec("status went Looking → done", "Looking for new photos…" in seen and said.startswith(("Up to date", "No new photos")), said)
     rec("status counts the 3 new photos", "3 new photos" in said, said)
+    import re
+    m = re.search(r"(\d+) new faces", said)
+    rec("status counts new faces", m and int(m.group(1)) >= 1 and any(x.startswith("Finding faces") for x in seen), said)
     rec("new photos in the grid without a reload", S.wait_for(lambda: items() >= before + 3, secs=30), f"{before}->{items()}")
-    if phone:
-        S.click_text("photo-menu"); time.sleep(1)
+    menu()
     S.click_text("photos:scan-now"); time.sleep(3)
     rec("second click within 30 s: wait message", "seconds" in (sc().get("said") or ""), sc().get("said"))
     S.shot(f"{tag}-2-wait")
