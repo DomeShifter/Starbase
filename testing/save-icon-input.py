@@ -13,8 +13,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from starbase_ui import Session, ship_and_run  # noqa: E402
 
 
-# Middle of the first slide's title placeholder in a 1280-wide window (thumbnails left, slide in the middle).
-SLIDE_TITLE = (720, 330)
+# Middle of the first slide's title placeholder in the 1280x800 test window (measured from a screenshot).
+SLIDE_TITLE = (758, 330)
 
 
 def run(testn, apps):
