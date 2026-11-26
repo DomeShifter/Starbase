@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.expanduser("~/.claude/tools"))
 import starbase_ui as ui
 
 def main():
-    a = sys.argv[1:]; base = a[0]; br = a[a.index("--browser") + 1] if "--browser" in a else "chromium"
+    a = [x for x in sys.argv[1:] if x != "--remote"]; base = a[0]; br = a[a.index("--browser") + 1] if "--browser" in a else "chromium"
     res = []
     def rec(n, ok, d=""): res.append(ok); print(("PASS " if ok else "FAIL ") + n, d, flush=True)
     S = ui.Session(br, base=base); S.sign_in(a[a.index("--user") + 1] if "--user" in a else "ada")
