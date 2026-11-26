@@ -90,6 +90,7 @@ pub fn start() {
                     crate::theme::install(&cc.egui_ctx);
                     egui_extras::install_image_loaders(&cc.egui_ctx);
                     install_wake(&cc.egui_ctx);
+                    starbase_clipboard::watch_focus();
                     // `?test`: window.starsheets for agents and scripts (testhook.rs, TESTING.md).
                     let test = crate::testhook::TestHook::install(&cc.egui_ctx);
                     Ok(Box::new(WebShell { test, ..WebShell::new(app, inbox, prefs) }))
@@ -369,6 +370,7 @@ impl eframe::App for WebShell {
             // A card or tip for the cell the pointer was over would show beside the menu (row 22).
             self.app.grid.hover_cell = None;
         }
+        crate::pasteprompt::before(&ctx);
         self.edit_menu.before(&mut self.app, &ctx);
         self.find.keys(&self.app, &ctx);
         crate::dvpanel::delete_key(&mut self.app);
@@ -408,6 +410,7 @@ impl eframe::App for WebShell {
         self.spell.ui(&mut self.app, &ctx);
         self.edit_menu.ui(&mut self.app, &ctx);
         crate::textmenu::after(&self.app, &ctx);
+        crate::pasteprompt::ui(&ctx);
         crate::house::style_tooltips(&ctx);
         note_copies(ui.ctx());
         copy_without_https(ui.ctx());
@@ -417,12 +420,9 @@ impl eframe::App for WebShell {
 
 /// On plain http eframe can't copy (it needs a secure context): take this frame's copied text
 /// and give it to the page's copy bridge (`__ssCopy` in index.html) instead.
-/// Remembers this frame's copied text for menu Paste (editmenu::LAST_COPY), and forgets it once
-/// the tab has lost the focus (something else may have been copied).
+/// Remembers this frame's copied text for menu Paste (crate starbase-clipboard, which forgets it
+/// once the tab loses the focus: `watch_focus`).
 fn note_copies(ctx: &egui::Context) {
-    if web_sys::window().and_then(|w| w.document()).and_then(|d| d.has_focus().ok()) == Some(false) {
-        crate::editmenu::forget_copy();
-    }
     let last = ctx.output(|o| {
         o.commands.iter().rev().find_map(|c| match c {
             egui::OutputCommand::CopyText(t) => Some(t.clone()),
@@ -474,11 +474,29 @@ thread_local! {
 /// Menu Paste (Edit > Paste, a cell's right-click Paste): start the page's async clipboard read
 /// (index.html `__ssPasteRead`) inside the click; the answer is queued and `take_menu_paste`
 /// pastes it next frame the way Ctrl+V does. False when the page can't read at all.
+/// By the Paste standard (crate starbase-clipboard): StarSheets' own copy while current is
+/// pasted at once; else the read; on http (or a refused read) the "Press Ctrl+V now" prompt,
+/// whose Ctrl+V pastes at the selected cell. Always answers true: the engine does nothing more.
 fn menu_paste_start(ctx: &egui::Context) -> bool {
-    let Some(w) = web_sys::window() else { return false };
-    if !w.is_secure_context() {
-        return false;
+    use starbase_clipboard::{PasteRoute, decide};
+    match decide(crate::editmenu::last_copy().as_deref(), starbase_clipboard::can_read(), false) {
+        PasteRoute::Own(text) => {
+            MENU_PASTE.with(|q| q.borrow_mut().push(Some((text, None))));
+            ctx.request_repaint();
+        }
+        PasteRoute::Read => {
+            if !menu_paste_read(ctx) {
+                starbase_clipboard::show_prompt();
+            }
+        }
+        PasteRoute::Prompt => starbase_clipboard::show_prompt(),
     }
+    true
+}
+
+/// Starts the page's clipboard read; false when the page has no reader.
+fn menu_paste_read(ctx: &egui::Context) -> bool {
+    let Some(w) = web_sys::window() else { return false };
     let Some(f) = js_sys::Reflect::get(&w, &"__ssPasteRead".into()).ok().and_then(|f| f.dyn_into::<js_sys::Function>().ok()) else {
         return false;
     };
@@ -497,8 +515,7 @@ fn menu_paste_start(ctx: &egui::Context) -> bool {
 }
 
 /// Applies the clipboard read a menu Paste started: its text and HTML through the same
-/// `paste_external` as Ctrl+V; when the page couldn't read, StarSheets' own last copy, else the
-/// engine's own clipboard (which says "Nothing to paste." if empty).
+/// `paste_external` as Ctrl+V; when the page couldn't read, the "Press Ctrl+V now" prompt.
 fn take_menu_paste(app: &mut gridcraft_ui_egui::SheetApp) {
     let answers: Vec<_> = MENU_PASTE.with(|q| std::mem::take(&mut *q.borrow_mut()));
     for answer in answers {
@@ -509,10 +526,8 @@ fn take_menu_paste(app: &mut gridcraft_ui_egui::SheetApp) {
                 }
                 app.paste_external(text.replace("\r\n", "\n"));
             }
-            None => match crate::editmenu::last_copy() {
-                Some(text) => app.paste_external(text),
-                None => app.run_or_alert("edit.paste", serde_json::json!({})),
-            },
+            // Refused or empty: Ctrl+V can still paste it.
+            None => starbase_clipboard::show_prompt(),
         }
     }
 }
@@ -522,8 +537,7 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
     let picture_ctx = ctx.clone();
     Services {
         copy_html: Some(Box::new(copy_html)),
-        // Menu Paste: read the real clipboard when chosen (answered next frame, take_menu_paste);
-        // plain http / no clipboard API: StarSheets' own last copy.
+        // Menu Paste: the Paste standard (menu_paste_start; answered next frame, take_menu_paste).
         paste_start: Some(Box::new({
             let ctx = ctx.clone();
             move || menu_paste_start(&ctx)

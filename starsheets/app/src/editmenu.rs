@@ -4,34 +4,21 @@
 //! menu shows instead (textmenu.rs), and this one only if a press ever gets past it.
 //!
 //! Paste reads the clipboard only where the browser allows a page to (https, after the browser
-//! asks); elsewhere it explains Ctrl+V, as Sheets does for its own Edit menu.
+//! asks); elsewhere it shows the "Press Ctrl+V now" prompt (pasteprompt.rs, crate starbase-clipboard).
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-thread_local! {
-    /// The text StarSheets itself last put on the clipboard (cells or text in a cell), while this
-    /// tab has kept the focus. On plain http a page can't read the clipboard, so menu Paste
-    /// (Edit › Paste, a cell's right-click Paste, this menu's Paste) uses this instead; Ctrl+V
-    /// always gets the real clipboard from the browser.
-    static LAST_COPY: RefCell<Option<String>> = const { RefCell::new(None) };
-}
-
-/// Remembers text StarSheets just copied (web.rs: every copy, any route).
+/// Remembers text StarSheets just copied (web.rs: every copy, any route), for menu Paste
+/// (crate starbase-clipboard: forgotten once the tab loses the focus).
 #[cfg(target_arch = "wasm32")]
 pub fn remember_copy(text: &str) {
-    LAST_COPY.with(|c| *c.borrow_mut() = Some(text.replace("\r\n", "\n")));
+    starbase_clipboard::remember(text);
 }
 
 /// The text StarSheets last copied, if the tab hasn't lost the focus since.
 pub fn last_copy() -> Option<String> {
-    LAST_COPY.with(|c| c.borrow().clone()).filter(|t| !t.is_empty())
-}
-
-/// The tab lost the focus: something else may have been copied meanwhile.
-#[cfg(target_arch = "wasm32")]
-pub fn forget_copy() {
-    LAST_COPY.with(|c| *c.borrow_mut() = None);
+    starbase_clipboard::own_copy()
 }
 
 use gridcraft_ui_egui::SheetApp;
@@ -48,8 +35,6 @@ pub struct EditMenu {
     escape: bool,
     /// Text read from the clipboard for Paste, inserted on the frame it arrives.
     pasted: Rc<RefCell<Option<String>>>,
-    /// The "use Ctrl+V" note, when the browser won't let a page read the clipboard.
-    paste_note: bool,
     /// The selection (anchor, caret) as the right button went down. egui's text box moves the
     /// caret to the pointer on ANY press (egui text_cursor_state.rs: `any_pressed`), which
     /// cleared the selection before the menu could cut or copy it (to-do 3 row 14, James's
@@ -137,7 +122,6 @@ impl EditMenu {
         if let Some(text) = self.pasted.borrow_mut().take() {
             insert(app, &text);
         }
-        self.note_ui(ctx);
         let (right, left, at) = ctx.input(|i| (i.pointer.secondary_clicked(), i.pointer.primary_clicked(), i.pointer.interact_pos()));
         let on_menu = at.zip(self.rect).is_some_and(|(p, r)| r.contains(p));
         if right && let Some(p) = at.filter(|p| over_editor(ctx, *p)) {
@@ -207,50 +191,48 @@ impl EditMenu {
         e.request_focus = true;
     }
 
-    /// Paste: the clipboard's text where the browser lets the page read it, else the note.
+    /// Paste, by the Paste standard (crate starbase-clipboard): StarSheets' own copy while
+    /// current, else the clipboard where the browser lets the page read it, else the
+    /// "Press Ctrl+V now" prompt (the text box keeps the keyboard, so the key pastes here).
     fn paste(&mut self, ctx: &egui::Context) {
-        // StarSheets' own last copy: still what's on the clipboard, as the tab never lost focus.
-        if let Some(text) = last_copy() {
-            *self.pasted.borrow_mut() = Some(text);
-            ctx.request_repaint();
-            return;
+        use starbase_clipboard::{PasteRoute, decide};
+        match decide(last_copy().as_deref(), starbase_clipboard::can_read(), false) {
+            PasteRoute::Own(text) => {
+                *self.pasted.borrow_mut() = Some(text);
+                ctx.request_repaint();
+            }
+            PasteRoute::Read => self.read(ctx),
+            PasteRoute::Prompt => starbase_clipboard::show_prompt(),
         }
+    }
+
+    /// Reads the clipboard (https); a refused or empty read shows the prompt.
+    fn read(&mut self, ctx: &egui::Context) {
         #[cfg(target_arch = "wasm32")]
-        if let Some(w) = web_sys::window().filter(|w| w.is_secure_context()) {
+        if let Some(w) = web_sys::window() {
             let clipboard = w.navigator().clipboard();
             if !(clipboard.is_undefined() || clipboard.is_null()) {
                 let (slot, ctx) = (self.pasted.clone(), ctx.clone());
                 let promise = clipboard.read_text();
                 wasm_bindgen_futures::spawn_local(async move {
-                    match wasm_bindgen_futures::JsFuture::from(promise).await {
-                        Ok(v) => {
-                            *slot.borrow_mut() = v.as_string();
-                            ctx.request_repaint();
-                        }
-                        Err(e) => log::warn!("Clipboard read refused: {e:?}"),
+                    match wasm_bindgen_futures::JsFuture::from(promise).await.ok().and_then(|v| v.as_string()).filter(|t| !t.is_empty()) {
+                        Some(text) => *slot.borrow_mut() = Some(text),
+                        None => starbase_clipboard::show_prompt(),
                     }
+                    ctx.request_repaint();
                 });
                 return;
             }
         }
-        let _ = ctx;
-        self.paste_note = true;
-    }
-
-    /// Sheets' note when the browser won't let a menu paste.
-    fn note_ui(&mut self, ctx: &egui::Context) {
-        if !self.paste_note {
+        // The desktop app reads the system clipboard itself: no prompt.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(text) = starbase_clipboard::read_native() {
+            *self.pasted.borrow_mut() = Some(text);
+            ctx.request_repaint();
             return;
         }
-        let mut closed = false;
-        let mut ok = false;
-        house::dialog(ctx, "starsheets_paste_note", 420.0, "Copying and pasting in this browser", Some(&mut closed), |ui| {
-            house::text(ui, PASTE_NOTE);
-            ok = house::actions(ui, &["OK"]).is_some() || ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
-        });
-        if closed || ok {
-            self.paste_note = false;
-        }
+        let _ = ctx;
+        starbase_clipboard::show_prompt();
     }
 }
 

@@ -295,7 +295,7 @@ jobs:
       - name: Compress the site (served pre-compressed) and zip it for the release
         run: |
           (cd site && zip -qr "../starsheets-web-$VERSION.zip" .)
-          find site -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.css' -o -name '*.html' -o -name '*.svg' -o -name '*.json' -o -name '*.txt' \) -exec gzip -k -9 {} \;
+          ../scripts/precompress.sh site
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4

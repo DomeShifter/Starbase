@@ -6667,6 +6667,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
+name = "starbase-clipboard"
+version = "0.4.0"
+dependencies = [
+ "arboard",
+ "wasm-bindgen",
+ "web-sys",
+]
+
+[[package]]
 name = "starbase-connect"
 version = "0.4.0"
 dependencies = [
@@ -6731,6 +6740,7 @@ dependencies = [
  "rfd",
  "serde",
  "serde_json",
+ "starbase-clipboard",
  "starbase-connect",
  "starbase-photo-edit",
  "starbase-savestate",

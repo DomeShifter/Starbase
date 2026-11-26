@@ -24,6 +24,8 @@ impl Home {
             // The last right-click menu's rows: [{label, rect: [x0, y0, x1, y1]}].
             "menu": self.menu_rects.iter().map(|(l, r)| json!({ "label": l, "rect": [r.min.x, r.min.y, r.max.x, r.max.y] })).collect::<Vec<_>>(),
             "photos": self.photos.test_state(self.photo_folder().is_some()),
+            // Drive's left list has the "Locked" entry (target "drive:locked").
+            "lockedEntry": self.store.has_photos(),
             "view": view,
             "list": self.list,
             "view_opts": json!({ "cols": self.vo.cols_str(), "grid": self.vo.grid_str() }),
