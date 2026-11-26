@@ -1153,3 +1153,21 @@ fn leave_page_guard_only_while_something_is_unsaved() {
         assert_eq!(g(d, p, s), want, "dirty={d} pending={p} server={s}");
     }
 }
+
+/// An idle window must not keep repainting: after it settles, every frame may only ask for the next
+/// one at least 200 ms later (at most 5 repaints a second), e.g. a caret blink or a clock.
+#[test]
+fn idle_window_does_not_repaint() {
+    let mut h = window(1400.0);
+    steps(&mut h, 20);
+    let mut fast = Vec::new();
+    for _ in 0..20 {
+        steps(&mut h, 1);
+        let delay = h.output().viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+        if delay < std::time::Duration::from_millis(200) {
+            let causes: Vec<String> = h.ctx.repaint_causes().iter().map(|c| format!("{}:{} {}", c.file, c.line, c.reason)).collect();
+            fast.push(format!("{delay:?} {causes:?}"));
+        }
+    }
+    assert!(fast.is_empty(), "idle frames asked to repaint again within 200 ms: {fast:#?}");
+}
