@@ -220,6 +220,8 @@ impl Home {
                         self.type_rows(ui);
                         house::menu_sep(ui);
                         self.theme_row(ui);
+                        house::menu_sep(ui);
+                        ui.horizontal_wrapped(|ui| self.photos.alb.ppl.scan.ui(ui, &self.store));
                     });
                 } else {
                     let dark = self.photos.shell.dark;
@@ -244,9 +246,7 @@ impl Home {
                         house::menu(ui, 200.0);
                         self.type_rows(ui);
                     });
-                    if self.photos.alb.ppl.scan.ui(ui, &self.store) {
-                        self.photos.alb.ppl.asked = false;
-                    }
+                    self.photos.alb.ppl.scan.ui(ui, &self.store);
                     let set = pill(ui, Some("folder"), self.photos.shell.scope.short(), self.photos.shell.scope != Scope::Folder);
                     house::target(&ctx, "photo-set", set.rect);
                     egui::Popup::menu(&set).show(|ui| {

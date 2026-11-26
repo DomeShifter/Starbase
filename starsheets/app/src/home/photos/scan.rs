@@ -20,6 +20,8 @@ pub(in crate::home) struct ScanNow {
     poll: f64,
     /// The words shown last (also for the test hook).
     said: String,
+    /// A scan just finished: PhotoMode lists the folder and People again.
+    pub finished: bool,
 }
 
 impl ScanNow {
@@ -68,6 +70,7 @@ impl ScanNow {
             } else {
                 self.running = false;
                 finished = true;
+                self.finished = true;
                 let (n, f) = (last["photos_new"].as_u64().unwrap_or(0), last["faces_new"].as_u64().unwrap_or(0));
                 self.said = match (n, last["faces_on"] == true) {
                     (0, _) => "No new photos".into(),

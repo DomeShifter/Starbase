@@ -250,10 +250,7 @@ impl PhotoMode {
         }
         let pr = &st["progress"];
         let waiting = st["missing"].as_array().is_some_and(|m| !m.is_empty());
-        let ppl = &mut self.alb.ppl;
-        if ui.horizontal(|ui| ppl.scan.ui(ui, store)).inner {
-            ppl.asked = false;
-        }
+        ui.horizontal(|ui| self.alb.ppl.scan.ui(ui, store));
         let scanning = self.scan_bar(ui, &st, true);
         if scanning || waiting {
             self.people_poll(ui, 2.0);

@@ -2,6 +2,7 @@
 
 use super::http::{get, send};
 use super::*;
+use crate::photos::faces::{self, Found};
 use crate::{Shared, auth};
 
 #[tokio::test]
@@ -13,7 +14,8 @@ async fn scan_now_queues_only_my_folders_and_waits_between_asks() {
     }
     for p in ["ada/Pics/a.jpg", "bob/Mine/b.jpg"] {
         std::fs::create_dir_all(s.full(p).parent().unwrap()).unwrap();
-        std::fs::write(s.full(p), jpeg(&halves(40, 20))).unwrap();
+        let img = if p.starts_with("ada") { halves(40, 20) } else { halves(30, 20) };
+        std::fs::write(s.full(p), jpeg(&img)).unwrap();
     }
     s.synced_index().unwrap();
     let app: Shared = Arc::new(crate::App {
@@ -60,6 +62,18 @@ async fn scan_now_queues_only_my_folders_and_waits_between_asks() {
     }
     let ph = service(&app.store).unwrap();
     assert!(ph.rows("ada/Pics", true).iter().any(|r| r.path == "ada/Pics/c.jpg"), "the new picture is in the index");
+    // A face in Bob's picture is not one of Ada's new faces; one in hers is.
+    while ph.with_db(faces::thumb_paths).unwrap_or_default().len() < 3 {
+        assert!(t.elapsed() < Duration::from_secs(20), "thumbnails never made");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    let model = ph.face_model().to_string();
+    let face = Found { x: 0.1, y: 0.1, w: 0.2, h: 0.2, score: 0.95, px: 80.0, emb: vec![1.0, 0.0, 0.0, 0.0] };
+    let thumb_of = |path: &str| ph.with_db(faces::thumb_paths).unwrap().into_iter().find(|(_, p)| p == path).unwrap().0;
+    ph.with_db(|ix| faces::keep(ix, &thumb_of("bob/Mine/b.jpg"), &model, std::slice::from_ref(&face))).unwrap();
+    assert_eq!(get(&app, "/api/photos/scan", Some("ada"), &[]).await.json["faces_new"], 0, "Bob's face isn't counted for Ada");
+    ph.with_db(|ix| faces::keep(ix, &thumb_of("ada/Pics/c.jpg"), &model, &[face])).unwrap();
+    assert_eq!(get(&app, "/api/photos/scan", Some("ada"), &[]).await.json["faces_new"], 1, "Ada's new face");
     // Each person sees their own run.
     let none = get(&app, "/api/photos/scan", Some("boss"), &[]).await.json;
     assert_eq!(none["queued"], 2);

@@ -6,7 +6,8 @@
 //!   `{"queued": n}`; 429 when I asked less than 30 s ago; 401 signed out.
 //! - `GET /api/photos/scan`: how my last "Scan now" is getting on: `{"busy", "queued",
 //!   "photos_new", "faces_on", "thumbs_waiting", "faces": {"done", "all"}, "faces_new"}`.
-//!   `busy` while a queued rescan hasn't finished; the face numbers are the face worker's.
+//!   `busy` while a queued rescan hasn't finished; `faces` is the face worker's progress; `faces_new`
+//!   counts only faces in pictures in my folders.
 //!
 //! Nothing here adds a schedule: the 10-minute rescan, the rescan on opening a folder and the
 //! face worker's rounds stay as they are. Only folders I may see are counted or scanned.
@@ -51,10 +52,22 @@ fn photos_in(ph: &Photos, folders: &[String]) -> usize {
     seen.len()
 }
 
-/// (done, all, faces) of the face worker.
-fn face_counts(ph: &Photos) -> (u64, u64, u64) {
+/// (done, all) of the face worker (the whole server, as the People page shows it).
+fn face_counts(ph: &Photos) -> (u64, u64) {
     let model = ph.face_model().to_string();
-    ph.with_db(|ix| faces::progress(ix, &model))
+    let (done, all, _) = ph.with_db(|ix| faces::progress(ix, &model));
+    (done, all)
+}
+
+/// Faces found in pictures in `folders` (only those: never other people's).
+fn faces_in(ph: &Photos, folders: &[String]) -> u64 {
+    let mine: HashSet<String> = folders.iter().flat_map(|f| ph.rows(f, true)).map(|r| r.path).collect();
+    let model = ph.face_model().to_string();
+    ph.with_db(|ix| {
+        let thumbs: HashSet<String> =
+            faces::thumb_paths(ix).unwrap_or_default().into_iter().filter(|(_, p)| mine.contains(p)).map(|(t, _)| t).collect();
+        faces::faces(ix, &model).unwrap_or_default().iter().filter(|f| thumbs.contains(&f.thumb)).count() as u64
+    })
 }
 
 pub async fn route(app: &Shared, m: &str, me: Option<auth::User>) -> Response<Body> {
@@ -86,7 +99,7 @@ fn start(a: &crate::App, me: Option<&auth::User>, who: &str, ph: &Photos) -> Res
     }
     let folders = my_folders(a, me, ph);
     let photos_before = photos_in(ph, &folders);
-    let faces_before = face_counts(ph).2;
+    let faces_before = faces_in(ph, &folders);
     let tickets: Vec<u64> = folders.iter().map(|f| ph.request_scan(f, true, true)).collect();
     ph.ml.poke();
     let n = tickets.len();
@@ -108,7 +121,7 @@ fn how_far(who: &str, ph: &Photos) -> Response<Body> {
     };
     let busy = tickets.iter().any(|t| !ph.wait_scan(*t, Duration::ZERO));
     let photos_new = if folders.is_empty() { 0 } else { photos_in(ph, &folders).saturating_sub(photos_before) };
-    let (done, all, nfaces) = face_counts(ph);
+    let (done, all) = face_counts(ph);
     let (queued, working) = ph.queued();
     send_json(
         &json!({
@@ -118,7 +131,7 @@ fn how_far(who: &str, ph: &Photos) -> Response<Body> {
             "faces_on": ph.faces_on(),
             "thumbs_waiting": queued + working,
             "faces": { "done": done, "all": all },
-            "faces_new": if tickets.is_empty() { 0 } else { nfaces.saturating_sub(faces_before) },
+            "faces_new": if tickets.is_empty() { 0 } else { faces_in(ph, &folders).saturating_sub(faces_before) },
         }),
         200,
     )

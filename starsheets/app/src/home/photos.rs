@@ -579,6 +579,13 @@ impl PhotoMode {
         self.frame += 1;
         self.upload_pump(ctx, store, folder.as_deref(), ctx.input(|i| i.time));
         let now = ctx.input(|i| i.time);
+        if std::mem::take(&mut self.alb.ppl.scan.finished) {
+            // "Scan now" finished: new pictures and faces show without a reload.
+            self.alb.ppl.asked = false;
+            if let Some(f) = self.folder.clone() {
+                self.list(ctx, store, &f);
+            }
+        }
         let got: Vec<Got> = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(|e| e.into_inner()));
         for g in got {
             match g {
