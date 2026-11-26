@@ -210,6 +210,7 @@ fn snapshot(app: &mut WordApp, shell: &mut Shell, link: Option<&Link>, ctx: &egu
     }
     json!({
         "shell": shell_state,
+        "targets": crate::shell::targets(ctx),
         "format": format,
         "view": view,
         "words": words,

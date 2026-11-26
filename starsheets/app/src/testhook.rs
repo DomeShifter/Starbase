@@ -337,7 +337,7 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
         return json!({ "screen": "signin", "account": crate::account::test_state(ctx) });
     }
     if p.home.active {
-        return json!({ "screen": "home", "home": p.home.test_state(), "account": crate::account::test_state(ctx) });
+        return json!({ "screen": "home", "home": p.home.test_state(), "account": crate::account::test_state(ctx), "targets": crate::house::targets(ctx) });
     }
     let Some(doc) = p.app.session.active() else {
         return json!({ "screen": "sheet", "file": null });
@@ -401,6 +401,7 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
     let linked = p.files.linked().filter(|(uid, _)| *uid == doc.uid);
     json!({
         "screen": "sheet",
+        "targets": crate::house::targets(ctx),
         "file": doc.display_title(),
         "fileId": linked.map(|(_, id)| id),
         "folder": p.files.folder(),

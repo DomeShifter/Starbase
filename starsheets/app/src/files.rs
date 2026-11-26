@@ -294,6 +294,11 @@ impl Files {
             "new" => {
                 open_url(&format!("{}?new=1", page_url("")));
             }
+            // File › New from a template…: the Drive's gallery in a new tab, for this file's folder.
+            "templates" => {
+                let dir = self.link.as_ref().map(|l| format!("&dir={}", enc(&l.folder))).unwrap_or_default();
+                open_url(&format!("{}?templates=1{dir}", page_url("")));
+            }
             // The home screen, in this file's folder.
             // The Files button: the home screen in a new tab, at this file's folder.
             "home_tab" => {

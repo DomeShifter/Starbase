@@ -54,6 +54,11 @@ pub(crate) trait Store {
     fn start_dir(&self) -> Option<String> {
         None
     }
+    /// Whether to open "New from a template" at once (`?templates=1` on the web: an editor's
+    /// File › New from a template…).
+    fn start_templates(&self) -> bool {
+        false
+    }
     /// Whether presentations can be made here ("New presentation"): in the browser, and on the
     /// desktop with Starbase Slides beside the Drive.
     fn has_slides(&self) -> bool {
@@ -281,6 +286,11 @@ impl Store for ServerStore {
     fn start_dir(&self) -> Option<String> {
         let search = web_sys::window()?.location().search().ok()?;
         web_sys::UrlSearchParams::new_with_str(&search).ok()?.get("dir").filter(|d| !d.is_empty())
+    }
+
+    fn start_templates(&self) -> bool {
+        let search = web_sys::window().and_then(|w| w.location().search().ok()).unwrap_or_default();
+        web_sys::UrlSearchParams::new_with_str(&search).ok().and_then(|p| p.get("templates")).as_deref() == Some("1")
     }
 }
 
