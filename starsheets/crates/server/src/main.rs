@@ -3089,6 +3089,12 @@ mod tests {
         let up = |name: &str| format!("/api/files?name={name}&as_is=1");
         let g = send(&app, &ip, "POST", &up("photo.png"), &boss, &[], png.clone()).await;
         assert_eq!((g.status, g.json["name"].as_str(), g.json["folder"].as_str()), (201, Some("photo.png"), Some("boss")));
+        // Phone uploads (?skip_dup=1): the same bytes in the same folder are reported, not saved twice.
+        let dup = send(&app, &ip, "POST", &format!("{}&skip_dup=1", up("again.png")), &boss, &[], png.clone()).await;
+        assert_eq!((dup.status, dup.json["duplicate"].as_bool(), dup.json["name"].as_str()), (200, Some(true), Some("photo.png")));
+        assert!(dup.json["id"].is_null());
+        let other = send(&app, &ip, "POST", &format!("{}&skip_dup=1", up("other.png")), &boss, &[], b"different".to_vec()).await;
+        assert_eq!(other.status, 201);
         let photo = g.json["id"].as_str().unwrap().to_string();
         // Without as_is a name that isn't a spreadsheet still becomes one (the apps' own saves).
         assert_eq!(send(&app, &ip, "POST", "/api/files?name=notes.txt", &boss, &[], b"x".to_vec()).await.json["name"], "notes.txt.xlsx");

@@ -45,6 +45,10 @@ pub(crate) trait Store {
     fn new_file(&self, folder: &str, document: bool) -> Result<(), String>;
     /// Asks which files to upload; `got` gets each one picked (name, bytes).
     fn pick_files(&self, got: Box<dyn Fn(String, Vec<u8>)>);
+    /// Asks for pictures and videos (a phone offers its camera roll and camera); default: any file.
+    fn pick_media(&self, got: Box<dyn Fn(String, Vec<u8>)>) {
+        self.pick_files(got);
+    }
     /// Hands a downloaded file to the person (the browser's download, or a Save dialog).
     fn download(&self, name: &str, bytes: &[u8]) -> Result<(), String>;
     /// A small per-person setting (grid or list, sort order); missing means the default.
@@ -259,6 +263,10 @@ impl Store for ServerStore {
     fn pick_files(&self, got: Box<dyn Fn(String, Vec<u8>)>) {
         // The Drive keeps any kind of file.
         crate::web::pick_any(got);
+    }
+
+    fn pick_media(&self, got: Box<dyn Fn(String, Vec<u8>)>) {
+        crate::web::pick_media(got);
     }
 
     fn download(&self, name: &str, bytes: &[u8]) -> Result<(), String> {

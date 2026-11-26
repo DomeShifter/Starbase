@@ -887,6 +887,17 @@ impl Store {
         json!({"ok": true, "bin": name, "original": relpath, "space": if self.spaces { space_of(relpath) } else { "" }})
     }
 
+    /// A file in `folder` (not below it) whose bytes are exactly `body`: sizes first, then the bytes.
+    fn same_bytes_in(&self, folder: &str, body: &[u8]) -> Option<String> {
+        for e in fs::read_dir(self.full(folder)).ok()?.flatten() {
+            let Ok(m) = e.metadata() else { continue };
+            if m.is_file() && m.len() == body.len() as u64 && fs::read(e.path()).is_ok_and(|b| b == body) {
+                return Some(join(folder, &e.file_name().to_string_lossy()));
+            }
+        }
+        None
+    }
+
     /// Reserves a free file name in `folder` (stem.ext, stem (2).ext, …) by creating it exclusively.
     pub fn claim_name(&self, folder: &str, stem: &str, ext: &str, own: Option<&str>) -> R<String> {
         use std::os::unix::fs::OpenOptionsExt;
@@ -1012,6 +1023,14 @@ impl Store {
         if p.len() == 1 && method == "POST" {
             let folder = rel(qs(q, "folder"))?;
             self.need_folder(&folder)?;
+            // ?skip_dup=1 (phone uploads): a file already in this folder with exactly these bytes
+            // is not saved again; the reply says which one it is ("duplicate", no new "id").
+            if qs(q, "skip_dup") == Some("1")
+                && let Some(same) = self.same_bytes_in(&folder, body)
+            {
+                let id = index.iter().find(|(_, p)| **p == same).map(|(i, _)| i.clone()).unwrap_or_default();
+                return Ok(Reply::Json(json!({"duplicate": true, "existing": id, "name": base_of(&same), "folder": folder}), 200));
+            }
             // ?as_is=1: a file uploaded to the Drive keeps its name and type, whatever it is
             // (photo.jpg stays photo.jpg); otherwise a name that isn't a spreadsheet or document
             // gets .xlsx, as before.
