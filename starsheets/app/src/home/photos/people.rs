@@ -373,16 +373,20 @@ impl PhotoMode {
         if let Some(m) = missing {
             if st["can_download"].as_bool() == Some(true) {
                 if st["download"]["busy"].as_bool() != Some(true) {
-                    let files: Vec<String> = m.iter().map(|f| format!("{} ({})", f["what"].as_str().unwrap_or(""), f["licence"].as_str().unwrap_or(""))).collect();
+                    let files: Vec<String> =
+                        m.iter().map(|f| format!("{} ({})", f["what"].as_str().unwrap_or(""), f["licence"].as_str().unwrap_or(""))).collect();
                     let t = format!("Face recognition needs model files: {}. Download them from the Face recognition menu.", files.join(", "));
                     ui.label(RichText::new(t).size(house::NOTE).color(theme::text_dim()));
                 }
             } else {
                 let files: Vec<String> = m
                     .iter()
-                    .map(|f| format!("{} ({}, {})", f["file"].as_str().unwrap_or(""), f["what"].as_str().unwrap_or(""), f["url"].as_str().unwrap_or("")))
+                    .map(|f| {
+                        format!("{} ({}, {})", f["file"].as_str().unwrap_or(""), f["what"].as_str().unwrap_or(""), f["url"].as_str().unwrap_or(""))
+                    })
                     .collect();
-                let t = format!("Model files are missing. Put them in {}: {}.", st["models"].as_str().unwrap_or("the models folder"), files.join("; "));
+                let t =
+                    format!("Model files are missing. Put them in {}: {}.", st["models"].as_str().unwrap_or("the models folder"), files.join("; "));
                 ui.label(RichText::new(t).size(house::NOTE).color(house::ERROR));
             }
         }
@@ -530,8 +534,11 @@ impl PhotoMode {
         let (named, groups) = (self.alb.ppl.named.clone(), self.alb.ppl.groups.clone());
         if named.is_empty() && groups.is_empty() {
             let scanning = st["progress"]["done"].as_u64() < st["progress"]["all"].as_u64();
-            let (title, hint) =
-                if scanning { ("Still looking", "People appear here as they are found.") } else { ("No faces found", "No faces were found in these pictures.") };
+            let (title, hint) = if scanning {
+                ("Still looking", "People appear here as they are found.")
+            } else {
+                ("No faces found", "No faces were found in these pictures.")
+            };
             house::empty_state(ui, Some("groups"), title, hint, None);
             return;
         }
@@ -644,7 +651,13 @@ impl PhotoMode {
                 self.face_ui(ctx, store, &p, (&f.id, &f.v, f.bx), Some(f.face), rect.center(), 26.0);
                 if resp.hovered() {
                     p.circle_filled(rect.right_top() + vec2(-9.0, 9.0), 8.0, theme::text());
-                    p.text(rect.right_top() + vec2(-9.0, 9.0), egui::Align2::CENTER_CENTER, "×", egui::FontId::proportional(house::NOTE), Color32::WHITE);
+                    p.text(
+                        rect.right_top() + vec2(-9.0, 9.0),
+                        egui::Align2::CENTER_CENTER,
+                        "×",
+                        egui::FontId::proportional(house::NOTE),
+                        Color32::WHITE,
+                    );
                 }
                 if resp.on_hover_text("Not this person: take this face out").clicked() {
                     out = Some(f.face);
