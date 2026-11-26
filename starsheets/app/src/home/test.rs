@@ -27,6 +27,7 @@ impl Home {
             "view": view,
             "storage": self.storage.map(|(u, b, f)| json!({ "used": u, "bin": b, "free": f })),
             "loading": self.loading,
+            "activity": self.activity.as_ref().map(|(_, v)| super::activity::rows(v)),
             "search": self.search,
             // Files whose text matched the search, with the snippet shown for each.
             "found": self.found.iter().map(|(id, s)| json!({ "id": id, "snippet": s })).collect::<Vec<_>>(),

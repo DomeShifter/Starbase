@@ -179,6 +179,7 @@ impl Home {
         folder: Option<String>,
     ) -> bool {
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
+        house::target(ui.ctx(), label, r);
         let p = ui.painter().clone();
         let dropping = self.dragging.is_some() && folder.is_some() && resp.contains_pointer();
         if current {

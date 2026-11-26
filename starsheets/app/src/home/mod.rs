@@ -22,6 +22,7 @@ use crate::store::{Backend, Method, enc};
 use crate::theme;
 
 mod actions;
+mod activity;
 mod bin;
 mod filepreview;
 mod filters;
@@ -124,6 +125,8 @@ enum Reply {
     Download(String, Vec<u8>),
     /// Who has access to the item in Details.
     Access(Item, Json),
+    /// A file's Activity list (file id, answer).
+    Activity(String, Json),
     /// One request of an undoable action answered: what it did (None: nothing), or why not.
     Did(u64, Result<Option<undo::Step>, String>),
     /// One request of an undo answered.
@@ -189,6 +192,9 @@ pub struct Home {
     mixed: bool,
     /// Details: the item shown, and who has access to it (from the server) once known.
     details: Option<(Item, Option<Json>)>,
+    /// Details: 0 = Details, 1 = Activity; and the Activity list once it arrives (file id, list).
+    details_tab: usize,
+    activity: Option<(String, Json)>,
     search: String,
     /// Files whose text holds the search words (id → snippet), for the search in `found_for`.
     found: HashMap<String, String>,
@@ -955,6 +961,11 @@ impl Home {
                         None => Thumb::None,
                     };
                     self.thumbs.insert(id, (version, t));
+                }
+                Reply::Activity(id, v) => {
+                    if matches!(&self.details, Some((Item::File(i), _)) if *i == id) {
+                        self.activity = Some((id, v));
+                    }
                 }
                 Reply::Access(item, v) => {
                     if let Some((i, a)) = self.details.as_mut()
