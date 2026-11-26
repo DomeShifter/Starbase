@@ -21,6 +21,7 @@ impl Home {
                 ui.add(button.fill(theme::ON).corner_radius(16).min_size(vec2(104.0, 48.0)).stroke(Stroke::NONE))
             })
             .inner;
+        house::target(ui.ctx(), "New", new.rect);
         egui::Popup::menu(&new).show(|ui| {
             house::menu(ui, 260.0);
             let folder = here.clone().unwrap_or_else(|| self.space.clone());

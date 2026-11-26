@@ -727,7 +727,9 @@ fn empty_folder(ui: &mut Ui, can_add: bool) -> bool {
         ui.label(RichText::new(sub).size(house::BODY).color(theme::TEXT_DIM));
         can_add && {
             ui.add_space(house::S);
-            ui.add(house::link("Start from a template")).clicked()
+            let r = ui.add(house::link("Start from a template"));
+            house::target(ui.ctx(), "Start from a template", r.rect);
+            r.clicked()
         }
     })
     .inner

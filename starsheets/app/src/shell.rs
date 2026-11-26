@@ -1000,7 +1000,8 @@ fn title_and_menus(app: &mut SheetApp, ui: &mut Ui, title_draft: &mut Option<Str
                 ui.spacing_mut().item_spacing.x = 0.0;
                 ui.spacing_mut().button_padding = vec2(7.0, 2.0);
                 for (title, items) in MENUS {
-                    ui.menu_button(RichText::new(*title).size(14.0).color(theme::TEXT), |ui| menu_items(app, ui, items));
+                    let r = ui.menu_button(RichText::new(*title).size(14.0).color(theme::TEXT), |ui| menu_items(app, ui, items)).response;
+                    house::target(ui.ctx(), &format!("menu:{title}"), r.rect);
                 }
             });
         });
@@ -1718,7 +1719,9 @@ fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[Item]) -> f32 {
             Cmd(label, id, keys) | CmdWith(label, id, keys, _) => {
                 let on = entry_enabled(app, id);
                 let text = crate::menuactions::label(&app.session, label);
-                if ui.add_enabled_ui(on, |ui| ui.add_sized([width, 32.0], menu_row(&text, keys, with_icons))).inner.clicked() {
+                let r = ui.add_enabled_ui(on, |ui| ui.add_sized([width, 32.0], menu_row(&text, keys, with_icons))).inner;
+                house::target(ui.ctx(), &text, r.rect);
+                if r.clicked() {
                     let p = match item {
                         CmdWith(.., p) => self::params(p),
                         _ => json!({}),

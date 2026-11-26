@@ -94,6 +94,7 @@ fn card(ui: &mut Ui, t: &Template) -> egui::Response {
         .response;
     let r = ui.interact(r.rect, egui::Id::unique(("template", t.key)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
     r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t.name));
+    house::target(ui.ctx(), &format!("template:{}", t.name), r.rect);
     r
 }
 

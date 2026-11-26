@@ -1898,7 +1898,29 @@ fn docs_menu_style() -> egui::style::StyleModifier {
 /// One of the menu bar's menus with [`docs_menu_style`].
 fn menu_bar_menu(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
     let config = egui::containers::menu::MenuConfig::new().style(docs_menu_style());
-    let _ = egui::containers::menu::MenuButton::new(RichText::new(title).size(14.0).color(TEXT)).config(config).ui(ui, add);
+    let (r, _) = egui::containers::menu::MenuButton::new(RichText::new(title).size(14.0).color(TEXT)).config(config).ui(ui, add);
+    target(ui.ctx(), &format!("menu:{title}"), r.rect);
+}
+
+/// Where the labelled controls were last drawn, keyed by label, with the pass that drew them.
+#[derive(Clone, Default)]
+struct Targets(std::collections::BTreeMap<String, (u64, egui::Rect)>);
+
+/// Remembers where a menu or menu entry was drawn, for the test hook's `targets`: real-click
+/// tests read the spot from there instead of guessing positions (as in Starbase Sheets).
+fn target(ctx: &egui::Context, label: &str, rect: egui::Rect) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<Targets>(egui::Id::NULL).0.insert(label.to_owned(), (pass, rect)));
+}
+
+/// The controls drawn in the latest passes: label → centre `[x, y]` in points.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn targets(ctx: &egui::Context) -> serde_json::Value {
+    let all = ctx.data(|d| d.get_temp::<Targets>(egui::Id::NULL)).unwrap_or_default().0;
+    let last = all.values().map(|(p, _)| *p).max().unwrap_or(0);
+    let map: serde_json::Map<String, serde_json::Value> =
+        all.into_iter().filter(|(_, (p, _))| p + 1 >= last).map(|(k, (_, r))| (k, serde_json::json!([r.center().x, r.center().y]))).collect();
+    serde_json::Value::Object(map)
 }
 
 /// The wording a menu entry shows, and its shortcut.
@@ -2000,7 +2022,9 @@ fn menu_items(app: &mut WordApp, ui: &mut Ui, flags: &mut Flags, items: &[Item],
             Cmd(_, "stardocs.templates", ..) if !cfg!(target_arch = "wasm32") || link.is_none() => {}
             Cmd(_, id, p, _) => {
                 let b = menu_row(icons::menu_icon_name(label), column, label, keys, width);
-                if ui.add_enabled(!greyed(app, id), b).clicked() {
+                let r = ui.add_enabled(!greyed(app, id), b);
+                target(ui.ctx(), label, r.rect);
+                if r.clicked() {
                     run_menu(app, ui.ctx(), flags, link, id, params(p));
                     ui.close();
                 }
