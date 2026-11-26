@@ -135,7 +135,7 @@ enum Reply {
     /// One request of an undoable action answered: what it did (None: nothing), or why not.
     Did(u64, Result<Option<undo::Step>, String>),
     /// One request of an undo answered.
-    Undone(Result<(), String>),
+    Undone(Result<Option<(String, Option<String>)>, String>),
     /// The files whose text matches a search: (the search, [(file id, snippet)]).
     Found(String, Vec<(String, String)>),
     Error(String),

@@ -229,8 +229,10 @@ impl Home {
         for step in action.steps.into_iter().rev() {
             let (method, url, body) = step.undo_request();
             let label = step.label();
+            let turned = if let Step::Rotate { id, .. } = &step { Some(id.clone()) } else { None };
             call_any(&self.store, &self.inbox, ctx, method, url, body, move |r| {
-                Reply::Undone(r.map(|_| ()).map_err(|(status, msg)| match status {
+                // A turned picture's new thumbnail version, so the grid and viewer redraw it.
+                Reply::Undone(r.map(|b| turned.map(|id| (id, serde_json::from_slice::<serde_json::Value>(&b).ok().and_then(|v| v["thumb_v"].as_str().map(str::to_string))))).map_err(|(status, msg)| match status {
                     404 => format!("\u{201c}{label}\u{201d} isn't where it was left any more, so it was left as it is."),
                     _ => msg,
                 }))
@@ -239,8 +241,13 @@ impl Home {
     }
 
     /// One undo request answered.
-    pub(super) fn undone(&mut self, ctx: &egui::Context, r: Result<(), String>) {
+    pub(super) fn undone(&mut self, ctx: &egui::Context, r: Result<Option<(String, Option<String>)>, String>) {
         let now = ctx.input(|i| i.time);
+        let r = r.map(|turned| {
+            if let Some((id, v)) = turned {
+                self.photos.edited(&id, v);
+            }
+        });
         let Some((left, errors, _)) = self.undo.undoing.as_mut() else { return };
         *left -= 1;
         if let Err(e) = r {
