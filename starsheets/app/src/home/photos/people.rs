@@ -70,7 +70,7 @@ impl People {
     #[cfg(target_arch = "wasm32")]
     pub fn test_state(&self) -> Json {
         let c = |v: &Vec<Card>| v.iter().map(|c| json!({"id": c.id, "name": c.name, "count": c.count})).collect::<Vec<_>>();
-        json!({"named": c(&self.named), "groups": c(&self.groups), "on": self.state["on"], "faces": self.faces.len(), "can_download": self.state["can_download"], "download": self.state["download"], "missing": self.state["missing"].as_array().map_or(0, Vec::len)})
+        json!({"named": c(&self.named), "groups": c(&self.groups), "on": self.state["on"], "faces": self.faces.len(), "can_download": self.state["can_download"], "download": self.state["download"], "missing": self.state["missing"].as_array().map_or(0, Vec::len), "progress": self.state["progress"]})
     }
 }
 
@@ -175,23 +175,62 @@ impl PhotoMode {
         resp.clicked()
     }
 
-    /// Off, models missing, progress: one or two lines over the people.
+    /// Ask the list again every `secs` seconds while faces are being looked for (or models fetched).
+    fn people_poll(&mut self, ui: &Ui, secs: f64) {
+        let now = ui.input(|i| i.time);
+        if now - self.alb.ppl.poll > secs {
+            self.alb.ppl.poll = now;
+            self.alb.ppl.asked = false;
+        }
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(secs));
+    }
+
+    /// "Finding faces: 4 of 10" as a bar; true while the scan is running.
+    fn scan_bar(&mut self, ui: &mut Ui, st: &Json, wide: bool) -> bool {
+        let pr = &st["progress"];
+        let (done, all) = (pr["done"].as_u64().unwrap_or(0), pr["all"].as_u64().unwrap_or(0));
+        if done >= all {
+            return false;
+        }
+        let bar = egui::ProgressBar::new(done as f32 / all.max(1) as f32)
+            .desired_width(if wide { 320.0 } else { 220.0 })
+            .text(RichText::new(format!("Finding faces: {done} of {all}")).size(house::NOTE));
+        let r = ui.add(bar);
+        house::target(ui.ctx(), "people:progress", r.rect);
+        if wide {
+            ui.label(RichText::new("You can keep using Photos. People appear here as they are found.").size(house::NOTE).color(theme::text_dim()));
+        }
+        true
+    }
+
+    /// Off, models missing, progress: one clear path to turn it on, then a progress bar.
     fn people_status(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend) {
         let st = self.alb.ppl.state.clone();
         let dim = |ui: &mut Ui, t: String| ui.label(RichText::new(t).size(house::NOTE).color(theme::text_dim()));
         if st.is_null() {
             return;
         }
-        self.models_ui(ui, ctx, store, &st);
         if st["on"].as_bool() != Some(true) {
-            ui.horizontal(|ui| {
-                dim(ui, "Face recognition is off: faces are found on this server only, never sent anywhere.".into());
-                if st["can_toggle"].as_bool() == Some(true) && self.pill(ui, "Turn on", false) {
-                    self.people_post(ctx, store, "api/photos/faces", json!({"on": true}));
+            dim(ui, "Face recognition groups the same face across your pictures. It runs on this server only; nothing is sent anywhere.".into());
+            let downloading = st["download"]["busy"].as_bool() == Some(true);
+            if st["can_toggle"].as_bool() == Some(true) {
+                if downloading || st["download"]["error"].is_string() {
+                    self.models_ui(ui, ctx, store, &st);
                 }
-            });
+                let need = st["can_download"].as_bool() == Some(true) && st["missing"].as_array().is_some_and(|m| !m.is_empty());
+                let label = if need { "Download face models and turn on" } else { "Turn on face recognition" };
+                if !downloading && self.pill(ui, label, false) {
+                    self.people_post(ctx, store, "api/photos/faces", json!({"on": true}));
+                    if need {
+                        self.people_post(ctx, store, "api/photos/faces/models", json!({}));
+                    }
+                }
+            } else {
+                dim(ui, "It is off. Ask the owner of this server to turn it on (in Photos, People).".into());
+            }
             return;
         }
+        self.models_ui(ui, ctx, store, &st);
         if let Some(m) = st["missing"].as_array().filter(|m| !m.is_empty() && st["can_download"].as_bool() != Some(true)) {
             let files: Vec<String> = m
                 .iter()
@@ -208,30 +247,88 @@ impl PhotoMode {
             );
         }
         let pr = &st["progress"];
-        // While the worker is looking (or waiting for models), ask again every 5 seconds.
-        if pr["done"].as_u64() < pr["all"].as_u64() || st["missing"].as_array().is_some_and(|m| !m.is_empty()) {
-            let now = ui.input(|i| i.time);
-            if now - self.alb.ppl.poll > 5.0 {
-                self.alb.ppl.poll = now;
-                self.alb.ppl.asked = false;
-            }
-            ctx.request_repaint_after(std::time::Duration::from_secs(5));
+        let waiting = st["missing"].as_array().is_some_and(|m| !m.is_empty());
+        let scanning = self.scan_bar(ui, &st, true);
+        if scanning || waiting {
+            self.people_poll(ui, 2.0);
         }
         ui.horizontal(|ui| {
-            dim(
-                ui,
-                format!(
-                    "Looked at {} of {} pictures, {} faces. {}",
-                    pr["done"].as_u64().unwrap_or(0),
-                    pr["all"].as_u64().unwrap_or(0),
-                    pr["faces"].as_u64().unwrap_or(0),
-                    st["note"].as_str().unwrap_or("")
-                ),
-            );
+            if !scanning {
+                dim(ui, format!("Done: {} faces found. {}", pr["faces"].as_u64().unwrap_or(0), st["note"].as_str().unwrap_or("")));
+            } else if let Some(n) = st["note"].as_str().filter(|n| !n.is_empty()) {
+                dim(ui, n.to_string());
+            }
             if st["can_toggle"].as_bool() == Some(true) && self.pill(ui, "Turn off", false) {
                 self.people_post(ctx, store, "api/photos/faces", json!({"on": false}));
             }
         });
+        if st["can_toggle"].as_bool() == Some(true) {
+            dim(ui, "Turning off stops the scan. Names and groups are kept.".into());
+        }
+    }
+
+    /// Open a person's page (from the list or the strip).
+    fn people_open(&mut self, ctx: &egui::Context, store: &Backend, c: Card) {
+        self.pics.clear();
+        self.viewer = None;
+        self.alb.ppl.faces.clear();
+        self.alb.ppl.ask = Ask::None;
+        self.loading = true;
+        let key = c.id.clone();
+        self.alb.open = Some(c);
+        super::albums::get(ctx, store, &self.inbox, &format!("api/photos/people/{key}"), move |v| Got::Opened(Tab::People, key, v));
+    }
+
+    /// A row of round faces at the top of Photos; a tap opens the person, "See all" opens People.
+    pub(in crate::home) fn people_strip(&mut self, ui: &mut Ui, store: &Backend) {
+        let ctx = ui.ctx().clone();
+        self.people_boot(&ctx, store);
+        let st = self.alb.ppl.state.clone();
+        if st["on"].as_bool() != Some(true) {
+            return;
+        }
+        if self.scan_bar(ui, &st, false) {
+            self.people_poll(ui, 3.0);
+        }
+        let mut all = self.alb.ppl.named.clone();
+        all.extend(self.alb.ppl.groups.iter().filter(|c| c.count > 1).cloned());
+        if all.is_empty() {
+            return;
+        }
+        let (side, gap) = (64.0, house::M);
+        let fit = (((ui.available_width() - 90.0) / (side + gap)) as usize).clamp(1, 12);
+        let mut open = None;
+        let mut see_all = false;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            for (n, c) in all.iter().take(fit).enumerate() {
+                let (rect, resp) = ui.allocate_exact_size(vec2(side, side + 20.0), Sense::click());
+                house::target(&ctx, &format!("people-strip:{n}"), rect);
+                let p = ui.painter_at(rect);
+                let centre = rect.min + vec2(side / 2.0, side / 2.0);
+                if let (Some((id, v)), Some(bx)) = (&c.cover, c.bx) {
+                    self.face_ui(&ctx, store, &p, (id, v, bx), centre, side / 2.0 - 2.0);
+                }
+                if resp.hovered() {
+                    p.circle_stroke(centre, side / 2.0 - 1.0, egui::Stroke::new(2.0, theme::SHARE));
+                }
+                let name = if c.name.is_empty() { "Unnamed".to_string() } else { c.name.clone() };
+                p.text(rect.min + vec2(side / 2.0, side + 4.0), egui::Align2::CENTER_TOP, name, egui::FontId::proportional(house::NOTE), theme::text_dim());
+                if resp.clicked() {
+                    open = Some(c.clone());
+                }
+            }
+            if self.pill(ui, "See all", false) {
+                see_all = true;
+            }
+        });
+        if let Some(c) = open {
+            self.go(super::albums::Tab::People);
+            self.people_open(&ctx, store, c);
+        } else if see_all {
+            self.go(super::albums::Tab::People);
+        }
+        ui.add_space(house::S);
     }
 
     /// The owner's "Download face models" button, its progress and errors.
@@ -299,7 +396,16 @@ impl PhotoMode {
         let (named, groups) = (self.alb.ppl.named.clone(), self.alb.ppl.groups.clone());
         if named.is_empty() && groups.is_empty() {
             ui.add_space(house::XL);
-            ui.label(RichText::new("No faces yet.").size(house::BODY).color(theme::text_dim()));
+            let on = self.alb.ppl.state["on"].as_bool() == Some(true);
+            let scanning = self.alb.ppl.state["progress"]["done"].as_u64() < self.alb.ppl.state["progress"]["all"].as_u64();
+            let t = if !on {
+                ""
+            } else if scanning {
+                "Still looking. People appear here as they are found."
+            } else {
+                "No faces found in these pictures."
+            };
+            ui.label(RichText::new(t).size(house::BODY).color(theme::text_dim()));
             return;
         }
         let (mut open, mut n) = (None, 0);
@@ -324,14 +430,7 @@ impl PhotoMode {
             }
         });
         if let Some(c) = open {
-            self.pics.clear();
-            self.viewer = None;
-            self.alb.ppl.faces.clear();
-            self.alb.ppl.ask = Ask::None;
-            self.loading = true;
-            let key = c.id.clone();
-            self.alb.open = Some(c);
-            super::albums::get(&ctx, store, &self.inbox, &format!("api/photos/people/{key}"), move |v| Got::Opened(Tab::People, key, v));
+            self.people_open(&ctx, store, c);
         }
     }
 

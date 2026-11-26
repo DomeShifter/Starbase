@@ -864,6 +864,7 @@ impl PhotoMode {
         self.pick_ui(ui, store);
         self.upload_ui(ui);
         ui.add_space(house::S);
+        self.people_strip(ui, store);
         if self.pics.is_empty() {
             ui.add_space(house::XL);
             let text = if self.loading {
