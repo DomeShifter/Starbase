@@ -1115,45 +1115,46 @@ pub fn save_status(ctx: &egui::Context, dirty: bool) -> SaveStatus {
     set.unwrap_or_else(|| if dirty { SaveStatus::new(SaveState::Problem, "Not saved") } else { SaveStatus::new(SaveState::Saved, "Saved") })
 }
 
-/// The save and change-tracking symbol left of Files (to-do 3 row 8; replaces the "Saved" text
-/// beside the title). A dot shows the state: blue while saving, red when something isn't saved
-/// or the connection is down; none when all is saved. Hover: who changed the file last and when,
-/// then where it is saved. A click opens version history, as Sheets' clock does.
+/// The save-state icon left of Files (to-do 3 row 38, shared with Docs and Slides): an ochre
+/// floppy while unsaved or saving, a green clock once saved; hover shows a short card (when,
+/// who, "Click for version history"). A click opens version history.
 fn save_symbol(ui: &mut Ui, dirty: bool) {
-    let get = |key: &str| ui.ctx().data(|m| m.get_temp::<String>(egui::Id::unique(key))).unwrap_or_default();
-    let status = save_status(ui.ctx(), dirty);
-    let (last_edit, tip) = (get("starsheets_last_edit"), get("starsheets_save_status_tip"));
-    let dot = match status.state {
-        SaveState::Saved | SaveState::ViewOnly => None,
-        SaveState::Saving => Some(theme::BLUE),
-        SaveState::Connecting | SaveState::Offline | SaveState::Problem => Some(crate::house::ERROR),
-    };
-    let button = match icons::icon("history") {
-        Some(img) => Button::image(img.fit_to_exact_size(vec2(24.0, 24.0))),
-        None => Button::new(RichText::new("🕘").size(18.0)),
-    };
-    let r = ui.add(button.frame_when_inactive(false).corner_radius(18.0).min_size(vec2(36.0, 36.0)));
-    if let Some(c) = dot {
-        let at = r.rect.center() + vec2(8.0, -8.0);
-        ui.painter().circle(at, 4.0, c, Stroke::new(1.5, theme::PAGE));
+    let info = save_info(ui.ctx(), dirty);
+    let pal = starbase_savestate::SavePalette::house(theme::TEXT_DIM, theme::PAGE);
+    let out = starbase_savestate::save_icon(ui, &info, &pal);
+    crate::house::target(ui.ctx(), "save-icon", out.response.rect);
+    if let Some(card) = out.card {
+        crate::house::target(ui.ctx(), "save-icon-card", card);
     }
-    // The live state in words first (the save tip below already covers saving and errors), then
-    // who and when, then where.
-    let mut lines: Vec<String> = Vec::new();
-    if matches!(status.state, SaveState::ViewOnly | SaveState::Connecting | SaveState::Offline) {
-        lines.push(status.text.clone());
-    }
-    if !last_edit.is_empty() {
-        lines.push(last_edit);
-    }
-    if !tip.is_empty() {
-        lines.push(tip);
-    }
-    let r = if lines.is_empty() { r } else { r.on_hover_text(lines.join("\n")) };
-    if r.clicked() {
+    if out.response.clicked() && info.history {
         ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique("starsheets_files_request"), "versions".to_string()));
     }
 }
+
+/// What the save-state icon shows: the [`SaveStatus`] with when and who (files.rs, native.rs).
+pub fn save_info(ctx: &egui::Context, dirty: bool) -> starbase_savestate::SaveInfo {
+    use starbase_savestate::{SaveInfo, SaveKind};
+    let get = |key: &str| ctx.data(|m| m.get_temp::<String>(egui::Id::unique(key))).unwrap_or_default();
+    let set = ctx.data(|m| m.get_temp::<SaveStatus>(egui::Id::unique(SAVE_STATUS)));
+    let local = set.as_ref().is_some_and(|s| s.text.contains("this computer"));
+    let (kind, detail) = match set {
+        None if dirty => (SaveKind::Unsaved, String::new()),
+        None => (SaveKind::Saved, String::new()),
+        Some(s) => match s.state {
+            SaveState::Saved => (SaveKind::Saved, get(crate::files::LAST_EDIT)),
+            SaveState::Saving => (SaveKind::Saving, String::new()),
+            SaveState::ViewOnly => (SaveKind::ViewOnly, get(crate::files::LAST_EDIT)),
+            SaveState::Connecting => (SaveKind::Offline, "Connecting…".to_string()),
+            SaveState::Offline => (SaveKind::Offline, String::new()),
+            SaveState::Problem => (SaveKind::Problem, s.text.trim_start_matches("Not saved").trim_start_matches(':').trim().to_string()),
+        },
+    };
+    let when = Some(get(SAVE_WHEN)).filter(|w| !w.is_empty());
+    SaveInfo { kind, when, version: None, detail, local, history: !local }
+}
+
+/// The egui memory key holding when the file was last saved, in words.
+pub const SAVE_WHEN: &str = "starsheets_save_when";
 
 /// The Material Symbols icon Sheets shows beside a menu item (docs/sheets-menus.md).
 pub const MENU_ICONS: &[(&str, &str)] = &[

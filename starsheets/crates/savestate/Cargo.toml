@@ -1,0 +1,13 @@
+[package]
+name = "starbase-savestate"
+description = "The save-state icon of the title row (Sheets, Docs, Slides): floppy while unsaved, clock once saved, and its hover card"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+# egui only (no app code): Starbase Sheets uses it from this workspace, Docs and Slides by path.
+[dependencies]
+egui = { version = "0.37", default-features = false }

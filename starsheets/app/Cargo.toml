@@ -45,6 +45,8 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 zip = { version = "3", default-features = false, features = ["deflate"] }
 # "Connect to a server…" (remote.rs): device sign-in, the token in the system keyring, the files API.
 starbase-connect = { path = "../crates/connect" }
+# The save-state icon on the title row (shared with Docs and Slides).
+starbase-savestate = { path = "../crates/savestate" }
 # Photos (home/photos.rs): the desktop decodes pictures itself (the browser does on the web).
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 
