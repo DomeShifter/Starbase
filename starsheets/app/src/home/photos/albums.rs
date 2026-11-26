@@ -53,6 +53,8 @@ pub(in crate::home) struct Card {
     pub cover: Option<(String, String)>,
     /// People: the face on the cover (x, y, w, h, 0..1).
     pub bx: Option<[f32; 4]>,
+    /// People: the cover face's id (its sharp picture comes from the server).
+    pub face: Option<i64>,
     /// An album's pictures (ids), so the Info panel can say which albums a picture is in.
     pub files: Vec<String>,
 }
@@ -97,6 +99,7 @@ pub(super) fn cards(v: &Json, key: &str) -> Vec<Card> {
                 let n = |i: usize| b[i].as_f64().unwrap_or(0.0) as f32;
                 [n(0), n(1), n(2), n(3)]
             }),
+            face: c["cover"]["face"].as_i64(),
             files: c["files"].as_array().into_iter().flatten().filter_map(|f| f.as_str().map(str::to_string)).collect(),
         })
         .collect()

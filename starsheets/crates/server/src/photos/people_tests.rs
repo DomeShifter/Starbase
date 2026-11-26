@@ -57,6 +57,14 @@ async fn a_name_is_seen_only_by_the_account_that_gave_it() {
 
     let ada = get(&app, "/api/photos/people", Some("ada"), &[]).await.json;
     let g = ada["groups"][0]["id"].as_str().expect("one group").to_string();
+    // The cover face as its own sharp picture (cut from the 1024 thumbnail), only for who may see it.
+    let cover = &ada["groups"][0]["cover"];
+    let url = format!("/api/photos/people/face/{}/{}", cover["face"], cover["id"].as_str().unwrap());
+    let pic = get(&app, &url, Some("ada"), &[]).await;
+    assert_eq!(pic.status, 200, "{url}");
+    assert_eq!(image::load_from_memory(&pic.bytes).unwrap().width(), 256);
+    assert_eq!(get(&app, &url, Some("bob"), &[]).await.status, 403, "not Bob's picture");
+    assert_eq!(get(&app, &format!("/api/photos/people/face/999999/{}", cover["id"].as_str().unwrap()), Some("ada"), &[]).await.status, 404);
     let named = post(&app, &format!("/api/photos/people/{g}/name"), "ada", json!({"name": "Sally Ride"})).await;
     assert_eq!(named.status, 200);
     let p = named.json["id"].as_str().unwrap().to_string();

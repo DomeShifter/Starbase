@@ -246,3 +246,90 @@ fn registry_names_files_and_licences() {
         assert!(g.size > 100_000);
     }
 }
+
+/// A unit vector `a`·e0 + `b`·e1 + `c`·e(2+k): faces of a "new person" e1 that look a bit like e0.
+fn mix(a: f32, b: f32, k: usize, c: f32) -> Vec<f32> {
+    let mut v = [0f32; 16];
+    v[0] = a;
+    v[1] = b;
+    v[2 + k] += c;
+    let n = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    v.iter().map(|x| x / n).collect()
+}
+
+/// James 2026-11-26: new scans only ever added faces to existing people. Cause: faces matched
+/// automatically were used as the person's faces too, so one borderline match of a new person
+/// pulled every later face of them in. Now a new person's faces, scanned in separate passes,
+/// form a new group, like on a first scan.
+#[test]
+fn a_new_person_in_a_later_scan_becomes_a_new_group() {
+    let t = thresholds("auraface");
+    let lock = index();
+    {
+        let ix = lock.lock().unwrap();
+        // First scan: Ann, named.
+        faces::keep(&ix, "a1", "auraface", &[found(near(0, 0, 0.1))]).unwrap();
+        faces::keep(&ix, "a2", "auraface", &[found(near(0, 1, 0.1))]).unwrap();
+    }
+    faces::regroup(&lock, "auraface").unwrap();
+    let ann = {
+        let ix = lock.lock().unwrap();
+        let g = faces::faces(&ix, "auraface").unwrap().iter().find_map(Who::of).unwrap();
+        faces::name(&ix, g, "ada", "Ann").unwrap()
+    };
+    // Later scan, one batch at a time: Bea's first face happens to look a bit like Ann.
+    let b1 = mix(0.6, 0.8, 0, 0.0);
+    assert!(similarity(&b1, &near(0, 0, 0.1)) >= t.auto, "the borderline match this test is about");
+    lock.lock().map(|ix| faces::keep(&ix, "b1", "auraface", &[found(b1)]).unwrap()).unwrap();
+    faces::regroup(&lock, "auraface").unwrap();
+    for (k, key) in ["b2", "b3"].iter().enumerate() {
+        lock.lock().map(|ix| faces::keep(&ix, key, "auraface", &[found(mix(0.15, 1.0, k + 1, 0.1))]).unwrap()).unwrap();
+        faces::regroup(&lock, "auraface").unwrap();
+    }
+    let ix = lock.lock().unwrap();
+    let all = faces::faces(&ix, "auraface").unwrap();
+    let bea: Vec<_> = all.iter().filter(|f| f.thumb.starts_with('b')).collect();
+    assert!(bea.iter().all(|f| f.person.is_none()), "none of Bea's faces is Ann: {all:?}");
+    let g = bea[0].grp;
+    assert!(g.is_some() && bea.iter().all(|f| f.grp == g), "Bea is one new group: {all:?}");
+    assert_eq!(bea.iter().find(|f| f.thumb == "b1").unwrap().suggest, Some(ann), "Ann is only offered");
+    assert_eq!(all.iter().filter(|f| f.person == Some(ann)).count(), 2);
+}
+
+/// New faces of a known person still join them without asking.
+#[test]
+fn new_faces_of_a_known_person_still_join() {
+    let lock = index();
+    lock.lock().map(|ix| faces::keep(&ix, "a1", "auraface", &[found(near(0, 0, 0.1)), found(near(0, 1, 0.1))]).unwrap()).unwrap();
+    faces::regroup(&lock, "auraface").unwrap();
+    let ann = {
+        let ix = lock.lock().unwrap();
+        let g = faces::faces(&ix, "auraface").unwrap().iter().find_map(Who::of).unwrap();
+        faces::name(&ix, g, "ada", "Ann").unwrap()
+    };
+    lock.lock().map(|ix| faces::keep(&ix, "a2", "auraface", &[found(near(0, 2, 0.2)), found(near(0, 3, 0.2))]).unwrap()).unwrap();
+    faces::regroup(&lock, "auraface").unwrap();
+    // Looked at again in later passes: they stay.
+    faces::regroup(&lock, "auraface").unwrap();
+    let ix = lock.lock().unwrap();
+    assert_eq!(faces::faces(&ix, "auraface").unwrap().iter().filter(|f| f.person == Some(ann)).count(), 4);
+}
+
+/// Face pictures are cut from the big thumbnail: a face 10% of a 1024 px picture is ~154 px of
+/// it (from the 256 one it was ~38 px), scaled to the 256 px People asks for.
+#[test]
+fn face_crop_is_square_and_sharp() {
+    let mut img = image::RgbImage::new(1024, 768);
+    for (x, y, p) in img.enumerate_pixels_mut() {
+        *p = image::Rgb([(x / 4) as u8, (y / 3) as u8, 0]);
+    }
+    let c = faces::face_crop(&img, [0.45, 0.4, 0.1, 0.1], 256);
+    assert_eq!(c.dimensions(), (256, 256));
+    // The face's centre stays in the middle.
+    let mid = c.get_pixel(128, 128);
+    assert!((mid[0] as i32 - 128).abs() <= 2 && (mid[1] as i32 - 115).abs() <= 2, "{mid:?}");
+    // Near an edge it moves inside the picture; bigger than the picture, it's the whole height.
+    assert_eq!(faces::face_crop(&img, [0.95, 0.0, 0.05, 0.05], 256).dimensions(), (256, 256));
+    assert_eq!(faces::face_crop(&img, [0.0, 0.0, 1.0, 1.0], 64).dimensions(), (64, 64));
+    assert_eq!(faces::face_crop(&image::RgbImage::new(0, 0), [0.1, 0.1, 0.1, 0.1], 32).dimensions(), (32, 32));
+}

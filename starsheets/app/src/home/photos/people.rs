@@ -40,6 +40,10 @@ pub(in crate::home) struct People {
     ask: Ask,
     /// When the list was last asked for again while models download (seconds, egui time).
     poll: f64,
+    /// The card whose name is being typed in place on the People list (its id), and whether
+    /// the box still needs the keyboard.
+    pub editing: Option<String>,
+    focus: bool,
 }
 
 impl People {
@@ -69,8 +73,12 @@ impl People {
 
     #[cfg(target_arch = "wasm32")]
     pub fn test_state(&self) -> Json {
-        let c = |v: &Vec<Card>| v.iter().map(|c| json!({"id": c.id, "name": c.name, "count": c.count})).collect::<Vec<_>>();
-        json!({"named": c(&self.named), "groups": c(&self.groups), "on": self.state["on"], "faces": self.faces.len(), "can_download": self.state["can_download"], "download": self.state["download"], "missing": self.state["missing"].as_array().map_or(0, Vec::len), "progress": self.state["progress"]})
+        let c = |v: &Vec<Card>| {
+            v.iter()
+                .map(|c| json!({"id": c.id, "name": c.name, "count": c.count, "face": c.face, "cover": c.cover.as_ref().map(|x| &x.0)}))
+                .collect::<Vec<_>>()
+        };
+        json!({"named": c(&self.named), "groups": c(&self.groups), "on": self.state["on"], "faces": self.faces.len(), "can_download": self.state["can_download"], "download": self.state["download"], "missing": self.state["missing"].as_array().map_or(0, Vec::len), "progress": self.state["progress"], "editing": self.editing})
     }
 }
 
@@ -144,11 +152,38 @@ impl PhotoMode {
         );
     }
 
-    /// A round face from picture `id` (content tag `v`), box `bx`, centred at `c`.
-    fn face_ui(&mut self, ctx: &egui::Context, store: &Backend, p: &egui::Painter, (id, v, bx): (&str, &str, [f32; 4]), c: Pos2, r: f32) {
+    /// A round face from picture `id` (content tag `v`), box `bx`, centred at `c`. With the face's
+    /// id, the server's sharp face picture (cut from the big thumbnail); while it loads, the small
+    /// thumbnail when it is already here; without (or when that fails), cut from the small one.
+    #[allow(clippy::too_many_arguments)]
+    fn face_ui(
+        &mut self,
+        ctx: &egui::Context,
+        store: &Backend,
+        p: &egui::Painter,
+        (id, v, bx): (&str, &str, [f32; 4]),
+        face: Option<i64>,
+        c: Pos2,
+        r: f32,
+    ) {
         p.circle_filled(c, r, Color32::from_rgb(0xE8, 0xEA, 0xED));
-        self.want_id(ctx, store, id, Some(v), SMALL);
         let frame = self.frame;
+        if let Some(f) = face {
+            let key = format!("face/{f}/{id}");
+            self.want_id(ctx, store, &key, Some(v), SMALL);
+            if let Some(t) = self.tex.get(&(key.clone(), SMALL), frame) {
+                round(p, t.id(), c, r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)));
+                return;
+            }
+            if !self.failed.contains(&(key, SMALL)) {
+                if let Some(t) = self.tex.get(&(id.to_string(), SMALL), frame) {
+                    let [w, h] = t.size();
+                    round(p, t.id(), c, r, face_uv(bx, w as f32, h as f32));
+                }
+                return;
+            }
+        }
+        self.want_id(ctx, store, id, Some(v), SMALL);
         if let Some(t) = self.tex.get(&(id.to_string(), SMALL), frame) {
             let [w, h] = t.size();
             round(p, t.id(), c, r, face_uv(bx, w as f32, h as f32));
@@ -162,17 +197,49 @@ impl PhotoMode {
         let p = ui.painter_at(rect);
         let centre = rect.min + vec2(side / 2.0, side / 2.0);
         if let (Some((id, v)), Some(bx)) = (&c.cover, c.bx) {
-            self.face_ui(ctx, store, &p, (id, v, bx), centre, side / 2.0 - 4.0);
+            self.face_ui(ctx, store, &p, (id, v, bx), c.face, centre, side / 2.0 - 4.0);
         }
         if resp.hovered() {
             p.circle_stroke(centre, side / 2.0 - 3.0, egui::Stroke::new(3.0, theme::SHARE));
         }
-        let name = if c.name.is_empty() { "Add a name".to_string() } else { c.name.clone() };
-        let col = if c.name.is_empty() { theme::text_dim() } else { theme::text() };
-        p.text(rect.min + vec2(side / 2.0, side + 4.0), egui::Align2::CENTER_TOP, name, egui::FontId::proportional(house::BODY), col);
+        self.card_name(ui, ctx, store, c, n, Rect::from_min_size(rect.min + vec2(0.0, side + 2.0), vec2(side, 20.0)));
         let n = format!("{} {}", c.count, if c.count == 1 { "picture" } else { "pictures" });
         p.text(rect.min + vec2(side / 2.0, side + 22.0), egui::Align2::CENTER_TOP, n, egui::FontId::proportional(house::NOTE), theme::text_dim());
         resp.clicked()
+    }
+
+    /// A card's name on the People list, typed in place: click it (or "Add a name"), Enter or
+    /// clicking elsewhere saves (the person page's name call), Esc puts it back.
+    fn card_name(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend, c: &Card, n: usize, r: Rect) {
+        let target = format!("people:name:{n}");
+        if self.alb.ppl.editing.as_deref() == Some(c.id.as_str()) {
+            let t = ui.put(r, egui::TextEdit::singleline(&mut self.alb.ppl.text).hint_text("Name").desired_width(r.width()));
+            house::target(ctx, &target, t.rect);
+            if std::mem::take(&mut self.alb.ppl.focus) {
+                t.request_focus();
+            } else if t.lost_focus() {
+                let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                let name = self.alb.ppl.text.trim().to_string();
+                self.alb.ppl.editing = None;
+                if !esc && !name.is_empty() && name != c.name {
+                    self.people_post(ctx, store, &format!("api/photos/people/{}/name", c.id), json!({"name": name}));
+                    for o in self.alb.ppl.named.iter_mut().chain(self.alb.ppl.groups.iter_mut()).filter(|o| o.id == c.id) {
+                        o.name = name.clone();
+                    }
+                }
+            }
+            return;
+        }
+        let resp = ui.interact(r, ui.scope_id().with(("people-name", &c.id)), Sense::click()).on_hover_cursor(egui::CursorIcon::Text);
+        house::target(ctx, &target, r);
+        let name = if c.name.is_empty() { "Add a name".to_string() } else { c.name.clone() };
+        let col = if c.name.is_empty() || resp.hovered() { theme::text_dim() } else { theme::text() };
+        ui.painter_at(r).text(r.center_top() + vec2(0.0, 2.0), egui::Align2::CENTER_TOP, name, egui::FontId::proportional(house::BODY), col);
+        if resp.clicked() {
+            self.alb.ppl.editing = Some(c.id.clone());
+            self.alb.ppl.text = c.name.clone();
+            self.alb.ppl.focus = true;
+        }
     }
 
     /// Ask the list again every `secs` seconds while faces are being looked for (or models fetched).
@@ -307,7 +374,7 @@ impl PhotoMode {
                 let p = ui.painter_at(rect);
                 let centre = rect.min + vec2(side / 2.0, side / 2.0);
                 if let (Some((id, v)), Some(bx)) = (&c.cover, c.bx) {
-                    self.face_ui(&ctx, store, &p, (id, v, bx), centre, side / 2.0 - 2.0);
+                    self.face_ui(&ctx, store, &p, (id, v, bx), c.face, centre, side / 2.0 - 2.0);
                 }
                 if resp.hovered() {
                     p.circle_stroke(centre, side / 2.0 - 1.0, egui::Stroke::new(2.0, theme::SHARE));
@@ -509,7 +576,7 @@ impl PhotoMode {
                 let (rect, resp) = ui.allocate_exact_size(vec2(56.0, 56.0), Sense::click());
                 house::target(ctx, &format!("face:{i}"), rect);
                 let p = ui.painter_at(rect);
-                self.face_ui(ctx, store, &p, (&f.id, &f.v, f.bx), rect.center(), 26.0);
+                self.face_ui(ctx, store, &p, (&f.id, &f.v, f.bx), Some(f.face), rect.center(), 26.0);
                 if resp.hovered() {
                     p.circle_filled(rect.right_top() + vec2(-9.0, 9.0), 8.0, theme::text());
                     p.text(rect.right_top() + vec2(-9.0, 9.0), egui::Align2::CENTER_CENTER, "×", egui::FontId::proportional(13.0), Color32::WHITE);
