@@ -6697,6 +6697,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "starbase-templates"
+version = "0.4.0"
+dependencies = [
+ "zip 3.0.0",
+]
+
+[[package]]
 name = "starsheets"
 version = "0.4.0"
 dependencies = [
@@ -6719,6 +6726,7 @@ dependencies = [
  "serde_json",
  "starbase-connect",
  "starbase-photo-edit",
+ "starbase-templates",
  "starsheets-sync",
  "trash",
  "wasm-bindgen",
@@ -6762,6 +6770,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.1",
  "starbase-photo-edit",
+ "starbase-templates",
  "starsheets-sync",
  "tiny-skia",
  "tokio",
