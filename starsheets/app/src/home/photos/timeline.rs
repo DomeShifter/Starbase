@@ -320,6 +320,7 @@ impl super::PhotoMode {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
 impl Timeline {
     /// For the test hook: where things are drawn, the scroll offset and the months.
     pub(in crate::home) fn test_state(&self) -> serde_json::Value {
