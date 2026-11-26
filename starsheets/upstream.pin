@@ -1,7 +1,7 @@
 # GridCraft as StarSheets builds it: our fork's "starsheets" branch = upstream tag `base` plus
 # one commit per StarSheets change (docs/upstream.md). Bump `commit` after pushing to the fork.
 repo = "https://github.com/DomeShifter/gridcraft.git"
-branch = "sheets-structure"
-commit = "34939154aeb3045fd53bae79e84f9c2a0c78751d"
+branch = "starsheets"
+commit = "311855ab095b4907ff5bf09038b779d68d582846"
 base = "v0.19.1"
 upstream = "https://github.com/storytold/gridcraft.git"

@@ -1141,6 +1141,21 @@ async fn gate(
                             Err(why) => error(400, &why),
                         });
                     }
+                    // External content (IMAGE pictures from the web): blocked in files that
+                    // aren't the person's own until they allow it (docs/privacy.md).
+                    (["external"], "GET") => {
+                        need(role, Role::View)?;
+                        let own = store::space_of(&path) == home && spaces::last_change(store, id).is_none_or(|(by, _)| by == home);
+                        return Err(send_json(&json!({ "allowed": spaces::external_allowed(store, &me, id, own) }), 200));
+                    }
+                    (["external"], "POST") => {
+                        need(role, Role::View)?;
+                        let on = json.get("allow").and_then(Value::as_bool).unwrap_or(false);
+                        return Err(match spaces::set_external(store, &me, id, on) {
+                            Ok(()) => send_json(&json!({ "allowed": on }), 200),
+                            Err(e) => error(500, &e.to_string()),
+                        });
+                    }
                     (["star"], "POST") => {
                         need(role, Role::View)?;
                         let on = json.get("on").and_then(Value::as_bool).unwrap_or(true);
@@ -1977,6 +1992,11 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
     // A file replaced through the API (a version restored) is read again by its live room.
     let restored = m == "POST" && p.len() == 5 && p[0] == "files" && p[2] == "versions" && p[4] == "restore";
     let replaced = ((m == "PUT" && p.len() == 2 && p[0] == "files") || restored).then(|| p[1].clone());
+    // A file uploaded from this computer, or a copy, came from outside: its external content
+    // stays blocked for the person who brought it in until they allow it.
+    let from_outside = m == "POST"
+        && ((p.len() == 1 && p[0] == "files" && (q.get("as_is").is_some_and(|v| v == "1") || q.get("imported").is_some_and(|v| v == "1")))
+            || (p.len() == 3 && p[0] == "files" && p[2] == "copy"));
     let (m2, p2) = (m.clone(), p.clone());
     let app2 = app.clone();
     let out = tokio::task::spawn_blocking(move || {
@@ -2006,6 +2026,10 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
                 };
                 if let Some(id) = made {
                     let who = me.username.clone();
+                    if from_outside {
+                        let (u, id) = (me.clone(), id.clone());
+                        blocking(&app, move |a| spaces::set_external(&a.store, &u, &id, false)).await;
+                    }
                     blocking(&app, move |a| spaces::note_changed(&a.store, &id, &who)).await;
                 }
             }
@@ -2331,6 +2355,24 @@ mod tests {
         }
         let g = post(&app, &other, "/api/signup", "", json!({"username": "new9", "name": "N", "password": "longenough"})).await;
         assert_eq!(g.status, 429);
+    }
+
+    #[tokio::test]
+    async fn external_content_is_blocked_in_files_from_outside_until_allowed() {
+        let (app, ip, boss) = owned().await;
+        let ext = |id: &str| format!("/api/files/{id}/external");
+        let made = send(&app, &ip, "POST", "/api/files?name=Mine.xlsx", &boss, &[], b"one".to_vec()).await;
+        let mine = made.json["id"].as_str().unwrap().to_string();
+        assert_eq!(send(&app, &ip, "GET", &ext(&mine), &boss, &[], vec![]).await.json["allowed"], true, "own file: as before");
+        let up = send(&app, &ip, "POST", "/api/files?name=From%20mail.xlsx&as_is=1", &boss, &[], b"two".to_vec()).await;
+        let up = up.json["id"].as_str().unwrap().to_string();
+        assert_eq!(send(&app, &ip, "GET", &ext(&up), &boss, &[], vec![]).await.json["allowed"], false, "uploaded: blocked");
+        let copy = send(&app, &ip, "POST", &format!("/api/files/{mine}/copy"), &boss, &[], vec![]).await;
+        let copy = copy.json["id"].as_str().unwrap().to_string();
+        assert_eq!(send(&app, &ip, "GET", &ext(&copy), &boss, &[], vec![]).await.json["allowed"], false, "a copy: blocked");
+        assert_eq!(post(&app, &ip, &ext(&up), &boss, json!({"allow": true})).await.status, 200);
+        assert_eq!(send(&app, &ip, "GET", &ext(&up), &boss, &[], vec![]).await.json["allowed"], true, "remembered");
+        assert_eq!(send(&app, &ip, "GET", &ext(&up), "", &[], vec![]).await.status, 401);
     }
 
     #[tokio::test]

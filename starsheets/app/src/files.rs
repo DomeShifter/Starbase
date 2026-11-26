@@ -327,10 +327,20 @@ impl Files {
                 let Some(d) = app.session.active() else { return };
                 let Ok(bytes) = xlsx(&d.wb, "copy.xlsx") else { return };
                 let name = format!("Copy of {}", d.title);
-                send(Method::Post, format!("{API}?name={}", enc(&name)), Some(bytes), None, self.inbox.clone(), ctx.clone(), |_, _, body| {
-                    let v: Json = serde_json::from_slice(&body).unwrap_or_default();
-                    Reply::Navigate(v["id"].as_str().unwrap_or("").to_string())
-                });
+                // A copy of a spreadsheet whose web content is blocked stays blocked (external.rs).
+                let outside = if crate::external::allowed() { "" } else { "&imported=1" };
+                send(
+                    Method::Post,
+                    format!("{API}?name={}{outside}", enc(&name)),
+                    Some(bytes),
+                    None,
+                    self.inbox.clone(),
+                    ctx.clone(),
+                    |_, _, body| {
+                        let v: Json = serde_json::from_slice(&body).unwrap_or_default();
+                        Reply::Navigate(v["id"].as_str().unwrap_or("").to_string())
+                    },
+                );
             }
             "details" => self.details = true,
             "bin" => {
@@ -508,7 +518,7 @@ impl Files {
             match gridcraft_engine::io::open_bytes(&name, &bytes).and_then(|(wb, _)| gridcraft_engine::io::save_bytes(&wb, "import.xlsx")) {
                 Ok(xlsx) => send(
                     Method::Post,
-                    format!("{API}?name={}", enc(&stem(&name))),
+                    format!("{API}?name={}&imported=1", enc(&stem(&name))),
                     Some(xlsx),
                     None,
                     self.inbox.clone(),

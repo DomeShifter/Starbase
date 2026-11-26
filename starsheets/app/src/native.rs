@@ -878,6 +878,7 @@ impl eframe::App for NativeShell {
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        crate::emacs_keys::strip(ctx, raw);
         // Files dropped on the window: uploaded into the folder shown on the home screen; on a
         // spreadsheet, opened (here if it's blank, else in a window of its own).
         for f in std::mem::take(&mut raw.dropped_files) {
