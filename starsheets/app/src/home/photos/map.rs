@@ -10,7 +10,7 @@ use egui::epaint::{Mesh, Vertex, WHITE_UV};
 use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2, pos2, vec2};
 use serde_json::{Value as Json, json};
 
-use super::{Got, Pic, PhotoMode, SMALL, Viewer};
+use super::{Got, PhotoMode, Pic, SMALL, Viewer};
 use crate::house;
 use crate::store::Backend;
 use crate::theme;
@@ -264,7 +264,7 @@ pub(in crate::home) struct PlacesMap {
     drawn: Vec<(Rect, Vec<usize>)>,
     /// Thumbnails in the open strip last frame (screen rects).
     strip: Vec<Rect>,
-    view: Rect,
+    view: Option<Rect>,
 }
 
 impl PlacesMap {
@@ -321,7 +321,7 @@ impl PlacesMap {
         let r = |r: &Rect| json!([r.min.x, r.min.y, r.width(), r.height()]);
         json!({
             "list": self.list, "loaded": self.loaded, "zoom": self.zoom, "centre": self.centre, "pictures": self.pics.len(),
-            "tiles": self.tiles.as_ref().map(|t| &t.1), "view": r(&self.view),
+            "tiles": self.tiles.as_ref().map(|t| &t.1), "view": self.view.as_ref().map(r),
             "stacks": self.drawn.iter().map(|(rc, ix)| json!({"rect": r(rc), "count": ix.len()})).collect::<Vec<_>>(),
             "open": self.open.as_ref().map(Vec::len), "strip": self.strip.iter().map(r).collect::<Vec<_>>(),
         })
@@ -350,11 +350,11 @@ impl PhotoMode {
                 self.map.fitted = false;
             }
             if self.pill(ui, "−", false) {
-                let v = self.map.view;
+                let v = self.map.view.unwrap_or(Rect::ZERO);
                 self.map.zoom_at(v, v.center(), -1.0);
             }
             if self.pill(ui, "+", false) {
-                let v = self.map.view;
+                let v = self.map.view.unwrap_or(Rect::ZERO);
                 self.map.zoom_at(v, v.center(), 1.0);
             }
             if self.map.loaded && self.map.pics.is_empty() {
@@ -364,7 +364,7 @@ impl PhotoMode {
         ui.add_space(house::S);
         let size = ui.available_size().max(vec2(120.0, 160.0));
         let (view, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
-        self.map.view = view;
+        self.map.view = Some(view);
         if !self.map.fitted && view.width() > 1.0 {
             self.map.fit(view);
             self.map.fitted = true;
@@ -399,9 +399,9 @@ impl PhotoMode {
         }
         if over_map {
             let at = resp.hover_pos().unwrap_or(view.center());
-            let (scroll, pinch) = ui.input(|i| (i.raw_scroll_delta.y, i.zoom_delta()));
+            let (scroll, pinch) = ui.input(|i| (i.smooth_scroll_delta.y, i.zoom_delta()));
             if scroll != 0.0 {
-                m.zoom_at(view, at, (scroll / 120.0).clamp(-1.0, 1.0) * 0.5);
+                m.zoom_at(view, at, (scroll / 200.0).clamp(-1.0, 1.0));
             }
             if pinch != 1.0 {
                 m.zoom_at(view, at, pinch.log2());
@@ -657,14 +657,12 @@ mod tests {
             let f = w.fill(band, 0);
             assert!(f.tris.len() % 3 == 0 && f.tris.len() > 3 * 1000, "band {band}: {} corners", f.tris.len());
             // London is on land, the middle of the Atlantic isn't: count triangles covering each.
-            let covers = |m: [f32; 2]| {
-                f.tris.chunks(3).filter(|t| {
-                    let [a, b, c] = [f.pts[t[0] as usize], f.pts[t[1] as usize], f.pts[t[2] as usize]];
-                    let s = [cross(a, b, m), cross(b, c, m), cross(c, a, m)];
-                    s.iter().all(|v| *v >= 0.0) || s.iter().all(|v| *v <= 0.0)
-                })
-                .count()
+            let inside = |t: &[u32], m: [f32; 2]| {
+                let [a, b, c] = [f.pts[t[0] as usize], f.pts[t[1] as usize], f.pts[t[2] as usize]];
+                let s = [cross(a, b, m), cross(b, c, m), cross(c, a, m)];
+                s.iter().all(|v| *v >= 0.0) || s.iter().all(|v| *v <= 0.0)
             };
+            let covers = |m: [f32; 2]| f.tris.chunks(3).filter(|t| inside(t, m)).count();
             assert!(covers(mercator(51.5, -0.12)) >= 1, "band {band}: London should be land");
             assert_eq!(covers(mercator(30.0, -40.0)), 0, "band {band}: the Atlantic should be sea");
         }
