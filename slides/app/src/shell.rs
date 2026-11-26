@@ -73,6 +73,10 @@ pub trait Drive {
     fn share(&self) {}
     /// Opens the Version history dialog.
     fn history(&self) {}
+    /// The Version history dialog is open (for the test hook).
+    fn history_open(&self) -> bool {
+        false
+    }
     /// Draws the Share and Version history dialogs when open (every frame).
     fn dialogs(&self, _ctx: &egui::Context) {}
     /// Insert › Image › From Drive: opens the picker of the person's Drive pictures.
@@ -518,16 +522,21 @@ impl Shell {
             }
         }
         if let Some(d) = drive {
-            let (text, colour) = match d.saved() {
-                _ if d.view_only() => ("View only".to_string(), pal.text_dim),
-                Saved::Nothing => (String::new(), pal.text_dim),
-                Saved::Saving => ("Saving…".to_string(), pal.text_dim),
-                Saved::Done => (d.saved_text(), pal.text_dim),
-                Saved::Failed(why) => (why, pal.error),
-            };
-            if !text.is_empty() {
-                ui.add_space(10.0);
-                ui.add(egui::Label::new(RichText::new(&text).size(13.0).color(colour)).truncate()).on_hover_text(&text);
+            // The save-state icon shared with Sheets and Docs (to-do 3 row 38); its card says what
+            // the old text beside the name said, shorter. A click opens Version history.
+            ui.add_space(6.0);
+            let info = save_info(app, d);
+            let pal_icon = starbase_savestate::SavePalette::house(pal.text_dim, pal.head);
+            let out = starbase_savestate::save_icon(ui, &info, &pal_icon);
+            // Screen readers (and the window tests) read the card's first line.
+            let said = starbase_savestate::card_lines(&info)[0].clone();
+            out.response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &said));
+            target(ui.ctx(), "save-icon", out.response.rect);
+            if let Some(card) = out.card {
+                target(ui.ctx(), "save-icon-card", card);
+            }
+            if out.response.clicked() && info.history {
+                d.history();
             }
             if let Some(notice) = d.notice() {
                 ui.add_space(10.0);
@@ -984,8 +993,46 @@ impl Shell {
             "serverName": drive.map(|d| d.name()),
             "viewOnly": drive.is_some_and(|d| d.view_only()),
             "picking": drive.is_some_and(|d| d.picking()),
+            "saveIcon": drive.map(|d| save_info(app, d).kind.word()),
+            "historyOpen": drive.is_some_and(|d| d.history_open()),
         })
     }
+}
+
+/// What the save-state icon shows for this presentation.
+fn save_info(app: &SlideApp, d: &dyn Drive) -> starbase_savestate::SaveInfo {
+    use starbase_savestate::{SaveInfo, SaveKind};
+    let dirty = app.session.documents().iter().any(|doc| doc.is_dirty());
+    let (kind, detail) = match d.saved() {
+        _ if d.view_only() => (SaveKind::ViewOnly, String::new()),
+        Saved::Failed(why) => (SaveKind::Problem, why),
+        Saved::Saving => (SaveKind::Saving, String::new()),
+        _ if dirty => (SaveKind::Unsaved, String::new()),
+        Saved::Done | Saved::Nothing => (SaveKind::Saved, String::new()),
+    };
+    // Version history lives on the server (the same rule as its menu entry).
+    let history = d.file_id().is_some() && !d.desktop() && !d.view_only();
+    SaveInfo { kind, when: None, version: None, detail, local: d.saved_text().contains("this computer"), history }
+}
+
+#[derive(Clone, Default)]
+struct Targets(std::collections::BTreeMap<String, (u64, egui::Rect)>);
+
+/// Remembers where a control was drawn, for the test hook's `targets`: real-click tests read
+/// the spot from there instead of guessing positions (as in Starbase Sheets and Docs).
+fn target(ctx: &egui::Context, label: &str, rect: egui::Rect) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<Targets>(egui::Id::NULL).0.insert(label.to_owned(), (pass, rect)));
+}
+
+/// The controls drawn in the latest passes: label → centre `[x, y]` in points.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn targets(ctx: &egui::Context) -> Value {
+    let all = ctx.data(|d| d.get_temp::<Targets>(egui::Id::NULL)).unwrap_or_default().0;
+    let last = all.values().map(|(p, _)| *p).max().unwrap_or(0);
+    let map: serde_json::Map<String, Value> =
+        all.into_iter().filter(|(_, (p, _))| p + 1 >= last).map(|(k, (_, r))| (k, json!([r.center().x, r.center().y]))).collect();
+    Value::Object(map)
 }
 
 /// Commands that don't change the presentation: a viewer may still use them.
