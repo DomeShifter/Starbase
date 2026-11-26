@@ -54,6 +54,18 @@ pub(super) fn sentence(e: &Json) -> String {
     }
 }
 
+/// The rows as shown ("Ada edited · 2 h ago"), for the test hook.
+pub(super) fn rows(list: &Json) -> Vec<String> {
+    let now = now();
+    list["activity"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .map(|e| format!("{} · {}", sentence(e), relative(e["at"].as_i64().unwrap_or(0), now)))
+        .collect()
+}
+
 /// The list, or a note while it loads.
 pub(super) fn ui(ui: &mut egui::Ui, list: Option<&Json>) {
     let Some(list) = list else {

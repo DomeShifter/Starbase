@@ -25,6 +25,7 @@ impl Home {
             "photos": self.photos.test_state(self.photo_folder().is_some()),
             "view": view,
             "loading": self.loading,
+            "activity": self.activity.as_ref().map(|(_, v)| super::activity::rows(v)),
             "search": self.search,
             "filters": { "kind": self.filters.kind, "who": self.filters.who, "when": self.filters.when },
             "error": self.error,
