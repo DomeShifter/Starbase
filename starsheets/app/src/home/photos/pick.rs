@@ -71,7 +71,7 @@ pub(super) fn targets(sel: &mut HashSet<String>, anchor: &mut Option<String>, id
 
 /// A command on the selected pictures (the right-click menu, the selection bar, the viewer's ⋮).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum Act {
+pub(in crate::home) enum Act {
     Open,
     AddTo,
     Favourite,
@@ -106,6 +106,10 @@ pub(in crate::home) enum Out {
     Star(Vec<String>),
     Delete(Vec<String>),
     Info(String),
+    /// A Photos action that is done, for Ctrl+Z (label, steps).
+    Did(String, Vec<crate::home::undo::Step>),
+    /// The note's Undo button (or Ctrl+Z in the viewer).
+    Undo,
 }
 
 /// "Add to album…": the pictures, and the New album name while typing one.
@@ -168,6 +172,8 @@ pub(in crate::home) struct Picker {
 pub(in crate::home) struct Note {
     pub text: String,
     pub album: Option<Card>,
+    /// Shows an Undo button (the last action is in the Drive's undo list).
+    pub undo: bool,
     until: f64,
 }
 
@@ -188,7 +194,7 @@ impl PhotoMode {
     }
 
     /// The open album, when an album is open.
-    pub(super) fn open_album(&self) -> Option<Card> {
+    pub(in crate::home) fn open_album(&self) -> Option<Card> {
         self.alb.open.clone().filter(|_| self.alb.tab == Tab::Albums)
     }
 
@@ -215,12 +221,20 @@ impl PhotoMode {
     }
 
     pub(in crate::home) fn say(&mut self, ctx: &egui::Context, text: String, album: Option<Card>) {
-        self.pick.note = Some(Note { text, album, until: ctx.input(|i| i.time) + NOTE_SECS });
+        self.pick.note = Some(Note { text, album, undo: false, until: ctx.input(|i| i.time) + NOTE_SECS });
         ctx.request_repaint();
     }
 
+    /// A note with Undo (Ctrl+Z does the same).
+    pub(in crate::home) fn say_undo(&mut self, ctx: &egui::Context, text: String) {
+        self.say(ctx, text, None);
+        if let Some(n) = &mut self.pick.note {
+            n.undo = true;
+        }
+    }
+
     /// Runs `act` on `ids` (square `at` for Open).
-    pub(super) fn act(&mut self, ctx: &egui::Context, store: &Backend, act: Act, ids: Vec<String>, at: Option<usize>) {
+    pub(in crate::home) fn act(&mut self, ctx: &egui::Context, store: &Backend, act: Act, ids: Vec<String>, at: Option<usize>) {
         if ids.is_empty() && act != Act::SelectAll {
             return;
         }
@@ -257,7 +271,8 @@ impl PhotoMode {
                 let n = ids.len();
                 self.pics.retain(|p| !ids.contains(&p.id));
                 self.clear_selection();
-                self.say(ctx, format!("Removed {n} from {}", c.name), None);
+                self.out.push(Out::Did(format!("Removed from {}", c.name), vec![crate::home::undo::Step::AlbumRemove { album: c.id.clone(), ids }]));
+                self.say_undo(ctx, format!("Removed {n} from {}", c.name));
             }
         }
     }
@@ -291,10 +306,17 @@ impl PhotoMode {
     }
 
     /// The server added pictures to an album: the note, and the album list again.
-    pub(super) fn added(&mut self, ctx: &egui::Context, store: &Backend, c: Card, n: u64, asked: u64) {
+    pub(super) fn added(&mut self, ctx: &egui::Context, store: &Backend, c: Card, n: u64, asked: u64, ids: Vec<String>) {
         let text = added_text(&c.name, n, asked);
         self.used(store, &c.id);
+        let undo = !ids.is_empty();
+        if undo {
+            self.out.push(Out::Did(format!("Added to {}", c.name), vec![crate::home::undo::Step::AlbumAdd { album: c.id.clone(), ids }]));
+        }
         self.say(ctx, text, Some(c));
+        if let Some(note) = &mut self.pick.note {
+            note.undo = undo;
+        }
         self.alb.changed(ctx, store, &self.inbox);
     }
 
@@ -588,6 +610,14 @@ impl PhotoMode {
                         ui.horizontal_centered(|ui| {
                             ui.label(RichText::new(&note.text).size(house::BODY).color(Color32::WHITE));
                             ui.add_space(house::L);
+                            if note.undo
+                                && ui
+                                    .add(egui::Button::new(RichText::new("Undo").size(house::BODY).strong().color(theme::SHARE)).frame(false))
+                                    .clicked()
+                            {
+                                self.pick.note = None;
+                                self.out.push(Out::Undo);
+                            }
                             if note.album.is_some()
                                 && ui
                                     .add(egui::Button::new(RichText::new("Open album").size(house::BODY).strong().color(theme::SHARE)).frame(false))
@@ -731,7 +761,8 @@ fn answer(a: Result<(u16, Vec<u8>), String>, id: String, name: String, asked: u6
             let n = v["added"].as_u64().or(v["count"].as_u64()).unwrap_or(0);
             let id = v["id"].as_str().map_or(id, str::to_string);
             let name = v["name"].as_str().map_or(name, str::to_string);
-            Got::Added(Card { id, name, ..Default::default() }, n, asked)
+            let ids = v["ids"].as_array().into_iter().flatten().filter_map(|x| x.as_str().map(str::to_string)).collect();
+            Got::Added(Card { id, name, ..Default::default() }, n, asked, ids)
         }
         Ok((s, b)) => {
             let v: Json = serde_json::from_slice(&b).unwrap_or_default();
@@ -867,12 +898,12 @@ mod tests {
         let ok = |b: Json| answer(Ok((200, b.to_string().into_bytes())), "a1".into(), "Trip".into(), 4);
         // An add: "added" counts only the new ones.
         match ok(json!({"id": "a1", "name": "Trip", "count": 5, "added": 2})) {
-            Got::Added(c, n, asked) => assert_eq!((c.id.as_str(), c.name.as_str(), n, asked), ("a1", "Trip", 2, 4)),
+            Got::Added(c, n, asked, _) => assert_eq!((c.id.as_str(), c.name.as_str(), n, asked), ("a1", "Trip", 2, 4)),
             _ => panic!("not added"),
         }
         // A new album: its count is how many went in.
         match answer(Ok((200, json!({"id": "b2", "name": "New", "count": 3}).to_string().into_bytes())), String::new(), String::new(), 3) {
-            Got::Added(c, n, _) => assert_eq!((c.id.as_str(), c.name.as_str(), n), ("b2", "New", 3)),
+            Got::Added(c, n, _, _) => assert_eq!((c.id.as_str(), c.name.as_str(), n), ("b2", "New", 3)),
             _ => panic!("not added"),
         }
         match answer(Ok((400, br#"{"error":"Too many"}"#.to_vec())), String::new(), String::new(), 1) {

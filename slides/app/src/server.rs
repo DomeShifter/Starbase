@@ -96,7 +96,7 @@ pub struct Link {
     state: Rc<RefCell<State>>,
     ctx: egui::Context,
     /// The Share and Version history dialogs.
-    dialogs: Rc<RefCell<(crate::dialogs::Share, crate::dialogs::History)>>,
+    dialogs: Rc<RefCell<(crate::dialogs::Share, crate::dialogs::History, crate::dialogs::Pick)>>,
 }
 
 fn query_param(key: &str) -> Option<String> {
@@ -523,6 +523,19 @@ impl crate::shell::Drive for Link {
         let mut d = self.dialogs.borrow_mut();
         d.0.ui(ctx);
         d.1.ui(ctx);
+        d.2.ui(ctx);
+    }
+
+    fn pick_image(&self) {
+        self.dialogs.borrow_mut().2.start(&self.ctx);
+    }
+
+    fn take_picture(&self) -> Option<(String, Vec<u8>)> {
+        self.dialogs.borrow().2.take()
+    }
+
+    fn picking(&self) -> bool {
+        self.dialogs.borrow().2.is_open()
     }
 
     fn name(&self) -> String {

@@ -198,6 +198,8 @@ impl Home {
                     group,
                     r.map(|b| {
                         let v: Json = serde_json::from_slice(&b).unwrap_or_default();
+                        // Pictures Photos lists from subfolders or albums aren't in the Drive's list: the server says where it was.
+                        let original = if original.is_empty() { v["original"].as_str().unwrap_or("").to_string() } else { original };
                         let bin = v["bin"].as_str().filter(|_| v["space"].as_str() == Some(mine.as_str()) && !original.is_empty())?;
                         Some(undo::Step::Binned { bin: bin.to_string(), original })
                     })
@@ -409,6 +411,7 @@ impl Home {
                     // Photos' own listing first: pictures in subfolders/albums aren't in `self.files`.
                     let on = photos::stars_on(&ids, &self.photos.pics, |id| self.file(id).map(|f| f.starred));
                     self.photos.set_starred(&ids, on);
+                    self.undo.record("Favourite".into(), ids.iter().map(|id| undo::Step::Star { id: id.clone(), on }).collect());
                     for id in &ids {
                         call(
                             &self.store,
@@ -423,8 +426,10 @@ impl Home {
                     let n = ids.len();
                     let what = if n == 1 { "1 picture".to_string() } else { format!("{n} pictures") };
                     let text = if on { format!("{what} added to Starred") } else { format!("{what} taken out of Starred") };
-                    self.photos.say(ctx, text, None);
+                    self.photos.say_undo(ctx, text);
                 }
+                photos::Out::Did(label, steps) => self.undo.record(label, steps),
+                photos::Out::Undo => self.undo(ctx),
                 photos::Out::Delete(ids) => self.delete(ctx, ids.into_iter().map(Item::File).collect()),
                 photos::Out::Info(id) => self.show_details(ctx, Item::File(id)),
             }
