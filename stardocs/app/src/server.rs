@@ -563,7 +563,11 @@ impl Link {
         };
         if t - since >= QUIET_MS && !ctx.input(|i| i.pointer.any_down()) {
             self.state.borrow_mut().dirty_since = None;
+            // An autosave is not a click on our toolbar: `shell::run` hands the keyboard to the
+            // page afterwards, which took it from a comment being typed (the third letter).
+            let want_focus = app.canvas.want_focus;
             crate::shell::run(app, "file.save", serde_json::json!({}));
+            app.canvas.want_focus = want_focus;
         } else {
             ctx.request_repaint_after(std::time::Duration::from_millis(500));
         }
