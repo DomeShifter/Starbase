@@ -1,0 +1,2 @@
+### Added
+- Photos → Places opens on a world map: pictures are stacked where they were taken (stacks split as you zoom in), the map pans and zooms (drag, wheel, pinch, +/−, double-click, arrows, Fit all), and clicking a stack shows its pictures in a strip along the bottom. The base map is built in and works offline (Natural Earth, public domain); the server owner can add detailed tiles with `STARBASE_MAP_TILES` and `STARBASE_MAP_ATTRIBUTION`, fetched and cached by the server. "List" still shows the place cards.
