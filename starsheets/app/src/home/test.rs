@@ -31,6 +31,8 @@ impl Home {
             "view_opts": json!({ "cols": self.vo.cols_str(), "grid": self.vo.grid_str() }),
             "storage": self.storage.map(|(u, b, f)| json!({ "used": u, "bin": b, "free": f })),
             "loading": self.loading,
+            // Quiet prefetch of Docs and Slides (prefetch.rs): "skipped" / "started" / "done" / null.
+            "prefetch": crate::prefetch::test_state(),
             "versions": self.versions.as_ref().map(|(_, v)| super::history::rows(v)),
             "details_tab": self.details_tab,
             "activity": self.activity.as_ref().map(|(_, v)| super::activity::rows(v)),

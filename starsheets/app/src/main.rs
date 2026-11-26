@@ -62,6 +62,7 @@ mod native;
 mod notes;
 mod panels;
 mod pasteprompt;
+mod prefetch;
 mod pivotpanel;
 #[cfg(target_arch = "wasm32")]
 mod prefs;
