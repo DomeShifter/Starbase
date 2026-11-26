@@ -30,7 +30,7 @@ enum Ask {
 
 #[derive(Default)]
 pub(in crate::home) struct People {
-    asked: bool,
+    pub asked: bool,
     pub named: Vec<Card>,
     pub groups: Vec<Card>,
     /// The list's state: on, note, missing models, progress.
@@ -40,6 +40,8 @@ pub(in crate::home) struct People {
     ask: Ask,
     /// When the list was last asked for again while models download (seconds, egui time).
     poll: f64,
+    /// "Scan now" (scan.rs): in the toolbar and on the People page.
+    pub scan: super::scan::ScanNow,
 }
 
 impl People {
@@ -70,7 +72,7 @@ impl People {
     #[cfg(target_arch = "wasm32")]
     pub fn test_state(&self) -> Json {
         let c = |v: &Vec<Card>| v.iter().map(|c| json!({"id": c.id, "name": c.name, "count": c.count})).collect::<Vec<_>>();
-        json!({"named": c(&self.named), "groups": c(&self.groups), "on": self.state["on"], "faces": self.faces.len(), "can_download": self.state["can_download"], "download": self.state["download"], "missing": self.state["missing"].as_array().map_or(0, Vec::len), "progress": self.state["progress"]})
+        json!({"named": c(&self.named), "groups": c(&self.groups), "on": self.state["on"], "faces": self.faces.len(), "can_download": self.state["can_download"], "download": self.state["download"], "missing": self.state["missing"].as_array().map_or(0, Vec::len), "progress": self.state["progress"], "scan": self.scan.test_state()})
     }
 }
 
@@ -248,6 +250,10 @@ impl PhotoMode {
         }
         let pr = &st["progress"];
         let waiting = st["missing"].as_array().is_some_and(|m| !m.is_empty());
+        let ppl = &mut self.alb.ppl;
+        if ui.horizontal(|ui| ppl.scan.ui(ui, store)).inner {
+            ppl.asked = false;
+        }
         let scanning = self.scan_bar(ui, &st, true);
         if scanning || waiting {
             self.people_poll(ui, 2.0);

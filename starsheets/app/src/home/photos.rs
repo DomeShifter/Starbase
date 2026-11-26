@@ -24,6 +24,7 @@ mod locked;
 mod map;
 mod people;
 mod pick;
+mod scan;
 pub(super) mod shell;
 mod timeline;
 mod upload;

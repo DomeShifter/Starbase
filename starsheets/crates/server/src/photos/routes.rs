@@ -13,6 +13,7 @@
 //!   the listing; only groups of two or more, biggest waste first. No near-duplicate matching yet:
 //!   the index keeps no perceptual hash.
 //! - `GET /api/photos/status`: the index's state (the server's owner only).
+//! - `POST /api/photos/scan` / `GET /api/photos/scan`: "Scan now" and how it is getting on (scan_now.rs).
 //!
 //! Who may: a folder's pictures, anyone who may view the folder; a thumbnail, anyone who may
 //! view the file (the same checks as a download, sharing.rs). Where a picture was taken (GPS)
@@ -69,6 +70,9 @@ pub async fn route(
     }
     if p.len() == 3 && p[1] == "export" {
         return Some(super::export::route(app, m, p[2].clone(), me, body).await);
+    }
+    if p.len() == 2 && p[1] == "scan" {
+        return Some(super::scan_now::route(app, m, me).await);
     }
     let post = p.len() == 2 && (p[1] == "enable" || p[1] == "disable");
     if (m != "GET" && !post) || (m != "POST" && post) {

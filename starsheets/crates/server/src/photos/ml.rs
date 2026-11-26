@@ -172,6 +172,8 @@ pub struct State {
     pub dl: Mutex<Download>,
     wake: Condvar,
     sleep: Mutex<()>,
+    /// A poke that came while the worker was busy: its next nap is skipped.
+    kicked: AtomicBool,
 }
 
 impl State {
@@ -183,15 +185,23 @@ impl State {
             dl: Mutex::new(Download::default()),
             wake: Condvar::new(),
             sleep: Mutex::new(()),
+            kicked: AtomicBool::new(false),
         }
     }
-    /// Wakes the worker (turned on, or faces changed).
+    /// Wakes the worker (turned on, faces changed, new pictures, "Scan now").
     pub fn poke(&self) {
+        // Under the nap's lock, so a poke between the worker's check and its wait isn't lost.
+        let _g = self.sleep.lock().unwrap_or_else(|e| e.into_inner());
+        self.kicked.store(true, Ordering::Relaxed);
         self.wake.notify_all();
     }
     fn nap(&self, d: Duration) {
         let g = self.sleep.lock().unwrap_or_else(|e| e.into_inner());
+        if self.kicked.swap(false, Ordering::Relaxed) {
+            return;
+        }
         let _ = self.wake.wait_timeout(g, d);
+        self.kicked.store(false, Ordering::Relaxed);
     }
     fn say(&self, s: impl Into<String>) {
         *self.note.lock().unwrap_or_else(|e| e.into_inner()) = s.into();

@@ -45,6 +45,7 @@ pub mod model;
 pub mod people;
 pub mod raw;
 pub mod routes;
+mod scan_now;
 pub mod sidecar;
 pub mod strip;
 pub mod tiles;
@@ -288,6 +289,8 @@ pub struct Photos {
     dirty: Mutex<HashSet<PathBuf>>,
     /// When each folder was last rescanned for a request.
     looked: Mutex<HashMap<String, Instant>>,
+    /// Each person's last "Scan now" (scan_now.rs).
+    scan_now: Mutex<HashMap<String, scan_now::Run>>,
     /// The last full rescan: (started, seconds it took, files found).
     last_scan: Mutex<Option<(u64, f64, usize)>>,
     scanning: AtomicBool,
@@ -400,6 +403,7 @@ impl Photos {
             watcher: Mutex::new(None),
             dirty: Mutex::default(),
             looked: Mutex::default(),
+            scan_now: Mutex::default(),
             last_scan: Mutex::new(None),
             scanning: AtomicBool::new(false),
             made: AtomicU64::new(0),
@@ -1040,6 +1044,8 @@ impl Photos {
                 }
                 drop(s);
                 self.scans_wake.notify_all();
+                // New pictures may have faces: the face worker looks now, not after its nap.
+                self.ml.poke();
                 continue;
             }
             if Instant::now() >= next_full {

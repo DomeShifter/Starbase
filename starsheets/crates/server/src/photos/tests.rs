@@ -404,6 +404,7 @@ fn clone_for_test(p: &Photos) -> Photos {
         watcher: Mutex::new(None),
         dirty: Mutex::default(),
         looked: Mutex::default(),
+        scan_now: Mutex::default(),
         last_scan: Mutex::new(None),
         scanning: AtomicBool::new(false),
         made: AtomicU64::new(0),
@@ -459,6 +460,8 @@ mod export_tests;
 mod locked_tests;
 #[path = "people_tests.rs"]
 mod people_tests;
+#[path = "scan_now_tests.rs"]
+mod scan_now_tests;
 
 mod http {
     use super::*;
