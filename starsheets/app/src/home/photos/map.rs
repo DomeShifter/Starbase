@@ -573,7 +573,7 @@ impl PhotoMode {
             Color32::WHITE,
         );
         let close = Rect::from_center_size(head.right_center() - vec2(22.0, 0.0), Vec2::splat(28.0));
-        let cr = ui.interact(close, egui::Id::new("map-strip-close"), Sense::click());
+        let cr = ui.interact(close, ui.scope_id().with("map-strip-close"), Sense::click());
         painter.text(close.center(), egui::Align2::CENTER_CENTER, "×", egui::FontId::proportional(22.0), Color32::WHITE);
         if cr.clicked() {
             self.map.open = None;
