@@ -808,7 +808,7 @@ impl Editor {
 
     /// Click an eye (or drag out a circle) to take the red out; `r` is the whole picture.
     fn red_eye_ui(&mut self, ui: &mut Ui, r: Rect) {
-        let resp = ui.interact(r, ui.id().with("red-eye"), Sense::click_and_drag());
+        let resp = ui.interact(r, ui.scope_id().with("red-eye"), Sense::click_and_drag());
         let side = r.width().min(r.height()).max(1.0);
         let to_frac = |p: egui::Pos2| ((p.x - r.left()) / r.width(), (p.y - r.top()) / r.height());
         let origin = ui.input(|i| i.pointer.press_origin());

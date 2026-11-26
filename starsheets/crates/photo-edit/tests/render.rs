@@ -49,6 +49,7 @@ fn serde_round_trip() {
         temperature: 15,
         tint: -5,
         filter: Some(Filter { name: FilterName::Sepia, amount: 0.3 }),
+        red_eye: vec![],
     };
     let s = serde_json::to_string(&e).unwrap();
     assert!(s.contains(r#""angle":-12.3"#) && s.contains(r#""aspect":"16:9""#) && s.contains(r#""v":1"#), "{s}");
