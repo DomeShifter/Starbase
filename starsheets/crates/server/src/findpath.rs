@@ -117,7 +117,7 @@ mod tests {
     }
 
     fn share(s: &Store, item: sharing::Item, people: &[(&str, Role)], link: Role) {
-        let share = sharing::Share { people: people.iter().map(|(p, r)| (p.to_string(), *r)).collect(), link };
+        let share = sharing::Share { people: people.iter().map(|(p, r)| (p.to_string(), *r)).collect(), link, ..Default::default() };
         sharing::set(s, item, &share).unwrap();
     }
 

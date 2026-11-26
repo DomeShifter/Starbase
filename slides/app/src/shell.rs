@@ -544,7 +544,11 @@ impl Shell {
                 ui.add_enabled_ui(may_edit, |ui| {
                     self.tools_insert(app, ui, drive, pal);
                     bar(ui, pal);
+                    self.tools_font(app, ui, drive, pal);
+                    bar(ui, pal);
                     self.tools_text(app, ui, drive, pal);
+                    bar(ui, pal);
+                    self.tools_look(app, ui, drive, pal);
                     bar(ui, pal);
                     self.tools_slide(app, ui, drive, pal);
                 });
@@ -604,6 +608,87 @@ impl Shell {
         if tool(ui, pal, "add_comment", "Add comment", false) {
             self.run(app, drive, "app.dialog", json!({"id": "comment"}));
         }
+    }
+
+    /// Font family, font size with - and +, as in Docs (DeckCraft's own font list and sizes).
+    fn tools_font(&mut self, app: &mut SlideApp, ui: &mut Ui, drive: Option<&dyn Drive>, pal: &Palette) {
+        let f = app.session.execute("format.state", &json!({})).unwrap_or_default();
+        let family = f.get("font").and_then(Value::as_str).unwrap_or("").to_string();
+        let size = f.get("size").and_then(Value::as_f64).map(|s| format!("{}", (s * 10.0).round() / 10.0)).unwrap_or_default();
+        let config = || egui::containers::menu::MenuConfig::new().style(menu_style(*pal));
+        let label = if family.is_empty() { "Font".to_string() } else { family };
+        let b = Button::new(RichText::new(label).size(14.0).color(pal.text)).min_size(vec2(110.0, 28.0));
+        let r = egui::containers::menu::MenuButton::from_button(b).config(config()).ui(ui, |ui| {
+            menu_look(ui, pal);
+            ui.set_max_height(360.0);
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for fam in deckcraft_ui_egui::ribbon::font_families(app) {
+                    if ui.add(Button::new(RichText::new(&fam).size(14.0).color(pal.text)).min_size(vec2(180.0, ROW))).clicked() {
+                        self.run(app, drive, "format.font", json!({ "family": fam }));
+                        ui.close();
+                    }
+                }
+            });
+        });
+        named(ui, &r.0, "Font family");
+        if tool(ui, pal, "remove", "Decrease font size", false) {
+            self.run(app, drive, "format.shrink", json!({}));
+        }
+        let b = Button::new(RichText::new(size).size(14.0).color(pal.text)).min_size(vec2(36.0, 28.0));
+        let r = egui::containers::menu::MenuButton::from_button(b).config(config()).ui(ui, |ui| {
+            menu_look(ui, pal);
+            for s in deckcraft_engine::cmd::format::SIZES.iter().chain([72.0, 96.0].iter()) {
+                if ui.add(Button::new(RichText::new(format!("{s}")).size(14.0).color(pal.text)).min_size(vec2(60.0, ROW))).clicked() {
+                    self.run(app, drive, "format.size", json!({ "size": s }));
+                    ui.close();
+                }
+            }
+        });
+        named(ui, &r.0, "Font size");
+        if tool(ui, pal, "add", "Increase font size", false) {
+            self.run(app, drive, "format.grow", json!({}));
+        }
+    }
+
+    /// Text colour and highlight (for the selected text), then fill colour and border colour and
+    /// weight (for the selected shape or text box), each with DeckCraft's colour grid.
+    fn tools_look(&mut self, app: &mut SlideApp, ui: &mut Ui, drive: Option<&dyn Drive>, pal: &Palette) {
+        use deckcraft_ui_egui::{ribbon::cref_param, widgets};
+        let Some(sc) = app.session.active().and_then(|d| d.doc.masters.first().map(|m| m.scheme())) else { return };
+        let picks: [(&str, &str, &str, Option<&str>); 4] = [
+            ("format_color_text", "Text colour", "format.color", None),
+            ("ink_highlighter", "Highlight colour", "format.highlight", Some("No Color")),
+            ("format_color_fill", "Fill colour", "shape.fill", Some("No Fill")),
+            ("border_color", "Border colour", "shape.line", Some("No Outline")),
+        ];
+        for (icon, tip, id, none) in picks {
+            let r = icon_button(ui, icon, false, pal);
+            named(ui, &r, tip);
+            let r = r.on_hover_text(tip);
+            widgets::color_popup(&r).show(|ui| {
+                menu_look(ui, pal);
+                if let Some(c) = widgets::color_grid(ui, &sc, none) {
+                    let p = match (c, id) {
+                        (Some(c), _) => json!({ "color": cref_param(&c) }),
+                        (None, "shape.line" | "shape.fill") => json!({ "none": true }),
+                        (None, _) => json!({}),
+                    };
+                    self.run(app, drive, id, p);
+                }
+            });
+        }
+        let r = icon_button(ui, "drive_file_rename_outline", false, pal);
+        named(ui, &r, "Border weight");
+        let r = r.on_hover_text("Border weight");
+        egui::Popup::menu(&r).show(|ui| {
+            menu_look(ui, pal);
+            for w in [0.5, 1.0, 2.0, 3.0, 4.5, 6.0] {
+                if ui.add(Button::new(RichText::new(format!("{w} pt")).size(14.0).color(pal.text)).min_size(vec2(90.0, ROW))).clicked() {
+                    self.run(app, drive, "shape.line", json!({ "width": w }));
+                    ui.close();
+                }
+            }
+        });
     }
 
     /// Bold, Italic, Underline (lit while on), alignment, lists, indents, Clear formatting.

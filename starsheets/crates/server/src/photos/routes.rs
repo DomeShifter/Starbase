@@ -50,6 +50,9 @@ pub async fn route(
     if p.first().map(String::as_str) != Some("photos") {
         return None;
     }
+    if p.len() >= 2 && (p[1] == "albums" || p[1] == "places" || p[1] == "events") {
+        return Some(super::albums::route(app, m, p, q, me, body).await);
+    }
     if p.len() == 3 && p[1] == "edits" {
         return Some(super::edits::route(app, m, p[2].clone(), me, headers, body).await);
     }
@@ -202,27 +205,7 @@ async fn list(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>)
                 "modified" => format!("{modified:020}"),
                 _ => r.meta.taken.clone().map(|t| t.chars().take(19).collect()).unwrap_or_else(|| iso(modified)),
             };
-            let ready = r.state == State::Ready;
-            let camera = [r.meta.make.as_deref(), r.meta.model.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" ");
-            let v = json!({
-                "id": id,
-                "pid": r.id,
-                "name": r.name,
-                "folder": r.folder,
-                "media": r.media,
-                "size": r.size,
-                "modified": modified,
-                "state": r.state.name(),
-                "error": r.error,
-                "v": if ready { r.thumb_key().map(tag) } else { None },
-                "edited": r.edits.is_some(),
-                "taken": r.meta.taken,
-                "width": if ready { Some(r.meta.width) } else { None },
-                "height": if ready { Some(r.meta.height) } else { None },
-                "orientation": if ready { Some(r.meta.orientation) } else { None },
-                "camera": (!camera.is_empty()).then_some(camera),
-                "gps": r.meta.lat.zip(r.meta.lon).filter(|_| places).map(|(lat, lon)| json!({"lat": lat, "lon": lon, "alt": r.meta.alt})),
-            });
+            let v = photo_json(&r, id, places);
             Some((format!("{key}\u{0}{}", r.path), v))
         })
         .collect();
@@ -239,6 +222,32 @@ async fn list(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>)
         }),
         200,
     )
+}
+
+/// One picture as the listings show it (`gps` only when `places`: people who may edit).
+pub(super) fn photo_json(r: &super::index::Row, id: &str, places: bool) -> Value {
+    let modified = r.mtime_ns.div_euclid(1_000_000_000);
+    let ready = r.state == State::Ready;
+    let camera = [r.meta.make.as_deref(), r.meta.model.as_deref()].into_iter().flatten().collect::<Vec<_>>().join(" ");
+    json!({
+        "id": id,
+        "pid": r.id,
+        "name": r.name,
+        "folder": r.folder,
+        "media": r.media,
+        "size": r.size,
+        "modified": modified,
+        "state": r.state.name(),
+        "error": r.error,
+        "v": if ready { r.thumb_key().map(tag) } else { None },
+        "edited": r.edits.is_some(),
+        "taken": r.meta.taken,
+        "width": if ready { Some(r.meta.width) } else { None },
+        "height": if ready { Some(r.meta.height) } else { None },
+        "orientation": if ready { Some(r.meta.orientation) } else { None },
+        "camera": (!camera.is_empty()).then_some(camera),
+        "gps": r.meta.lat.zip(r.meta.lon).filter(|_| places).map(|(lat, lon)| json!({"lat": lat, "lon": lon, "alt": r.meta.alt})),
+    })
 }
 
 /// Seconds since 1970 as `YYYY-MM-DDTHH:MM:SS` (UTC), to sort pictures without an EXIF date.

