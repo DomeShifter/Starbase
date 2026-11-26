@@ -76,9 +76,9 @@ pub fn menu(ui: &mut Ui, width: f32) {
     let w = &mut st.visuals.widgets;
     for (state, fill) in [
         (&mut w.inactive, Color32::TRANSPARENT),
-        (&mut w.hovered, theme::MENU_HOVER),
-        (&mut w.active, theme::HOVER),
-        (&mut w.open, theme::MENU_HOVER),
+        (&mut w.hovered, theme::menu_hover()),
+        (&mut w.active, theme::hover()),
+        (&mut w.open, theme::menu_hover()),
     ] {
         state.bg_stroke = Stroke::NONE;
         state.weak_bg_fill = fill;
@@ -92,7 +92,7 @@ pub fn menu(ui: &mut Ui, width: f32) {
 /// column when it has one, and a little room. Fixed widths (220 / 320) are for command menus.
 pub fn fit_width<'a>(ui: &Ui, labels: impl IntoIterator<Item = &'a str>, icon_column: bool) -> f32 {
     let font = egui::FontId::proportional(BODY);
-    let widest = labels.into_iter().map(|t| ui.painter().layout_no_wrap(t.to_string(), font.clone(), theme::TEXT).size().x).fold(0.0_f32, f32::max);
+    let widest = labels.into_iter().map(|t| ui.painter().layout_no_wrap(t.to_string(), font.clone(), theme::text()).size().x).fold(0.0_f32, f32::max);
     let icon = if icon_column { 20.0 + 14.0 } else { 0.0 };
     (widest + 2.0 * f32::from(MENU_INSET) + icon + 12.0).clamp(80.0, 480.0).ceil()
 }
@@ -100,13 +100,13 @@ pub fn fit_width<'a>(ui: &Ui, labels: impl IntoIterator<Item = &'a str>, icon_co
 /// A menu row: an icon (Material Symbols name, or none), the label, and a grey shortcut at the
 /// right. Returns true when clicked.
 pub fn menu_row(ui: &mut Ui, icon: Option<&str>, label: &str, keys: &str, enabled: bool) -> bool {
-    let text = RichText::new(label).size(BODY).color(theme::TEXT);
+    let text = RichText::new(label).size(BODY).color(theme::text());
     let b = match icon.and_then(crate::icons::icon) {
         Some(img) => egui::Button::image_and_text(img.fit_to_exact_size(vec2(20.0, 20.0)), text),
-        None if icon.is_some() => egui::Button::new(RichText::new(format!("       {label}")).size(BODY).color(theme::TEXT)),
+        None if icon.is_some() => egui::Button::new(RichText::new(format!("       {label}")).size(BODY).color(theme::text())),
         None => egui::Button::new(text),
     };
-    let b = if keys.is_empty() { b } else { b.shortcut_text(RichText::new(keys).size(NOTE).color(theme::TEXT_DIM)) };
+    let b = if keys.is_empty() { b } else { b.shortcut_text(RichText::new(keys).size(NOTE).color(theme::text_dim())) };
     let r = ui.add_enabled(enabled, b.min_size(vec2(ui.available_width(), 32.0)));
     target(ui.ctx(), label, r.rect);
     r.clicked()
@@ -138,7 +138,7 @@ pub fn targets(ctx: &egui::Context) -> serde_json::Value {
 pub fn menu_sep(ui: &mut Ui) {
     ui.add_space(S);
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
-    ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0, theme::DIVIDER));
+    ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0, theme::divider()));
     ui.add_space(S);
 }
 
@@ -202,7 +202,7 @@ pub fn install(ctx: &egui::Context) {
         s.visuals.window_corner_radius = CornerRadius::same(PANEL_RADIUS);
         s.visuals.menu_corner_radius = CornerRadius::same(PANEL_RADIUS);
         s.visuals.window_stroke = Stroke::NONE;
-        s.visuals.window_fill = Color32::WHITE;
+        s.visuals.window_fill = theme::card();
         s.visuals.window_shadow = egui::epaint::Shadow { offset: [0, 4], blur: 24, spread: 0, color: Color32::from_black_alpha(60) };
         s.visuals.popup_shadow = egui::epaint::Shadow { offset: [0, 2], blur: 10, spread: 0, color: Color32::from_black_alpha(45) };
         // Menus, pop-ups and tooltips appear at once, as in Sheets: egui fades every new area in
@@ -292,7 +292,7 @@ fn restyle_tip(shape: &mut egui::Shape, fill: Color32) -> bool {
 /// The frame of every dialog: white, 24 px padding, 8 px corners, a soft shadow.
 pub fn dialog_frame() -> Frame {
     Frame::NONE
-        .fill(Color32::WHITE)
+        .fill(theme::card())
         .inner_margin(Margin::same(XL as i8))
         .corner_radius(CornerRadius::same(PANEL_RADIUS))
         .shadow(egui::epaint::Shadow { offset: [0, 4], blur: 24, spread: 0, color: Color32::from_black_alpha(60) })
@@ -300,11 +300,12 @@ pub fn dialog_frame() -> Frame {
 
 /// The frame of a floating card (a note, a link, the date picker): 16 px padding.
 pub fn card_frame() -> Frame {
-    Frame::NONE
-        .fill(Color32::WHITE)
-        .inner_margin(Margin::same(L as i8))
-        .corner_radius(CornerRadius::same(PANEL_RADIUS))
-        .shadow(egui::epaint::Shadow { offset: [0, 2], blur: 10, spread: 0, color: Color32::from_black_alpha(45) })
+    Frame::NONE.fill(theme::card()).inner_margin(Margin::same(L as i8)).corner_radius(CornerRadius::same(PANEL_RADIUS)).shadow(egui::epaint::Shadow {
+        offset: [0, 2],
+        blur: 10,
+        spread: 0,
+        color: Color32::from_black_alpha(45),
+    })
 }
 
 /// A small floating bubble (the calculation preview): 8 x 4 padding, 4 px corners.
@@ -314,7 +315,7 @@ pub fn bubble_frame() -> Frame {
 
 /// The frame of a side panel (data validation, conditional formatting): 16 px all round.
 pub fn panel_frame() -> Frame {
-    Frame::NONE.fill(Color32::WHITE).inner_margin(Margin::same(L as i8)).stroke(Stroke::new(1.0, theme::DIVIDER))
+    Frame::NONE.fill(theme::card()).inner_margin(Margin::same(L as i8)).stroke(Stroke::new(1.0, theme::divider()))
 }
 
 /// Sets a dialog or panel `Ui` up in the house style: 14 px text, 36 px fields with a thin grey
@@ -329,9 +330,11 @@ pub fn form_style(ui: &mut Ui) {
         st.text_styles.insert(ts, egui::FontId::proportional(BODY));
     }
     let w = &mut st.visuals.widgets;
-    for (state, stroke) in [(&mut w.inactive, theme::BOX), (&mut w.hovered, theme::TEXT), (&mut w.active, theme::BLUE), (&mut w.open, theme::BLUE)] {
-        state.bg_fill = Color32::WHITE;
-        state.weak_bg_fill = Color32::WHITE;
+    for (state, stroke) in
+        [(&mut w.inactive, theme::edge()), (&mut w.hovered, theme::text()), (&mut w.active, theme::BLUE), (&mut w.open, theme::BLUE)]
+    {
+        state.bg_fill = theme::card();
+        state.weak_bg_fill = theme::card();
         state.bg_stroke = Stroke::new(1.0, stroke);
         state.corner_radius = CornerRadius::same(FIELD_RADIUS);
         state.expansion = 0.0;
@@ -351,7 +354,7 @@ pub fn dialog<R>(ctx: &egui::Context, id: &str, width: f32, title: &str, close: 
             // The ✕ is placed first so a long title is cut short ("…", full title on hover)
             // instead of running under it (to-do row 73).
             ui.horizontal(|ui| {
-                let label = egui::Label::new(RichText::new(title).size(TITLE).color(theme::TEXT));
+                let label = egui::Label::new(RichText::new(title).size(TITLE).color(theme::text()));
                 match close {
                     Some(close) => {
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -381,7 +384,7 @@ pub fn dialog<R>(ctx: &egui::Context, id: &str, width: f32, title: &str, close: 
 pub fn title_row(ui: &mut Ui, title: &str) -> bool {
     let mut close = false;
     ui.horizontal(|ui| {
-        ui.label(RichText::new(title).size(TITLE).color(theme::TEXT));
+        ui.label(RichText::new(title).size(TITLE).color(theme::text()));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| close = close_button(ui));
     });
     ui.add_space(L - S);
@@ -399,7 +402,7 @@ pub fn close_button(ui: &mut Ui) -> bool {
 
 /// A field label, with its help text underneath when there is some.
 pub fn label(ui: &mut Ui, text: &str, note: &str) {
-    ui.label(RichText::new(text).size(LABEL).strong().color(theme::TEXT));
+    ui.label(RichText::new(text).size(LABEL).strong().color(theme::text()));
     if !note.is_empty() {
         self::note(ui, note);
     }
@@ -407,23 +410,23 @@ pub fn label(ui: &mut Ui, text: &str, note: &str) {
 
 /// Help text: small and grey.
 pub fn note(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text).size(NOTE).color(theme::TEXT_DIM));
+    ui.label(RichText::new(text).size(NOTE).color(theme::text_dim()));
 }
 
 /// A note with more detail when the pointer is over it.
 #[cfg(target_arch = "wasm32")]
 pub fn note_with_tip(ui: &mut Ui, text: &str, tip: &str) {
-    ui.label(RichText::new(text).size(NOTE).color(theme::TEXT_DIM)).on_hover_text(tip);
+    ui.label(RichText::new(text).size(NOTE).color(theme::text_dim())).on_hover_text(tip);
 }
 
 /// A small-capitals heading (STANDARD, CUSTOM).
 pub fn caps(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text.to_uppercase()).size(CAPS).strong().color(theme::TEXT_DIM));
+    ui.label(RichText::new(text.to_uppercase()).size(CAPS).strong().color(theme::text_dim()));
 }
 
 /// Body text.
 pub fn text(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text).size(BODY).color(theme::TEXT));
+    ui.label(RichText::new(text).size(BODY).color(theme::text()));
 }
 
 /// The main button: a green pill with white text.
@@ -458,8 +461,8 @@ pub fn secondary(text: &str) -> egui::Button<'static> {
 /// Any other button, its text in another accent.
 pub fn secondary_in(text: &str, accent: Color32) -> egui::Button<'static> {
     egui::Button::new(RichText::new(text.to_string()).size(BODY).color(accent))
-        .fill(Color32::WHITE)
-        .stroke(Stroke::new(1.0, theme::BOX))
+        .fill(theme::card())
+        .stroke(Stroke::new(1.0, theme::edge()))
         .corner_radius(CornerRadius::same(BUTTON_RADIUS))
         .min_size(vec2(88.0, BUTTON_HEIGHT))
 }
@@ -508,10 +511,10 @@ pub fn menu_inset<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
 /// Returns true when the choice changed.
 pub fn select(ui: &mut Ui, id: &str, width: f32, current: &mut usize, labels: &[&str], dividers_after: &[usize]) -> bool {
     let shown = labels.get(*current).copied().unwrap_or_default();
-    let field = egui::Button::new(RichText::new(shown).size(BODY).color(theme::TEXT))
-        .right_text(RichText::new("▾").size(BODY).color(theme::TEXT_DIM))
-        .fill(Color32::WHITE)
-        .stroke(Stroke::new(1.0, theme::BOX))
+    let field = egui::Button::new(RichText::new(shown).size(BODY).color(theme::text()))
+        .right_text(RichText::new("▾").size(BODY).color(theme::text_dim()))
+        .fill(theme::card())
+        .stroke(Stroke::new(1.0, theme::edge()))
         .corner_radius(CornerRadius::same(FIELD_RADIUS))
         .min_size(vec2(width, FIELD_HEIGHT));
     let r = ui.add(field);
@@ -523,7 +526,7 @@ pub fn select(ui: &mut Ui, id: &str, width: f32, current: &mut usize, labels: &[
         egui::ScrollArea::vertical().max_height(menu_max_height(ui.ctx())).show(ui, |ui| {
             for (i, label) in labels.iter().enumerate() {
                 let row = ui.add(
-                    egui::Button::new(RichText::new(*label).size(BODY).color(theme::TEXT))
+                    egui::Button::new(RichText::new(*label).size(BODY).color(theme::text()))
                         .shortcut_text("")
                         .frame_when_inactive(false)
                         .min_size(vec2(0.0, ROW_HEIGHT)),
@@ -534,7 +537,7 @@ pub fn select(ui: &mut Ui, id: &str, width: f32, current: &mut usize, labels: &[
                         egui::Align2::LEFT_CENTER,
                         "✓",
                         egui::FontId::proportional(16.0),
-                        theme::TEXT,
+                        theme::text(),
                     );
                 }
                 if row.clicked() {
@@ -559,7 +562,7 @@ pub fn tabs(ui: &mut Ui, current: &mut usize, labels: &[&str]) -> bool {
         ui.spacing_mut().item_spacing.x = 0.0;
         for (i, label) in labels.iter().enumerate() {
             let on = i == *current;
-            let colour = if on { theme::BLUE } else { theme::TEXT_DIM };
+            let colour = if on { theme::BLUE } else { theme::text_dim() };
             let text = RichText::new(*label).size(BODY).color(colour);
             let r =
                 ui.add(egui::Button::new(if on { text.strong() } else { text }).frame_when_inactive(false).min_size(vec2(88.0, FIELD_HEIGHT + XS)));
@@ -575,7 +578,7 @@ pub fn tabs(ui: &mut Ui, current: &mut usize, labels: &[&str]) -> bool {
         }
     });
     let r = row.response.rect;
-    ui.painter().hline(ui.max_rect().x_range(), r.bottom(), Stroke::new(1.0, theme::DIVIDER));
+    ui.painter().hline(ui.max_rect().x_range(), r.bottom(), Stroke::new(1.0, theme::divider()));
     ui.add_space(L);
     changed
 }

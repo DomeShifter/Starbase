@@ -88,3 +88,72 @@ pub fn install(ctx: &egui::Context) {
     // Padding, corners and shadows for every window, menu and dialog (house.rs).
     crate::house::install(ctx);
 }
+
+thread_local! {
+    /// Photo Mode's dark look is on (home/photos/shell.rs): the colour functions below answer dark.
+    static PHOTO_DARK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether Photo Mode's dark look is showing.
+pub fn photo_dark() -> bool {
+    PHOTO_DARK.with(|c| c.get())
+}
+
+/// Turns Photo Mode's dark look on or off (the caller re-applies the egui visuals, see `sync_dark`).
+pub fn set_photo_dark(on: bool) {
+    PHOTO_DARK.with(|c| c.set(on));
+}
+
+/// Re-applies the visuals when Photo Mode's dark look changed: dark egui visuals, then the house style over them.
+pub fn sync_dark(ctx: &egui::Context, want: bool) {
+    if want != photo_dark() {
+        set_photo_dark(want);
+        theme::apply(ctx, want);
+        crate::house::install(ctx);
+    }
+}
+
+/// Like `TEXT`, but dark in Photo Mode's dark look.
+pub fn text() -> Color32 {
+    if photo_dark() { rgb(0xE8EAED) } else { TEXT }
+}
+
+/// Like `TEXT_DIM`, but dark in Photo Mode's dark look.
+pub fn text_dim() -> Color32 {
+    if photo_dark() { rgb(0xA6ABB1) } else { TEXT_DIM }
+}
+
+/// Like `SHARE`, but dark in Photo Mode's dark look.
+pub fn share() -> Color32 {
+    if photo_dark() { rgb(0x2B4465) } else { SHARE }
+}
+
+/// Like `BOX`, but dark in Photo Mode's dark look.
+pub fn edge() -> Color32 {
+    if photo_dark() { rgb(0x5F6368) } else { BOX }
+}
+
+/// Like `DIVIDER`, but dark in Photo Mode's dark look.
+pub fn divider() -> Color32 {
+    if photo_dark() { rgb(0x3C4043) } else { DIVIDER }
+}
+
+/// Like `PAGE`, but dark in Photo Mode's dark look.
+pub fn page() -> Color32 {
+    if photo_dark() { rgb(0x101114) } else { PAGE }
+}
+
+/// Like `MENU_HOVER`, but dark in Photo Mode's dark look.
+pub fn menu_hover() -> Color32 {
+    if photo_dark() { rgb(0x2A2D32) } else { MENU_HOVER }
+}
+
+/// Like `HOVER`, but dark in Photo Mode's dark look.
+pub fn hover() -> Color32 {
+    if photo_dark() { rgb(0x33363B) } else { HOVER }
+}
+
+/// A card, field or panel: white, or a step lighter than the page in the dark look.
+pub fn card() -> Color32 {
+    if photo_dark() { rgb(0x1B1D21) } else { Color32::WHITE }
+}
