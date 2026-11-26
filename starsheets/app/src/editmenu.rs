@@ -224,6 +224,13 @@ impl EditMenu {
                 return;
             }
         }
+        // The desktop app reads the system clipboard itself: no prompt.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(text) = starbase_clipboard::read_native() {
+            *self.pasted.borrow_mut() = Some(text);
+            ctx.request_repaint();
+            return;
+        }
         let _ = ctx;
         starbase_clipboard::show_prompt();
     }

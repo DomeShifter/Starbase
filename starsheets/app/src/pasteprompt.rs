@@ -24,7 +24,7 @@ pub fn ui(ctx: &egui::Context) {
         return;
     }
     let mut close = false;
-    let area = egui::Area::new(egui::Id::new("starbase_paste_prompt"))
+    let area = egui::Area::new(egui::Id::unique("starbase_paste_prompt"))
         .order(egui::Order::Foreground)
         .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, house::XL * 3.0))
         .interactable(true)
@@ -34,7 +34,7 @@ pub fn ui(ctx: &egui::Context) {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(clip::PROMPT_TITLE).size(house::LABEL).strong().color(crate::theme::text()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let r = ui.scope(|ui| house::close_button(ui));
+                        let r = ui.scope(house::close_button);
                         house::target(ui.ctx(), "paste prompt: close", r.response.rect);
                         close = r.inner;
                     });

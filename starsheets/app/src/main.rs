@@ -31,7 +31,6 @@ mod customnumber;
 mod datepicker;
 mod dvpanel;
 mod editmenu;
-mod pasteprompt;
 mod emacs_keys;
 mod errortip;
 mod external;
@@ -62,6 +61,7 @@ mod namespanel;
 mod native;
 mod notes;
 mod panels;
+mod pasteprompt;
 mod pivotpanel;
 #[cfg(target_arch = "wasm32")]
 mod prefs;

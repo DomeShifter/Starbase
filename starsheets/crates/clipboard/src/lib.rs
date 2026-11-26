@@ -132,6 +132,12 @@ pub fn can_read() -> bool {
     }
 }
 
+/// The desktop app's direct read of the system clipboard (None when empty or unavailable).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_native() -> Option<String> {
+    arboard::Clipboard::new().ok()?.get_text().ok().filter(|t| !t.is_empty())
+}
+
 /// Forgets the own copy whenever the window loses the focus or the tab is hidden (call once at
 /// start). Checking `document.hasFocus()` once per frame wasn't enough: egui draws no frame
 /// while the tab is in the background and has the focus back by the next one, so a copy made
