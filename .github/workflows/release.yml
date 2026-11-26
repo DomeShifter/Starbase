@@ -247,7 +247,7 @@ jobs:
           name: starbase-flatpak
           path: dist
       - name: Flatpak and OSTree
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq flatpak ostree
+        run: sudo rm -f /etc/apt/sources.list.d/microsoft*; sudo apt-get update -qq && sudo apt-get install -y -qq flatpak ostree
       # flatpak signs through gpg-agent without asking, so the passphrase is preset in the agent
       # of a throwaway keyring (never on a command line, never printed).
       - name: Release key
@@ -337,7 +337,7 @@ jobs:
     steps:
       - name: Flatpak
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq flatpak
+          sudo rm -f /etc/apt/sources.list.d/microsoft*; sudo apt-get update -qq && sudo apt-get install -y -qq flatpak
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - name: Pages serves the new version
         run: |
