@@ -1183,7 +1183,7 @@ impl Shell {
             return;
         }
         let mut picked = None;
-        egui::Area::new(egui::Id::new("stardocs_pages_side_by_side"))
+        egui::Area::new(egui::Id::unique("stardocs_pages_side_by_side"))
             .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-24.0, -16.0))
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
