@@ -267,6 +267,7 @@ impl Home {
         if resp.clicked() || resp.secondary_clicked() || resp.double_clicked() {
             *clicked_item = true;
         }
+        house::target(ui.ctx(), &format!("item:{}", self.label_of(item)), resp.rect);
         if let Item::File(id) = item {
             self.tile_rects.insert(id.clone(), resp.rect);
         }
