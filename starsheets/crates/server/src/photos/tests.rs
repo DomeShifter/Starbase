@@ -554,6 +554,25 @@ mod http {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+        // Stars show for pictures in folders inside too (Photos can't find those in the Drive listing).
+        let deep = "/api/photos?folder=ann/Trip&sub=1&sort=name";
+        let top = get(&app, "/api/photos?folder=ann/Trip", Some("ann"), &[]).await.json["photos"].clone();
+        let g = get(&app, deep, Some("ann"), &[]).await;
+        let inner = g.json["photos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| !top.as_array().unwrap().iter().any(|t| t["id"] == p["id"]))
+            .expect("one in a subfolder")
+            .clone();
+        assert_eq!(inner["starred"], false, "{}", g.json);
+        let id = inner["id"].as_str().unwrap();
+        assert_eq!(send(&app, "POST", &format!("/api/files/{id}/star"), Some("ann"), &[], r#"{"on":true}"#).await.status, 200);
+        let g = get(&app, deep, Some("ann"), &[]).await;
+        let stars: Vec<(String, bool)> =
+            g.json["photos"].as_array().unwrap().iter().map(|p| (p["name"].as_str().unwrap().into(), p["starred"].as_bool().unwrap())).collect();
+        let want: Vec<(String, bool)> = stars.iter().map(|(n, _)| (n.clone(), *n == inner["name"].as_str().unwrap())).collect();
+        assert_eq!(stars, want, "only the starred one, found by id");
         assert_eq!(get(&app, "/api/photos?folder=ann/Trip", None, &[]).await.status, 401, "signed in only");
         assert_eq!(get(&app, "/api/photos?folder=ann/Trip", Some("bob"), &[]).await.status, 403);
         assert_eq!(get(&app, "/api/photos?folder=ann", Some("bob"), &[]).await.status, 403);
@@ -587,7 +606,7 @@ mod http {
         sharing::set(
             &app.store,
             sharing::Item::Folder(&folder_id),
-            &sharing::Share { people: vec![("bob".into(), sharing::Role::View)], link: sharing::Role::None },
+            &sharing::Share { people: vec![("bob".into(), sharing::Role::View)], link: sharing::Role::None, ..Default::default() },
         )
         .unwrap();
         let g = get(&app, &format!("/api/photos?folder_id={folder_id}"), Some("bob"), &[]).await;

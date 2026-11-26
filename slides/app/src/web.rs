@@ -185,6 +185,7 @@ impl eframe::App for WebShell {
     }
 
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        crate::emacs_keys::strip(ctx, raw);
         // Browsers cannot read dropped files synchronously: consume this pass's drops here and
         // deliver them through the inbox once read.
         for f in std::mem::take(&mut raw.dropped_files) {
@@ -280,7 +281,7 @@ fn push_inbox(inbox: &Inbox, event: InboxEvent) {
 fn guard_unload(dirty: Rc<Cell<bool>>) -> Result<(), String> {
     let window = web_sys::window().ok_or("no window")?;
     let guard = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::BeforeUnloadEvent)>::new(move |e: web_sys::BeforeUnloadEvent| {
-        if crate::server::unsaved() || dirty.get() {
+        if crate::shell::should_guard_unload(dirty.get(), crate::server::unsaved()) {
             e.prevent_default();
             e.set_return_value("unsaved");
         }

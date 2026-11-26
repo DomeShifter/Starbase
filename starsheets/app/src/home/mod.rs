@@ -24,6 +24,7 @@ use crate::theme;
 mod actions;
 mod bin;
 mod filepreview;
+mod filters;
 mod input;
 mod items;
 mod photo_edit;
@@ -179,6 +180,8 @@ pub struct Home {
     /// Details: the item shown, and who has access to it (from the server) once known.
     details: Option<(Item, Option<Json>)>,
     search: String,
+    /// The chips under the search box (filters.rs).
+    filters: filters::Filters,
     selected: Vec<Item>,
     anchor: Option<Item>,
     clipboard: Option<(Vec<Item>, bool)>,
@@ -538,6 +541,7 @@ impl Home {
         self.view = Some(v);
         self.selected.clear();
         self.search.clear();
+        self.filters = Default::default();
         self.renaming = None;
         self.just_made = None;
     }
@@ -622,13 +626,15 @@ impl Home {
     fn contents(&self) -> (Vec<FolderRow>, Vec<FileRow>) {
         let q = self.search.trim().to_lowercase();
         if !q.is_empty() {
+            let fl = &self.filters;
             let folders = self
                 .folders
                 .iter()
                 .filter(|f| name_of(&f.path).to_lowercase().contains(&q) && f.path != self.space && f.path.contains('/'))
+                .filter(|f| !fl.any() || fl.folder_ok(f, &self.space, self.folder_stats(&f.path).0))
                 .cloned()
                 .collect();
-            let files = self.files.iter().filter(|f| f.name.to_lowercase().contains(&q)).cloned().collect();
+            let files = self.files.iter().filter(|f| f.name.to_lowercase().contains(&q) && fl.file_ok(f, &self.space)).cloned().collect();
             return self.sorted(folders, files);
         }
         let (folders, files): (Vec<FolderRow>, Vec<FileRow>) = match self.view.clone() {
@@ -973,9 +979,12 @@ impl Home {
         self.pending_move_ui(&ctx);
         self.note_ui(&ctx);
         // The photo viewer covers everything and takes the keys while it's open.
-        if !viewer::ui(&mut self.photos, &ctx, &self.store) && !self.file_preview_ui(&ctx) {
+        let dialog = self.photos.pick_busy();
+        if !viewer::ui(&mut self.photos, &ctx, &self.store) && !dialog && !self.file_preview_ui(&ctx) {
             self.keys(&ctx);
         }
+        // Photos' Add to album, Add photos and its note: over the grid and the viewer.
+        self.photos.overlays(&ctx, &self.store);
         // Connected to a server, or disconnected: the Drive starts again over the new files.
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(store) = self.connect.ui(&ctx) {
