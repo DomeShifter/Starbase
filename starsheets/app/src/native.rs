@@ -712,7 +712,8 @@ impl LocalFiles {
                 }
             }
             "new" => shown(launch("starsheets", &["--new".as_ref(), here.as_os_str()]), app),
-            "home" | "home_tab" => shown(launch("starsheets", &["--home".as_ref()]), app),
+            // The desktop Drive has the gallery (New › From a template…).
+            "home" | "home_tab" | "templates" => shown(launch("starsheets", &["--home".as_ref()]), app),
             "copy" => {
                 let Some(d) = app.session.active() else { return };
                 let made = xlsx(&d.wb, "copy.xlsx").and_then(|bytes| {

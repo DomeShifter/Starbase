@@ -107,7 +107,31 @@ pub fn menu_row(ui: &mut Ui, icon: Option<&str>, label: &str, keys: &str, enable
         None => egui::Button::new(text),
     };
     let b = if keys.is_empty() { b } else { b.shortcut_text(RichText::new(keys).size(NOTE).color(theme::TEXT_DIM)) };
-    ui.add_enabled(enabled, b.min_size(vec2(ui.available_width(), 32.0))).clicked()
+    let r = ui.add_enabled(enabled, b.min_size(vec2(ui.available_width(), 32.0)));
+    target(ui.ctx(), label, r.rect);
+    r.clicked()
+}
+
+/// Where the labelled controls were last drawn, keyed by label, with the pass that drew them.
+#[derive(Clone, Default)]
+struct Targets(std::collections::BTreeMap<String, (u64, egui::Rect)>);
+
+/// Remembers where a labelled control was drawn, for the test hook's `targets` (app/TESTING.md):
+/// real-click tests read the spot from there instead of guessing positions.
+pub fn target(ctx: &egui::Context, label: &str, rect: egui::Rect) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<Targets>(egui::Id::NULL).0.insert(label.to_owned(), (pass, rect)));
+}
+
+/// The controls drawn in the latest pass: label → centre `[x, y]` in points (CSS pixels at 100%).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn targets(ctx: &egui::Context) -> serde_json::Value {
+    let all = ctx.data(|d| d.get_temp::<Targets>(egui::Id::NULL)).unwrap_or_default().0;
+    let last = all.values().map(|(p, _)| *p).max().unwrap_or(0);
+    // A control counts when it was drawn in the last pass or the one before (menus draw a pass late).
+    let map: serde_json::Map<String, serde_json::Value> =
+        all.into_iter().filter(|(_, (p, _))| p + 1 >= last).map(|(k, (_, r))| (k, serde_json::json!([r.center().x, r.center().y]))).collect();
+    serde_json::Value::Object(map)
 }
 
 /// A menu divider: a light line with 8 px above and below.
