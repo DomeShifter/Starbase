@@ -1893,7 +1893,7 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
             let pw = form_urlencoded::parse(&b).find(|(k, _)| k == "pw").map(|(_, v)| v.into_owned()).unwrap_or_default();
             blocking(&app, move |a| publiclink::unlock(&a.store, &token, &pw)).await
         } else if method == Method::GET || method == Method::HEAD {
-            let what = p.get(2).cloned().unwrap_or_default();
+            let what = p.get(2..).map(|r| r.join("/")).unwrap_or_default();
             let cookies = headers.get_all(header::COOKIE).iter().filter_map(|v| v.to_str().ok()).collect::<Vec<_>>().join(";");
             blocking(&app, move |a| publiclink::serve(&a.store, &token, &what, &publiclink::grant_in(&cookies, &token))).await
         } else {
