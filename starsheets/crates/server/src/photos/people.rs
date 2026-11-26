@@ -10,6 +10,9 @@
 //! - `POST /api/photos/people/ID/name` `{"name"}`; `/merge` `{"into": ID}`; `/remove` `{"face"}`.
 //! - `GET|POST /api/photos/faces` `{"on": bool}`: face recognition on or off (the server's owner;
 //!   `STARBASE_PHOTOS_FACES` overrides).
+//! - `POST /api/photos/faces/models` (owner, `ml` builds): download the missing model files from
+//!   their pinned URLs (SHA-256 checked) into the models folder; progress in `"download"`
+//!   `{"busy", "file", "got", "total", "error"}`, `"can_download"` says whether the button applies.
 //!
 //! Deferred hardening: people are one list for the whole server (anyone who can see one of a
 //! group's pictures may name or merge it); per-person libraries and an owner-only rename can follow.
@@ -29,6 +32,19 @@ use crate::{App, Shared, auth, blocking, error, send_json, sharing};
 const MAX_NAME: usize = 80;
 const MAX_GROUPS: usize = 300;
 
+/// The owner's "Download face models": fetches the missing pinned model files in the background.
+fn fetch(a: &App, owner: bool) -> Answer {
+    if !owner {
+        return Err(error(403, "Only the server's owner can download the face models."));
+    }
+    let s = svc(a)?;
+    if !cfg!(feature = "ml") {
+        return Err(error(400, "This server was built without face recognition (the `ml` feature), so the models would not be used."));
+    }
+    s.fetch_models().map_err(|e| error(400, &e))?;
+    Ok(state(a, owner))
+}
+
 /// The pictures I may see, by thumbnail key.
 type Vis = HashMap<String, Vec<Seen>>;
 
@@ -41,6 +57,7 @@ pub async fn route(app: &Shared, m: &str, p: &[String], me: Option<auth::User>, 
     let r = match (p[1].as_str(), m, p.len()) {
         ("faces", "GET", 2) => blocking(app, move |a| Ok(state(a, owner))).await,
         ("faces", "POST", 2) => blocking(app, move |a| toggle(a, owner, &b)).await,
+        ("faces", "POST", 3) if p[2] == "models" => blocking(app, move |a| fetch(a, owner)).await,
         ("people", "GET", 2) => blocking(app, move |a| list(a, me, owner)).await,
         ("people", "GET", 3) => {
             let id = p[2].clone();
@@ -74,7 +91,11 @@ fn state(a: &App, owner: bool) -> Value {
     } else {
         Vec::new()
     };
+    let d = s.ml.dl.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let fetchable = !missing.is_empty() && s.missing_models().iter().all(|m| m.get.is_some());
     json!({
+        "can_download": owner && cfg!(feature = "ml") && (fetchable || d.busy),
+        "download": if owner { json!({"busy": d.busy, "file": d.file, "got": d.got, "total": d.total, "error": d.error}) } else { Value::Null },
         "on": s.faces_on(),
         "can_toggle": owner && s.ml.cfg.forced.is_none(),
         "forced": s.ml.cfg.forced.is_some(),
@@ -124,7 +145,9 @@ fn list(a: &App, me: Option<auth::User>, owner: bool) -> Answer {
     let s = svc(a)?;
     let vis = visible(a, &s, &me);
     let model = s.face_model().to_string();
-    let (all, names) = s.with_db(|ix| Ok::<_, rusqlite::Error>((faces::faces(ix, &model)?, faces::people(ix)?))).map_err(|_| error(500, "couldn't read the faces"))?;
+    let (all, names) = s
+        .with_db(|ix| Ok::<_, rusqlite::Error>((faces::faces(ix, &model)?, faces::people(ix)?)))
+        .map_err(|_| error(500, "couldn't read the faces"))?;
     let mut groups: HashMap<Who, (BTreeSet<String>, Option<Value>)> = HashMap::new();
     for f in &all {
         let (Some(who), Some(pics)) = (Who::of(f), vis.get(&f.thumb)) else { continue };

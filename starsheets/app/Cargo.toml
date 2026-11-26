@@ -27,7 +27,10 @@ png = "0.18"
 # The photo editor (home/photo_edit.rs): its edits and live preview, in the browser too (no
 # decoders: the browser decodes).
 starbase-photo-edit = { path = "../crates/photo-edit" }
+starbase-templates = { path = "../crates/templates" }
 image = { version = "0.25", default-features = false }
+# Drive previews of Markdown files (home/textpreview.rs): parsing only, no HTML output.
+pulldown-cmark = { version = "0.13", default-features = false }
 
 # The desktop app (native.rs): GridCraft's own native window setup, local mode over a folder on
 # disk (localstore.rs), the system's file dialogs and Trash; persistence remembers each
@@ -51,7 +54,7 @@ rfd = { workspace = true }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "Event", "EventTarget", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "HtmlIFrameElement", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration", "Clipboard", "ClipboardItem", "Navigator", "MessageEvent", "UrlSearchParams", "AddEventListenerOptions", "Storage", "CustomEvent", "CustomEventInit", "Request", "RequestInit", "Response", "Headers", "History", "WebSocket", "BinaryType", "CloseEvent", "ImageBitmap", "ImageBitmapOptions", "ResizeQuality", "OffscreenCanvas", "OffscreenCanvasRenderingContext2d", "ImageData", "HtmlTextAreaElement", "PointerEvent", "MouseEvent", "KeyboardEvent", "FocusEvent", "FocusOptions", "DomRect"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "Event", "EventTarget", "BeforeUnloadEvent", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "HtmlIFrameElement", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration", "Clipboard", "ClipboardItem", "Navigator", "MessageEvent", "UrlSearchParams", "AddEventListenerOptions", "Storage", "CustomEvent", "CustomEventInit", "Request", "RequestInit", "Response", "Headers", "History", "WebSocket", "BinaryType", "CloseEvent", "ImageBitmap", "ImageBitmapOptions", "ResizeQuality", "OffscreenCanvas", "OffscreenCanvasRenderingContext2d", "ImageData", "HtmlTextAreaElement", "PointerEvent", "MouseEvent", "KeyboardEvent", "FocusEvent", "FocusOptions", "DomRect", "HtmlInputElement", "FileList", "File"] }
 
 # Native tests of the photo editor (home/photo_edit.rs): egui_kittest's accessibility tree, no GPU.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

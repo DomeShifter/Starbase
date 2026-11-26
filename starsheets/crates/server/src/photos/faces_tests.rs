@@ -77,9 +77,9 @@ fn plan_matches_people_then_groups() {
     people.insert(7, vec![near(0, 0, 0.0)]);
     let snap = Snapshot {
         loose: vec![
-            (1, near(0, 1, 0.2), true),  // very like person 7: joins
-            (2, near(0, 2, 1.6), true),  // somewhat like person 7: offered (sim ~0.53 > auto? see below)
-            (3, near(1, 0, 0.1), true),  // a new person, two faces: a group
+            (1, near(0, 1, 0.2), true), // very like person 7: joins
+            (2, near(0, 2, 1.6), true), // somewhat like person 7: offered (sim ~0.53 > auto? see below)
+            (3, near(1, 0, 0.1), true), // a new person, two faces: a group
             (4, near(1, 1, 0.1), true),
             (5, near(2, 0, 0.0), true),  // alone: no group
             (6, near(1, 2, 0.1), false), // like 3/4 but not good enough to group
@@ -230,4 +230,11 @@ fn registry_names_files_and_licences() {
         assert!(!m.licence.contains("NC"), "only permissive models");
     }
     assert!(ml::model_file("buffalo_l").is_none());
+    // The button's files are pinned: an exact https URL, a SHA-256 and a size.
+    for n in ["yunet", "auraface"] {
+        let g = ml::model_file(n).unwrap().get.as_ref().unwrap();
+        assert!(g.url.starts_with("https://") && g.url.ends_with(ml::model_file(n).unwrap().file), "{}", g.url);
+        assert!(g.sha256.len() == 64 && g.sha256.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
+        assert!(g.size > 100_000);
+    }
 }

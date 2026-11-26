@@ -1,0 +1,12 @@
+[package]
+name = "starbase-templates"
+description = "Starbase's starter templates (CV, letter, budget, …): ordinary .docx/.xlsx/.pptx files, made by scripts/make-templates.py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dev-dependencies]
+zip = { version = "3", default-features = false, features = ["deflate"] }

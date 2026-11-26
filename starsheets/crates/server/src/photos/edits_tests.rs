@@ -107,7 +107,7 @@ async fn edits_are_saved_in_a_sidecar_by_people_who_may_edit() {
     sharing::set(
         &app.store,
         sharing::Item::Folder(&folder_id),
-        &sharing::Share { people: vec![("bob".into(), sharing::Role::View)], link: sharing::Role::None },
+        &sharing::Share { people: vec![("bob".into(), sharing::Role::View)], link: sharing::Role::None, ..Default::default() },
     )
     .unwrap();
     let g = get(&app, &url(a), Some("bob"), &[]).await;

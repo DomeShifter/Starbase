@@ -336,3 +336,64 @@ async fn the_comment_ids_header_cant_touch_anyone_elses_comment() {
     assert_eq!(send(&app, "GET", &url, &boss, None, vec![]).await.bytes, mine);
     let _ = std::fs::remove_dir_all(&app.store.root);
 }
+
+#[tokio::test]
+async fn a_mention_marks_the_file_for_the_person_named_until_they_open_it() {
+    let (app, boss, ann, vic, _id, sheet) = setup().await;
+    let g = send(&app, "POST", "/api/users", &boss, None, js(json!({"username": "zed", "name": "Zed", "password": "zedpassword"}))).await;
+    assert_eq!(g.status, 200, "{:?}", g.json);
+    // Ann (a commenter) names Vic (has access), Zed (none), herself and a stranger.
+    let g = send(&app, "POST", &format!("/api/files/{sheet}/mentions"), &ann, None, js(json!({"users": ["vic", "zed", "ann", "nobody"]}))).await;
+    assert_eq!(g.status, 200, "{:?}", g.json);
+    assert_eq!(g.json["recorded"], json!(["vic"]));
+    assert_eq!(g.json["no_access"], json!(["zed"]));
+    let listed = |g: &Got| g.json["files"].as_array().unwrap().iter().find(|f| f["id"] == sheet.as_str()).cloned().unwrap();
+    let g = send(&app, "GET", "/api/files", &vic, None, vec![]).await;
+    assert_eq!(listed(&g)["mentioned_by"], "ann", "{:?}", g.json);
+    let g = send(&app, "GET", "/api/files", &ann, None, vec![]).await;
+    assert!(listed(&g).get("mentioned_by").is_none());
+    // Opening the file clears it.
+    assert_eq!(send(&app, "GET", &format!("/api/files/{sheet}"), &vic, None, vec![]).await.status, 200);
+    let g = send(&app, "GET", "/api/files", &vic, None, vec![]).await;
+    assert!(listed(&g).get("mentioned_by").is_none());
+    // A viewer can't record mentions.
+    let g = send(&app, "POST", &format!("/api/files/{sheet}/mentions"), &vic, None, js(json!({"users": ["ann"]}))).await;
+    assert_eq!(g.status, 403);
+    let _ = std::fs::remove_dir_all(&app.store.root);
+}
+
+#[tokio::test]
+async fn several_files_and_a_folder_download_as_one_zip_with_the_same_permissions() {
+    let (app, boss, ann, _vic, id, sheet) = setup().await;
+    let g = send(&app, "POST", "/api/folders?path=boss&name=Pics", &boss, None, vec![]).await;
+    assert!(g.status < 300, "{:?}", g.json);
+    let g = send(&app, "POST", "/api/files?name=a.txt&as_is=1&folder=boss/Pics", &boss, None, b"alpha".to_vec()).await;
+    assert_eq!(g.status, 201, "{:?}", g.json);
+    let g = send(&app, "POST", "/api/files?name=a.txt&as_is=1&folder=boss", &boss, None, b"top".to_vec()).await;
+    let top = g.json["id"].as_str().unwrap().to_string();
+    let names = |bytes: &[u8]| -> Vec<String> {
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec())).unwrap();
+        let mut n: Vec<String> = (0..z.len()).map(|i| z.by_index(i).unwrap().name().to_string()).collect();
+        n.sort();
+        n
+    };
+    // 2 files + 1 folder: one zip, folder contents under the folder's name.
+    let uri = format!("/api/zip?files={id},{sheet}&folders=boss/Pics");
+    let g = send(&app, "GET", &uri, &boss, None, vec![]).await;
+    assert_eq!(g.status, 200);
+    assert_eq!(names(&g.bytes), ["Letter.docx", "Pics/a.txt", "Sums.xlsx"]);
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(g.bytes.clone())).unwrap();
+    let mut s = String::new();
+    z.by_name("Pics/a.txt").unwrap().read_to_string(&mut s).unwrap();
+    assert_eq!(s, "alpha");
+    // Two files of one name sit side by side, never overwriting.
+    let g = send(&app, "GET", &format!("/api/zip?files={top},{top}"), &boss, None, vec![]).await;
+    assert_eq!(names(&g.bytes), ["a (2).txt", "a.txt"]);
+    // Others: shared files are fine, a folder that isn't theirs is refused as a whole.
+    assert_eq!(send(&app, "GET", &format!("/api/zip?files={id},{sheet}"), &ann, None, vec![]).await.status, 200);
+    assert_eq!(send(&app, "GET", &uri, &ann, None, vec![]).await.status, 403);
+    assert_eq!(send(&app, "GET", &format!("/api/zip?files={top}"), &ann, None, vec![]).await.status, 403);
+    assert_eq!(send(&app, "GET", "/api/zip", &boss, None, vec![]).await.status, 400);
+    assert_eq!(send(&app, "GET", "/api/zip?files=nope", &boss, None, vec![]).await.status, 404);
+    assert_eq!(send(&app, "GET", "/api/zip?folders=boss/Pics", &ann, None, vec![]).await.status, 403);
+}

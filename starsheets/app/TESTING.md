@@ -19,7 +19,7 @@ Requests are answered at the start of the next frame. Each answer is `{"ok": val
 A `panel:` or `ui:` id answers `{"opened": id}`: the panel shows on the frame after.
 
 **The snapshot.** On a spreadsheet: `screen: "sheet"`, `file` (its name), `fileId`, `folder`,
-`sheet`, `sheetIndex`, `sheets`, `active` (A1), `selection` (`A1:B3,D4`), `freeze` (`{rows, cols}` or null), `grid` (`{rows, cols, sized}`: the sheet's grid size; `sized` false = Excel's full grid), `smartFill` (`{at, cells: [[A1, text]…]}` the suggestion for the active cell, or null), `alternating` (each banding: `{range, header, band1, band2, footer}`), `pivot` (the pivot table the active cell is in, as GridCraft stores it, or null), `imagesReady` (IMAGE addresses on the sheet whose pictures arrived), `cell` (`value` as
+`sheet`, `sheetIndex`, `sheets`, `active` (A1), `selection` (`A1:B3,D4`), `freeze` (`{rows, cols}` or null), `grid` (`{rows, cols, sized}`: the sheet's grid size; `sized` false = Excel's full grid), `smartFill` (`{at, cells: [[A1, text]…]}` the suggestion for the active cell, or null), `alternating` (each banding: `{range, header, band1, band2, footer}`), `pivot` (the pivot table the active cell is in, as GridCraft stores it, or null), `imagesReady` (IMAGE addresses on the sheet whose pictures arrived), `external` (`{verdict: "Own"|"Asking"|"Blocked"|"Allowed", held}`: the external content guard; `run("external:allow")` presses Allow), `cell` (`value` as
 shown, `number`, `input`, `formula` or null, `note` text or null, `comment` `{author, text, replies, resolved}` or null, `validation` `{kind, items, multiple, display, itemColors}` or null), `format` (`bold`, `italic`, `underline`, `strike`,
 `font`, `size`, `numberFormat`, `hAlign`, `wrap`), `saved` and `saveStatus` (the words the save
 symbol shows), `dirty`, `canUndo`, `canRedo`, `live`, `peers` (other people in the file) and
@@ -64,7 +64,7 @@ opens the viewer; `home:photos:key {key}` with `next`, `prev`, `zoomin`, `zoomou
 
 **Photo editor** (`src/home/photo_edit.rs`, over the viewer): `home:photos:edit {open}` opens or
 closes it on the picture shown; `home:photos:edit:<what>` drives it: `tab {tab}` (crop, adjust,
-filters), `slider {key, value}`, `set {…edit fields…}`, `aspect {name}`, `rotate`, `flip`,
+filters), `slider {key, value}`, `set {…edit fields…}`, `aspect {name}`, `rotate`, `flip`, `auto`, `redeye {x, y, r}`, `redeye_tool {on}`,
 `undo`, `redo`, `reset`, `compare {on}`, `cancel`, `save`, `copy {strip_location, max_side}` and
 `answer {yes}` (the open question). The snapshot's `home.photos.photo_edit` has `open`, `tab`,
 `edits`, `dirty`, `writable`, `whyNot`, `foreign`, `ask`, `error`, `message`, `canUndo`,
@@ -81,4 +81,4 @@ account menu) and `next` (where signing in goes on to, from `?next=`). Signed ou
 `screen: "signin"` with only `account`. `starsheets.run("account:menu")` opens the account menu
 as clicking the avatar does.
 
-**Albums and Places** (`src/home/photos/albums.rs`): `home:photos:tab {tab: photos|albums|places}`; `home:photos:select {on, all | indexes}`; `home:photos:album:new {name}` (with the selection), `:open {album}`, `:back`, `:add {album}`, `:remove`, `:rename {name}`, `:delete`; `home:photos:place:open {place}`. The snapshot's `home.photos.albums` has `tab`, `albums`, `places`, `open`, `selecting`, `selected`.
+**Albums and Places** (`src/home/photos/albums.rs`): `home:photos:tab {tab: photos|albums|places|events|duplicates|locked}`; Locked (`photos/locked.rs`): `home:photos:locked:unlock {password}`, `:lock`, `:idle` (pretend 5 min passed), `:confirm {yes}` (the Move to Locked question); `home:photos:menu` acts `lock` and `unlock`; snapshot `home.photos.locked` has `unlocked`, `checked`, `busy`, `error`, `asking`, `count`; `home:photos:select {on, all | indexes}`; `home:photos:album:new {name}` (with the selection), `:open {album}`, `:back`, `:add {album}`, `:remove`, `:rename {name}`, `:delete`; `home:photos:place:open {place}`, `home:photos:event:open {event}`, `home:photos:event:save` (the opened event as a new album). The snapshot's `home.photos.albums` has `tab`, `albums`, `places`, `open`, `selecting`, `selected`.

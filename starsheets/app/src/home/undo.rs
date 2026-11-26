@@ -19,7 +19,7 @@ const NOTE_SECS: f64 = 8.0;
 pub(super) type Then = Box<dyn FnOnce(&Json) -> Option<Step>>;
 
 /// One thing done to one item, and so how to undo it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Step {
     /// A file moved or renamed: `id` is now at path `now`, it was at `was`.
     File { id: String, was: String, now: String },
@@ -30,11 +30,31 @@ pub(super) enum Step {
     Made { path: String },
     /// Something moved to the bin: its name in the bin, and where it was.
     Binned { bin: String, original: String },
+    /// Photos: a picture's star was turned `on` (undo: back to the other).
+    Star { id: String, on: bool },
+    /// Photos: these pictures were added to an album (undo: take them out again).
+    AlbumAdd { album: String, ids: Vec<String> },
+    /// Photos: these pictures were taken out of an album (undo: put them back).
+    AlbumRemove { album: String, ids: Vec<String> },
 }
 
 impl Step {
     /// The request that undoes this step, checked by the server (see the top of this file).
-    pub(super) fn undo_request(&self) -> (Method, String) {
+    pub(super) fn undo_request(&self) -> (Method, String, Option<Vec<u8>>) {
+        let files = |ids: &[String]| Some(serde_json::json!({ "files": ids }).to_string().into_bytes());
+        match self {
+            Step::Star { id, on } => (Method::Post, format!("api/files/{id}/star"), Some(format!("{{\"on\":{}}}", !on).into_bytes())),
+            Step::AlbumAdd { album, ids } => (Method::Post, format!("api/photos/albums/{}/remove", enc(album)), files(ids)),
+            Step::AlbumRemove { album, ids } => (Method::Post, format!("api/photos/albums/{}/add", enc(album)), files(ids)),
+            _ => {
+                let (m, u) = self.drive_request();
+                (m, u, None)
+            }
+        }
+    }
+
+    /// The Drive steps' requests (no body).
+    fn drive_request(&self) -> (Method, String) {
         let (was_parent, was_name) = (|p: &str| parent_of(p).to_string(), |p: &str| name_of(p).to_string());
         match self {
             Step::File { id, was, now } if parent_of(was) == parent_of(now) => {
@@ -51,6 +71,7 @@ impl Step {
             }
             Step::Made { path } => (Method::Delete, format!("api/folders?path={}&if_empty=1", enc(path))),
             Step::Binned { bin, original } => (Method::Post, format!("api/bin/restore?name={}&expect={}&exact=1", enc(bin), enc(original))),
+            Step::Star { .. } | Step::AlbumAdd { .. } | Step::AlbumRemove { .. } => unreachable!("they have a body: see undo_request"),
         }
     }
 
@@ -60,6 +81,8 @@ impl Step {
             Step::File { now, .. } | Step::Folder { now, .. } => name_of(now).to_string(),
             Step::Made { path } => name_of(path).to_string(),
             Step::Binned { original, .. } => name_of(original).to_string(),
+            Step::Star { .. } => "the star".into(),
+            Step::AlbumAdd { .. } | Step::AlbumRemove { .. } => "the album".into(),
         }
     }
 }
@@ -155,6 +178,18 @@ impl Undo {
         }
     }
 
+    /// A Photos action that is already done (its steps known): kept for Ctrl+Z; Photos shows its own note.
+    pub(super) fn record(&mut self, label: String, steps: Vec<Step>) {
+        if steps.is_empty() {
+            return;
+        }
+        self.next += 1;
+        self.done.push(Action { steps, label, serial: self.next });
+        if self.done.len() > KEEP {
+            self.done.remove(0);
+        }
+    }
+
     /// A New folder, undone by removing it while it's empty.
     pub(super) fn made(&mut self, path: String) {
         self.next += 1;
@@ -181,9 +216,9 @@ impl Home {
         self.undo.note = None;
         self.undo.undoing = Some((action.steps.len(), Vec::new(), action.label));
         for step in action.steps.into_iter().rev() {
-            let (method, url) = step.undo_request();
+            let (method, url, body) = step.undo_request();
             let label = step.label();
-            call_any(&self.store, &self.inbox, ctx, method, url, None, move |r| {
+            call_any(&self.store, &self.inbox, ctx, method, url, body, move |r| {
                 Reply::Undone(r.map(|_| ()).map_err(|(status, msg)| match status {
                     404 => format!("\u{201c}{label}\u{201d} isn't where it was left any more, so it was left as it is."),
                     _ => msg,
@@ -227,7 +262,7 @@ impl Home {
         let mut clicked = false;
         let mut closed = false;
         egui::Area::new(egui::Id::unique("home_note"))
-            .order(egui::Order::Foreground)
+            .order(egui::Order::Tooltip)
             .fixed_pos(egui::pos2(screen.left() + house::XL, screen.bottom() - house::XL - 48.0))
             .show(ctx, |ui| {
                 egui::Frame::NONE
@@ -275,6 +310,10 @@ mod tests {
     #[test]
     fn each_step_is_undone_by_a_checked_request() {
         let req = |s: Step| s.undo_request().1;
+        let (_, u, b) = (Step::Star { id: "f1".into(), on: true }).undo_request();
+        assert_eq!((u.as_str(), b), ("api/files/f1/star", Some(b"{\"on\":false}".to_vec())));
+        let (_, u, b) = (Step::AlbumAdd { album: "a1".into(), ids: vec!["x".into()] }).undo_request();
+        assert_eq!((u.as_str(), b), ("api/photos/albums/a1/remove", Some(b"{\"files\":[\"x\"]}".to_vec())));
         let moved = Step::File { id: "f1".into(), was: "me/A/a.xlsx".into(), now: "me/B/a (2).xlsx".into() };
         assert_eq!(req(moved), "api/files/f1/move?folder=me%2FA&from=me%2FB%2Fa%20(2).xlsx&as=a.xlsx");
         let renamed = Step::File { id: "f1".into(), was: "me/A/a.xlsx".into(), now: "me/A/b.xlsx".into() };
@@ -282,7 +321,7 @@ mod tests {
         let folder = |id: &str, was: &str, now: &str| Step::Folder { id: id.into(), was: was.into(), now: now.into() };
         assert_eq!(req(folder("d7", "me/X", "me/B/X")), "api/folders/move?path=me%2FB%2FX&to=me&as=X&id=d7");
         assert_eq!(req(folder("", "me/X", "me/Y")), "api/folders/rename?path=me%2FY&name=X&exact=1");
-        assert_eq!(Step::Made { path: "me/N".into() }.undo_request(), (Method::Delete, "api/folders?path=me%2FN&if_empty=1".into()));
+        assert_eq!(Step::Made { path: "me/N".into() }.undo_request(), (Method::Delete, "api/folders?path=me%2FN&if_empty=1".into(), None));
         assert_eq!(
             req(Step::Binned { bin: "a.xlsx".into(), original: "me/A/a.xlsx".into() }),
             "api/bin/restore?name=a.xlsx&expect=me%2FA%2Fa.xlsx&exact=1"

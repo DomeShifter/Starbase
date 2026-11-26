@@ -50,8 +50,14 @@ fn trace() -> bool {
 
 /// The starting document as `.docx` bytes: a heading, paragraphs, a table, a comment, a tracked
 /// insertion, a header and a footnote, made with the engine's own commands and saved by its
-/// writer.
+/// writer. Built once per process: the comment and the tracked insertion are stamped with the
+/// clock, so two builds a second apart are two different documents (and fingerprints).
 pub fn base_docx() -> Vec<u8> {
+    static BASE: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    BASE.get_or_init(build_base_docx).clone()
+}
+
+fn build_base_docx() -> Vec<u8> {
     let mut s = Session::new(Document::new());
     s.doc = s.blank_document();
     s.clamp_selection();
@@ -400,29 +406,7 @@ impl Stats {
     }
 }
 
-pub struct Server {
-    pub doc: Document,
-    /// Every applied change: (client, its steps as applied).
-    pub log: Vec<(usize, Vec<Step>)>,
-}
-
-impl Server {
-    /// Take a change made on version `base`: transform it over everything applied since, apply,
-    /// log it. Returns the steps as applied (what is broadcast).
-    pub fn receive(&mut self, client: usize, base: usize, steps: Vec<Step>) -> Result<Vec<Step>, String> {
-        let since: Vec<Step> = self.log[base..].iter().flat_map(|(_, s)| s.iter().cloned()).collect();
-        let sent = steps.clone();
-        crate::RECORD_DROPS.with(|r| r.set(true));
-        let (steps, _) = xform_lists(steps, since);
-        crate::RECORD_DROPS.with(|r| r.set(false));
-        apply_all(&mut self.doc, &steps).map_err(|e| format!("server: {e}\n steps {}", crate::short(&steps)))?;
-        if trace() {
-            println!("server #{} from {client} base {base}: {}\n    as applied: {}", self.log.len(), crate::short(&sent), crate::short(&steps));
-        }
-        self.log.push((client, steps.clone()));
-        Ok(steps)
-    }
-}
+pub type Server = crate::room::DocRoom;
 
 /// One of this client's changes as the server applied it, with the steps that undo it.
 pub struct Done {
@@ -642,7 +626,11 @@ pub struct Outcome {
 pub type Msg = (usize, Vec<Step>);
 
 pub fn serve(server: &mut Server, down: &mut [VecDeque<Msg>], c: usize, (base, steps): Msg) -> Result<(), String> {
-    let applied = server.receive(c, base, steps)?;
+    let sent = if trace() { crate::short(&steps) } else { String::new() };
+    let applied = server.submit(c, base, steps)?;
+    if trace() {
+        println!("server #{} from {c} base {base}: {sent}\n    as applied: {}", server.seq(), crate::short(&applied));
+    }
     for d in down.iter_mut() {
         d.push_back((c, applied.clone()));
     }
@@ -686,7 +674,7 @@ pub fn drain(
 pub fn run_scenario(seed: u64, n: usize, events: usize, mix: Mix, base: &[u8]) -> Result<Outcome, String> {
     let mut rng = Rng::new(seed);
     let mut stats = Stats::default();
-    let mut server = Server { doc: open(base), log: Vec::new() };
+    let mut server = Server::new(open(base));
     let mut clients: Vec<Client> = (0..n).map(|i| Client::new(i, open(base))).collect();
     let mut typed = vec![0isize; n];
     let mut up: Vec<VecDeque<Msg>> = vec![VecDeque::new(); n];

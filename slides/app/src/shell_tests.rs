@@ -1,6 +1,7 @@
 //! Native tests of the window (egui_kittest's accessibility tree, no GPU): our menus and toolbar
 //! around DeckCraft's slides, with DeckCraft's own title bar, ribbon and status bar off.
 
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, reason = "tests")]
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -166,6 +167,10 @@ fn download_hands_over_a_pptx() {
 /// A pretend server link, to see the title row and what a viewer may do.
 struct FakeDrive {
     view_only: bool,
+    /// The Drive picker was asked for.
+    asked: std::cell::Cell<bool>,
+    /// A picture "chosen" in it, waiting for the shell.
+    picked: RefCell<Option<(String, Vec<u8>)>>,
 }
 
 impl Drive for FakeDrive {
@@ -184,6 +189,12 @@ impl Drive for FakeDrive {
     fn home(&self) {}
     fn new_presentation(&self) {}
     fn rename(&self, _stem: &str) {}
+    fn pick_image(&self) {
+        self.asked.set(true);
+    }
+    fn take_picture(&self) -> Option<(String, Vec<u8>)> {
+        self.picked.borrow_mut().take()
+    }
 }
 
 fn harness_on_server(view_only: bool) -> Harness<'static, (State, FakeDrive)> {
@@ -193,7 +204,10 @@ fn harness_on_server(view_only: bool) -> Harness<'static, (State, FakeDrive)> {
             s.shell.ui(&mut s.app, ui, Some(&*d));
             s.app.ui(ui);
         },
-        (State { app: app_with(Services::default()), shell: Shell::new(Mode::Light) }, FakeDrive { view_only }),
+        (
+            State { app: app_with(Services::default()), shell: Shell::new(Mode::Light) },
+            FakeDrive { view_only, asked: Default::default(), picked: Default::default() },
+        ),
     );
     egui_extras::install_image_loaders(&h.ctx);
     h.run_steps(4);
@@ -243,4 +257,82 @@ fn presenter_view_asks_for_the_presenter_window_for_one_show() {
     h.run_steps(3);
     assert!(h.state().app.show.is_none());
     assert!(!h.state().shell.presenter_flag().get(), "only for that show: Slideshow shows the slides alone again");
+}
+
+#[test]
+fn the_text_toolbar_sets_size_and_colour_and_they_survive_a_pptx() {
+    let mut h = harness();
+    {
+        let app = &mut h.state_mut().app;
+        let id = app.run("insert.textBox", json!({"rect": [100, 50, 400, 40]})).unwrap()["id"].as_u64().unwrap();
+        app.run("text.edit", json!({"id": id})).unwrap();
+        app.run("text.insert", json!({"text": "Hello"})).unwrap();
+        app.run("text.move", json!({"to": "start", "extend": true})).unwrap();
+    }
+    h.run_steps(3);
+    let size = |h: &mut Harness<'static, State>| h.state_mut().app.session.execute("format.state", &json!({})).unwrap()["size"].as_f64().unwrap();
+    let before = size(&mut h);
+    h.get_by_label("Increase font size").click();
+    h.run_steps(3);
+    assert!(size(&mut h) > before, "the + button made the text bigger");
+    // Fill colour, typed into the colour grid's hex field.
+    h.get_by_label("Fill colour").click();
+    h.run_steps(3);
+    h.get_by_role(egui::accesskit::Role::TextInput).click();
+    h.run_steps(2);
+    h.get_by_role(egui::accesskit::Role::TextInput).type_text("FF0000");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(4);
+    let s = h.state_mut();
+    let doc = s.app.session.active().unwrap().doc.clone();
+    let bytes = deckcraft_engine::cmd::file::save_bytes(&doc, "pptx").unwrap();
+    let mut back = Session::new();
+    let p = deckcraft_engine::cmd::file::open_presentation("t.pptx", &bytes).unwrap();
+    deckcraft_engine::cmd::file::add_opened(&mut back, "t.pptx", None, p);
+    let shapes = format!("{:?}", back.active().unwrap().doc.slides[0].shapes);
+    assert!(shapes.contains("255, g: 0") || shapes.to_uppercase().contains("FF0000"), "the red fill reopened");
+}
+
+#[test]
+fn leave_page_guard_only_while_something_is_unsaved() {
+    use crate::shell::should_guard_unload as g;
+    // (a presentation is dirty, not yet on the server)
+    for (d, s, want) in [(false, false, false), (true, false, true), (false, true, true), (true, true, true)] {
+        assert_eq!(g(d, s), want, "dirty={d} server={s}");
+    }
+}
+
+/// A 1x1 PNG.
+const PNG: &[u8] = &[
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+    0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0x00,
+    0x00, 0x03, 0x01, 0x01, 0x00, 0xC9, 0xFE, 0x92, 0xEF, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+];
+
+#[test]
+fn insert_image_from_drive_opens_the_picker_and_puts_the_chosen_picture_on_the_slide() {
+    let mut h = harness_on_server(false);
+    {
+        let (s, d) = h.state_mut();
+        s.shell.command(&mut s.app, Some(&*d), "slides.driveImage", json!({})).unwrap();
+        assert!(d.asked.get(), "the command opens the picker");
+    }
+    let before = format!("{:?}", h.state().0.app.session.active().unwrap().doc);
+    *h.state().1.picked.borrow_mut() = Some(("logo.png".into(), PNG.to_vec()));
+    h.run_steps(3);
+    let after = format!("{:?}", h.state().0.app.session.active().unwrap().doc);
+    assert_ne!(before, after, "the chosen picture was inserted: {:?}", h.state().0.app.status);
+    assert!(after.contains("logo.png") || after.len() > before.len());
+    // Nothing is left to insert a second time.
+    assert!(h.state().1.picked.borrow().is_none());
+}
+
+#[test]
+fn insert_image_from_drive_needs_the_server_and_an_editor() {
+    let mut h = harness();
+    let s = h.state_mut();
+    assert!(s.shell.command(&mut s.app, None, "slides.driveImage", json!({})).is_err(), "no server, no Drive");
+    let mut v = harness_on_server(true);
+    let (s, d) = v.state_mut();
+    assert!(!s.shell.allowed(&s.app, Some(&*d), "slides.driveImage"), "a viewer can't insert");
 }

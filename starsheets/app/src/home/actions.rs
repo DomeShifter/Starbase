@@ -11,9 +11,25 @@ impl Home {
         let role = self.role_of(item).to_string();
         let can_edit = may_edit(&role);
         let is_space = matches!(item, Item::Folder(f) if !f.contains('/') && self.accounts);
-        let row = |ui: &mut Ui, icon: &str, label: &str, keys: &str, enabled: bool| house::menu_row(ui, Some(icon), label, keys, enabled);
+        // Each row's rect, for the test hook: tests click the row the app drew, never a guess.
+        let rects = std::cell::RefCell::new(Vec::new());
+        let row = |ui: &mut Ui, icon: &str, label: &str, keys: &str, enabled: bool| {
+            let top = ui.cursor().top();
+            let clicked = house::menu_row(ui, Some(icon), label, keys, enabled);
+            let r = egui::Rect::from_x_y_ranges(ui.min_rect().x_range(), top..=top + 32.0);
+            rects.borrow_mut().push((label.to_string(), r));
+            clicked
+        };
         if row(ui, "", "Open", "Enter", single) {
             self.activate(ui.ctx(), item);
+            ui.close();
+        }
+        if let Item::File(id) = item
+            && self.file(id).is_some_and(|f| super::items::opens_as(&f.name) != super::items::Opens::Editor)
+            && row(ui, "visibility", "Preview", "", single)
+        {
+            let id = id.clone();
+            self.preview(ui.ctx(), &id);
             ui.close();
         }
         house::menu_sep(ui);
@@ -51,19 +67,26 @@ impl Home {
             self.start_rename(item);
             ui.close();
         }
-        if let Item::File(id) = item {
-            if row(ui, "content_copy", "Make a copy", "", single) {
-                call(&self.store, &self.inbox, ui.ctx(), Method::Post, format!("api/files/{id}/copy"), None, refresh_after);
-                ui.close();
-            }
-            if row(ui, "download", "Download", "", single) {
-                let name = self.label_of(item);
-                self.download(ui.ctx(), id, &name);
-                ui.close();
-            }
+        if let Item::File(id) = item
+            && row(ui, "content_copy", "Make a copy", "", single)
+        {
+            call(&self.store, &self.inbox, ui.ctx(), Method::Post, format!("api/files/{id}/copy"), None, refresh_after);
+            ui.close();
+        }
+        // One file downloads as itself; several items, or a folder, as one .zip.
+        if row(ui, "download", "Download", "", !is_space || !single) {
+            self.download_items(ui.ctx(), &targets);
+            ui.close();
         }
         if row(ui, "info", "Details", "", single) {
             self.show_details(ui.ctx(), item.clone());
+            ui.close();
+        }
+        if let Item::File(_) = item
+            && row(ui, "history", "Version history", "", single && can_edit)
+        {
+            self.show_details(ui.ctx(), item.clone());
+            self.details_tab = 2;
             ui.close();
         }
         house::menu_sep(ui);
@@ -103,6 +126,7 @@ impl Home {
             self.delete(ui.ctx(), targets);
             ui.close();
         }
+        self.menu_rects = rects.into_inner();
     }
 
     /// Folder colour ▸ : the house's folder colours as swatches (name on hover), and No colour.
@@ -181,6 +205,8 @@ impl Home {
                     group,
                     r.map(|b| {
                         let v: Json = serde_json::from_slice(&b).unwrap_or_default();
+                        // Pictures Photos lists from subfolders or albums aren't in the Drive's list: the server says where it was.
+                        let original = if original.is_empty() { v["original"].as_str().unwrap_or("").to_string() } else { original };
                         let bin = v["bin"].as_str().filter(|_| v["space"].as_str() == Some(mine.as_str()) && !original.is_empty())?;
                         Some(undo::Step::Binned { bin: bin.to_string(), original })
                     })
@@ -383,14 +409,93 @@ impl Home {
         }
     }
 
+    /// What Photos asked for (its menu and selection bar): stars, the bin (with Undo), Details.
+    pub(super) fn photo_outs(&mut self, ctx: &egui::Context) {
+        for o in std::mem::take(&mut self.photos.out) {
+            match o {
+                photos::Out::Star(ids) => {
+                    // Like Google Photos: any not yet a favourite → all become one; else all stop.
+                    // Photos' own listing first: pictures in subfolders/albums aren't in `self.files`.
+                    let on = photos::stars_on(&ids, &self.photos.pics, |id| self.file(id).map(|f| f.starred));
+                    self.photos.set_starred(&ids, on);
+                    self.undo.record("Favourite".into(), ids.iter().map(|id| undo::Step::Star { id: id.clone(), on }).collect());
+                    for id in &ids {
+                        call(
+                            &self.store,
+                            &self.inbox,
+                            ctx,
+                            Method::Post,
+                            format!("api/files/{id}/star"),
+                            Some(format!("{{\"on\":{on}}}").into_bytes()),
+                            refresh_after,
+                        );
+                    }
+                    let n = ids.len();
+                    let what = if n == 1 { "1 picture".to_string() } else { format!("{n} pictures") };
+                    let text = if on { format!("{what} added to Starred") } else { format!("{what} taken out of Starred") };
+                    self.photos.say_undo(ctx, text);
+                }
+                photos::Out::Did(label, steps) => self.undo.record(label, steps),
+                photos::Out::Undo => self.undo(ctx),
+                photos::Out::Delete(ids) => self.delete(ctx, ids.into_iter().map(Item::File).collect()),
+                photos::Out::Info(id) => self.show_details(ctx, Item::File(id)),
+            }
+        }
+    }
+
     pub(super) fn show_details(&mut self, ctx: &egui::Context, item: Item) {
         self.details = Some((item.clone(), None));
+        self.details_tab = 0;
+        self.activity = None;
+        self.versions = None;
+        if let (Item::File(id), true) = (&item, matches!(self.role_of(&item), "owner" | "edit")) {
+            let id = id.clone();
+            call(&self.store, &self.inbox, ctx, Method::Get, format!("api/files/{id}/history"), None, move |b| {
+                Reply::Versions(id, serde_json::from_slice(&b).unwrap_or_default())
+            });
+        }
+        if let (Item::File(id), true) = (&item, self.accounts) {
+            let id = id.clone();
+            call(&self.store, &self.inbox, ctx, Method::Get, format!("api/files/{id}/activity"), None, move |b| {
+                Reply::Activity(id, serde_json::from_slice(&b).unwrap_or_default())
+            });
+        }
         if self.accounts && !matches!(&item, Item::Folder(p) if !p.contains('/')) {
             let url = match &item {
                 Item::File(id) => format!("api/files/{id}/sharing"),
                 Item::Folder(p) => format!("api/folders/sharing?path={}", enc(p)),
             };
             call(&self.store, &self.inbox, ctx, Method::Get, url, None, move |b| Reply::Access(item, serde_json::from_slice(&b).unwrap_or_default()));
+        }
+    }
+
+    /// A click in Details › Versions: download an earlier version, restore it (a new version;
+    /// the list is asked for again), or put a picked file over this one as its newest version.
+    fn version_act(&mut self, ctx: &egui::Context, id: &str, act: history::Act) {
+        let name = self.label_of(&Item::File(id.to_string()));
+        match act {
+            history::Act::Download(v) => {
+                call(&self.store, &self.inbox, ctx, Method::Get, format!("api/files/{id}/versions/{}", enc(&v)), None, move |b| {
+                    Reply::Download(name, b)
+                });
+            }
+            history::Act::Restore(v) => {
+                let (store, inbox, ctx2, id2) = (self.store.clone(), self.inbox.clone(), ctx.clone(), id.to_string());
+                call(&self.store, &self.inbox, ctx, Method::Post, format!("api/files/{id}/versions/{}/restore", enc(&v)), None, move |_| {
+                    reload_history(&store, &inbox, &ctx2, &id2);
+                    refresh_after(Vec::new())
+                });
+            }
+            history::Act::Upload => {
+                let (store, inbox, ctx2, id2) = (self.store.clone(), self.inbox.clone(), ctx.clone(), id.to_string());
+                self.store.pick_files(Box::new(move |_, bytes| {
+                    let (s, i, c, d) = (store.clone(), inbox.clone(), ctx2.clone(), id2.clone());
+                    call(&store, &inbox, &ctx2, Method::Put, format!("api/files/{id2}"), Some(bytes), move |_| {
+                        reload_history(&s, &i, &c, &d);
+                        refresh_after(Vec::new())
+                    });
+                }));
+            }
         }
     }
 
@@ -501,26 +606,45 @@ impl Home {
         let mut close = false;
         let mut done = false;
         let mut share = false;
+        let mut version_act = None;
         house::dialog(ctx, "home_details", 480.0, &title, Some(&mut close), |ui| {
-            egui::Grid::new("home_details_grid").num_columns(2).spacing(vec2(house::L, house::S)).show(ui, |ui| {
-                for (k, v) in &rows {
-                    ui.label(RichText::new(*k).size(house::BODY).color(theme::TEXT_DIM));
-                    ui.label(RichText::new(v).size(house::BODY).color(theme::TEXT));
-                    ui.end_row();
+            let is_file = matches!(&item, Item::File(_));
+            if is_file && self.accounts {
+                let at = ui.cursor().min;
+                house::tabs(ui, &mut self.details_tab, &["Details", "Activity", "Versions"]);
+                for (i, l) in ["Details", "Activity", "Versions"].iter().enumerate() {
+                    let c = egui::pos2(at.x + 44.0 + 88.0 * i as f32, at.y + 16.0);
+                    house::target(ui.ctx(), &format!("details tab {l}"), egui::Rect::from_center_size(c, vec2(80.0, 28.0)));
                 }
-                if self.accounts && !matches!(&item, Item::Folder(p) if !p.contains('/')) {
-                    ui.label(RichText::new("Who has access").size(house::BODY).color(theme::TEXT_DIM));
-                    ui.vertical(|ui| {
-                        if access.is_none() {
-                            ui.label(RichText::new("Loading…").size(house::BODY).color(theme::TEXT_DIM));
-                        }
-                        for l in &access_lines {
-                            ui.label(RichText::new(l).size(house::BODY).color(theme::TEXT));
-                        }
-                    });
-                    ui.end_row();
-                }
-            });
+            }
+            if self.details_tab == 2 && is_file {
+                let can_edit = matches!(self.role_of(&item), "owner" | "edit");
+                let list = self.versions.as_ref().map(|(_, j)| j);
+                version_act = history::ui(ui, list, can_edit);
+            } else if self.details_tab == 1 && is_file {
+                let list = self.activity.as_ref().map(|(_, j)| j);
+                activity::ui(ui, list);
+            } else {
+                egui::Grid::new("home_details_grid").num_columns(2).spacing(vec2(house::L, house::S)).show(ui, |ui| {
+                    for (k, v) in &rows {
+                        ui.label(RichText::new(*k).size(house::BODY).color(theme::TEXT_DIM));
+                        ui.label(RichText::new(v).size(house::BODY).color(theme::TEXT));
+                        ui.end_row();
+                    }
+                    if self.accounts && !matches!(&item, Item::Folder(p) if !p.contains('/')) {
+                        ui.label(RichText::new("Who has access").size(house::BODY).color(theme::TEXT_DIM));
+                        ui.vertical(|ui| {
+                            if access.is_none() {
+                                ui.label(RichText::new("Loading…").size(house::BODY).color(theme::TEXT_DIM));
+                            }
+                            for l in &access_lines {
+                                ui.label(RichText::new(l).size(house::BODY).color(theme::TEXT));
+                            }
+                        });
+                        ui.end_row();
+                    }
+                });
+            }
             let can_share = self.accounts && self.role_of(&item) == "owner" && !matches!(&item, Item::Folder(p) if !p.contains('/'));
             let labels: &[&str] = if can_share { &["Share…", "Close"] } else { &["Close"] };
             match house::actions_in(ui, labels, ACCENT) {
@@ -529,6 +653,9 @@ impl Home {
                 None => {}
             }
         });
+        if let (Some(act), Item::File(id)) = (version_act, &item) {
+            self.version_act(ctx, id, act);
+        }
         if share {
             let (folder, key) = match &item {
                 Item::Folder(p) => (true, p.clone()),
@@ -575,4 +702,12 @@ struct PickTree<'a> {
     ok: &'a dyn Fn(&str, &str) -> bool,
     target: &'a mut Option<String>,
     expanded: &'a mut HashSet<String>,
+}
+
+/// Asks again for a file's version list (after a restore or a new version).
+fn reload_history(store: &Backend, inbox: &Rc<RefCell<Vec<Reply>>>, ctx: &egui::Context, id: &str) {
+    let id = id.to_string();
+    call(store, inbox, ctx, Method::Get, format!("api/files/{id}/history"), None, move |b| {
+        Reply::Versions(id, serde_json::from_slice(&b).unwrap_or_default())
+    });
 }

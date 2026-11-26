@@ -15,26 +15,45 @@ impl Home {
             Some(View::Recent) => json!("recent"),
             Some(View::Starred) => json!("starred"),
             Some(View::Bin) => json!("bin"),
+            Some(View::Storage) => json!("storage"),
             Some(View::Everyone(p)) => json!({ "everyone": p }),
             None => Json::Null,
         };
         json!({
+            "preview": self.file_preview.as_ref().map(|p| p.test_state()),
+            // The last right-click menu's rows: [{label, rect: [x0, y0, x1, y1]}].
+            "menu": self.menu_rects.iter().map(|(l, r)| json!({ "label": l, "rect": [r.min.x, r.min.y, r.max.x, r.max.y] })).collect::<Vec<_>>(),
             "photos": self.photos.test_state(self.photo_folder().is_some()),
             "view": view,
+            "storage": self.storage.map(|(u, b, f)| json!({ "used": u, "bin": b, "free": f })),
             "loading": self.loading,
+            "versions": self.versions.as_ref().map(|(_, v)| super::history::rows(v)),
+            "details_tab": self.details_tab,
+            "activity": self.activity.as_ref().map(|(_, v)| super::activity::rows(v)),
             "search": self.search,
+            // Files whose text matched the search, with the snippet shown for each.
+            "found": self.found.iter().map(|(id, s)| json!({ "id": id, "snippet": s })).collect::<Vec<_>>(),
+            "filters": { "kind": self.filters.kind, "who": self.filters.who, "when": self.filters.when },
             "error": self.error,
             "undo": self.undo.done.iter().map(|a| a.label.clone()).collect::<Vec<_>>(),
             "note": self.note_text(),
             "folders": folders.iter().map(|f| json!({ "path": f.path, "name": name_of(&f.path) })).collect::<Vec<_>>(),
             "files": files
                 .iter()
-                .map(|f| json!({ "id": f.id, "name": f.name, "folder": f.folder, "starred": f.starred, "kind": super::items::file_kind(&f.name) }))
+                .map(|f| {
+                    // The tile picture: "ready" (texture loaded), "loading", "none" (plain icon) or null.
+                    let thumb = self.thumbs.get(&f.id).map(|(_, t)| match t {
+                        super::Thumb::Ready(_) => "ready",
+                        super::Thumb::Loading => "loading",
+                        super::Thumb::None => "none",
+                    });
+                    json!({ "id": f.id, "name": f.name, "folder": f.folder, "starred": f.starred, "mentioned_by": f.mentioned_by, "kind": super::items::file_kind(&f.name), "thumb": thumb, "rect": self.tile_rects.get(&f.id).map(|r| [r.min.x, r.min.y, r.max.x, r.max.y]) })
+                })
                 .collect::<Vec<_>>(),
         })
     }
 
-    /// `home:folder` {path}, `home:search` {text}, `home:refresh`, `home:move`, `home:delete`, `home:undo`, `home:recent`, `home:starred`,
+    /// `home:folder` {path}, `home:search` {text}, `home:filter` {kind, who, when}, `home:refresh`, `home:move`, `home:delete`, `home:undo`, `home:recent`, `home:starred`,
     /// `home:shared`, `home:bin`; `home:opens` {id} says what opening that file does (without
     /// opening it): `{"opens": "editor" | "preview" | "download", "url"}`.
     pub(crate) fn test_run(&mut self, ctx: &egui::Context, id: &str, params: &Json) -> Result<Json, String> {
@@ -45,6 +64,12 @@ impl Home {
                 self.go_folder(&path);
             }
             "home:search" => self.search = text("text").unwrap_or_default(),
+            // {kind: folder|sheet|doc|slides|image|pdf|null, who: 0..2, when: 0..4}
+            "home:filter" => {
+                self.filters.kind = super::filters::KINDS.iter().map(|(k, _)| *k).find(|k| Some(*k) == text("kind").as_deref());
+                let n = |k: &str| params.get(k).and_then(Json::as_u64).unwrap_or(0) as u8;
+                (self.filters.who, self.filters.when) = (n("who").min(2), n("when").min(4));
+            }
             "home:refresh" => self.refresh(ctx),
             // Undo (undo.rs): `home:move` {files: [id], folders: [path], to} moves as a drag
             // does, `home:delete` {files, folders} bins, `home:undo` is Ctrl+Z.
@@ -62,6 +87,18 @@ impl Home {
                 }
             }
             "home:undo" => self.undo(ctx),
+            // `home:download` {files: [id], folders: [path]}: Download as the menu does it (one
+            // file as itself, else one zip); says which address it fetches.
+            "home:download" => {
+                let list = |k: &str| params.get(k).and_then(Json::as_array).into_iter().flatten().filter_map(Json::as_str).map(str::to_string);
+                let items: Vec<Item> = list("files").map(Item::File).chain(list("folders").map(Item::Folder)).collect();
+                if items.is_empty() {
+                    return Err("home:download needs {files} or {folders}".into());
+                }
+                let url = if let [Item::File(id)] = items.as_slice() { format!("api/files/{id}") } else { Self::zip_url(&items) };
+                self.download_items(ctx, &items);
+                return Ok(json!({ "url": url }));
+            }
             "home:opens" => {
                 let id = text("id").ok_or("home:opens needs {id}")?;
                 let f = self.file(&id).ok_or("no such file listed")?;
@@ -72,7 +109,18 @@ impl Home {
                 };
                 return Ok(json!({ "opens": opens, "url": url }));
             }
+            // The file preview (filepreview.rs): `home:preview` {id} opens it, `home:preview:close`.
+            "home:preview" => {
+                let id = text("id").ok_or("home:preview needs {id}")?;
+                self.file(&id).ok_or("no such file listed")?;
+                self.preview(ctx, &id);
+            }
+            "home:preview:close" => self.file_preview = None,
             "home:recent" => self.navigate(View::Recent),
+            "home:storage" => {
+                self.navigate(View::Storage);
+                self.load_storage(ctx);
+            }
             "home:starred" => self.navigate(View::Starred),
             "home:shared" => self.navigate(View::Shared(None)),
             "home:bin" => {
@@ -126,7 +174,15 @@ impl Home {
                 let ed = pm.editor.as_mut().ok_or("the editor isn't open")?;
                 ed.test_run(ctx, &self.store, &id["home:photos:edit:".len()..], params)?;
             }
-            "home:photos:tab" | "home:photos:select" | "home:photos:place:open" => pm.alb_test(ctx, &self.store, id, params)?,
+            "home:photos:locked:unlock" | "home:photos:locked:lock" | "home:photos:locked:idle" | "home:photos:locked:confirm" => {
+                pm.locked_test(ctx, &self.store, id, params)?
+            }
+            "home:photos:tab" | "home:photos:dups:keep" | "home:photos:select" | "home:photos:place:open" => {
+                pm.alb_test(ctx, &self.store, id, params)?
+            }
+            "home:photos:click" | "home:photos:menu" | "home:photos:bar" | "home:photos:addto" | "home:photos:picker" | "home:photos:note:open" => {
+                pm.pick_test(ctx, &self.store, id, params)?
+            }
             id if id.starts_with("home:photos:album:") => pm.alb_test(ctx, &self.store, id, params)?,
             "home:photos:open" => {
                 let i = params.get("index").and_then(Json::as_u64).unwrap_or(0) as usize;

@@ -107,7 +107,31 @@ pub fn menu_row(ui: &mut Ui, icon: Option<&str>, label: &str, keys: &str, enable
         None => egui::Button::new(text),
     };
     let b = if keys.is_empty() { b } else { b.shortcut_text(RichText::new(keys).size(NOTE).color(theme::TEXT_DIM)) };
-    ui.add_enabled(enabled, b.min_size(vec2(ui.available_width(), 32.0))).clicked()
+    let r = ui.add_enabled(enabled, b.min_size(vec2(ui.available_width(), 32.0)));
+    target(ui.ctx(), label, r.rect);
+    r.clicked()
+}
+
+/// Where the labelled controls were last drawn, keyed by label, with the pass that drew them.
+#[derive(Clone, Default)]
+struct Targets(std::collections::BTreeMap<String, (u64, egui::Rect)>);
+
+/// Remembers where a labelled control was drawn, for the test hook's `targets` (app/TESTING.md):
+/// real-click tests read the spot from there instead of guessing positions.
+pub fn target(ctx: &egui::Context, label: &str, rect: egui::Rect) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.get_temp_mut_or_default::<Targets>(egui::Id::NULL).0.insert(label.to_owned(), (pass, rect)));
+}
+
+/// The controls drawn in the latest pass: label → centre `[x, y]` in points (CSS pixels at 100%).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn targets(ctx: &egui::Context) -> serde_json::Value {
+    let all = ctx.data(|d| d.get_temp::<Targets>(egui::Id::NULL)).unwrap_or_default().0;
+    let last = all.values().map(|(p, _)| *p).max().unwrap_or(0);
+    // A control counts when it was drawn in the last pass or the one before (menus draw a pass late).
+    let map: serde_json::Map<String, serde_json::Value> =
+        all.into_iter().filter(|(_, (p, _))| p + 1 >= last).map(|(k, (_, r))| (k, serde_json::json!([r.center().x, r.center().y]))).collect();
+    serde_json::Value::Object(map)
 }
 
 /// A menu divider: a light line with 8 px above and below.
@@ -459,7 +483,9 @@ pub fn actions_in(ui: &mut Ui, labels: &[&str], accent: Color32) -> Option<usize
         ui.spacing_mut().item_spacing.x = S;
         for (i, l) in labels.iter().enumerate().rev() {
             let b = if i + 1 == labels.len() { primary_in(l, accent) } else { secondary_in(l, accent) };
-            if ui.add(b).clicked() {
+            let r = ui.add(b);
+            target(ui.ctx(), l, r.rect);
+            if r.clicked() {
                 hit = Some(i);
             }
         }
@@ -568,4 +594,38 @@ mod tests {
         }
         assert_eq!(super::BUTTON_RADIUS as f32 * 2.0, super::BUTTON_HEIGHT);
     }
+}
+
+static TOAST: std::sync::Mutex<Option<(String, f64)>> = std::sync::Mutex::new(None);
+
+/// A short confirmation at the bottom of the screen ("Sharing saved"). Shown for 2.5 s by `show_toast`.
+pub fn toast(ctx: &egui::Context, text: &str) {
+    let until = ctx.input(|i| i.time) + 2.5;
+    *TOAST.lock().unwrap_or_else(|e| e.into_inner()) = Some((text.to_string(), until));
+    ctx.request_repaint();
+}
+
+/// The toast showing now, if any (for the test hook; `show_toast` clears it once it has run out).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn toast_text() -> Option<String> {
+    TOAST.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|(t, _)| t.clone())
+}
+
+/// Draws the current toast, if any. Call once a frame from a screen that can raise one.
+pub fn show_toast(ctx: &egui::Context) {
+    let Some((text, until)) = TOAST.lock().unwrap_or_else(|e| e.into_inner()).clone() else { return };
+    if ctx.input(|i| i.time) >= until {
+        *TOAST.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        return;
+    }
+    egui::Area::new(egui::Id::unique("house_toast_area"))
+        .order(egui::Order::Tooltip)
+        .anchor(egui::Align2::CENTER_BOTTOM, vec2(0.0, -32.0))
+        .interactable(false)
+        .show(ctx, |ui| {
+            Frame::new().fill(Color32::from_rgb(40, 40, 40)).corner_radius(8).inner_margin(vec2(16.0, 10.0)).show(ui, |ui| {
+                ui.label(RichText::new(text).size(BODY).color(Color32::WHITE));
+            });
+        });
+    ctx.request_repaint_after(std::time::Duration::from_millis(200));
 }

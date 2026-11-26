@@ -99,7 +99,7 @@ modules:
       # starsheets/scripts/fetch-upstream.sh fetches). pin-engines.sh keeps the two equal.
       - type: git
         url: https://github.com/DomeShifter/gridcraft.git
-        commit: b51979c8ab24aba7b39f3c22bac323289d3e6545
+        commit: 8634647f297c35410659e07a3591879172591555
         dest: starsheets/upstream/gridcraft
       - cargo-sources-starsheets.json
 
@@ -138,11 +138,15 @@ modules:
           - starsheets/scripts
           - stardocs/target
           - stardocs/upstream
+      # The apps share one source file with GridCraft's (#[path] include): only that file.
+      - type: file
+        path: ../../../starsheets/app/src/emacs_keys.rs
+        dest: starsheets/app/src
       # WordCraft: our fork's `stardocs` branch at the commit in stardocs/upstream.pin. Keep the
       # two equal (pin-engines.sh). stardocs/Cargo.toml is committed, so gen-cargo.py need not run.
       - type: git
         url: https://github.com/DomeShifter/wordcraft.git
-        commit: f0726a5c2faeabdd29e7ca30b647891910117088
+        commit: 297d5165ec2df41651752a7387f94689e0aa3417
         dest: stardocs/upstream/wordcraft
       - cargo-sources-stardocs.json
 
@@ -183,11 +187,15 @@ modules:
           - slides/target
           - slides/upstream
           - slides/dist
+      # The apps share one source file with GridCraft's (#[path] include): only that file.
+      - type: file
+        path: ../../../starsheets/app/src/emacs_keys.rs
+        dest: starsheets/app/src
       # DeckCraft: our fork's `starslides` branch at the commit in slides/upstream.pin. Keep the
       # two equal (pin-engines.sh). slides/Cargo.toml is committed, so gen-cargo.py need not run.
       - type: git
         url: https://github.com/DomeShifter/deckcraft.git
-        commit: 18249e914b52c828e0c9087132366bb8460bd7f1
+        commit: c66e5c9f1141a9e628749564d93de6baf9bbbbd1
         dest: slides/upstream/deckcraft
       - cargo-sources-slides.json
 

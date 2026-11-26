@@ -191,6 +191,11 @@ fn run(ctx: &egui::Context, app: &mut SheetApp, home: &mut Home, id: &str, param
     if home.active {
         return Err(format!("`{id}` needs a spreadsheet open (this is the home screen)"));
     }
+    // External content bar (external.rs): `external:allow` presses Allow.
+    if id == "external:allow" {
+        crate::external::allow(ctx);
+        return Ok(json!({ "allowed": crate::external::allowed() }));
+    }
     // The clipboard, which a script can't reach: `clip:copy` copies the selection as Ctrl+C does
     // and answers the text and HTML it puts on the clipboard; `clip:paste {text, html?, values?}`
     // pastes as Ctrl+V (Ctrl+Shift+V with `values`) does when the browser hands those over.
@@ -294,6 +299,28 @@ fn key(app: &mut SheetApp, on_home: bool, name: &str) -> Result<Value, String> {
 /// cell's value and formula, its main formatting, saving and the other people in the file; on the
 /// home screen what it lists.
 /// The IMAGE addresses on the active sheet whose pictures have arrived.
+/// Non-empty cells (A1, input text) inside the selection, at most 2000, row by row.
+fn selection_cells(sheet: &gridcraft_engine::model::Sheet, ranges: &[gridcraft_engine::core::RangeRef]) -> Vec<Value> {
+    use gridcraft_engine::core::CellRef;
+    let mut out = Vec::new();
+    let Some(used) = sheet.used_range() else { return out };
+    for r in ranges {
+        for row in r.start.row.max(used.start.row)..=r.end.row.min(used.end.row) {
+            for col in r.start.col.max(used.start.col)..=r.end.col.min(used.end.col) {
+                let at = CellRef { row, col };
+                let t = sheet.input_text(at);
+                if !t.is_empty() {
+                    out.push(json!([at.a1(), t]));
+                    if out.len() >= 2000 {
+                        return out;
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 fn formula_images_ready(app: &SheetApp) -> Vec<String> {
     let Some(sh) = app.session.active().and_then(|d| d.wb.active()) else { return Vec::new() };
     sh.cells
@@ -310,10 +337,10 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
         return json!({ "screen": "signin", "account": crate::account::test_state(ctx) });
     }
     if p.home.active {
-        return json!({ "screen": "home", "home": p.home.test_state(), "account": crate::account::test_state(ctx) });
+        return json!({ "screen": "home", "home": p.home.test_state(), "account": crate::account::test_state(ctx), "targets": crate::house::targets(ctx) });
     }
     let Some(doc) = p.app.session.active() else {
-        return json!({ "screen": "sheet", "file": null });
+        return json!({ "screen": "sheet", "file": null, "mention": crate::notes::mentions::test_state() });
     };
     let wb = &doc.wb;
     let sheets: Vec<&str> = wb.sheets.iter().map(|s| s.name.as_str()).collect();
@@ -374,6 +401,8 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
     let linked = p.files.linked().filter(|(uid, _)| *uid == doc.uid);
     json!({
         "screen": "sheet",
+        "mention": crate::notes::mentions::test_state(),
+        "targets": crate::house::targets(ctx),
         "file": doc.display_title(),
         "fileId": linked.map(|(_, id)| id),
         "folder": p.files.folder(),
@@ -392,8 +421,11 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
         })),
         "alternating": wb.active().map(crate::altcolours::state),
         "pivot": crate::pivotpanel::state(&*p.app),
+        // Test-only: the non-empty cells of the selection as [a1, input], up to 2000, in one call.
+        "cells": wb.active().map(|s| selection_cells(s, &doc.selection.ranges)),
         "imagesReady": formula_images_ready(&*p.app),
         "linkCard": crate::linkcard::shown(),
+        "external": json!({ "verdict": crate::external::verdict().map(|v| format!("{v:?}")), "held": crate::external::held_count() }),
         "history": p.files.history_state(),
         "cell": cell,
         "format": format,

@@ -13,9 +13,11 @@
 // make the error smaller would only add an allocation on the error path.
 #![allow(clippy::result_large_err)]
 
+mod activity;
 mod auth;
 mod backup;
 mod commenting;
+mod contentsearch;
 mod devices;
 mod docx_comments;
 mod findpath;
@@ -25,10 +27,13 @@ mod log;
 mod oidc;
 mod photos;
 mod preview;
+mod publicdeck;
+mod publiclink;
 mod sharing;
 mod spaces;
 mod store;
 mod thumbs;
+mod zipdl;
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -296,12 +301,12 @@ async fn blocking<T: Send + 'static>(app: &Shared, f: impl FnOnce(&App) -> T + S
 
 /// Runs password hashing or checking (Argon2: slow on purpose) off the async threads and NOT
 /// under the store lock, a few at a time, so sign-in tries can't hold up everyone's files.
-async fn slow<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+pub(crate) async fn slow<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
     let _turn = ARGON_AT_ONCE.acquire().await.ok()?;
     tokio::task::spawn_blocking(f).await.ok()
 }
 
-fn too_many() -> Response<Body> {
+pub(crate) fn too_many() -> Response<Body> {
     error(429, "Too many tries. Wait a few minutes, then try again.")
 }
 
@@ -321,7 +326,7 @@ fn opt_field(body: &Value, key: &str) -> Option<String> {
 }
 
 /// Waits a moment after a wrong password or code (slows down guessing), then says so.
-async fn wrong(code: u16, why: &str) -> Response<Body> {
+pub(crate) async fn wrong(code: u16, why: &str) -> Response<Body> {
     tokio::time::sleep(WRONG_WAIT).await;
     error(code, why)
 }
@@ -1130,15 +1135,61 @@ async fn gate(
                         // Into someone else's folder: it becomes theirs, so only its owner may.
                         need(role, if store::space_of(&target) == store::space_of(&path) { Role::Edit } else { Role::Owner })?;
                     }
+                    // Activity: anyone who can see the file may read what happened to it.
+                    (["activity"], "GET") => {
+                        need(role, Role::View)?;
+                        return Err(send_json(&activity::list(store, id), 200));
+                    }
                     (["sharing"], "GET") => {
                         need(role, Role::View)?;
                         return Err(send_json(&sharing::describe(store, Item::File(id), &path, role), 200));
+                    }
+                    // "@Name" in a comment: the people named who may open the file get a marker.
+                    (["mentions"], "POST") => {
+                        need(role, Role::Comment)?;
+                        let named: Vec<String> = json
+                            .get("users")
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|u| u.as_str().map(str::to_string))
+                            .take(20)
+                            .collect();
+                        let (mut recorded, mut no_access) = (Vec::new(), Vec::new());
+                        for u in named {
+                            if u == me.username {
+                                continue;
+                            }
+                            let Some(user) = auth::users(store).into_iter().find(|x| x.username == u) else { continue };
+                            if sharing::file_role(store, true, Some(&user), id) >= Role::View {
+                                let _ = spaces::note_mention(store, &u, id, &me.username);
+                                recorded.push(u);
+                            } else {
+                                no_access.push(u);
+                            }
+                        }
+                        return Err(send_json(&json!({ "recorded": recorded, "no_access": no_access }), 200));
                     }
                     (["sharing"], "POST") => {
                         need(role, Role::Owner)?;
                         return Err(match sharing::update(store, Item::File(id), &path, &json) {
                             Ok(()) => send_json(&sharing::describe(store, Item::File(id), &path, role), 200),
                             Err(why) => error(400, &why),
+                        });
+                    }
+                    // External content (IMAGE pictures from the web): blocked in files that
+                    // aren't the person's own until they allow it (docs/privacy.md).
+                    (["external"], "GET") => {
+                        need(role, Role::View)?;
+                        let own = store::space_of(&path) == home && spaces::last_change(store, id).is_none_or(|(by, _)| by == home);
+                        return Err(send_json(&json!({ "allowed": spaces::external_allowed(store, &me, id, own) }), 200));
+                    }
+                    (["external"], "POST") => {
+                        need(role, Role::View)?;
+                        let on = json.get("allow").and_then(Value::as_bool).unwrap_or(false);
+                        return Err(match spaces::set_external(store, &me, id, on) {
+                            Ok(()) => send_json(&json!({ "allowed": on }), 200),
+                            Err(e) => error(500, &e.to_string()),
                         });
                     }
                     (["star"], "POST") => {
@@ -1214,7 +1265,7 @@ async fn gate(
                     _ => need(a.folder_role(&path), Role::Owner)?,
                 }
             }
-            (["bin", ..], _) => {
+            (["bin" | "usage", ..], _) => {
                 q.insert("space".into(), home.clone());
             }
             _ => {}
@@ -1549,9 +1600,13 @@ async fn add_sheets(app: &Shared, me: Option<auth::User>, file: String, q: &Hash
 /// GET /api/files/ID/thumb: the file's preview picture (thumbs.rs), drawn if there isn't one for
 /// this version yet (a document's is the one StarDocs sent, if it shows this version). Outside the store lock while drawing. 404: no picture (the app shows an icon).
 async fn thumb(app: &Shared, me: Option<auth::User>, file: String, headers: &HeaderMap) -> Response<Body> {
+    /// Draws one picture (run on a blocking thread).
+    type DrawJob = Box<dyn FnOnce(&App) -> Result<Vec<u8>, String> + Send>;
     enum Got {
         Have(Vec<u8>, String),
         Draw(String, Vec<u8>, String),
+        Photo(String, String),
+        Pdf(Vec<u8>, String),
     }
     let f2 = file.clone();
     let got = blocking(app, move |app| -> Result<Got, Response<Body>> {
@@ -1564,7 +1619,18 @@ async fn thumb(app: &Shared, me: Option<auth::User>, file: String, headers: &Hea
         if let Some(png) = thumbs::cached(&app.store, &f2, &version) {
             return Ok(Got::Have(png, version));
         }
-        // Other files (photos, PDFs…) have no picture here: the Drive shows their type's icon.
+        // Photos: their Photos thumbnail as a tile; PDFs: the top of page 1. Other files (videos:
+        // no ffmpeg in the server) have no picture here: the Drive shows their type's icon.
+        if photos::media_of(&path).is_some_and(|(_, thumbs)| thumbs) {
+            return Ok(Got::Photo(path, version));
+        }
+        if path.to_ascii_lowercase().ends_with(".pdf") {
+            if std::fs::metadata(&full).map(|m| m.len()).unwrap_or(u64::MAX) > thumbs::MAX_PDF {
+                return Err(error(404, "too big for a picture"));
+            }
+            let bytes = std::fs::read(&full).map_err(|_| error(404, "no such file"))?;
+            return Ok(Got::Pdf(bytes, version));
+        }
         if !store::is_editable(&path) {
             return Err(error(404, "no picture for this kind of file"));
         }
@@ -1583,10 +1649,17 @@ async fn thumb(app: &Shared, me: Option<auth::User>, file: String, headers: &Hea
     let (png, version) = match got {
         Err(resp) => return resp,
         Ok(Got::Have(png, v)) => (png, v),
-        Ok(Got::Draw(name, bytes, v)) => {
-            let (store_root, f3, v2) = (app.clone(), file.clone(), v.clone());
+        Ok(got) => {
+            let (store_root, f3) = (app.clone(), file.clone());
+            let (job, v): (DrawJob, String) = match got {
+                Got::Draw(name, bytes, v) => (Box::new(move |_| thumbs::from_bytes(&name, &bytes)), v),
+                Got::Photo(path, v) => (Box::new(move |a| thumbs::tile(&photos::drive_thumb(&a.store, &path)?)), v),
+                Got::Pdf(bytes, v) => (Box::new(move |_| thumbs::from_pdf(bytes)), v),
+                Got::Have(..) => unreachable!(),
+            };
+            let v2 = v.clone();
             let drawn = tokio::task::spawn_blocking(move || {
-                let png = thumbs::from_bytes(&name, &bytes)?;
+                let png = job(&store_root)?;
                 let _ = thumbs::keep(&store_root.store, &f3, &v2, &png);
                 Ok::<_, String>(png)
             })
@@ -1644,6 +1717,7 @@ fn after_files(app: &App, me: &auth::User, m: &str, p: &[String], r: Result<Repl
     let opened = spaces::opened(&app.store, me);
     let colours = spaces::colours(&app.store, me);
     let changed = spaces::changed_by(&app.store);
+    let mentioned = spaces::mentions(&app.store, me);
     let files: Vec<Value> = v["files"]
         .as_array()
         .cloned()
@@ -1664,6 +1738,9 @@ fn after_files(app: &App, me: &auth::User, m: &str, p: &[String], r: Result<Repl
             }
             if let Some(t) = opened.get(&id) {
                 f["opened"] = t.clone();
+            }
+            if let Some(by) = mentioned.get(&id).and_then(|m| m.get("by")) {
+                f["mentioned_by"] = by.clone();
             }
             Some(f)
         })
@@ -1771,6 +1848,25 @@ fn takes_a_file(m: &str, p: &[String]) -> bool {
 
 /// Paths answered before (or without) sign-in: accounts (single sign-on too) and, while
 /// setting up, storage.
+/// The request after "New from a template": `POST api/templates/<key>?folder=…` becomes
+/// `POST api/files?name=<name> (copy).<ext>&folder=…` with the template's file as the body.
+type Upload = (Vec<String>, HashMap<String, String>, Bytes);
+
+/// See [`Upload`]; any other request passes through unchanged.
+fn template_upload(m: &str, p: Vec<String>, mut q: HashMap<String, String>, body: Bytes) -> Result<Upload, Response<Body>> {
+    if p.first().map(String::as_str) != Some("templates") {
+        return Ok((p, q, body));
+    }
+    let t = match (m, p.as_slice()) {
+        ("POST", [_, key]) => starbase_templates::find(key).ok_or_else(|| error(404, "no such template"))?,
+        _ => return Err(error(404, "not found")),
+    };
+    let bytes = starbase_templates::bytes(t.key).ok_or_else(|| error(404, "no such template"))?;
+    q.insert("name".into(), starbase_templates::upload_name(t));
+    q.remove("as_is");
+    Ok((vec!["files".into()], q, Bytes::from_static(bytes)))
+}
+
 fn before_sign_in(p: &[String]) -> bool {
     matches!(p.first().map(String::as_str), Some("info" | "setup" | "signup" | "login" | "logout" | "me" | "users" | "storage" | "oidc" | "devices"))
 }
@@ -1823,6 +1919,53 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
     for (k, v) in form_urlencoded::parse(uri.query().unwrap_or("").as_bytes()) {
         q.entry(k.into_owned()).or_insert_with(|| v.into_owned());
     }
+    // A public link (publiclink.rs): no account needed.
+    if p.first().map(String::as_str) == Some("public") && p.len() >= 2 {
+        let token = p[1].clone();
+        let reply = if method == Method::POST && p.len() == 2 {
+            // The password page's form: a small body, no account.
+            let b = match read_body(body, &headers, 4096, SMALL_WAIT).await {
+                Ok(b) => b,
+                Err(resp) => return resp,
+            };
+            let pw = form_urlencoded::parse(&b).find(|(k, _)| k == "pw").map(|(_, v)| v.into_owned()).unwrap_or_default();
+            blocking(&app, move |a| publiclink::unlock(&a.store, &token, &pw)).await
+        } else if method == Method::GET || method == Method::HEAD {
+            let what = p.get(2..).map(|r| r.join("/")).unwrap_or_default();
+            let cookies = headers.get_all(header::COOKIE).iter().filter_map(|v| v.to_str().ok()).collect::<Vec<_>>().join(";");
+            blocking(&app, move |a| publiclink::serve(&a.store, &token, &what, &publiclink::grant_in(&cookies, &token))).await
+        } else {
+            return error(405, "method not allowed");
+        };
+        return match reply {
+            Some(r) => {
+                let csp = if r.script {
+                    "sandbox allow-scripts allow-same-origin; default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'self'"
+                } else if r.form {
+                    "sandbox allow-forms allow-same-origin; default-src 'none'; style-src 'unsafe-inline'; form-action 'self'"
+                } else {
+                    "sandbox allow-same-origin; default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; frame-src 'self'"
+                };
+                let mut b = Response::builder()
+                    .status(r.code)
+                    .header(header::CONTENT_TYPE, r.content_type)
+                    .header(header::CACHE_CONTROL, "no-store")
+                    .header("x-content-type-options", "nosniff")
+                    .header("content-security-policy", csp);
+                if let Some(d) = r.disposition {
+                    b = b.header(header::CONTENT_DISPOSITION, d);
+                }
+                if let Some(c) = r.set_cookie {
+                    b = b.header(header::SET_COOKIE, c);
+                }
+                if let Some(l) = r.location {
+                    b = b.header(header::LOCATION, l);
+                }
+                b.body(Body::from(r.body)).unwrap()
+            }
+            None => error(500, "server error"),
+        };
+    }
     let m = method.as_str().to_string();
     // Nothing is read (a body can be big) before we know who is asking: only the account and
     // setup requests come before sign-in, with small bodies.
@@ -1845,6 +1988,12 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
             Err(resp) => return resp,
         }
     };
+    // New from a template: made exactly like an upload of the template's file, so the folder
+    // checks, naming ("CV (copy).docx", then "(2)") and reply are the Drive's own.
+    let (p, q, body) = match template_upload(&m, p, q, body) {
+        Ok(x) => x,
+        Err(resp) => return resp,
+    };
     if let Some(resp) = accounts(&app, &m, &p, &q, &headers, &body, ask).await {
         return resp;
     }
@@ -1856,7 +2005,13 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
         return please_sign_in(&app, &headers);
     }
     let me = current_user(&app, &headers);
+    if let Some(resp) = contentsearch::route(&app, &m, &p, &q, me.clone()).await {
+        return resp;
+    }
     if let Some(resp) = findpath::route(&app, &m, &p, &q, me.clone()).await {
+        return resp;
+    }
+    if let Some(resp) = photos::locked::route(&app, &m, &p, me.clone(), ask.ip, &body).await {
         return resp;
     }
     // Photos: folder listings with EXIF dates, thumbnails, edits, the index's status (photos/).
@@ -1885,6 +2040,12 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
         )
         .await
     {
+        if resp.status().is_success()
+            && let Some(me) = &me
+        {
+            let (who, id) = (me.username.clone(), p[1].clone());
+            blocking(&app, move |a| activity::note(&a.store, &id, &who, "commented", "")).await;
+        }
         return resp;
     }
     if m == "PUT" && p.len() == 3 && p[0] == "files" && p[2] == "thumb" {
@@ -1894,6 +2055,9 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
     // (preview.rs says how they are kept safe).
     if m == "GET" && p.len() == 3 && p[0] == "files" && p[2] == "preview" {
         return preview::preview(&app, me, p[1].clone(), &headers).await;
+    }
+    if m == "GET" && p.len() == 1 && p[0] == "zip" {
+        return zipdl::zip(&app, me, &q).await;
     }
     if m == "GET" && p.len() == 3 && p[0] == "files" && p[2] == "raw" {
         return preview::raw(&app, me, p[1].clone(), &headers).await;
@@ -1922,6 +2086,16 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
             // Sharing is answered inside the gate: open live rooms check access straight away.
             if m == "POST" && p.last().is_some_and(|l| l == "sharing") && resp.status().is_success() {
                 app.rooms.recheck_access();
+                if let (Some(me), true) = (&me, p.len() == 3 && p[0] == "files") {
+                    let (who, id) = (me.username.clone(), p[1].clone());
+                    let body: Value = serde_json::from_slice(&body).unwrap_or_default();
+                    blocking(&app, move |a| {
+                        for (kind, detail) in activity::from_sharing(&body) {
+                            activity::note(&a.store, &id, &who, kind, &detail);
+                        }
+                    })
+                    .await;
+                }
             }
             return resp;
         }
@@ -1930,7 +2104,13 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
     // A file replaced through the API (a version restored) is read again by its live room.
     let restored = m == "POST" && p.len() == 5 && p[0] == "files" && p[2] == "versions" && p[4] == "restore";
     let replaced = ((m == "PUT" && p.len() == 2 && p[0] == "files") || restored).then(|| p[1].clone());
+    // A file uploaded from this computer, or a copy, came from outside: its external content
+    // stays blocked for the person who brought it in until they allow it.
+    let from_outside = m == "POST"
+        && ((p.len() == 1 && p[0] == "files" && (q.get("as_is").is_some_and(|v| v == "1") || q.get("imported").is_some_and(|v| v == "1")))
+            || (p.len() == 3 && p[0] == "files" && p[2] == "copy"));
     let (m2, p2) = (m.clone(), p.clone());
+    let act_q = q.clone();
     let app2 = app.clone();
     let out = tokio::task::spawn_blocking(move || {
         let _g = app2.lock.lock().unwrap_or_else(|e| e.into_inner());
@@ -1957,8 +2137,31 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
                     }
                     _ => None,
                 };
+                // Activity (Details): what was done, by whom.
+                if let (Ok(Reply::Json(v, 200 | 201)), true) = (&r, p2.first().is_some_and(|f| f == "files")) {
+                    let ev: Option<(String, &str, String)> = match (m2.as_str(), p2.as_slice()) {
+                        ("PUT", [_, id]) => Some((id.clone(), "edited", String::new())),
+                        ("POST", [_]) => v.get("id").and_then(Value::as_str).map(|i| (i.to_string(), "created", String::new())),
+                        ("POST", [_, _, c]) if c == "copy" => {
+                            v.get("id").and_then(Value::as_str).map(|i| (i.to_string(), "created", "a copy".to_string()))
+                        }
+                        ("POST", [_, id, c]) if c == "rename" => Some((id.clone(), "renamed", act_q.get("name").cloned().unwrap_or_default())),
+                        ("POST", [_, id, c]) if c == "move" => Some((id.clone(), "moved", act_q.get("folder").cloned().unwrap_or_default())),
+                        ("POST", [_, id, _, v, c]) if c == "restore" => Some((id.clone(), "restored", v.clone())),
+                        ("DELETE", [_, id]) => Some((id.clone(), "trashed", String::new())),
+                        _ => None,
+                    };
+                    if let Some((fid, kind, detail)) = ev {
+                        let who = me.username.clone();
+                        blocking(&app, move |a| activity::note(&a.store, &fid, &who, kind, &detail)).await;
+                    }
+                }
                 if let Some(id) = made {
                     let who = me.username.clone();
+                    if from_outside {
+                        let (u, id) = (me.clone(), id.clone());
+                        blocking(&app, move |a| spaces::set_external(&a.store, &u, &id, false)).await;
+                    }
                     blocking(&app, move |a| spaces::note_changed(&a.store, &id, &who)).await;
                 }
             }
@@ -2180,14 +2383,14 @@ mod tests {
         format!("10.{}.{}.{}", b(0), b(2), b(4))
     }
 
-    struct Got {
-        status: u16,
-        headers: HeaderMap,
-        json: Value,
-        bytes: Vec<u8>,
+    pub(crate) struct Got {
+        pub(crate) status: u16,
+        pub(crate) headers: HeaderMap,
+        pub(crate) json: Value,
+        pub(crate) bytes: Vec<u8>,
     }
 
-    async fn send(app: &Shared, ip: &str, method: &str, uri: &str, cookie: &str, extra: &[(&str, &str)], body: Vec<u8>) -> Got {
+    pub(crate) async fn send(app: &Shared, ip: &str, method: &str, uri: &str, cookie: &str, extra: &[(&str, &str)], body: Vec<u8>) -> Got {
         let mut b = axum::http::Request::builder().method(method).uri(uri).header(header::HOST, "192.168.1.5:8080");
         if !cookie.is_empty() {
             b = b.header(header::COOKIE, cookie);
@@ -2204,16 +2407,16 @@ mod tests {
         Got { status, headers, json: serde_json::from_slice(&bytes).unwrap_or(Value::Null), bytes: bytes.to_vec() }
     }
 
-    async fn post(app: &Shared, ip: &str, uri: &str, cookie: &str, v: Value) -> Got {
+    pub(crate) async fn post(app: &Shared, ip: &str, uri: &str, cookie: &str, v: Value) -> Got {
         send(app, ip, "POST", uri, cookie, &[], serde_json::to_vec(&v).unwrap()).await
     }
 
-    fn cookie_of(g: &Got) -> String {
+    pub(crate) fn cookie_of(g: &Got) -> String {
         g.headers.get(header::SET_COOKIE).and_then(|v| v.to_str().ok()).unwrap_or("").split(';').next().unwrap_or("").to_string()
     }
 
     /// A server with its owner ("boss"), signed in: (app, address, owner's cookie).
-    async fn owned() -> (Shared, String, String) {
+    pub(crate) async fn owned() -> (Shared, String, String) {
         let app = app(true);
         let ip = address();
         let code = auth::setup_code(&app.store);
@@ -2287,6 +2490,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn external_content_is_blocked_in_files_from_outside_until_allowed() {
+        let (app, ip, boss) = owned().await;
+        let ext = |id: &str| format!("/api/files/{id}/external");
+        let made = send(&app, &ip, "POST", "/api/files?name=Mine.xlsx", &boss, &[], b"one".to_vec()).await;
+        let mine = made.json["id"].as_str().unwrap().to_string();
+        assert_eq!(send(&app, &ip, "GET", &ext(&mine), &boss, &[], vec![]).await.json["allowed"], true, "own file: as before");
+        let up = send(&app, &ip, "POST", "/api/files?name=From%20mail.xlsx&as_is=1", &boss, &[], b"two".to_vec()).await;
+        let up = up.json["id"].as_str().unwrap().to_string();
+        assert_eq!(send(&app, &ip, "GET", &ext(&up), &boss, &[], vec![]).await.json["allowed"], false, "uploaded: blocked");
+        let copy = send(&app, &ip, "POST", &format!("/api/files/{mine}/copy"), &boss, &[], vec![]).await;
+        let copy = copy.json["id"].as_str().unwrap().to_string();
+        assert_eq!(send(&app, &ip, "GET", &ext(&copy), &boss, &[], vec![]).await.json["allowed"], false, "a copy: blocked");
+        assert_eq!(post(&app, &ip, &ext(&up), &boss, json!({"allow": true})).await.status, 200);
+        assert_eq!(send(&app, &ip, "GET", &ext(&up), &boss, &[], vec![]).await.json["allowed"], true, "remembered");
+        assert_eq!(send(&app, &ip, "GET", &ext(&up), "", &[], vec![]).await.status, 401);
+    }
+
+    #[tokio::test]
     async fn nothing_is_read_before_sign_in() {
         let (app, ip, boss) = owned().await;
         let big = vec![b'x'; 2 * 1024 * 1024];
@@ -2308,6 +2529,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn public_links_expire_hide_download_and_take_a_password() {
+        let (app, ip, boss) = owned().await;
+        let id = send(&app, &ip, "POST", "/api/files?name=Pic.png&as_is=1", &boss, &[], b"PNGDATA".to_vec()).await.json["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let sh = format!("/api/files/{id}/sharing");
+        let g = post(&app, &ip, &sh, &boss, json!({"public": {"on": true, "expires": "2999-01-01", "no_download": true}})).await;
+        assert_eq!(g.status, 200, "{:?}", g.json);
+        assert_eq!(g.json["public"]["expires"], "2999-01-01");
+        let t = g.json["public"]["token"].as_str().unwrap().to_string();
+        let page = send(&app, &ip, "GET", &format!("/api/public/{t}"), "", &[], vec![]).await;
+        assert_eq!(page.status, 200, "signed out");
+        let html = String::from_utf8_lossy(&page.bytes).to_string();
+        assert!(html.contains("/view") && !html.contains("Download"), "view only: no download button");
+        assert_eq!(send(&app, &ip, "GET", &format!("/api/public/{t}/download"), "", &[], vec![]).await.status, 403);
+        assert_eq!(send(&app, &ip, "GET", &format!("/api/public/{t}/view"), "", &[], vec![]).await.bytes, b"PNGDATA");
+        // Download allowed again.
+        post(&app, &ip, &sh, &boss, json!({"public": {"on": true, "no_download": false}})).await;
+        assert_eq!(send(&app, &ip, "GET", &format!("/api/public/{t}/download"), "", &[], vec![]).await.bytes, b"PNGDATA");
+        // Password.
+        post(&app, &ip, &sh, &boss, json!({"public": {"on": true, "password": "opensesame"}})).await;
+        let dl = format!("/api/public/{t}/download");
+        let get = |uri: String, cookie: String| {
+            let (app, ip) = (app.clone(), ip.clone());
+            async move { send(&app, &ip, "GET", &uri, &cookie, &[], vec![]).await }
+        };
+        assert_eq!(get(dl.clone(), String::new()).await.status, 200, "asks for the password");
+        assert!(!get(dl.clone(), String::new()).await.bytes.starts_with(b"PNGDATA"));
+        // The password goes in a form POST, never in the address.
+        let unlock = |pw: &str| {
+            let (app, ip, uri, body) = (app.clone(), ip.clone(), format!("/api/public/{t}"), format!("pw={pw}").into_bytes());
+            async move { send(&app, &ip, "POST", &uri, "", &[("content-type", "application/x-www-form-urlencoded")], body).await }
+        };
+        let bad = unlock("nope").await;
+        assert_eq!(bad.status, 401);
+        assert!(bad.headers.get(header::SET_COOKIE).is_none());
+        assert!(!get(format!("{dl}?pw=opensesame"), String::new()).await.bytes.starts_with(b"PNGDATA"), "?pw= no longer works");
+        let ok = unlock("opensesame").await;
+        assert_eq!(ok.status, 303);
+        let set = ok.headers.get(header::SET_COOKIE).unwrap().to_str().unwrap().to_string();
+        assert!(set.contains("HttpOnly") && set.contains(&format!("Path=/api/public/{t}")), "{set}");
+        let cookie = set.split(';').next().unwrap().to_string();
+        assert_eq!(get(dl.clone(), cookie.clone()).await.bytes, b"PNGDATA");
+        assert!(!get(dl.clone(), "pl_x=1".into()).await.bytes.starts_with(b"PNGDATA"), "a made-up cookie is not a key");
+        // Expired.
+        post(&app, &ip, &sh, &boss, json!({"public": {"on": true, "expires": "2001-02-03"}})).await;
+        let g = get(format!("/api/public/{t}"), cookie.clone()).await;
+        assert_eq!(g.status, 410);
+        assert!(String::from_utf8_lossy(&g.bytes).contains("This link has expired"));
+        // Bad date refused; off removes it.
+        assert_eq!(post(&app, &ip, &sh, &boss, json!({"public": {"on": true, "expires": "soon"}})).await.status, 400);
+        let g = post(&app, &ip, &sh, &boss, json!({"public": {"on": false}})).await;
+        assert_eq!(g.json["public"]["on"], false);
+        assert_eq!(send(&app, &ip, "GET", &format!("/api/public/{t}"), "", &[], vec![]).await.status, 404);
+    }
+
+    #[tokio::test]
     async fn other_sites_cant_send_requests() {
         let (app, ip, boss) = owned().await;
         let evil = [("origin", "https://evil.example")];
@@ -2320,6 +2599,72 @@ mod tests {
         let id = g.json["id"].as_str().unwrap().to_string();
         let put = [("origin", "http://192.168.1.5:8080"), ("content-type", "application/octet-stream")];
         assert_eq!(send(&app, &ip, "PUT", &format!("/api/files/{id}"), &boss, &put, b"two".to_vec()).await.status, 200);
+    }
+
+    /// New from a template (every template): a copy "<name> (copy).<ext>" in the folder asked
+    /// for, holding the template's file; again → "(copy) (2)"; the templates themselves are
+    /// unchanged; someone without edit access to the folder can't; an unknown key is a 404.
+    #[tokio::test]
+    async fn new_from_template_copies_into_the_folder() {
+        let (app, ip, boss) = owned().await;
+        let g = post(&app, &ip, "/api/users", &boss, json!({"username": "vic", "name": "vic", "password": "vicpassword"})).await;
+        assert_eq!(g.status, 200);
+        let vic = cookie_of(&post(&app, &ip, "/api/login", "", json!({"username": "vic", "password": "vicpassword"})).await);
+        let folder = send(&app, &ip, "POST", "/api/folders?name=Work", &boss, &[], vec![]).await.json["path"].as_str().unwrap().to_string();
+        let before: Vec<Vec<u8>> = starbase_templates::ALL.iter().map(|t| starbase_templates::bytes(t.key).unwrap().to_vec()).collect();
+        for t in starbase_templates::ALL {
+            let url = format!("/api/templates/{}?folder={folder}", t.key);
+            let g = send(&app, &ip, "POST", &url, &boss, &[], vec![]).await;
+            assert_eq!(g.status, 201, "{}: {:?}", t.key, g.json);
+            assert_eq!(g.json["name"], format!("{} (copy).{}", t.name, t.kind.ext()), "{}", t.key);
+            assert_eq!(g.json["folder"], folder.as_str(), "{}", t.key);
+            let id = g.json["id"].as_str().unwrap().to_string();
+            let got = send(&app, &ip, "GET", &format!("/api/files/{id}"), &boss, &[], vec![]).await;
+            assert_eq!(got.status, 200, "{}", t.key);
+            assert_eq!(got.bytes, starbase_templates::bytes(t.key).unwrap(), "{}: the copy is the template", t.key);
+            let again = send(&app, &ip, "POST", &url, &boss, &[], vec![]).await;
+            assert_eq!(again.json["name"], format!("{} (copy) (2).{}", t.name, t.kind.ext()), "{}", t.key);
+            assert_eq!(send(&app, &ip, "POST", &url, &vic, &[], vec![]).await.status, 403, "{}: not vic's folder", t.key);
+        }
+        let after: Vec<Vec<u8>> = starbase_templates::ALL.iter().map(|t| starbase_templates::bytes(t.key).unwrap().to_vec()).collect();
+        assert_eq!(before, after, "the templates are unchanged");
+        // The Drive opened without `dir` (no folder known yet): the copy goes to the person's
+        // own top folder, never to a folder with an empty name.
+        for url in ["/api/templates/monthly-budget", "/api/templates/monthly-budget?folder="] {
+            let g = send(&app, &ip, "POST", url, &boss, &[], vec![]).await;
+            assert_eq!(g.status, 201, "{url}: {:?}", g.json);
+            assert_eq!(g.json["folder"], "boss", "{url}: into the top folder");
+            assert_eq!(send(&app, &ip, "POST", url, &vic, &[], vec![]).await.json["folder"], "vic", "{url}: vic's own top folder");
+        }
+        assert_eq!(send(&app, &ip, "POST", "/api/templates/nope", &boss, &[], vec![]).await.status, 404);
+        assert_eq!(send(&app, &ip, "GET", "/api/templates/cv", &boss, &[], vec![]).await.status, 404);
+    }
+
+    /// Details > Activity: what happened to a file, newest first; a sharee (a viewer, not the
+    /// owner) reads it, a person with no access gets a 403.
+    #[tokio::test]
+    async fn file_activity_for_a_sharee_and_not_a_stranger() {
+        let (app, ip, boss) = owned().await;
+        for who in ["ann", "vic"] {
+            let g = post(&app, &ip, "/api/users", &boss, json!({"username": who, "name": who, "password": format!("{who}password")})).await;
+            assert_eq!(g.status, 200);
+        }
+        let ann = cookie_of(&post(&app, &ip, "/api/login", "", json!({"username": "ann", "password": "annpassword"})).await);
+        let vic = cookie_of(&post(&app, &ip, "/api/login", "", json!({"username": "vic", "password": "vicpassword"})).await);
+        let id = send(&app, &ip, "POST", "/api/files?name=Letter.docx", &boss, &[], b"one".to_vec()).await.json["id"].as_str().unwrap().to_string();
+        let url = format!("/api/files/{id}/activity");
+        assert_eq!(send(&app, &ip, "GET", &url, &ann, &[], vec![]).await.status, 403, "no access yet");
+        assert_eq!(send(&app, &ip, "GET", &url, &vic, &[], vec![]).await.status, 403, "a stranger sees nothing");
+        assert_eq!(post(&app, &ip, &format!("/api/files/{id}/sharing"), &boss, json!({"people": {"ann": "view"}, "link": "view"})).await.status, 200);
+        assert_eq!(send(&app, &ip, "POST", &format!("/api/files/{id}/rename?name=Memo"), &boss, &[], vec![]).await.status, 200);
+        assert_eq!(send(&app, &ip, "PUT", &format!("/api/files/{id}"), &boss, &[], b"two".to_vec()).await.status, 200);
+        let g = send(&app, &ip, "GET", &url, &ann, &[], vec![]).await;
+        assert_eq!(g.status, 200, "a view-only sharee may read it: {:?}", g.json);
+        let kinds: Vec<&str> = g.json["activity"].as_array().unwrap().iter().map(|e| e["kind"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["edited", "renamed", "link", "shared", "created"], "newest first");
+        assert_eq!(g.json["activity"][0]["by"], "boss");
+        assert_eq!(g.json["activity"][3]["detail"], "ann (can view)");
+        let _ = std::fs::remove_dir_all(&app.store.root);
     }
 
     /// Docs' version history: a document's saves become versions with who saved them; editors
@@ -2366,6 +2711,53 @@ mod tests {
         assert_eq!((vs[0]["author"].as_str(), vs[0]["name"].as_str()), (Some("ann"), Some("Final draft")));
         let named = vs[0]["v"].as_str().unwrap();
         assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{id}/versions/{named}"), &ann, &[], vec![]).await.bytes, b"two");
+        let _ = std::fs::remove_dir_all(&app.store.root);
+    }
+
+    /// Drive "Manage versions" for any file: a new revision put over xlsx, pptx, a photo or a text
+    /// file keeps the old one; an editor restores it, a viewer and a stranger are refused (403).
+    #[tokio::test]
+    async fn any_file_keeps_versions() {
+        let (app, ip, boss) = owned().await;
+        for who in ["ann", "vic", "eve"] {
+            let g = post(&app, &ip, "/api/users", &boss, json!({"username": who, "name": who, "password": format!("{who}password")})).await;
+            assert_eq!(g.status, 200);
+        }
+        let mut cookies = Vec::new();
+        for who in ["ann", "vic", "eve"] {
+            cookies.push(cookie_of(&post(&app, &ip, "/api/login", "", json!({"username": who, "password": format!("{who}password")})).await));
+        }
+        let (ann, vic, eve) = (cookies[0].clone(), cookies[1].clone(), cookies[2].clone());
+        for name in ["a.xlsx", "deck.pptx", "pic.png", "notes.txt"] {
+            let id = send(&app, &ip, "POST", &format!("/api/files?name={name}&as_is=1"), &boss, &[], b"one".to_vec()).await.json["id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let g = post(&app, &ip, &format!("/api/files/{id}/sharing"), &boss, json!({"people": {"ann": "edit", "vic": "view"}})).await;
+            assert_eq!(g.status, 200, "{name}");
+            assert_eq!(send(&app, &ip, "PUT", &format!("/api/files/{id}"), &ann, &[], b"two".to_vec()).await.status, 200);
+            let h = send(&app, &ip, "GET", &format!("/api/files/{id}/history"), &ann, &[], vec![]).await;
+            let vs = h.json["versions"].as_array().unwrap().clone();
+            assert_eq!(vs.len(), 1, "{name}: {vs:?}");
+            assert_eq!((vs[0]["author"].as_str(), vs[0]["size"].as_u64()), (Some("boss"), Some(3)), "{name}");
+            let v = vs[0]["v"].as_str().unwrap().to_string();
+            for (who, cookie) in [("viewer", &vic), ("stranger", &eve)] {
+                for url in [format!("/api/files/{id}/history"), format!("/api/files/{id}/versions"), format!("/api/files/{id}/versions/{v}")] {
+                    assert_eq!(send(&app, &ip, "GET", &url, cookie, &[], vec![]).await.status, 403, "{name} {who} {url}");
+                }
+                assert_eq!(
+                    send(&app, &ip, "POST", &format!("/api/files/{id}/versions/{v}/restore"), cookie, &[], vec![]).await.status,
+                    403,
+                    "{name} {who}"
+                );
+            }
+            assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{id}/versions/{v}"), &ann, &[], vec![]).await.bytes, b"one");
+            let g = send(&app, &ip, "POST", &format!("/api/files/{id}/versions/{v}/restore"), &ann, &[], vec![]).await;
+            assert_eq!(g.status, 200, "{name}: {:?}", g.json);
+            assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{id}"), &boss, &[], vec![]).await.bytes, b"one");
+            let h = send(&app, &ip, "GET", &format!("/api/files/{id}/history"), &ann, &[], vec![]).await;
+            assert_eq!(h.json["versions"].as_array().unwrap().len(), 2, "{name}: the restore keeps the version it replaced");
+        }
         let _ = std::fs::remove_dir_all(&app.store.root);
     }
 
@@ -2700,6 +3092,12 @@ mod tests {
         let up = |name: &str| format!("/api/files?name={name}&as_is=1");
         let g = send(&app, &ip, "POST", &up("photo.png"), &boss, &[], png.clone()).await;
         assert_eq!((g.status, g.json["name"].as_str(), g.json["folder"].as_str()), (201, Some("photo.png"), Some("boss")));
+        // Phone uploads (?skip_dup=1): the same bytes in the same folder are reported, not saved twice.
+        let dup = send(&app, &ip, "POST", &format!("{}&skip_dup=1", up("again.png")), &boss, &[], png.clone()).await;
+        assert_eq!((dup.status, dup.json["duplicate"].as_bool(), dup.json["name"].as_str()), (200, Some(true), Some("photo.png")));
+        assert!(dup.json["id"].is_null());
+        let other = send(&app, &ip, "POST", &format!("{}&skip_dup=1", up("other.png")), &boss, &[], b"different".to_vec()).await;
+        assert_eq!(other.status, 201);
         let photo = g.json["id"].as_str().unwrap().to_string();
         // Without as_is a name that isn't a spreadsheet still becomes one (the apps' own saves).
         assert_eq!(send(&app, &ip, "POST", "/api/files?name=notes.txt", &boss, &[], b"x".to_vec()).await.json["name"], "notes.txt.xlsx");
@@ -2737,6 +3135,13 @@ mod tests {
         assert_eq!(g.headers[header::CONTENT_RANGE], format!("bytes 1-3/{}", png.len()).as_str());
         let g = send(&app, &ip, "GET", &format!("/api/files/{photo}/raw"), &boss, &[("range", "bytes=999-")], vec![]).await;
         assert_eq!(g.status, 416);
+        // A video (Photos plays it from raw): its own type, and byte ranges so it can seek.
+        let clip = b"\0\0\0\x18ftypmp42 fake clip bytes".to_vec();
+        let clip_id = id_of(&send(&app, &ip, "POST", &up("clip.mp4"), &boss, &[], clip.clone()).await);
+        let g = send(&app, &ip, "GET", &format!("/api/files/{clip_id}/raw"), &boss, &[("range", "bytes=4-9")], vec![]).await;
+        assert_eq!((g.status, g.bytes.as_slice()), (206, &clip[4..10]));
+        assert_eq!(g.headers[header::CONTENT_TYPE], "video/mp4");
+        assert_eq!(g.headers[header::CONTENT_RANGE], format!("bytes 4-9/{}", clip.len()).as_str());
         // HTML, SVG, text and unknown types are never served to be shown as they are.
         for id in [&html, &svg, &exe, &txt] {
             assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{id}/raw"), &boss, &[], vec![]).await.status, 415, "raw {id}");
@@ -2758,13 +3163,12 @@ mod tests {
             assert_eq!(send(&app, &ip, "GET", &url, &ann, &[], vec![]).await.status, 403, "{url}");
         }
         assert_eq!(g.headers[header::CACHE_CONTROL], "no-store", "never cached: access can be taken away");
-        // Replacing it keeps no versions, but the old content goes to the bin (restorable);
-        // renaming keeps its type; moving too.
+        // Replacing it keeps the old content as a version (restorable); renaming keeps its type; moving too.
         assert_eq!(send(&app, &ip, "PUT", &format!("/api/files/{photo}"), &boss, &[], b"new".to_vec()).await.status, 200);
-        assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{photo}/versions"), &boss, &[], vec![]).await.json, json!([]));
-        let bin = send(&app, &ip, "GET", "/api/bin", &boss, &[], vec![]).await.json;
-        assert!(bin.as_array().unwrap().iter().any(|b| b["name"] == "photo.png" && b["original"] == "boss/photo.png"), "{bin}");
-        assert_eq!(std::fs::read(app.store.full("boss/.bin/photo.png")).unwrap(), png, "the replaced content");
+        let vs = send(&app, &ip, "GET", &format!("/api/files/{photo}/versions"), &boss, &[], vec![]).await.json;
+        assert_eq!(vs.as_array().map(Vec::len), Some(1), "{vs}");
+        let v = vs[0]["v"].as_str().unwrap();
+        assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{photo}/versions/{v}"), &boss, &[], vec![]).await.bytes, png);
         assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{photo}"), &boss, &[], vec![]).await.bytes, b"new");
         let g = send(&app, &ip, "POST", &format!("/api/files/{photo}/rename?name=Holiday"), &boss, &[], vec![]).await;
         assert_eq!(g.json["name"], "Holiday.png");

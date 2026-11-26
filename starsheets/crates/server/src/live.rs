@@ -86,6 +86,8 @@ enum RoomMsg {
 #[derive(Default)]
 pub struct Rooms {
     map: Mutex<HashMap<String, Sender<RoomMsg>>>,
+    /// Commenter saves being rebuilt right now (see commenting.rs): per server, not per process.
+    pub building: std::sync::atomic::AtomicUsize,
 }
 
 impl Rooms {
@@ -1562,7 +1564,7 @@ mod tests {
         let bob = crate::auth::add(&app.store, "bob", "Bob", "a long password").unwrap();
         let share = |role: Role| {
             let people = if role == Role::None { Vec::new() } else { vec![("bob".to_string(), role)] };
-            crate::sharing::set(&app.store, Item::File(&file), &Share { people, link: Role::None }).unwrap();
+            crate::sharing::set(&app.store, Item::File(&file), &Share { people, link: Role::None, ..Default::default() }).unwrap();
         };
         share(Role::Edit);
         let mut b = join_as(&app, &file, "c1", "tab", Some(bob), true);

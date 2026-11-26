@@ -45,6 +45,10 @@ pub(crate) trait Store {
     fn new_file(&self, folder: &str, document: bool) -> Result<(), String>;
     /// Asks which files to upload; `got` gets each one picked (name, bytes).
     fn pick_files(&self, got: Box<dyn Fn(String, Vec<u8>)>);
+    /// Asks for pictures and videos (a phone offers its camera roll and camera); default: any file.
+    fn pick_media(&self, got: Box<dyn Fn(String, Vec<u8>)>) {
+        self.pick_files(got);
+    }
     /// Hands a downloaded file to the person (the browser's download, or a Save dialog).
     fn download(&self, name: &str, bytes: &[u8]) -> Result<(), String>;
     /// A small per-person setting (grid or list, sort order); missing means the default.
@@ -53,6 +57,11 @@ pub(crate) trait Store {
     /// The folder to show first, if one was asked for (`?dir=` on the web).
     fn start_dir(&self) -> Option<String> {
         None
+    }
+    /// Whether to open "New from a template" at once (`?templates=1` on the web: an editor's
+    /// File › New from a template…).
+    fn start_templates(&self) -> bool {
+        false
     }
     /// Whether presentations can be made here ("New presentation"): in the browser, and on the
     /// desktop with Starbase Slides beside the Drive.
@@ -252,16 +261,12 @@ impl Store for ServerStore {
     }
 
     fn pick_files(&self, got: Box<dyn Fn(String, Vec<u8>)>) {
-        wasm_bindgen_futures::spawn_local(async move {
-            // The Drive keeps any kind of file.
-            let Some(picked) = rfd::AsyncFileDialog::new().pick_files().await else {
-                return;
-            };
-            for f in picked {
-                let (name, bytes) = (f.file_name(), f.read().await);
-                got(name, bytes);
-            }
-        });
+        // The Drive keeps any kind of file.
+        crate::web::pick_any(got);
+    }
+
+    fn pick_media(&self, got: Box<dyn Fn(String, Vec<u8>)>) {
+        crate::web::pick_media(got);
     }
 
     fn download(&self, name: &str, bytes: &[u8]) -> Result<(), String> {
@@ -281,6 +286,11 @@ impl Store for ServerStore {
     fn start_dir(&self) -> Option<String> {
         let search = web_sys::window()?.location().search().ok()?;
         web_sys::UrlSearchParams::new_with_str(&search).ok()?.get("dir").filter(|d| !d.is_empty())
+    }
+
+    fn start_templates(&self) -> bool {
+        let search = web_sys::window().and_then(|w| w.location().search().ok()).unwrap_or_default();
+        web_sys::UrlSearchParams::new_with_str(&search).ok().and_then(|p| p.get("templates")).as_deref() == Some("1")
     }
 }
 

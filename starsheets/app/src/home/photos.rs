@@ -17,8 +17,14 @@ use std::sync::{Arc, Mutex};
 use egui::{Color32, Rect, RichText, Sense, Ui, pos2, vec2};
 use serde_json::Value as Json;
 
-mod albums;
+pub(super) mod albums;
+mod dups;
+mod locked;
 mod people;
+mod pick;
+mod upload;
+
+pub(super) use pick::{Act, Out};
 
 use super::viewer::Viewer;
 use crate::house;
@@ -58,6 +64,80 @@ pub(super) struct Pic {
     pub modified: i64,
     pub width: u32,
     pub height: u32,
+    /// Starred by me (the server marks every listed picture, wherever it lives).
+    pub starred: bool,
+    pub size: u64,
+    pub camera: Option<String>,
+    /// Where it was taken, only when the server says this person may see it.
+    pub gps: Option<(f64, f64)>,
+    /// The town (or rounded position) of `gps`, named by the server.
+    pub place: Option<String>,
+    /// The media type ("image/jpeg", "video/mp4"...).
+    pub media: String,
+    /// A video's length, seconds.
+    pub duration: Option<f64>,
+    /// Camera RAW files stacked under this JPEG (same base name, same folder).
+    pub stack: Vec<StackFile>,
+}
+
+/// A file stacked under a picture: its RAW twin.
+#[derive(Clone, Debug, Default)]
+pub(super) struct StackFile {
+    pub id: String,
+    pub name: String,
+    pub v: Option<String>,
+    pub size: u64,
+}
+
+impl Pic {
+    /// This picture's id and its stacked files' ids (what Download and Delete act on).
+    pub fn with_stack(&self) -> Vec<String> {
+        std::iter::once(self.id.clone()).chain(self.stack.iter().map(|f| f.id.clone())).collect()
+    }
+
+    pub fn is_video(&self) -> bool {
+        self.media.starts_with("video/")
+    }
+}
+
+/// A video's length as the tile shows it: `0:07`, `12:30`, `1:02:03`.
+pub(super) fn duration_label(secs: f64) -> String {
+    let t = secs.max(0.0).round() as u64;
+    let (h, m, s) = (t / 3600, t / 60 % 60, t % 60);
+    if h > 0 { format!("{h}:{m:02}:{s:02}") } else { format!("{m}:{s:02}") }
+}
+
+/// A video's tile: a play triangle in a dark disc in the middle, its length at the bottom right.
+/// A stack's tile: a small dark chip with the number of files, bottom left.
+fn stack_badge(painter: &egui::Painter, rect: Rect, n: usize) {
+    let chip = Rect::from_min_size(rect.left_bottom() + vec2(6.0, -26.0), vec2(34.0, 20.0));
+    painter.rect_filled(chip, 10, Color32::from_black_alpha(170));
+    painter.text(chip.center(), egui::Align2::CENTER_CENTER, n.to_string(), egui::FontId::proportional(12.0), Color32::WHITE);
+}
+
+fn video_badge(painter: &egui::Painter, rect: Rect, duration: Option<f64>) {
+    let c = rect.center();
+    let r = (rect.width() * 0.16).clamp(14.0, 30.0);
+    painter.circle_filled(c, r, Color32::from_black_alpha(150));
+    painter.add(egui::Shape::convex_polygon(
+        vec![c + vec2(-r * 0.3, -r * 0.45), c + vec2(-r * 0.3, r * 0.45), c + vec2(r * 0.5, 0.0)],
+        Color32::WHITE,
+        egui::Stroke::NONE,
+    ));
+    if let Some(d) = duration {
+        let font = egui::FontId::proportional(house::NOTE);
+        let g = painter.layout_no_wrap(duration_label(d), font, Color32::WHITE);
+        let pos = rect.right_bottom() - vec2(6.0, 6.0) - g.size();
+        painter.rect_filled(Rect::from_min_size(pos, g.size()).expand2(vec2(4.0, 2.0)), 4, Color32::from_black_alpha(170));
+        painter.galley(pos, g, Color32::WHITE);
+    }
+}
+
+/// Whether a Favourite click turns stars on: like Google Photos, any not yet a favourite → all
+/// become one, else all stop. `photos` is Photos' own listing, which holds pictures in subfolders
+/// and albums; `drive` (the open folder's files) is only a fallback for a picture not listed there.
+pub(super) fn stars_on(ids: &[String], photos: &[Pic], drive: impl Fn(&str) -> Option<bool>) -> bool {
+    !ids.iter().all(|id| photos.iter().find(|p| &p.id == id).map(|p| p.starred).or_else(|| drive(id)).unwrap_or(false))
 }
 
 /// Answers, from the network or a decoder (possibly another thread on the desktop).
@@ -70,11 +150,26 @@ pub(super) enum Got {
     Error(String),
     /// The album or place list (albums.rs), and one opened.
     Cards(albums::Tab, Json),
+    /// The Duplicates list for a folder (dups.rs).
+    Dups(String, Json),
     Opened(albums::Tab, String, Json),
     /// An album changed: ask again.
     Changed,
     /// A person changed (people.rs): what the opened one is called now.
     PersonIs(Option<String>),
+    /// Pictures went into an album (pick.rs): the album, how many were new, how many were asked.
+    Added(albums::Card, u64, u64, Vec<String>),
+    /// The "Add photos" picker's list (pick.rs).
+    Picker(Json),
+    /// Locked (locked.rs): its state, a password accepted or refused, pictures moved in (true) or out.
+    LockedState(Json),
+    Unlocked,
+    Wrong(String),
+    Moved(Vec<String>, bool),
+    Nothing,
+    /// A file picked for upload (name, bytes), and the answer for upload number n (true: a duplicate).
+    Picked(String, Vec<u8>),
+    Uploaded(usize, Result<bool, String>),
 }
 
 /// Textures within a budget of bytes, least recently drawn going first.
@@ -189,6 +284,16 @@ pub(super) struct PhotoMode {
     pub editor: Option<super::photo_edit::Editor>,
     /// Albums and Places beside the grid (albums.rs).
     pub alb: albums::Albums,
+    /// The Duplicates tab (dups.rs).
+    pub dups: dups::Dups,
+    /// Selecting, the right-click menu, Add to album (pick.rs).
+    pub pick: pick::Pick,
+    /// The Locked tab (locked.rs).
+    pub lk: locked::Locked,
+    /// Upload from this device (upload.rs).
+    pub up: upload::Uploads,
+    /// What the Drive around Photos is asked to do (stars, the bin, Details).
+    pub out: Vec<Out>,
 }
 
 impl Default for PhotoMode {
@@ -207,6 +312,7 @@ impl Default for PhotoMode {
             error: None,
             waiting: 0,
             listed_at: -1e9,
+            up: Default::default(),
             inbox: Arc::default(),
             tex: Textures { budget: BUDGET, ..Default::default() },
             asking: HashSet::new(),
@@ -216,6 +322,10 @@ impl Default for PhotoMode {
             viewer: None,
             editor: None,
             alb: albums::Albums::default(),
+            dups: dups::Dups::default(),
+            pick: pick::Pick::default(),
+            lk: locked::Locked::default(),
+            out: Vec::new(),
         }
     }
 }
@@ -318,8 +428,33 @@ impl PhotoMode {
                 modified: p["modified"].as_i64().unwrap_or(0),
                 width: p["width"].as_u64().unwrap_or(0) as u32,
                 height: p["height"].as_u64().unwrap_or(0) as u32,
+                starred: p["starred"].as_bool().unwrap_or(false),
+                size: p["size"].as_u64().unwrap_or(0),
+                camera: p["camera"].as_str().map(str::to_string),
+                gps: p["gps"]["lat"].as_f64().zip(p["gps"]["lon"].as_f64()),
+                place: p["gps"]["place"].as_str().map(str::to_string),
+                media: s(p, "media"),
+                duration: p["duration"].as_f64(),
+                stack: p["stack"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|f| StackFile {
+                        id: s(f, "id"),
+                        name: s(f, "name"),
+                        v: f["v"].as_str().map(str::to_string),
+                        size: f["size"].as_u64().unwrap_or(0),
+                    })
+                    .collect(),
             })
             .collect()
+    }
+
+    /// Shows the new star state at once (the listing isn't fetched again for it).
+    pub(super) fn set_starred(&mut self, ids: &[String], on: bool) {
+        for p in self.pics.iter_mut().filter(|p| ids.contains(&p.id)) {
+            p.starred = on;
+        }
     }
 
     fn set_pics(&mut self, pics: Vec<Pic>) {
@@ -338,14 +473,31 @@ impl PhotoMode {
     /// Each frame: answers, and the listing again while pictures are still being read.
     pub fn logic(&mut self, ctx: &egui::Context, store: &Backend, folder: Option<String>) {
         self.frame += 1;
+        self.upload_pump(ctx, store, folder.as_deref(), ctx.input(|i| i.time));
         let now = ctx.input(|i| i.time);
         let got: Vec<Got> = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(|e| e.into_inner()));
         for g in got {
             match g {
                 Got::Cards(t, v) => self.alb.take_cards(t, &v),
                 Got::Opened(t, key, v) => self.take_opened(t, &key, &v),
+                Got::Dups(f, v) => self.dups.take(&f, &v),
                 Got::Changed => self.alb.changed(ctx, store, &self.inbox),
                 Got::PersonIs(id) => self.people_changed(ctx, store, id),
+                Got::Added(c, n, asked, ids) => self.added(ctx, store, c, n, asked, ids),
+                Got::Picker(v) => self.take_picker(&v),
+                Got::LockedState(v) => self.take_locked(ctx, &v),
+                Got::Unlocked => self.unlocked(ctx, store),
+                Got::Wrong(e) => {
+                    self.lk.busy = false;
+                    self.lk.error = Some(e);
+                }
+                Got::Moved(ids, into) => self.moved(ctx, store, &ids, into),
+                Got::Nothing => {}
+                Got::Picked(name, bytes) => {
+                    let f = folder.clone().or_else(|| self.folder.clone()).unwrap_or_default();
+                    self.upload_add(&f, name, bytes);
+                }
+                Got::Uploaded(i, r) => self.upload_answer(i, r, now),
                 Got::Listed(f, sub, v) => {
                     if Some(&f) == self.folder.as_ref() && sub == self.sub && self.alb.tab == albums::Tab::Photos {
                         self.take_list(&v);
@@ -408,6 +560,7 @@ impl PhotoMode {
         if self.waiting > 0 {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(RELIST));
         }
+        self.locked_logic(ctx, store);
         self.tex.evict(self.frame);
     }
 
@@ -472,6 +625,12 @@ impl PhotoMode {
     /// The best texture there is of picture `i`, preferring `size`: (texture, its size key).
     pub fn best(&mut self, i: usize, prefer: u32) -> Option<(egui::TextureHandle, u32)> {
         let id = self.pics.get(i)?.id.clone();
+        self.best_id(&id, prefer)
+    }
+
+    /// The same for a file by its id (a stacked RAW).
+    pub fn best_id(&mut self, id: &str, prefer: u32) -> Option<(egui::TextureHandle, u32)> {
+        let id = id.to_string();
         let order: &[u32] = match prefer {
             ORIGINAL => &[ORIGINAL, LARGE, SMALL],
             LARGE => &[LARGE, ORIGINAL, SMALL],
@@ -496,6 +655,8 @@ impl PhotoMode {
             ui.vertical(|ui| match self.alb.tab {
                 albums::Tab::Photos => self.folder_ui(ui, store, folder),
                 albums::Tab::People => self.people_ui(ui, store),
+                albums::Tab::Duplicates => self.dups_ui(ui, store, folder),
+                albums::Tab::Locked => self.locked_ui(ui, store),
                 _ => self.cards_ui(ui, store),
             });
         });
@@ -523,8 +684,13 @@ impl PhotoMode {
             }
             Some(true) => {}
         }
-        self.bar_ui(ui, store, folder);
+        if self.alb.selected.is_empty() {
+            self.bar_ui(ui, store, folder);
+        } else {
+            self.sel_bar_ui(ui, store);
+        }
         self.pick_ui(ui, store);
+        self.upload_ui(ui);
         ui.add_space(house::S);
         if self.pics.is_empty() {
             ui.add_space(house::XL);
@@ -541,7 +707,7 @@ impl PhotoMode {
         let (cols, tile) = layout(ui.available_width() - house::SCROLL_ROOM);
         let rows = self.pics.len().div_ceil(cols);
         ui.spacing_mut().item_spacing = vec2(GAP, GAP);
-        let mut open = None;
+        let mut hit = None;
         let shown = egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, tile, rows, |ui, range| {
             for row in range.clone() {
                 ui.horizontal(|ui| {
@@ -550,8 +716,8 @@ impl PhotoMode {
                         if i >= self.pics.len() {
                             break;
                         }
-                        if self.tile_ui(ui, &ctx, store, i, tile) {
-                            open = Some(i);
+                        if let Some(h) = self.tile_ui(ui, &ctx, store, i, tile) {
+                            hit = Some((i, h));
                         }
                     }
                 });
@@ -565,17 +731,43 @@ impl PhotoMode {
         for i in ahead.flat_map(|r| r * cols..((r + 1) * cols).min(n)) {
             self.want(&ctx, store, i, SMALL);
         }
-        if let Some(i) = open {
-            if self.alb.selecting {
-                self.alb.toggle(&self.pics[i].id);
-            } else {
-                self.viewer = Some(Viewer::new(i, self.pics.len()));
+        match hit {
+            Some((i, Hit::Click(on_box))) => {
+                let m = ctx.input(|i| i.modifiers);
+                self.clicked(i, on_box, m.shift, m.command);
             }
+            // While selecting, a double-click still opens the picture.
+            Some((i, Hit::Double)) => self.viewer = Some(Viewer::new(i, self.pics.len())),
+            Some((i, Hit::Menu(act, ids))) => self.act(&ctx, store, act, ids, Some(i)),
+            None => {}
+        }
+        // Esc clears the selection, Ctrl/⌘-A selects every picture listed (when no viewer, dialog
+        // or text box has the keys).
+        let free = self.viewer.is_none() && self.pick.dialog.is_none() && self.pick.picker.is_none() && ctx.memory(|m| m.focused().is_none());
+        if free && !self.alb.selected.is_empty() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            self.clear_selection();
+        }
+        if free && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::A)) {
+            self.select_all();
+        }
+        // Delete moves the selection to the bin (Shift-Delete: out of the open album only).
+        if free && !self.alb.selected.is_empty() {
+            let (shift, plain) = ctx
+                .input_mut(|i| (i.consume_key(egui::Modifiers::SHIFT, egui::Key::Delete), i.consume_key(egui::Modifiers::NONE, egui::Key::Delete)));
+            let ids = self.selection();
+            if shift && self.open_album().is_some() {
+                self.act(&ctx, store, Act::Remove, ids, None);
+            } else if plain || shift {
+                self.act(&ctx, store, Act::Delete, ids, None);
+            }
+        }
+        if free && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Z)) {
+            self.out.push(Out::Undo);
         }
     }
 
-    /// One square of the grid; true when clicked.
-    fn tile_ui(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend, i: usize, tile: f32) -> bool {
+    /// One square of the grid: a click (on its checkbox or not), or a right-click menu command.
+    fn tile_ui(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend, i: usize, tile: f32) -> Option<Hit> {
         let (rect, resp) = ui.allocate_exact_size(vec2(tile, tile), Sense::click());
         self.want(ctx, store, i, SMALL);
         let p = &self.pics[i];
@@ -585,6 +777,8 @@ impl PhotoMode {
         if let Some((t, _)) = self.best(i, SMALL) {
             let [w, h] = t.size();
             painter.image(t.id(), rect, cover_uv(w as f32, h as f32), Color32::WHITE);
+        } else if self.pics[i].is_video() {
+            painter.rect_filled(rect, 0, Color32::from_rgb(0x3C, 0x40, 0x43));
         } else if state == "failed" || state == "unsupported" {
             if let Some(img) = crate::icons::icon("image") {
                 img.paint_at(ui, Rect::from_center_size(rect.center() - vec2(0.0, 10.0), vec2(40.0, 40.0)));
@@ -598,27 +792,51 @@ impl PhotoMode {
                 theme::TEXT_DIM,
             );
         }
+        if self.pics[i].is_video() {
+            video_badge(&painter, rect, self.pics[i].duration);
+        }
+        if !self.pics[i].stack.is_empty() {
+            stack_badge(&painter, rect, 1 + self.pics[i].stack.len());
+        }
         if resp.hovered() {
             painter.rect_filled(rect, 0, Color32::from_black_alpha(40));
         }
-        if self.alb.selecting {
-            let on = self.alb.selected.contains(&self.pics[i].id);
-            let c = rect.left_top() + vec2(16.0, 16.0);
-            if on {
-                painter.rect_filled(rect, 0, Color32::from_rgba_unmultiplied(0x1A, 0x73, 0xE8, 60));
-            }
-            painter.circle(c, 10.0, if on { super::ACCENT } else { Color32::from_white_alpha(180) }, egui::Stroke::new(1.5, Color32::WHITE));
-            if on {
-                painter.text(c, egui::Align2::CENTER_CENTER, "✓", egui::FontId::proportional(14.0), Color32::WHITE);
-            }
+        let on = self.alb.selected.contains(&self.pics[i].id);
+        pick::check(&painter, rect, on, resp.hovered() || !self.alb.selected.is_empty());
+        // Right-click: the picture joins (or becomes) the selection, and the menu acts on it all.
+        if resp.secondary_clicked() {
+            let ids: Vec<String> = self.pics.iter().map(|p| p.id.clone()).collect();
+            pick::targets(&mut self.alb.selected, &mut self.pick.anchor, &ids, i);
         }
-        resp.on_hover_text(format!("{name}\n{date}")).clicked()
+        let in_album = self.open_album().is_some();
+        let mut chosen = None;
+        resp.context_menu(|ui| {
+            house::menu(ui, 240.0);
+            for (act, icon, label) in pick::menu_rows(in_album, self.locked_tab()) {
+                if house::menu_row(ui, Some(icon), label, "", true) {
+                    chosen = Some(act);
+                    ui.close();
+                }
+            }
+        });
+        if let Some(act) = chosen {
+            return Some(Hit::Menu(act, self.selection()));
+        }
+        let resp = resp.on_hover_text(format!("{name}\n{date}"));
+        if resp.double_clicked() && !self.alb.selected.is_empty() {
+            return Some(Hit::Double);
+        }
+        if resp.clicked() {
+            let on_box = resp.interact_pointer_pos().is_some_and(|p| pick::box_rect(rect).contains(p));
+            return Some(Hit::Click(on_box));
+        }
+        None
     }
 
     /// Above the grid: how many, subfolders, order, slideshow, turning off.
     fn bar_ui(&mut self, ui: &mut Ui, store: &Backend, folder: &str) {
         let ctx = ui.ctx().clone();
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let n = self.pics.len();
             let mut text = format!("{n} {}", if n == 1 { "picture" } else { "pictures" });
             if self.waiting > 0 {
@@ -626,7 +844,7 @@ impl PhotoMode {
             }
             ui.label(RichText::new(text).size(house::BODY).color(theme::TEXT_DIM));
             ui.add_space(house::M);
-            let pill = |ui: &mut Ui, label: &str, on: bool| {
+            let pill = |ui: &mut Ui, label: &str, on: bool| -> egui::Response {
                 ui.add(
                     egui::Button::new(RichText::new(label).size(house::BODY).color(theme::TEXT))
                         .fill(if on { theme::SHARE } else { Color32::WHITE })
@@ -634,26 +852,26 @@ impl PhotoMode {
                         .corner_radius(16)
                         .min_size(vec2(0.0, 32.0)),
                 )
-                .clicked()
             };
-            if pill(ui, "Include subfolders", self.sub) {
+            if pill(ui, "Include subfolders", self.sub).clicked() {
                 self.sub = !self.sub;
                 self.pics.clear();
                 self.list(&ctx, store, folder);
             }
-            if pill(ui, if self.newest_first { "Newest first" } else { "Oldest first" }, false) {
+            if pill(ui, if self.newest_first { "Newest first" } else { "Oldest first" }, false).clicked() {
                 self.newest_first = !self.newest_first;
                 store.set_setting("starsheets_home_photos_order", if self.newest_first { "new" } else { "old" });
                 self.list(&ctx, store, folder);
             }
-            if !self.pics.is_empty() && pill(ui, "Slideshow", false) {
+            let up = pill(ui, "Upload", false);
+            self.up.btn = Some([up.rect.center().x, up.rect.center().y]);
+            if up.clicked() {
+                self.upload_pick(&ctx, store);
+            }
+            if !self.pics.is_empty() && pill(ui, "Slideshow", false).clicked() {
                 let mut v = Viewer::new(0, self.pics.len());
                 v.play(ui.ctx().input(|i| i.time));
                 self.viewer = Some(v);
-            }
-            if !self.pics.is_empty() && pill(ui, if self.alb.selecting { "Done selecting" } else { "Select" }, self.alb.selecting) {
-                self.alb.selecting = !self.alb.selecting;
-                self.alb.selected.clear();
             }
             if self.can_disable {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -718,9 +936,13 @@ impl PhotoMode {
             "count": self.pics.len(),
             "albums": self.alb.test_state(),
             "people": self.alb.ppl.test_state(),
+            "dups": self.dups.test_state(),
+            "pick": self.pick.test_state(),
+            "locked": self.locked_state(),
+            "upload": self.up.test_state(),
             "textures": { "count": self.tex.len(), "bytes": self.tex.total, "budget": self.tex.budget, "asking": self.asking.len() },
             "items": self.pics.iter().take(60).map(|p| json!({
-                "id": p.id, "name": p.name, "taken": p.taken, "state": p.state, "v": p.v,
+                "id": p.id, "name": p.name, "taken": p.taken, "state": p.state, "v": p.v, "media": p.media, "duration": p.duration, "stack": p.stack.iter().map(|f| &f.name).collect::<Vec<_>>(),
                 "thumb": has(&p.id, SMALL), "large": has(&p.id, LARGE), "original": has(&p.id, ORIGINAL),
             })).collect::<Vec<_>>(),
             "photo_edit": self.editor.as_ref().map_or_else(|| json!({ "open": false }), |e| e.test_state()),
@@ -728,11 +950,20 @@ impl PhotoMode {
                 let p = self.pics.get(v.index());
                 json!({
                     "index": v.index(), "pos": v.pos, "id": p.map(|p| &p.id), "name": p.map(|p| &p.name),
-                    "zoom": v.zoom, "playing": v.playing, "shuffle": v.shuffle, "every": v.every, "showing": v.showing,
+                    "info": v.info, "menu": v.menu, "toast": crate::house::toast_text(), "info_rows": p.map(|p| super::viewer::info_lines(p, &self.alb.albums_of(&p.id)).iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>()), "zoom": v.zoom, "playing": v.playing, "shuffle": v.shuffle, "every": v.every, "showing": v.showing, "raw": v.raw,
                 })
             }),
         })
     }
+}
+
+/// What happened on a grid square.
+enum Hit {
+    /// A left click; true when on its checkbox.
+    Click(bool),
+    Double,
+    /// A right-click menu command, on these pictures.
+    Menu(pick::Act, Vec<String>),
 }
 
 /// A text link in the Drive's blue (house::link is Sheets' green).
@@ -805,6 +1036,30 @@ pub(super) async fn decode_web(bytes: Vec<u8>, max: u32) -> Option<egui::ColorIm
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn video_lengths_read_like_a_player() {
+        assert_eq!([duration_label(7.4), duration_label(750.0), duration_label(3723.0)], ["0:07", "12:30", "1:02:03"]);
+    }
+
+    #[test]
+    fn favourite_reads_the_star_of_pictures_in_subfolders() {
+        let pic = |id: &str, starred| Pic { id: id.into(), starred, ..Pic::default() };
+        // Photos lists a starred picture of a subfolder; the Drive's listing (open folder) lacks it.
+        let pics = [pic("top", false), pic("sub", true), pic("top2", true)];
+        let drive = |id: &str| (id == "top2" || id == "top").then_some(id == "top2");
+        let ids = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        for (sel, on, why) in [
+            (ids(&["sub"]), false, "a starred picture in a subfolder is un-starred, not starred again"),
+            (ids(&["sub", "top2"]), false, "all starred: all stop"),
+            (ids(&["sub", "top"]), true, "one not yet a favourite: all become one"),
+            (ids(&["top"]), true, "not starred"),
+            (ids(&["gone"]), true, "unknown counts as not starred"),
+        ] {
+            assert_eq!(stars_on(&sel, &pics, drive), on, "{why}");
+        }
+        assert!(!stars_on(&ids(&["d"]), &[], |_| Some(true)), "the Drive answers for pictures Photos hasn't listed");
+    }
 
     #[test]
     fn the_grid_fills_the_width() {

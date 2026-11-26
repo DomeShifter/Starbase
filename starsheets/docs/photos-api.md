@@ -157,10 +157,12 @@ the sidecar that was read: two saves can't both win, and another app's save in t
 `POST /api/photos/export/ID`, body (every field optional, at most 16 KB):
 
 ```json
-{"format": "jpeg", "quality": 90, "max_side": null, "strip_location": true}
+{"format": "jpeg", "quality": 90, "max_side": null, "strip_location": true, "edits": {}}
 ```
 
-Makes a new file next to the picture with its saved edits: `photo (edited).jpg` (or `.png`),
+Makes a new file next to the picture with its saved edits (or, when `edits` is sent, with those:
+same shape and checks as `PUT` edits, 400 if invalid; the picture's sidecar is never changed, so
+"Save a copy" leaves the original as it was): `photo (edited).jpg` (or `.png`),
 numbered when that name is taken (`photo (edited) (2).jpg`). It never replaces a file: it is
 saved like an upload. Answers 201 with `{"id", "name", "folder", "path"}`. Who may: anyone who may
 add files to the picture's folder (403 otherwise; 403 also for a picture they can't see). 400 for
@@ -246,6 +248,8 @@ Albums are virtual (one small JSON file per person next to the server's other se
 | `POST /api/photos/albums/ID/rename` `{"name"}`, `/add` `{"files"}`, `/remove` `{"files"}`, `/delete` | `{"id", "name", "count"}` or `{"deleted": true}`; the pictures stay where they are |
 | `GET /api/photos/places` | `{"places": [{"name", "count", "cover"}]}`: pictures with a GPS position I may know (same rule as `gps` above), grouped by the nearest town of 25,000+ people within 80 km (bundled GeoNames list, CC BY 4.0, no network), else by position rounded to 0.1 degree (`52.1°N, 0.2°E`) |
 | `GET /api/photos/places?place=NAME` | `{"place", "photos", "waiting"}` |
+| `GET /api/photos/events` | `{"events": [{"id", "name", "count", "cover"}], "waiting"}`: pictures I may see, with a capture time, grouped into runs: a new event after a gap of 6 h or more, or a jump of more than 50 km between pictures whose position I may know; fewer than 5 pictures is no event. Named `Whitby · 3–5 Aug 2026` (nearest town) or `Sunday 3 Aug 2026`. Computed on every request, nothing stored; newest first |
+| `GET /api/photos/events?event=ID` | `{"event", "id", "name", "photos", "waiting"}` (ID = the first picture's capture time). "Save as album" = `POST /api/photos/albums` with these picture ids |
 
 ## People (faces)
 

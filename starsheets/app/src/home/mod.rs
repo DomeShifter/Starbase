@@ -22,15 +22,22 @@ use crate::store::{Backend, Method, enc};
 use crate::theme;
 
 mod actions;
+mod activity;
 mod bin;
+mod filepreview;
+mod filters;
+mod history;
 mod input;
 mod items;
 mod photo_edit;
 mod photos;
 mod sidebar;
+mod templates;
 #[cfg(target_arch = "wasm32")]
 mod test;
+pub(crate) mod textpreview;
 mod undo;
+mod video;
 mod viewer;
 
 const LEFT: f32 = 256.0;
@@ -66,6 +73,8 @@ struct FileRow {
     opened: Option<i64>,
     /// Who saved the last change (username), when known.
     changed_by: String,
+    /// Who mentioned you in a comment here (username), until you open the file.
+    mentioned_by: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -102,6 +111,8 @@ enum View {
     Recent,
     Starred,
     Bin,
+    /// Storage used, and my files biggest first.
+    Storage,
     /// The server owner's view of every folder ("" = everyone's folders).
     Everyone(String),
 }
@@ -109,16 +120,24 @@ enum View {
 enum Reply {
     Listed(Json),
     Bin(Vec<BinRow>),
+    /// Storage figures: used, in the bin, free on the disk (None: unknown).
+    Storage(u64, u64, Option<u64>),
     Refresh,
     NewFolder(String),
     Thumb(String, String, Option<egui::ColorImage>),
     Download(String, Vec<u8>),
     /// Who has access to the item in Details.
     Access(Item, Json),
+    /// A file's Activity list (file id, answer).
+    Activity(String, Json),
+    /// A file's version history (file id, answer).
+    Versions(String, Json),
     /// One request of an undoable action answered: what it did (None: nothing), or why not.
     Did(u64, Result<Option<undo::Step>, String>),
     /// One request of an undo answered.
     Undone(Result<(), String>),
+    /// The files whose text matches a search: (the search, [(file id, snippet)]).
+    Found(String, Vec<(String, String)>),
     Error(String),
 }
 
@@ -155,6 +174,8 @@ pub struct Home {
     files: Vec<FileRow>,
     folders: Vec<FolderRow>,
     bin: Vec<BinRow>,
+    /// Bytes used by my files, bytes in my bin, free bytes on the disk (from api/usage).
+    storage: Option<(u64, u64, Option<u64>)>,
     /// My own folder ("" without accounts), whether I'm the server's owner, the tops of "Shared
     /// with me", and everyone's names.
     space: String,
@@ -176,7 +197,19 @@ pub struct Home {
     mixed: bool,
     /// Details: the item shown, and who has access to it (from the server) once known.
     details: Option<(Item, Option<Json>)>,
+    /// Details: 0 = Details, 1 = Activity; and the Activity list once it arrives (file id, list).
+    details_tab: usize,
+    activity: Option<(String, Json)>,
+    /// Details › Versions: the file's history (file id, answer).
+    versions: Option<(String, Json)>,
     search: String,
+    /// Files whose text holds the search words (id → snippet), for the search in `found_for`.
+    found: HashMap<String, String>,
+    found_for: String,
+    /// The search last sent to the server for text matches.
+    asked: String,
+    /// The chips under the search box (filters.rs).
+    filters: filters::Filters,
     selected: Vec<Item>,
     anchor: Option<Item>,
     clipboard: Option<(Vec<Item>, bool)>,
@@ -193,6 +226,12 @@ pub struct Home {
     fetching: usize,
     /// "View as photos" (photos.rs, viewer.rs).
     photos: photos::PhotoMode,
+    /// The file preview over the Drive (filepreview.rs), when open.
+    file_preview: Option<filepreview::FilePreview>,
+    /// Where each file was last drawn (id → screen rect), for the test hook's real clicks.
+    tile_rects: HashMap<String, egui::Rect>,
+    /// The rows of the last right-click menu drawn (label, screen rect), for the test hook's real clicks.
+    menu_rects: Vec<(String, egui::Rect)>,
     /// What Ctrl+Z undoes, and the "Moved to … Undo" note (undo.rs).
     undo: undo::Undo,
     error: Option<String>,
@@ -347,6 +386,42 @@ impl Home {
         if self.view == Some(View::Bin) {
             self.load_bin(ctx);
         }
+        self.load_storage(ctx);
+    }
+
+    fn load_storage(&mut self, ctx: &egui::Context) {
+        call(&self.store, &self.inbox, ctx, Method::Get, "api/usage".into(), None, |b| {
+            let v: Json = serde_json::from_slice(&b).unwrap_or_default();
+            Reply::Storage(v["used"].as_u64().unwrap_or(0), v["bin"].as_u64().unwrap_or(0), v["free"].as_u64())
+        });
+    }
+
+    /// Search also looks inside files: asks the server which files' text holds the words (once
+    /// per search; an answer for an older search is dropped when it arrives).
+    fn ask_text_matches(&mut self, ctx: &egui::Context) {
+        let q = self.search.trim().to_string();
+        if q == self.asked {
+            return;
+        }
+        self.asked = q.clone();
+        if q.chars().count() < 2 {
+            self.found.clear();
+            self.found_for.clear();
+            return;
+        }
+        let url = format!("api/content-search?q={}", enc(&q));
+        let q2 = q.clone();
+        call_any(&self.store, &self.inbox, ctx, Method::Get, url, None, move |r| {
+            let hits = r.ok().and_then(|b| serde_json::from_slice::<Json>(&b).ok()).map(|v| {
+                v["hits"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter().filter_map(|h| Some((h["id"].as_str()?.to_string(), h["snippet"].as_str().unwrap_or("").to_string()))).collect()
+                    })
+                    .unwrap_or_default()
+            });
+            Reply::Found(q2, hits.unwrap_or_default())
+        });
     }
 
     fn load_bin(&mut self, ctx: &egui::Context) {
@@ -390,6 +465,7 @@ impl Home {
                 shared: f["shared"].as_bool().unwrap_or(false),
                 opened: f["opened"].as_i64(),
                 changed_by: s(f, "changed_by"),
+                mentioned_by: s(f, "mentioned_by"),
             })
             .collect();
         let info = v["folder_info"].as_object().cloned().unwrap_or_default();
@@ -449,17 +525,51 @@ impl Home {
         format!("api/files/{id}/preview")
     }
 
-    /// Opens file `id`'s preview in a new tab (a desktop app connected to a server downloads it).
-    fn preview(&mut self, ctx: &egui::Context, id: &str, name: &str) {
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = (ctx, name);
-            if let Some(w) = web_sys::window() {
-                let _ = w.open_with_url_and_target(&Self::preview_url(id), "_blank");
+    /// The files the preview's arrows go through: those of the view shown that don't open in an
+    /// editor, in the order shown.
+    fn previewable(&self) -> Vec<String> {
+        self.contents().1.into_iter().filter(|f| items::opens_as(&f.name) != items::Opens::Editor).map(|f| f.id).collect()
+    }
+
+    /// Opens Drive's preview of file `id` over the file list (filepreview.rs).
+    fn preview(&mut self, ctx: &egui::Context, id: &str) {
+        let Some(f) = self.file(id) else { return };
+        let (name, size, modified, owner) = (f.name.clone(), f.size, f.modified, f.owner.clone());
+        let owner = self.person(&owner);
+        let list = self.previewable();
+        let at = (list.iter().position(|x| x == id).unwrap_or(0), list.len().max(1));
+        self.file_preview = Some(filepreview::FilePreview::open(ctx, &self.store, id, &name, size, modified, owner, at));
+    }
+
+    /// One frame of the preview, if open; whether it was (it takes the keys then).
+    fn file_preview_ui(&mut self, ctx: &egui::Context) -> bool {
+        let Some(p) = self.file_preview.as_mut() else { return false };
+        match p.ui(ctx) {
+            Some(filepreview::Act::Close) => self.file_preview = None,
+            Some(filepreview::Act::Step(by)) => {
+                let (cur, info) = (p.id.clone(), p.info);
+                let list = self.previewable();
+                if !list.is_empty() {
+                    let at = list.iter().position(|x| *x == cur).map_or(0, |i| i as i64);
+                    let next = list[(at + i64::from(by)).rem_euclid(list.len() as i64) as usize].clone();
+                    self.preview(ctx, &next);
+                    if let Some(p) = self.file_preview.as_mut() {
+                        p.info = info;
+                    }
+                }
             }
+            Some(filepreview::Act::Download(id, name)) => self.download(ctx, &id, &name),
+            Some(filepreview::Act::NewTab(id)) => {
+                #[cfg(target_arch = "wasm32")]
+                if let Some(w) = web_sys::window() {
+                    let _ = w.open_with_url_and_target(&Self::preview_url(&id), "_blank");
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                let _ = id;
+            }
+            None => {}
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        self.download(ctx, id, name);
+        true
     }
 
     /// Downloads file `id`. In the browser the server sends it as an attachment (streamed, so a
@@ -475,6 +585,38 @@ impl Home {
         }
         let name = name.to_string();
         call(&self.store, &self.inbox, ctx, Method::Get, format!("api/files/{id}"), None, move |b| Reply::Download(name, b));
+    }
+
+    /// Downloads what is selected: a single file as itself, anything else (several items, or a
+    /// folder) as ONE .zip made by the server (`api/zip`), folders with everything below them.
+    pub(crate) fn download_items(&mut self, ctx: &egui::Context, items: &[Item]) {
+        if let [Item::File(id)] = items {
+            let name = self.label_of(&items[0]);
+            return self.download(ctx, id, &name);
+        }
+        let url = Self::zip_url(items);
+        #[cfg(target_arch = "wasm32")]
+        {
+            // The browser saves it as it arrives; the server names it.
+            if let Some(w) = web_sys::window() {
+                let _ = w.location().set_href(&url);
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let name = match items {
+                [Item::Folder(p)] => format!("{}.zip", name_of(p)),
+                _ => "Starbase.zip".to_string(),
+            };
+            call(&self.store, &self.inbox, ctx, Method::Get, url, None, move |b| Reply::Download(name, b));
+        }
+    }
+
+    /// The address of the zip of `items` (files by id, folders by path, one per line).
+    pub(crate) fn zip_url(items: &[Item]) -> String {
+        let files: Vec<&str> = items.iter().filter_map(|i| if let Item::File(id) = i { Some(id.as_str()) } else { None }).collect();
+        let folders: Vec<&str> = items.iter().filter_map(|i| if let Item::Folder(p) = i { Some(p.as_str()) } else { None }).collect();
+        format!("api/zip?files={}&folders={}", enc(&files.join(",")), enc(&folders.join("\n")))
     }
 
     /// A new spreadsheet or document in `folder` (it opens in its own tab or window).
@@ -496,6 +638,7 @@ impl Home {
         self.view = Some(v);
         self.selected.clear();
         self.search.clear();
+        self.filters = Default::default();
         self.renaming = None;
         self.just_made = None;
     }
@@ -580,13 +723,21 @@ impl Home {
     fn contents(&self) -> (Vec<FolderRow>, Vec<FileRow>) {
         let q = self.search.trim().to_lowercase();
         if !q.is_empty() {
+            let fl = &self.filters;
             let folders = self
                 .folders
                 .iter()
                 .filter(|f| name_of(&f.path).to_lowercase().contains(&q) && f.path != self.space && f.path.contains('/'))
+                .filter(|f| !fl.any() || fl.folder_ok(f, &self.space, self.folder_stats(&f.path).0))
                 .cloned()
                 .collect();
-            let files = self.files.iter().filter(|f| f.name.to_lowercase().contains(&q)).cloned().collect();
+            let text = self.found_for.to_lowercase() == q;
+            let files = self
+                .files
+                .iter()
+                .filter(|f| (f.name.to_lowercase().contains(&q) || (text && self.found.contains_key(&f.id))) && fl.file_ok(f, &self.space))
+                .cloned()
+                .collect();
             return self.sorted(folders, files);
         }
         let (folders, files): (Vec<FolderRow>, Vec<FileRow>) = match self.view.clone() {
@@ -605,6 +756,12 @@ impl Home {
                 let mut files: Vec<FileRow> = self.files.iter().filter(|f| f.opened.is_some()).cloned().collect();
                 files.sort_by_key(|f| std::cmp::Reverse(f.opened));
                 files.truncate(60);
+                return (Vec::new(), files);
+            }
+            Some(View::Storage) => {
+                let mut files: Vec<FileRow> = self.files.iter().filter(|f| !self.accounts || f.owner == self.space).cloned().collect();
+                files.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
+                files.truncate(200);
                 return (Vec::new(), files);
             }
             Some(View::Bin) | None => (Vec::new(), Vec::new()),
@@ -661,7 +818,7 @@ impl Home {
     fn shown(&self, folders: &[FolderRow], files: &[FileRow]) -> Vec<Item> {
         let mut items: Vec<Item> =
             folders.iter().map(|f| Item::Folder(f.path.clone())).chain(files.iter().map(|f| Item::File(f.id.clone()))).collect();
-        if self.mixed && self.view != Some(View::Recent) {
+        if self.mixed && !matches!(self.view, Some(View::Recent | View::Storage)) {
             self.sort_items(&mut items);
         }
         items
@@ -750,6 +907,7 @@ impl Home {
             Some(View::Recent) => parts.push(("Recent".into(), None)),
             Some(View::Starred) => parts.push(("Starred".into(), None)),
             Some(View::Bin) => parts.push(("Bin".into(), None)),
+            Some(View::Storage) => parts.push(("Storage".into(), None)),
             None => {}
         }
         parts
@@ -768,6 +926,10 @@ impl Home {
                 self.mixed = b[2] == b'1';
             }
             self.open_dir = self.store.start_dir();
+            if self.store.start_templates() {
+                let folder = self.open_dir.clone().unwrap_or_else(|| self.space.clone());
+                templates::open(ctx, &folder);
+            }
             self.photos.boot(&self.store);
             self.refresh(ctx);
         }
@@ -782,6 +944,7 @@ impl Home {
         ctx.request_repaint_after(std::time::Duration::from_millis(RELIST_MS as u64));
         let folder = self.photo_folder();
         self.photos.logic(ctx, &self.store, folder);
+        self.ask_text_matches(ctx);
         let replies: Vec<Reply> = std::mem::take(&mut *self.inbox.borrow_mut());
         for r in replies {
             match r {
@@ -790,6 +953,7 @@ impl Home {
                     self.bin = b;
                     self.loading = false;
                 }
+                Reply::Storage(u, b, f) => self.storage = Some((u, b, f)),
                 Reply::Refresh => self.refresh(ctx),
                 Reply::NewFolder(path) => {
                     self.refresh(ctx);
@@ -805,6 +969,16 @@ impl Home {
                         None => Thumb::None,
                     };
                     self.thumbs.insert(id, (version, t));
+                }
+                Reply::Activity(id, v) => {
+                    if matches!(&self.details, Some((Item::File(i), _)) if *i == id) {
+                        self.activity = Some((id, v));
+                    }
+                }
+                Reply::Versions(id, v) => {
+                    if matches!(&self.details, Some((Item::File(i), _)) if *i == id) {
+                        self.versions = Some((id, v));
+                    }
                 }
                 Reply::Access(item, v) => {
                     if let Some((i, a)) = self.details.as_mut()
@@ -833,6 +1007,12 @@ impl Home {
                 Reply::Download(name, bytes) => {
                     if let Err(e) = self.store.download(&name, &bytes) {
                         self.error = Some(e);
+                    }
+                }
+                Reply::Found(q, hits) => {
+                    if q == self.search.trim() {
+                        self.found = hits.into_iter().collect();
+                        self.found_for = q;
                     }
                 }
                 Reply::Error(e) => {
@@ -867,8 +1047,9 @@ impl Home {
     }
 
     fn want_thumb(&mut self, ctx: &egui::Context, f: &FileRow) {
-        // Only spreadsheets and documents have a picture: other files show their type's icon.
-        if items::opens_as(&f.name) != items::Opens::Editor {
+        // Spreadsheets, documents, photos and PDFs have a picture: other files show their type's
+        // icon (so does any file the server has no picture of).
+        if items::opens_as(&f.name) != items::Opens::Editor && !matches!(items::file_kind(&f.name), "image" | "pdf") {
             return;
         }
         if self.thumbs.get(&f.id).is_some_and(|(v, _)| *v == f.version) || self.fetching >= THUMBS_AT_ONCE {
@@ -904,6 +1085,7 @@ impl Home {
 
     pub fn ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        self.templates_ui(&ctx);
         ui.painter().rect_filled(ui.max_rect(), 0, theme::PAGE);
         egui::Panel::top("home_top")
             .show_separator_line(false)
@@ -930,9 +1112,12 @@ impl Home {
         self.pending_move_ui(&ctx);
         self.note_ui(&ctx);
         // The photo viewer covers everything and takes the keys while it's open.
-        if !viewer::ui(&mut self.photos, &ctx, &self.store) {
+        let dialog = self.photos.pick_busy();
+        if !viewer::ui(&mut self.photos, &ctx, &self.store) && !dialog && !self.file_preview_ui(&ctx) {
             self.keys(&ctx);
         }
+        // Photos' Add to album, Add photos and its note: over the grid and the viewer.
+        self.photos.overlays(&ctx, &self.store);
         // Connected to a server, or disconnected: the Drive starts again over the new files.
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(store) = self.connect.ui(&ctx) {
@@ -1010,7 +1195,8 @@ fn size_text(n: u64) -> String {
     match n {
         0..=1023 => format!("{n} B"),
         1024..=1_048_575 => format!("{:.0} KB", n as f64 / 1024.0),
-        _ => format!("{:.1} MB", n as f64 / 1_048_576.0),
+        1_048_576..=1_073_741_823 => format!("{:.1} MB", n as f64 / 1_048_576.0),
+        _ => format!("{:.1} GB", n as f64 / 1_073_741_824.0),
     }
 }
 

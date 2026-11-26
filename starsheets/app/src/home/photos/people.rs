@@ -38,6 +38,8 @@ pub(in crate::home) struct People {
     pub faces: Vec<FaceCard>,
     text: String,
     ask: Ask,
+    /// When the list was last asked for again while models download (seconds, egui time).
+    poll: f64,
 }
 
 impl People {
@@ -68,7 +70,7 @@ impl People {
     #[cfg(target_arch = "wasm32")]
     pub fn test_state(&self) -> Json {
         let c = |v: &Vec<Card>| v.iter().map(|c| json!({"id": c.id, "name": c.name, "count": c.count})).collect::<Vec<_>>();
-        json!({"named": c(&self.named), "groups": c(&self.groups), "on": self.state["on"], "faces": self.faces.len()})
+        json!({"named": c(&self.named), "groups": c(&self.groups), "on": self.state["on"], "faces": self.faces.len(), "can_download": self.state["can_download"], "download": self.state["download"], "missing": self.state["missing"].as_array().map_or(0, Vec::len)})
     }
 }
 
@@ -179,6 +181,7 @@ impl PhotoMode {
         if st.is_null() {
             return;
         }
+        self.models_ui(ui, ctx, store, &st);
         if st["on"].as_bool() != Some(true) {
             ui.horizontal(|ui| {
                 dim(ui, "Face recognition is off: faces are found on this server only, never sent anywhere.".into());
@@ -188,15 +191,31 @@ impl PhotoMode {
             });
             return;
         }
-        if let Some(m) = st["missing"].as_array().filter(|m| !m.is_empty()) {
-            let files: Vec<String> = m.iter().map(|f| format!("{} ({}, {})", f["file"].as_str().unwrap_or(""), f["what"].as_str().unwrap_or(""), f["url"].as_str().unwrap_or(""))).collect();
+        if let Some(m) = st["missing"].as_array().filter(|m| !m.is_empty() && st["can_download"].as_bool() != Some(true)) {
+            let files: Vec<String> = m
+                .iter()
+                .map(|f| format!("{} ({}, {})", f["file"].as_str().unwrap_or(""), f["what"].as_str().unwrap_or(""), f["url"].as_str().unwrap_or("")))
+                .collect();
             ui.label(
-                RichText::new(format!("Model files are missing. Put them in {}: {}.", st["models"].as_str().unwrap_or("the models folder"), files.join("; ")))
-                    .size(house::NOTE)
-                    .color(house::ERROR),
+                RichText::new(format!(
+                    "Model files are missing. Put them in {}: {}.",
+                    st["models"].as_str().unwrap_or("the models folder"),
+                    files.join("; ")
+                ))
+                .size(house::NOTE)
+                .color(house::ERROR),
             );
         }
         let pr = &st["progress"];
+        // While the worker is looking (or waiting for models), ask again every 5 seconds.
+        if pr["done"].as_u64() < pr["all"].as_u64() || st["missing"].as_array().is_some_and(|m| !m.is_empty()) {
+            let now = ui.input(|i| i.time);
+            if now - self.alb.ppl.poll > 5.0 {
+                self.alb.ppl.poll = now;
+                self.alb.ppl.asked = false;
+            }
+            ctx.request_repaint_after(std::time::Duration::from_secs(5));
+        }
         ui.horizontal(|ui| {
             dim(
                 ui,
@@ -210,6 +229,49 @@ impl PhotoMode {
             );
             if st["can_toggle"].as_bool() == Some(true) && self.pill(ui, "Turn off", false) {
                 self.people_post(ctx, store, "api/photos/faces", json!({"on": false}));
+            }
+        });
+    }
+
+    /// The owner's "Download face models" button, its progress and errors.
+    fn models_ui(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend, st: &Json) {
+        if st["can_download"].as_bool() != Some(true) {
+            return;
+        }
+        let d = &st["download"];
+        let mb = |b: u64| b as f64 / 1_048_576.0;
+        if d["busy"].as_bool() == Some(true) {
+            let (got, total) = (d["got"].as_u64().unwrap_or(0), d["total"].as_u64().unwrap_or(0).max(1));
+            ui.horizontal_wrapped(|ui| {
+                ui.add(egui::ProgressBar::new(got as f32 / total as f32).desired_width(160.0));
+                ui.label(
+                    RichText::new(format!("Downloading {}: {:.0} of {:.0} MB", d["file"].as_str().unwrap_or("the models"), mb(got), mb(total)))
+                        .size(house::NOTE)
+                        .color(theme::TEXT_DIM),
+                );
+            });
+            // Ask again every second while it runs.
+            let now = ui.input(|i| i.time);
+            if now - self.alb.ppl.poll > 1.0 {
+                self.alb.ppl.poll = now;
+                self.alb.ppl.asked = false;
+            }
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
+            return;
+        }
+        if let Some(e) = d["error"].as_str() {
+            ui.label(RichText::new(format!("The download failed: {e}")).size(house::NOTE).color(house::ERROR));
+        }
+        let files: Vec<String> = st["missing"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|f| format!("{} ({})", f["what"].as_str().unwrap_or(""), f["licence"].as_str().unwrap_or("")))
+            .collect();
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new(format!("Face recognition needs model files: {}.", files.join(", "))).size(house::NOTE).color(theme::TEXT_DIM));
+            if self.pill(ui, "Download face models", false) {
+                self.people_post(ctx, store, "api/photos/faces/models", json!({}));
             }
         });
     }

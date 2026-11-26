@@ -26,7 +26,7 @@ use crate::house;
 use crate::store::{Backend, Method};
 use crate::theme;
 
-use starbase_photo_edit::{Aspect, Crop, Edits, Filter, FilterName, RgbaImage, output_size, render};
+use starbase_photo_edit::{Aspect, Crop, Edits, Filter, FilterName, MAX_RED_EYE, RedEye, RgbaImage, auto_enhance, output_size, render};
 
 /// The longest side of the preview, and of the stand-in shown while dragging.
 const PREVIEW: u32 = 1024;
@@ -135,7 +135,7 @@ enum Got {
     Loaded(Result<(u16, Vec<u8>), String>),
     Source(Option<egui::ColorImage>),
     /// PUT edits: status and body; whether a copy is to be made straight after.
-    Saved(Result<(u16, Vec<u8>), String>, bool),
+    Saved(Result<(u16, Vec<u8>), String>),
     Copied(Result<(u16, Vec<u8>), String>),
 }
 
@@ -197,6 +197,10 @@ pub(super) struct Editor {
     pub uploads: u64,
     /// A crop handle being dragged.
     grab: Option<Grab>,
+    /// The red-eye tool is on: a click or drag on the picture fixes an eye.
+    pub red_eye_on: bool,
+    /// Where the Auto button, the Red eye chip and the picture were last drawn (test hook).
+    hits: [Option<Rect>; 3],
     /// The folder should be listed again (a copy was made).
     pub relist: bool,
     outcome: Option<Outcome>,
@@ -257,6 +261,8 @@ impl Editor {
             renders: 0,
             uploads: 0,
             grab: None,
+            red_eye_on: false,
+            hits: [None; 3],
             relist: false,
             outcome: None,
         }
@@ -364,7 +370,7 @@ impl Editor {
     }
 
     /// Answers since last frame.
-    fn logic(&mut self, ctx: &egui::Context, store: &Backend) {
+    fn logic(&mut self, _ctx: &egui::Context, _store: &Backend) {
         let got: Vec<Got> = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(|e| e.into_inner()));
         for g in got {
             match g {
@@ -375,18 +381,14 @@ impl Editor {
                         self.error = Some("The picture couldn't be opened.".into());
                     }
                 }
-                Got::Saved(a, then_copy) => {
+                Got::Saved(a) => {
                     self.saving = false;
                     match a {
                         Ok((200, b)) => {
                             let v: Json = serde_json::from_slice(&b).unwrap_or_default();
                             self.etag = v["etag"].as_str().map(str::to_string).or(self.etag.take());
                             self.saved = self.edits.clone();
-                            if then_copy {
-                                self.copy_now(ctx, store);
-                            } else {
-                                self.outcome = Some(Outcome::Saved(v["thumb_v"].as_str().map(str::to_string)));
-                            }
+                            self.outcome = Some(Outcome::Saved(v["thumb_v"].as_str().map(str::to_string)));
                         }
                         Ok((409 | 412, _)) => self.ask = Some(Ask::Conflict),
                         Ok((s, b)) => {
@@ -399,7 +401,7 @@ impl Editor {
                 Got::Copied(a) => {
                     self.saving = false;
                     match a {
-                        Ok((200, b)) => {
+                        Ok((200 | 201, b)) => {
                             let v: Json = serde_json::from_slice(&b).unwrap_or_default();
                             let path = v["path"].as_str().unwrap_or("");
                             let name = path.rsplit('/').next().unwrap_or(path);
@@ -446,6 +448,28 @@ impl Editor {
         }
     }
 
+    /// One-click Auto: sets the tone sliders from the picture's histogram (one undo step).
+    pub fn auto(&mut self) {
+        if let Some(src) = &self.src {
+            self.edits = auto_enhance(src, &self.edits);
+            self.settle(false);
+        }
+    }
+
+    /// The red-eye tool works on the picture as it was shot, so only while it isn't turned,
+    /// straightened or cropped.
+    pub fn red_eye_possible(&self) -> bool {
+        self.edits.geometry_is_identity()
+    }
+
+    /// Fixes red eye at (`x`, `y`) with radius `r` (fractions of the picture); one undo step.
+    pub fn add_red_eye(&mut self, x: f32, y: f32, r: f32) {
+        if self.edits.red_eye.len() < MAX_RED_EYE && self.red_eye_possible() {
+            self.edits.red_eye.push(RedEye { x: x.clamp(0.0, 1.0), y: y.clamp(0.0, 1.0), r: r.clamp(0.005, 0.5) });
+            self.settle(false);
+        }
+    }
+
     /// Back to the original picture (as one step that can be undone).
     pub fn reset(&mut self) {
         self.edits = Edits::default();
@@ -463,10 +487,10 @@ impl Editor {
 
     /// Save: writes the edits beside the picture.
     pub fn save(&mut self, ctx: &egui::Context, store: &Backend) {
-        self.save_then(ctx, store, false);
+        self.save_then(ctx, store);
     }
 
-    fn save_then(&mut self, ctx: &egui::Context, store: &Backend, then_copy: bool) {
+    fn save_then(&mut self, ctx: &egui::Context, store: &Backend) {
         if !self.writable || self.saving {
             return;
         }
@@ -474,12 +498,8 @@ impl Editor {
             self.ask = Some(Ask::Foreign);
             return;
         }
-        if !self.dirty() && !then_copy {
-            self.outcome = Some(Outcome::Closed);
-            return;
-        }
         if !self.dirty() {
-            self.copy_now(ctx, store);
+            self.outcome = Some(Outcome::Closed);
             return;
         }
         // The sliders keep every field in range; this is the last check before anything is sent.
@@ -497,24 +517,28 @@ impl Editor {
             &format!("api/photos/edits/{}", self.id),
             Some(body),
             self.etag.clone(),
-            Box::new(move |a| Self::push(&inbox, &ctx2, Got::Saved(a, then_copy))),
+            Box::new(move |a| Self::push(&inbox, &ctx2, Got::Saved(a))),
         );
     }
 
-    /// "Save a copy…" confirmed: the edits are saved first (the copy is made from the saved
-    /// ones), then the copy.
+    /// "Save a copy…" confirmed: the copy is made from the edits as they are now, sent in the
+    /// request. Nothing is saved to the original's sidecar: it stays as it was before this session.
     pub fn copy(&mut self, ctx: &egui::Context, store: &Backend) {
         self.ask = None;
-        if self.dirty() {
-            self.save_then(ctx, store, true);
-        } else {
-            self.copy_now(ctx, store);
+        if self.saving {
+            return;
         }
+        if let Err(e) = self.edits.validate() {
+            self.error = Some(format!("No copy made: {e}"));
+            return;
+        }
+        self.copy_now(ctx, store);
     }
 
     fn copy_now(&mut self, ctx: &egui::Context, store: &Backend) {
         self.saving = true;
-        let body = json!({ "format": "jpeg", "quality": 90, "max_side": self.max_side, "strip_location": self.strip_location });
+        self.error = None;
+        let body = json!({ "format": "jpeg", "quality": 90, "max_side": self.max_side, "strip_location": self.strip_location, "edits": self.edits });
         let (inbox, ctx2) = (self.inbox.clone(), ctx.clone());
         store.call(
             ctx,
@@ -769,6 +793,7 @@ impl Editor {
         let (w, h) = (w.max(1) as f32, h.max(1) as f32);
         let fit = (area.width() / w).min(area.height() / h);
         let r = Rect::from_center_size(area.center(), vec2(w, h) * fit);
+        self.hits[2] = Some(r);
         painter.image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         if self.comparing {
             let label = Rect::from_min_size(r.min + vec2(house::S, house::S), vec2(72.0, 24.0));
@@ -776,6 +801,30 @@ impl Editor {
             painter.text(label.center(), egui::Align2::CENTER_CENTER, "Original", egui::FontId::proportional(house::NOTE), Color32::WHITE);
         } else if self.tab == Tab::Crop {
             self.crop_ui(ui, r);
+        } else if self.red_eye_on && self.tab == Tab::Adjust && self.red_eye_possible() {
+            self.red_eye_ui(ui, r);
+        }
+    }
+
+    /// Click an eye (or drag out a circle) to take the red out; `r` is the whole picture.
+    fn red_eye_ui(&mut self, ui: &mut Ui, r: Rect) {
+        let resp = ui.interact(r, ui.scope_id().with("red-eye"), Sense::click_and_drag());
+        let side = r.width().min(r.height()).max(1.0);
+        let to_frac = |p: egui::Pos2| ((p.x - r.left()) / r.width(), (p.y - r.top()) / r.height());
+        let origin = ui.input(|i| i.pointer.press_origin());
+        if let (true, Some(o), Some(now)) = (resp.dragged(), origin, resp.interact_pointer_pos()) {
+            ui.painter().circle_stroke(o, o.distance(now).max(2.0), Stroke::new(1.5, Color32::WHITE));
+        }
+        if resp.drag_stopped() {
+            if let (Some(o), Some(now)) = (origin, resp.interact_pointer_pos()) {
+                let (x, y) = to_frac(o);
+                self.add_red_eye(x, y, (o.distance(now) / side).max(0.01));
+            }
+        } else if resp.clicked()
+            && let Some(now) = resp.interact_pointer_pos()
+        {
+            let (x, y) = to_frac(now);
+            self.add_red_eye(x, y, 0.03);
         }
     }
 
@@ -884,6 +933,27 @@ impl Editor {
     }
 
     fn adjust_panel(&mut self, ui: &mut Ui) {
+        house::caps(ui, "Quick fixes");
+        ui.horizontal_wrapped(|ui| {
+            let auto =
+                ui.add(house::secondary_in("Auto", super::ACCENT)).on_hover_text("Set brightness, contrast and colour balance from the picture");
+            self.hits[0] = Some(auto.rect);
+            if auto.clicked() {
+                self.auto();
+            }
+            let possible = self.red_eye_possible();
+            let (clicked, rect) = chip_rect(ui, "Red eye", self.red_eye_on && possible);
+            self.hits[1] = Some(rect);
+            if clicked && possible {
+                self.red_eye_on = !self.red_eye_on;
+            }
+        });
+        if !self.red_eye_possible() {
+            house::note(ui, "Red eye works on the picture before it is turned or cropped: reset those first.");
+        } else if self.red_eye_on {
+            house::note(ui, "Click an eye, or drag a circle around it. Undo takes it back.");
+        }
+        house::gap(ui);
         for k in knobs() {
             let mut v = (k.get)(&self.edits);
             let exposure = k.key == "exposure";
@@ -1225,15 +1295,19 @@ fn slider_row(ui: &mut Ui, label: &str, v: &mut f32, min: f32, max: f32, default
 
 /// A pill-shaped choice (aspect presets).
 fn chip(ui: &mut Ui, label: &str, on: bool) -> bool {
-    ui.add(
+    chip_rect(ui, label, on).0
+}
+
+fn chip_rect(ui: &mut Ui, label: &str, on: bool) -> (bool, Rect) {
+    let r = ui.add(
         egui::Button::new(RichText::new(label).size(house::BODY).color(if on { super::ACCENT } else { theme::TEXT }))
             .fill(if on { house::SELECTED } else { Color32::WHITE })
             .stroke(Stroke::new(1.0, if on { super::ACCENT } else { theme::BOX }))
             .corner_radius(16)
             .min_size(vec2(0.0, 32.0))
             .selected(on),
-    )
-    .clicked()
+    );
+    (r.clicked(), r.rect)
 }
 
 /// An icon button of the bottom bar.
@@ -1325,6 +1399,8 @@ impl Editor {
             "error": self.error,
             "message": self.message,
             "comparing": self.comparing,
+            "redEyeTool": self.red_eye_on,
+            "hits": self.hits.map(|h| h.map(|r| [r.left(), r.top(), r.right(), r.bottom()])),
             "canUndo": self.can_undo(),
             "canRedo": self.can_redo(),
             "renderMs": (self.render_ms * 100.0).round() / 100.0,
@@ -1336,7 +1412,7 @@ impl Editor {
 
     /// The test hook's commands (`home:photos:edit:<what>`): `tab {tab}`, `set {fields…}`,
     /// `slider {key, value}`, `undo`, `redo`, `reset`, `compare {on}`, `cancel`, `save`, `copy
-    /// {strip_location, max_side}`, `answer {yes}`, `aspect {name}`, `rotate`, `flip`.
+    /// {strip_location, max_side}`, `answer {yes}`, `aspect {name}`, `rotate`, `flip`, `auto`, `redeye {x, y, r}`, `redeye_tool {on}`.
     pub(super) fn test_run(&mut self, ctx: &egui::Context, store: &Backend, what: &str, params: &Json) -> Result<(), String> {
         let s = |k: &str| params.get(k).and_then(Json::as_str).map(str::to_string);
         match what {
@@ -1349,6 +1425,12 @@ impl Editor {
                 (k.set)(&mut self.edits, v);
                 self.settle(false);
             }
+            "auto" => self.auto(),
+            "redeye" => {
+                let g = |k: &str, d: f64| params.get(k).and_then(Json::as_f64).unwrap_or(d) as f32;
+                self.add_red_eye(g("x", 0.5), g("y", 0.5), g("r", 0.03));
+            }
+            "redeye_tool" => self.red_eye_on = params.get("on").and_then(Json::as_bool).unwrap_or(true),
             "undo" => self.do_undo(),
             "redo" => self.do_redo(),
             "reset" => self.reset(),
@@ -1634,6 +1716,23 @@ mod tests {
         // No server support at all: the same, with its own reason.
         let h = harness(Ok((404, Vec::new())));
         assert!(!h.state().ed.writable && h.state().ed.why_not.as_deref().unwrap_or("").contains("can't keep"));
+    }
+
+    #[test]
+    fn save_a_copy_sends_the_edits_and_never_saves_the_original() {
+        let mut h = harness(reply(true, &[]));
+        let c = egui::Context::default();
+        let store = h.state().store.clone();
+        h.state_mut().ed.test_run(&c, &store, "slider", &json!({"key": "contrast", "value": 30})).unwrap();
+        h.state_mut().ed.test_run(&c, &store, "copy", &json!({})).unwrap();
+        h.run();
+        let calls = h.state().fake.calls.borrow().clone();
+        assert!(calls.iter().all(|c| c.0 != Method::Put), "the original's edits are not saved");
+        let post = calls.iter().find(|c| c.0 == Method::Post).expect("export asked");
+        assert_eq!(post.1, "api/photos/export/p1");
+        let body = post.3.clone().unwrap();
+        assert_eq!(body["edits"]["contrast"], json!(h.state().ed.edits.contrast), "{body}");
+        assert_eq!(body["edits"]["exposure"], 0.5);
     }
 
     #[test]

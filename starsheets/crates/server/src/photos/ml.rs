@@ -27,8 +27,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
-use super::faces;
 use super::Photos;
+use super::faces;
 
 /// A model file the worker uses.
 pub struct ModelFile {
@@ -36,6 +36,58 @@ pub struct ModelFile {
     pub what: &'static str,
     pub licence: &'static str,
     pub url: &'static str,
+    /// Where the "Download face models" button fetches it from (pinned), or `None`: by hand only.
+    pub get: Option<Fetch>,
+}
+
+/// A pinned download: the exact file's URL, its SHA-256 (hex) and size in bytes.
+pub struct Fetch {
+    pub url: &'static str,
+    pub sha256: &'static str,
+    pub size: u64,
+}
+
+/// The owner's model download, for the People view.
+#[derive(Clone, Debug, Default)]
+pub struct Download {
+    pub busy: bool,
+    /// The file being fetched now.
+    pub file: String,
+    /// Bytes fetched and to fetch, over all files.
+    pub got: u64,
+    pub total: u64,
+    pub error: Option<String>,
+}
+
+/// Fetches one pinned file into `part`: at most its size, checked against its SHA-256.
+fn fetch_one(agent: &ureq::Agent, g: &Fetch, part: &Path, mut got: impl FnMut(u64)) -> Result<(), String> {
+    use sha2::Digest;
+    use std::io::{Read, Write};
+    let resp = agent.get(g.url).call().map_err(|e| format!("couldn't download it: {e}"))?;
+    let mut body = resp.into_body();
+    let mut rd = body.with_config().limit(g.size + 1).reader();
+    let mut out = std::fs::File::create(part).map_err(|e| format!("couldn't write {}: {e}", part.display()))?;
+    let mut h = sha2::Sha256::new();
+    let (mut buf, mut n) = (vec![0u8; 1 << 16], 0u64);
+    loop {
+        let k = rd.read(&mut buf).map_err(|e| format!("the download broke off: {e}"))?;
+        if k == 0 {
+            break;
+        }
+        n += k as u64;
+        if n > g.size {
+            return Err("the file is bigger than expected".into());
+        }
+        h.update(&buf[..k]);
+        out.write_all(&buf[..k]).map_err(|e| format!("couldn't write {}: {e}", part.display()))?;
+        got(k as u64);
+    }
+    out.sync_all().map_err(|e| format!("couldn't write {}: {e}", part.display()))?;
+    let hex: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
+    if n != g.size || hex != g.sha256 {
+        return Err("the file isn't the expected one (size or SHA-256 checksum differs), so it wasn't kept".into());
+    }
+    Ok(())
 }
 
 /// The model registry: only permissively licensed models (photos-mode.md §7).
@@ -47,6 +99,11 @@ pub const REGISTRY: [(&str, ModelFile); 3] = [
             what: "YuNet face detector",
             licence: "MIT",
             url: "https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet",
+            get: Some(Fetch {
+                url: "https://media.githubusercontent.com/media/opencv/opencv_zoo/f12e12798e8314f7c074a6656816c048dcc95b7a/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
+                sha256: "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
+                size: 232_589,
+            }),
         },
     ),
     (
@@ -56,6 +113,11 @@ pub const REGISTRY: [(&str, ModelFile); 3] = [
             what: "AuraFace v1 face embedder",
             licence: "Apache-2.0",
             url: "https://huggingface.co/fal/AuraFace-v1 (only glintr100.onnx: not the SCRFD file beside it)",
+            get: Some(Fetch {
+                url: "https://huggingface.co/fal/AuraFace-v1/resolve/af6d057c9b0ec4071d4c49c80e3539258798b609/glintr100.onnx",
+                sha256: "a7933ea5330113b01c9b60351d8f4c33003f145d8470ac5f0e52ee2effe25c60",
+                size: 260_694_151,
+            }),
         },
     ),
     (
@@ -65,6 +127,7 @@ pub const REGISTRY: [(&str, ModelFile); 3] = [
             what: "SFace face embedder",
             licence: "Apache-2.0",
             url: "https://github.com/opencv/opencv_zoo/tree/main/models/face_recognition_sface",
+            get: None,
         },
     ),
 ];
@@ -105,13 +168,22 @@ pub struct State {
     pub note: Mutex<String>,
     /// Faces changed by someone: group again soon.
     pub dirty: AtomicBool,
+    /// The owner's "Download face models": what is being fetched, how far, or why it failed.
+    pub dl: Mutex<Download>,
     wake: Condvar,
     sleep: Mutex<()>,
 }
 
 impl State {
     pub fn new(cfg: MlConfig) -> State {
-        State { cfg, note: Mutex::new("Not started.".into()), dirty: AtomicBool::new(false), wake: Condvar::new(), sleep: Mutex::new(()) }
+        State {
+            cfg,
+            note: Mutex::new("Not started.".into()),
+            dirty: AtomicBool::new(false),
+            dl: Mutex::new(Download::default()),
+            wake: Condvar::new(),
+            sleep: Mutex::new(()),
+        }
     }
     /// Wakes the worker (turned on, or faces changed).
     pub fn poke(&self) {
@@ -149,6 +221,68 @@ impl Photos {
     pub fn missing_models(&self) -> Vec<&'static ModelFile> {
         let dir = self.models_dir();
         ["yunet", self.face_model()].iter().filter_map(|n| model_file(n)).filter(|m| !dir.join(m.file).is_file()).collect()
+    }
+
+    /// Starts fetching the missing model files in a thread (the owner's "Download face models").
+    pub fn fetch_models(self: Arc<Self>) -> Result<(), String> {
+        let want = self.missing_models();
+        if want.is_empty() {
+            return Err("The model files are already here.".into());
+        }
+        if let Some(m) = want.iter().find(|m| m.get.is_none()) {
+            return Err(format!("{} can't be downloaded from here: copy it into {} by hand ({}).", m.file, self.models_dir().display(), m.url));
+        }
+        {
+            let mut d = self.ml.dl.lock().unwrap_or_else(|e| e.into_inner());
+            if d.busy {
+                return Err("The models are already being downloaded.".into());
+            }
+            *d = Download { busy: true, total: want.iter().filter_map(|m| m.get.as_ref()).map(|g| g.size).sum(), ..Download::default() };
+        }
+        let me = self.clone();
+        std::thread::Builder::new()
+            .name("face-models".into())
+            .spawn(move || {
+                let r = me.fetch_all(&want);
+                let mut d = me.ml.dl.lock().unwrap_or_else(|e| e.into_inner());
+                d.busy = false;
+                d.error = r.err();
+                drop(d);
+                me.ml.poke();
+            })
+            .map(|_| ())
+            .map_err(|e| {
+                self.ml.dl.lock().unwrap_or_else(|e| e.into_inner()).busy = false;
+                format!("Couldn't start the download: {e}")
+            })
+    }
+
+    fn fetch_all(&self, want: &[&'static ModelFile]) -> Result<(), String> {
+        let dir = self.models_dir();
+        std::fs::create_dir_all(&dir).map_err(|e| format!("Couldn't make the models folder {}: {e}", dir.display()))?;
+        let tls = ureq::tls::TlsConfig::builder().root_certs(ureq::tls::RootCerts::PlatformVerifier).build();
+        let agent = ureq::Agent::new_with_config(
+            ureq::Agent::config_builder()
+                .https_only(true)
+                .max_redirects(5)
+                .timeout_connect(Some(Duration::from_secs(30)))
+                .timeout_global(Some(Duration::from_secs(3600)))
+                .user_agent(concat!("Starbase/", env!("CARGO_PKG_VERSION")))
+                .tls_config(tls)
+                .build(),
+        );
+        for m in want {
+            let Some(g) = m.get.as_ref() else { continue };
+            self.ml.dl.lock().unwrap_or_else(|e| e.into_inner()).file = m.file.to_string();
+            let part = dir.join(format!("{}.part", m.file));
+            let r = fetch_one(&agent, g, &part, |n| self.ml.dl.lock().unwrap_or_else(|e| e.into_inner()).got += n);
+            if let Err(e) = r {
+                let _ = std::fs::remove_file(&part);
+                return Err(format!("{} ({}): {e}", m.file, m.what));
+            }
+            std::fs::rename(&part, dir.join(m.file)).map_err(|e| format!("Couldn't save {}: {e}", m.file))?;
+        }
+        Ok(())
     }
 
     /// The face worker thread.
@@ -232,15 +366,7 @@ fn look(eng: &mut dyn Engine, bytes: &[u8]) -> Result<Vec<faces::Found>, String>
         if n > 0.0 {
             emb.iter_mut().for_each(|x| *x /= n);
         }
-        out.push(faces::Found {
-            x: d.x / w as f32,
-            y: d.y / h as f32,
-            w: d.w / w as f32,
-            h: d.h / h as f32,
-            score: d.score,
-            px: d.w.min(d.h),
-            emb,
-        });
+        out.push(faces::Found { x: d.x / w as f32, y: d.y / h as f32, w: d.w / w as f32, h: d.h / h as f32, score: d.score, px: d.w.min(d.h), emb });
     }
     Ok(out)
 }
@@ -469,8 +595,7 @@ mod onnx {
                 }
                 got.push((s, part));
             }
-            let strides: Vec<YuStride> =
-                got.iter().map(|(s, p)| YuStride { stride: *s, cls: &p[0], obj: &p[1], bbox: &p[2], kps: &p[3] }).collect();
+            let strides: Vec<YuStride> = got.iter().map(|(s, p)| YuStride { stride: *s, cls: &p[0], obj: &p[1], bbox: &p[2], kps: &p[3] }).collect();
             Ok(yunet_decode(&strides, w, h, MIN_SCORE))
         }
 

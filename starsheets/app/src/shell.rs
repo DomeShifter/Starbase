@@ -29,6 +29,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
         "File",
         &[
             Cmd("New spreadsheet", "panel:new", ""),
+            Cmd("New from a template…", "panel:templates", ""),
             Cmd("Open", "panel:open", "Ctrl+O"),
             Cmd("Import", "file.open", ""),
             Cmd("Make a copy", "panel:copy", ""),
@@ -124,6 +125,9 @@ pub const MENUS: &[(&str, &[Item])] = &[
                 ],
             ),
             Sub("Group", &[Cmd("Group", "data.group", "Alt+Shift+→"), Cmd("Ungroup", "data.ungroup", "Alt+Shift+←")]),
+            Cmd("Protected ranges", "panel:protect", ""),
+            Sep,
+            Sub("Hidden sheets", &[Cmd("Show all hidden sheets", "panel:unhideSheets", "")]),
             Sep,
             Sub(
                 "Zoom",
@@ -137,6 +141,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
                     CmdWith("200%", "view.zoom", "", r#"{"percent":200}"#),
                 ],
             ),
+            Cmd("Full screen", "panel:fullscreen", ""),
         ],
     ),
     (
@@ -149,6 +154,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Sep,
             Cmd("Chart", "panel:chart", ""),
             Cmd("Pivot table", "insert.pivotTable", ""),
+            Cmd("Sparkline", "panel:sparkline", ""),
             Sub("Image", &[Cmd("Insert image in cell", "panel:imageInCell", ""), Cmd("Insert image over cells", "panel:imageOverCells", "")]),
             Sep,
             Sub(
@@ -295,6 +301,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Cmd("Create a filter", "data.filter", ""),
             Sub("Filter views", &[Cmd("Create new filter view", "panel:filterViewNew", ""), Cmd("Save as filter view", "panel:filterViewSave", "")]),
             Cmd("Add a slicer", "insert.slicer", ""),
+            Cmd("Refresh pivot tables", "data.refreshAll", ""),
             Sep,
             Cmd("Protect sheets and ranges", "panel:protect", ""),
             Cmd("Named ranges", "ui:nameManager", ""),
@@ -646,6 +653,7 @@ impl Shell {
             .exact_size(48.0)
             .frame(Frame::NONE.fill(theme::PAGE).inner_margin(Margin { left: 12, right: 12, top: 4, bottom: 6 }))
             .show(ui, |ui| self.toolbar(app, ui));
+        crate::external::bar(ui);
         self.views.ui(app, ui);
     }
 
@@ -992,7 +1000,8 @@ fn title_and_menus(app: &mut SheetApp, ui: &mut Ui, title_draft: &mut Option<Str
                 ui.spacing_mut().item_spacing.x = 0.0;
                 ui.spacing_mut().button_padding = vec2(7.0, 2.0);
                 for (title, items) in MENUS {
-                    ui.menu_button(RichText::new(*title).size(14.0).color(theme::TEXT), |ui| menu_items(app, ui, items));
+                    let r = ui.menu_button(RichText::new(*title).size(14.0).color(theme::TEXT), |ui| menu_items(app, ui, items)).response;
+                    house::target(ui.ctx(), &format!("menu:{title}"), r.rect);
                 }
             });
         });
@@ -1149,6 +1158,7 @@ fn save_symbol(ui: &mut Ui, dirty: bool) {
 /// The Material Symbols icon Sheets shows beside a menu item (docs/sheets-menus.md).
 pub const MENU_ICONS: &[(&str, &str)] = &[
     ("New spreadsheet", "note_add"),
+    ("New from a template…", "note_add"),
     ("Open", "folder_open"),
     ("Import", "upload"),
     ("Make a copy", "content_copy"),
@@ -1364,6 +1374,7 @@ const CHIP_GREY: egui::Color32 = egui::Color32::from_rgb(0xE8, 0xEA, 0xED);
 /// without chips and without a colour is plain text. Grey behind the row on hover or keyboard.
 fn list_item(ui: &mut Ui, it: &gridcraft_ui_egui::ListItem<'_>) -> egui::Response {
     let (rect, r) = ui.allocate_exact_size(it.size, egui::Sense::click());
+    house::target(ui.ctx(), &format!("list:{}", it.text), rect);
     if r.hovered() || it.selected {
         ui.painter().rect_filled(rect, 0.0, theme::MENU_HOVER);
     }
@@ -1505,6 +1516,8 @@ pub fn run_entry_with(app: &mut SheetApp, ctx: &egui::Context, id: &str, params:
         ctx.data_mut(|m| m.insert_temp(egui::Id::unique(crate::protectpanel::REQUEST), -1i64));
     } else if id == "panel:customnumber" {
         ctx.data_mut(|m| m.insert_temp(egui::Id::unique(crate::customnumber::REQUEST), true));
+    } else if id == "panel:fullscreen" {
+        toggle_fullscreen();
     } else if id == "panel:chart" {
         ctx.data_mut(|m| m.insert_temp(egui::Id::unique(crate::chartpanel::REQUEST), true));
     } else if id == "panel:dropdown" {
@@ -1707,7 +1720,9 @@ fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[Item]) -> f32 {
             Cmd(label, id, keys) | CmdWith(label, id, keys, _) => {
                 let on = entry_enabled(app, id);
                 let text = crate::menuactions::label(&app.session, label);
-                if ui.add_enabled_ui(on, |ui| ui.add_sized([width, 32.0], menu_row(&text, keys, with_icons))).inner.clicked() {
+                let r = ui.add_enabled_ui(on, |ui| ui.add_sized([width, 32.0], menu_row(&text, keys, with_icons))).inner;
+                house::target(ui.ctx(), &text, r.rect);
+                if r.clicked() {
                     let p = match item {
                         CmdWith(.., p) => self::params(p),
                         _ => json!({}),
@@ -1736,6 +1751,18 @@ fn menu_items(app: &mut SheetApp, ui: &mut Ui, items: &[Item]) -> f32 {
         }
     }
     width
+}
+
+/// View › Full screen: the browser's own full screen for the whole page; the same entry leaves it.
+fn toggle_fullscreen() {
+    #[cfg(target_arch = "wasm32")]
+    if let Some(doc) = web_sys::window().and_then(|w| w.document()) {
+        if doc.fullscreen_element().is_some() {
+            doc.exit_fullscreen();
+        } else if let Some(el) = doc.document_element() {
+            let _ = el.request_fullscreen();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1846,6 +1873,7 @@ mod tests {
         }
         let known = [
             "panel:new",
+            "panel:templates",
             "panel:open",
             "panel:copy",
             "panel:bin",
@@ -1864,6 +1892,7 @@ mod tests {
             "panel:customnumber",
             "panel:customcurrency",
             "panel:protect",
+            "panel:fullscreen",
             "panel:shortcuts",
             "panel:searchMenus",
             "panel:alternatingColours",

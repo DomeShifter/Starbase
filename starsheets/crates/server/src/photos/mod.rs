@@ -32,16 +32,21 @@ pub mod albums;
 pub mod crs;
 pub mod decode;
 pub mod edits;
+mod events;
 pub mod export;
 pub mod faces;
 #[cfg(test)]
 mod faces_tests;
 pub mod index;
+pub mod locked;
 pub mod ml;
 pub mod model;
 pub mod people;
+pub mod raw;
 pub mod routes;
 pub mod sidecar;
+pub mod strip;
+pub mod video;
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::Read;
@@ -78,11 +83,16 @@ pub fn media_of(name: &str) -> Option<(&'static str, bool)> {
         "png" => ("image/png", true),
         "webp" => ("image/webp", true),
         "gif" => ("image/gif", true),
-        // Listed, no thumbnails yet (job 5: HEIC through the system's libheif, RAW, AVIF).
+        // Camera RAW: thumbnails from the embedded JPEG preview (raw.rs). CR3 (not TIFF), HEIC (needs libheif), AVIF, TIFF: listed, no thumbnails yet.
         "heic" | "heif" => ("image/heic", false),
         "avif" => ("image/avif", false),
         "tif" | "tiff" => ("image/tiff", false),
-        "dng" | "cr2" | "cr3" | "nef" | "arw" | "orf" | "rw2" | "raf" | "pef" | "srw" => ("image/x-raw", false),
+        "dng" | "cr2" | "nef" | "arw" | "orf" | "rw2" | "raf" | "pef" | "srw" => ("image/x-raw", true),
+        "cr3" => ("image/x-raw", false),
+        // Videos: listed with a generic tile, played by the browser from the Drive's Range-aware raw route.
+        "mp4" | "m4v" => ("video/mp4", false),
+        "mov" => ("video/quicktime", false),
+        "webm" => ("video/webm", false),
         _ => return None,
     })
 }
@@ -284,6 +294,44 @@ pub struct Photos {
 }
 
 static SERVICES: LazyLock<Mutex<HashMap<PathBuf, Arc<Photos>>>> = LazyLock::new(Default::default);
+
+/// Pictures read only for a Drive tile: one at a time (each may use a child's memory budget).
+static DRIVE_READING: Mutex<()> = Mutex::new(());
+
+/// The 256-pixel thumbnail (JPEG or PNG, upright: EXIF orientation applied) of the picture at
+/// `path`, for its Drive tile. Photos' own thumbnail when Photos is on for its folder and has
+/// read it (edits shown); otherwise the picture is read now, the same way Photos reads one (a
+/// child process when the server runs them), and the caller keeps the result.
+pub fn drive_thumb(store: &Store, path: &str) -> Result<Vec<u8>, String> {
+    if !media_of(path).is_some_and(|(_, thumbs)| thumbs) {
+        return Err("no thumbnails of this kind of picture".into());
+    }
+    let svc = service(store);
+    if let Some(svc) = svc.as_ref().filter(|s| s.covers(path))
+        && let Some(r) = svc.row(path).filter(|r| r.state == State::Ready && svc.fresh(r))
+        && let Some(hash) = r.thumb_key()
+        && let Some((file, _)) = svc.thumb_file(hash, decode::SIZES[0])
+        && let Ok(bytes) = std::fs::read(&file)
+    {
+        svc.used(&file);
+        return Ok(bytes);
+    }
+    let memory = svc.as_ref().map_or(decode::CHILD_MEMORY, |s| s.cfg.child_memory);
+    let file = store.open_safe(path).ok_or("no such file")?;
+    if file.metadata().map_err(|e| e.to_string())?.len() > MAX_FILE {
+        return Err("too big".into());
+    }
+    let _one = DRIVE_READING.lock().unwrap_or_else(|e| e.into_inner());
+    let made = match WORKER_EXE.get() {
+        Some(exe) => decode::run_isolated(exe, file, memory, None)?,
+        None => {
+            let mut bytes = Vec::new();
+            file.take(MAX_FILE).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+            decode::make_guarded(&bytes, &decode::Limits::for_memory(memory), None)?
+        }
+    };
+    made.thumbs.into_iter().find(|t| t.size == decode::SIZES[0]).map(|t| t.bytes).ok_or_else(|| "no thumbnail".into())
+}
 
 /// The photo service of `store`, started on first use.
 pub fn service(store: &Store) -> Option<Arc<Photos>> {

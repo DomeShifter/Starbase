@@ -41,6 +41,9 @@ pub trait Drive {
     fn home(&self);
     /// File › New presentation: a new, named .pptx in this presentation's folder, in a new tab.
     fn new_presentation(&self);
+    /// File › New from a template…: the Drive's gallery, for this presentation's folder (the
+    /// browser only; the desktop hides the item).
+    fn templates(&self) {}
     fn rename(&self, stem: &str);
     /// What the title row says once saved.
     fn saved_text(&self) -> String {
@@ -72,6 +75,16 @@ pub trait Drive {
     fn history(&self) {}
     /// Draws the Share and Version history dialogs when open (every frame).
     fn dialogs(&self, _ctx: &egui::Context) {}
+    /// Insert › Image › From Drive: opens the picker of the person's Drive pictures.
+    fn pick_image(&self) {}
+    /// The picture chosen in that picker since the last call (file name, bytes), once.
+    fn take_picture(&self) -> Option<(String, Vec<u8>)> {
+        None
+    }
+    /// Whether the Drive picture picker is open.
+    fn picking(&self) -> bool {
+        false
+    }
 }
 
 /// A menu entry: a command (label, id, params as JSON text, shortcut shown), a sub-menu, a line,
@@ -96,6 +109,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
         "File",
         &[
             Cmd("New presentation", "slides.new", NO, ""),
+            Cmd("New from a template…", "slides.templates", NO, ""),
             Cmd("Open from Starbase", "slides.home", NO, ""),
             Desktop,
             Sep,
@@ -159,7 +173,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
     (
         "Insert",
         &[
-            Cmd("Image", "app.insertPictureDialog", NO, ""),
+            Sub("Image", &[Cmd("Upload from computer", "app.insertPictureDialog", NO, ""), Cmd("From Drive", "slides.driveImage", NO, "")]),
             Cmd("Text box", "slides.textBox", NO, ""),
             Sub(
                 "Shape",
@@ -394,6 +408,10 @@ impl Shell {
             });
         if let Some(d) = drive {
             d.dialogs(&ctx);
+            if let Some((name, bytes)) = d.take_picture() {
+                let data = deckcraft_engine::cmd::base64_encode(&bytes);
+                self.run(app, drive, "insert.picture", json!({"name": name, "data": data}));
+            }
         }
     }
 
@@ -544,7 +562,11 @@ impl Shell {
                 ui.add_enabled_ui(may_edit, |ui| {
                     self.tools_insert(app, ui, drive, pal);
                     bar(ui, pal);
+                    self.tools_font(app, ui, drive, pal);
+                    bar(ui, pal);
                     self.tools_text(app, ui, drive, pal);
+                    bar(ui, pal);
+                    self.tools_look(app, ui, drive, pal);
                     bar(ui, pal);
                     self.tools_slide(app, ui, drive, pal);
                 });
@@ -587,9 +609,20 @@ impl Shell {
         if tool(ui, pal, "text_fields", "Text box", matches!(kind, ToolKind::TextBox)) {
             self.run(app, drive, "slides.textBox", json!({}));
         }
-        if tool(ui, pal, "image", "Insert image", false) {
-            self.run(app, drive, "app.insertPictureDialog", json!({}));
-        }
+        // Insert image: upload from this computer, or pick one from the Drive (browser only).
+        let r = icon_button(ui, "image", false, pal);
+        named(ui, &r, "Insert image");
+        let r = r.on_hover_text("Insert image");
+        egui::Popup::menu(&r).show(|ui| {
+            if ui.button("Upload from computer").clicked() {
+                self.run(app, drive, "app.insertPictureDialog", json!({}));
+                ui.close();
+            }
+            if drive.is_some_and(|d| !d.desktop()) && ui.button("From Drive").clicked() {
+                self.run(app, drive, "slides.driveImage", json!({}));
+                ui.close();
+            }
+        });
         let r = icon_button(ui, "shapes", matches!(kind, ToolKind::Shape { .. }), pal);
         named(ui, &r, "Shape");
         let r = r.on_hover_text("Shape");
@@ -604,6 +637,87 @@ impl Shell {
         if tool(ui, pal, "add_comment", "Add comment", false) {
             self.run(app, drive, "app.dialog", json!({"id": "comment"}));
         }
+    }
+
+    /// Font family, font size with - and +, as in Docs (DeckCraft's own font list and sizes).
+    fn tools_font(&mut self, app: &mut SlideApp, ui: &mut Ui, drive: Option<&dyn Drive>, pal: &Palette) {
+        let f = app.session.execute("format.state", &json!({})).unwrap_or_default();
+        let family = f.get("font").and_then(Value::as_str).unwrap_or("").to_string();
+        let size = f.get("size").and_then(Value::as_f64).map(|s| format!("{}", (s * 10.0).round() / 10.0)).unwrap_or_default();
+        let config = || egui::containers::menu::MenuConfig::new().style(menu_style(*pal));
+        let label = if family.is_empty() { "Font".to_string() } else { family };
+        let b = Button::new(RichText::new(label).size(14.0).color(pal.text)).min_size(vec2(110.0, 28.0));
+        let r = egui::containers::menu::MenuButton::from_button(b).config(config()).ui(ui, |ui| {
+            menu_look(ui, pal);
+            ui.set_max_height(360.0);
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                for fam in deckcraft_ui_egui::ribbon::font_families(app) {
+                    if ui.add(Button::new(RichText::new(&fam).size(14.0).color(pal.text)).min_size(vec2(180.0, ROW))).clicked() {
+                        self.run(app, drive, "format.font", json!({ "family": fam }));
+                        ui.close();
+                    }
+                }
+            });
+        });
+        named(ui, &r.0, "Font family");
+        if tool(ui, pal, "remove", "Decrease font size", false) {
+            self.run(app, drive, "format.shrink", json!({}));
+        }
+        let b = Button::new(RichText::new(size).size(14.0).color(pal.text)).min_size(vec2(36.0, 28.0));
+        let r = egui::containers::menu::MenuButton::from_button(b).config(config()).ui(ui, |ui| {
+            menu_look(ui, pal);
+            for s in deckcraft_engine::cmd::format::SIZES.iter().chain([72.0, 96.0].iter()) {
+                if ui.add(Button::new(RichText::new(format!("{s}")).size(14.0).color(pal.text)).min_size(vec2(60.0, ROW))).clicked() {
+                    self.run(app, drive, "format.size", json!({ "size": s }));
+                    ui.close();
+                }
+            }
+        });
+        named(ui, &r.0, "Font size");
+        if tool(ui, pal, "add", "Increase font size", false) {
+            self.run(app, drive, "format.grow", json!({}));
+        }
+    }
+
+    /// Text colour and highlight (for the selected text), then fill colour and border colour and
+    /// weight (for the selected shape or text box), each with DeckCraft's colour grid.
+    fn tools_look(&mut self, app: &mut SlideApp, ui: &mut Ui, drive: Option<&dyn Drive>, pal: &Palette) {
+        use deckcraft_ui_egui::{ribbon::cref_param, widgets};
+        let Some(sc) = app.session.active().and_then(|d| d.doc.masters.first().map(|m| m.scheme())) else { return };
+        let picks: [(&str, &str, &str, Option<&str>); 4] = [
+            ("format_color_text", "Text colour", "format.color", None),
+            ("ink_highlighter", "Highlight colour", "format.highlight", Some("No Color")),
+            ("format_color_fill", "Fill colour", "shape.fill", Some("No Fill")),
+            ("border_color", "Border colour", "shape.line", Some("No Outline")),
+        ];
+        for (icon, tip, id, none) in picks {
+            let r = icon_button(ui, icon, false, pal);
+            named(ui, &r, tip);
+            let r = r.on_hover_text(tip);
+            widgets::color_popup(&r).show(|ui| {
+                menu_look(ui, pal);
+                if let Some(c) = widgets::color_grid(ui, &sc, none) {
+                    let p = match (c, id) {
+                        (Some(c), _) => json!({ "color": cref_param(&c) }),
+                        (None, "shape.line" | "shape.fill") => json!({ "none": true }),
+                        (None, _) => json!({}),
+                    };
+                    self.run(app, drive, id, p);
+                }
+            });
+        }
+        let r = icon_button(ui, "drive_file_rename_outline", false, pal);
+        named(ui, &r, "Border weight");
+        let r = r.on_hover_text("Border weight");
+        egui::Popup::menu(&r).show(|ui| {
+            menu_look(ui, pal);
+            for w in [0.5, 1.0, 2.0, 3.0, 4.5, 6.0] {
+                if ui.add(Button::new(RichText::new(format!("{w} pt")).size(14.0).color(pal.text)).min_size(vec2(90.0, ROW))).clicked() {
+                    self.run(app, drive, "shape.line", json!({ "width": w }));
+                    ui.close();
+                }
+            }
+        });
     }
 
     /// Bold, Italic, Underline (lit while on), alignment, lists, indents, Clear formatting.
@@ -651,6 +765,10 @@ impl Shell {
         let width = menu_width(ui, items);
         for item in items {
             match item {
+                // Templates live in the Drive: the desktop program hides the item (its Drive has them).
+                Cmd(_, "slides.templates", ..) if drive.is_none_or(|d| d.desktop()) => {}
+                // So are the Drive's pictures.
+                Cmd(_, "slides.driveImage", ..) if drive.is_none_or(|d| d.desktop()) => {}
                 Cmd(label, id, p, keys) => {
                     let enabled = self.allowed(app, drive, id);
                     // The desktop program opens files on this computer.
@@ -733,7 +851,7 @@ impl Shell {
 
     /// Whether a menu entry can be used now: DeckCraft's own check for its commands; nothing that
     /// changes the presentation for someone who may only view it.
-    fn allowed(&self, app: &SlideApp, drive: Option<&dyn Drive>, id: &str) -> bool {
+    pub(crate) fn allowed(&self, app: &SlideApp, drive: Option<&dyn Drive>, id: &str) -> bool {
         if drive.is_some_and(|d| d.view_only())
             && !READ_ONLY_OK.contains(&id)
             && !matches!(id, "slides.share" | "slides.print" | "slides.home")
@@ -792,6 +910,8 @@ impl Shell {
                 }
             },
             "home" => drive.ok_or("not opened from Starbase")?.home(),
+            "driveImage" => drive.filter(|d| !d.desktop()).ok_or("the Drive's pictures need a presentation opened from Starbase")?.pick_image(),
+            "templates" => drive.ok_or("not opened from Starbase")?.templates(),
             "share" => drive.filter(|d| d.file_id().is_some()).ok_or("sharing needs a presentation saved on a Starbase server")?.share(),
             "history" => drive.filter(|d| d.file_id().is_some()).ok_or("version history needs a presentation saved on a Starbase server")?.history(),
             "print" => {
@@ -863,6 +983,7 @@ impl Shell {
             }),
             "serverName": drive.map(|d| d.name()),
             "viewOnly": drive.is_some_and(|d| d.view_only()),
+            "picking": drive.is_some_and(|d| d.picking()),
         })
     }
 }
@@ -873,6 +994,7 @@ const READ_ONLY_OK: &[&str] = &[
     "slides.theme",
     "slides.home",
     "slides.new",
+    "slides.templates",
     "app.exportDialog",
     "app.palette",
     "app.about",
@@ -1058,6 +1180,13 @@ fn named(ui: &Ui, r: &egui::Response, name: &str) {
 }
 
 /// Every command id the menus use (the tests check that each one exists).
+/// Whether leaving the page now would lose something: a presentation with unsaved changes, or a
+/// save not yet on the server. All saved: never prompt.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn should_guard_unload(dirty: bool, server_unsaved: bool) -> bool {
+    dirty || server_unsaved
+}
+
 #[cfg(test)]
 pub fn menu_ids() -> Vec<&'static str> {
     fn walk(items: &[Item], out: &mut Vec<&'static str>) {

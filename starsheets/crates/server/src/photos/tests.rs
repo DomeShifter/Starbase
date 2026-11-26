@@ -259,6 +259,7 @@ fn with_pictures() -> (Store, Arc<Photos>) {
     put("ann/Trip/map.png", &encoded(&image::DynamicImage::ImageRgb8(halves(300, 200)), image::ImageFormat::Png));
     put("ann/Trip/iphone.heic", b"not decoded yet");
     put("ann/Trip/broken.jpg", b"\xFF\xD8\xFF\xE0 this is not really a jpeg");
+    put("ann/Trip/clip.mp4", b"\0\0\0\x08free");
     put("ann/Trip/notes.txt", b"not a picture");
     put("ann/Trip/.hidden.jpg", &jpeg(&halves(8, 8)));
     put("ann/Private/me.jpg", &jpeg(&halves(8, 8)));
@@ -306,7 +307,15 @@ fn the_index_and_thumbnails_of_a_store() {
     paths.sort();
     assert_eq!(
         paths,
-        ["ann/Trip/beach.jpg", "ann/Trip/broken.jpg", "ann/Trip/iphone.heic", "ann/Trip/map.png", "ann/Trip/sunset.JPG", "bob/me.gif"],
+        [
+            "ann/Trip/beach.jpg",
+            "ann/Trip/broken.jpg",
+            "ann/Trip/clip.mp4",
+            "ann/Trip/iphone.heic",
+            "ann/Trip/map.png",
+            "ann/Trip/sunset.JPG",
+            "bob/me.gif"
+        ],
         "no hidden files, bins, text, anything through a link, or folders Photos is off for"
     );
     let beach = &rows["ann/Trip/beach.jpg"];
@@ -314,6 +323,7 @@ fn the_index_and_thumbnails_of_a_store() {
     assert_eq!(rows["ann/Trip/sunset.JPG"].meta.orientation, 8);
     assert_eq!((rows["ann/Trip/sunset.JPG"].meta.width, rows["ann/Trip/sunset.JPG"].meta.height), (600, 800));
     assert_eq!(rows["ann/Trip/iphone.heic"].state, State::Unsupported);
+    assert_eq!((rows["ann/Trip/clip.mp4"].state, rows["ann/Trip/clip.mp4"].media.as_str()), (State::Unsupported, "video/mp4"), "videos are listed");
     assert_eq!(rows["ann/Trip/broken.jpg"].state, State::Failed);
     assert!(rows["ann/Trip/broken.jpg"].error.is_some());
     for p in ["ann/Trip/beach.jpg", "ann/Trip/map.png", "bob/me.gif"] {
@@ -439,10 +449,14 @@ fn inotify_sees_a_new_picture() {
 
 #[path = "albums_tests.rs"]
 mod albums_tests;
+#[path = "dups_tests.rs"]
+mod dups_tests;
 #[path = "edits_tests.rs"]
 mod edits_tests;
 #[path = "export_tests.rs"]
 mod export_tests;
+#[path = "locked_tests.rs"]
+mod locked_tests;
 
 mod http {
     use super::*;
@@ -486,6 +500,35 @@ mod http {
 
     pub(super) async fn get(app: &Shared, uri: &str, who: Option<&str>, extra: &[(header::HeaderName, &str)]) -> Got {
         ask(app, "GET", uri, who, extra).await
+    }
+
+    #[tokio::test]
+    async fn only_the_owner_may_download_face_models() {
+        let root = tmp("facemodels");
+        let s = Store { root: root.clone(), keep: 3, spaces: true };
+        for (u, n) in [("boss", "Boss"), ("ann", "Ann")] {
+            auth::add(&s, u, n, &format!("{u}password")).unwrap();
+        }
+        let app: Shared = Arc::new(crate::App {
+            store: s,
+            base: root.clone(),
+            lock: std::sync::Mutex::new(()),
+            location: "here".into(),
+            auth: true,
+            site: None,
+            rooms: crate::live::Rooms::default(),
+            oidc: None,
+        });
+        assert_eq!(ask(&app, "POST", "/api/photos/faces/models", None, &[]).await.status, 401);
+        let g = ask(&app, "POST", "/api/photos/faces/models", Some("ann"), &[]).await;
+        assert_eq!(g.status, 403, "not the owner: {}", g.json);
+        let g = get(&app, "/api/photos/faces", Some("ann"), &[]).await;
+        assert_ne!(g.json["can_download"].as_bool(), Some(true), "{}", g.json);
+        assert!(g.json["download"].is_null(), "no download details for others: {}", g.json);
+        let g = ask(&app, "POST", "/api/photos/faces/models", Some("boss"), &[]).await;
+        assert_ne!(g.status, 200, "no models fetched in tests (no ml feature or no Photos here): {}", g.json);
+        assert_eq!(get(&app, "/api/photos/faces/models", Some("boss"), &[]).await.status, 404);
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[tokio::test]
@@ -544,6 +587,7 @@ mod http {
         assert_eq!(names, ["a.jpg", "b.jpg"], "by date taken; no spreadsheets; not the folder inside");
         assert_eq!(g.json["photos"][0]["taken"], "2021-01-01T00:00:00+01:00");
         assert!(g.json["photos"][0]["gps"]["lat"].as_f64().is_some(), "the owner sees where: {}", g.json);
+        assert!(g.json["photos"][0]["gps"]["place"].as_str().is_some_and(|p| !p.is_empty()), "named for the Info panel: {}", g.json);
         // With the folders inside (rescanned in the background: asked again until it's there).
         let t = Instant::now();
         loop {
@@ -555,6 +599,25 @@ mod http {
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
+        // Stars show for pictures in folders inside too (Photos can't find those in the Drive listing).
+        let deep = "/api/photos?folder=ann/Trip&sub=1&sort=name";
+        let top = get(&app, "/api/photos?folder=ann/Trip", Some("ann"), &[]).await.json["photos"].clone();
+        let g = get(&app, deep, Some("ann"), &[]).await;
+        let inner = g.json["photos"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| !top.as_array().unwrap().iter().any(|t| t["id"] == p["id"]))
+            .expect("one in a subfolder")
+            .clone();
+        assert_eq!(inner["starred"], false, "{}", g.json);
+        let id = inner["id"].as_str().unwrap();
+        assert_eq!(send(&app, "POST", &format!("/api/files/{id}/star"), Some("ann"), &[], r#"{"on":true}"#).await.status, 200);
+        let g = get(&app, deep, Some("ann"), &[]).await;
+        let stars: Vec<(String, bool)> =
+            g.json["photos"].as_array().unwrap().iter().map(|p| (p["name"].as_str().unwrap().into(), p["starred"].as_bool().unwrap())).collect();
+        let want: Vec<(String, bool)> = stars.iter().map(|(n, _)| (n.clone(), *n == inner["name"].as_str().unwrap())).collect();
+        assert_eq!(stars, want, "only the starred one, found by id");
         assert_eq!(get(&app, "/api/photos?folder=ann/Trip", None, &[]).await.status, 401, "signed in only");
         assert_eq!(get(&app, "/api/photos?folder=ann/Trip", Some("bob"), &[]).await.status, 403);
         assert_eq!(get(&app, "/api/photos?folder=ann", Some("bob"), &[]).await.status, 403);
@@ -588,7 +651,7 @@ mod http {
         sharing::set(
             &app.store,
             sharing::Item::Folder(&folder_id),
-            &sharing::Share { people: vec![("bob".into(), sharing::Role::View)], link: sharing::Role::None },
+            &sharing::Share { people: vec![("bob".into(), sharing::Role::View)], link: sharing::Role::None, ..Default::default() },
         )
         .unwrap();
         let g = get(&app, &format!("/api/photos?folder_id={folder_id}"), Some("bob"), &[]).await;
@@ -635,4 +698,22 @@ fn cache_dir_choice() {
     assert!(pick(None, false, true, None, Some("/home/u")).starts_with("/home/u/.cache/starbase/photos"));
     assert!(pick(None, false, true, None, None).starts_with("/var/cache/starbase/photos"));
     assert_eq!(pick(None, false, false, Some("/xdg"), None), PathBuf::from("/data/.starsheets/photos-cache"));
+}
+
+#[test]
+fn drive_tiles_get_an_upright_thumbnail_without_photos_turned_on() {
+    // Stored 40 × 20 (red left, blue right) with EXIF 6: shown 20 × 40, red at the top.
+    let dir = tmp("drive");
+    std::fs::write(dir.join("p.jpg"), with_exif(&jpeg(&halves(40, 20)), &exif_block(6, "2024:07:14 18:30:05", None))).unwrap();
+    std::fs::write(dir.join("notes.bmp"), b"BM").unwrap();
+    let store = Store { root: dir.clone(), keep: 3, spaces: false };
+    let t = image::load_from_memory(&drive_thumb(&store, "p.jpg").unwrap()).unwrap().to_rgb8();
+    assert_eq!(t.dimensions(), (20, 40));
+    assert!(t.get_pixel(10, 3)[0] > 200 && t.get_pixel(10, 36)[2] > 200, "upright");
+    // As a tile: the card's shape, cut around the middle.
+    let tile = image::load_from_memory(&crate::thumbs::tile(&drive_thumb(&store, "p.jpg").unwrap()).unwrap()).unwrap();
+    assert_eq!((tile.width(), tile.height()), (crate::thumbs::TILE_W, crate::thumbs::TILE_H));
+    assert!(drive_thumb(&store, "notes.bmp").is_err());
+    assert!(drive_thumb(&store, "missing.jpg").is_err());
+    let _ = std::fs::remove_dir_all(dir);
 }

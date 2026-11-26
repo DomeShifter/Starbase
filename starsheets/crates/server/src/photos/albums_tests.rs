@@ -55,11 +55,17 @@ async fn albums_are_virtual_and_show_only_what_the_viewer_may_see() {
     let url = format!("/api/photos/albums/{id}");
     // Add: pictures I may see only; twice is once; a text file and a stranger's id are ignored.
     let g = post(&app, &format!("{url}/add"), "ann", json!({"files": [a, b, a, c, txt, "nosuchid"]})).await;
-    assert_eq!((g.status, g.json["count"].as_u64()), (200, Some(3)), "{}", g.json);
+    assert_eq!((g.status, g.json["count"].as_u64(), g.json["added"].as_u64()), (200, Some(3), Some(3)), "{}", g.json);
+    // Adding again (Add to album… on pictures already there): nothing doubles, and the reply says 0 new.
+    let g = post(&app, &format!("{url}/add"), "ann", json!({"files": [b, a]})).await;
+    assert_eq!((g.status, g.json["count"].as_u64(), g.json["added"].as_u64()), (200, Some(3), Some(0)), "{}", g.json);
     let g = get(&app, &url, Some("ann"), &[]).await;
     let names: Vec<&str> = g.json["photos"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap()).collect();
     assert_eq!(names, ["a.jpg", "b.jpg", "c.jpg"], "newest first, c has no date: last; {}", g.json);
     assert_eq!(get(&app, "/api/photos/albums", Some("ann"), &[]).await.json["albums"][0]["count"], 3);
+    // The list names each album's pictures: the viewer's Info panel says which albums a picture is in.
+    let g = get(&app, "/api/photos/albums", Some("ann"), &[]).await;
+    assert!(g.json["albums"][0]["files"].as_array().unwrap().iter().any(|f| f == &json!(a)), "{}", g.json);
 
     // Rename.
     assert_eq!(post(&app, &format!("{url}/rename"), "ann", json!({"name": "Summer 2024"})).await.json["name"], "Summer 2024");
@@ -76,7 +82,7 @@ async fn albums_are_virtual_and_show_only_what_the_viewer_may_see() {
     sharing::set(
         &app.store,
         sharing::Item::Folder(&folder_id),
-        &sharing::Share { people: vec![("bob".into(), sharing::Role::View)], link: sharing::Role::None },
+        &sharing::Share { people: vec![("bob".into(), sharing::Role::View)], link: sharing::Role::None, ..Default::default() },
     )
     .unwrap();
     let g = post(&app, &format!("/api/photos/albums/{bid}/add"), "bob", json!({"files": [a, b, c]})).await;

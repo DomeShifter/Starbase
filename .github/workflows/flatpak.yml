@@ -53,10 +53,10 @@ jobs:
         with:
           python-version: "3.12"
       # upstream.pin is where an engine bump is made; the manifest follows it. A committed
-      # manifest that is behind only warns, since the build uses the pinned commits either way.
+      # manifest that is behind fails here, so a stale one cannot go unnoticed (it hid a red build once).
       - name: Engine commits from upstream.pin
         run: |
-          packaging/linux/flatpak/pin-engines.sh --check || echo "::warning::$MANIFEST is behind upstream.pin; CI builds the pinned commits. Run packaging/linux/flatpak/pin-engines.sh to update it."
+          packaging/linux/flatpak/pin-engines.sh --check || { echo "::error::$MANIFEST is behind upstream.pin. Run packaging/linux/flatpak/pin-engines.sh and commit."; exit 1; }
       - name: Generate cargo-sources-*.json
         run: |
           pip install -q 'aiohttp>=3.9.5,<4' 'tomlkit>=0.13.3,<1' 'PyYAML>=6.0.2,<7'

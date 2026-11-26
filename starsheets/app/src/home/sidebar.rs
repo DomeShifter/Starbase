@@ -21,6 +21,7 @@ impl Home {
                 ui.add(button.fill(theme::ON).corner_radius(16).min_size(vec2(104.0, 48.0)).stroke(Stroke::NONE))
             })
             .inner;
+        house::target(ui.ctx(), "New", new.rect);
         egui::Popup::menu(&new).show(|ui| {
             house::menu(ui, 260.0);
             let folder = here.clone().unwrap_or_else(|| self.space.clone());
@@ -35,6 +36,9 @@ impl Home {
                 && let Err(e) = self.store.new_presentation(&folder)
             {
                 self.error = Some(e);
+            }
+            if house::menu_row(ui, Some("description"), "From a template…", "", true) {
+                templates::open(ui.ctx(), &folder);
             }
             if house::menu_row(ui, Some("create_new_folder"), "New folder", "", true) {
                 call(&self.store, &self.inbox, ui.ctx(), Method::Post, format!("api/folders?path={}&name=New%20folder", enc(&folder)), None, |b| {
@@ -70,6 +74,19 @@ impl Home {
             self.node(ui, "Recent", "schedule", Some(View::Recent), None, "recent");
             self.node(ui, "Starred", "star", Some(View::Starred), None, "starred");
             self.node(ui, "Bin", "delete", Some(View::Bin), None, "bin");
+            let top = ui.cursor().min;
+            self.node(ui, "Storage", "sort", Some(View::Storage), None, "storage");
+            house::target(ui.ctx(), "Storage", Rect::from_min_size(top, vec2(ui.available_width(), 34.0)));
+            if let Some((used, _, free)) = self.storage {
+                let text = match free {
+                    Some(f) => format!("{} used of {} free", size_text(used), size_text(f)),
+                    None => format!("{} used", size_text(used)),
+                };
+                ui.horizontal(|ui| {
+                    ui.add_space(56.0);
+                    ui.label(RichText::new(text).size(12.0).color(theme::TEXT_DIM));
+                });
+            }
             if self.accounts && self.admin {
                 ui.add_space(house::S);
                 ui.separator();
@@ -162,6 +179,7 @@ impl Home {
         folder: Option<String>,
     ) -> bool {
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
+        house::target(ui.ctx(), label, r);
         let p = ui.painter().clone();
         let dropping = self.dragging.is_some() && folder.is_some() && resp.contains_pointer();
         if current {

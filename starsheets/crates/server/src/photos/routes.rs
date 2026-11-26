@@ -7,6 +7,10 @@
 //!   everything in it (anyone who may edit the folder). Until then nothing in it is indexed.
 //! - `POST /api/photos/disable?folder=PATH`: turns it off and forgets the folder's pictures and
 //!   thumbnails (the folder's owner, or the server's).
+//! - `GET /api/photos/duplicates?folder=PATH` (or `folder_id`): groups of pictures anywhere in the
+//!   folder with exactly the same content (the index's content hash), each with its pictures as in
+//!   the listing; only groups of two or more, biggest waste first. No near-duplicate matching yet:
+//!   the index keeps no perceptual hash.
 //! - `GET /api/photos/status`: the index's state (the server's owner only).
 //!
 //! Who may: a folder's pictures, anyone who may view the folder; a thumbnail, anyone who may
@@ -23,7 +27,7 @@
 //! again each time; someone whose access is taken away keeps only what their browser already
 //! showed them, and gets nothing new.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use axum::body::Body;
@@ -50,7 +54,7 @@ pub async fn route(
     if p.first().map(String::as_str) != Some("photos") {
         return None;
     }
-    if p.len() >= 2 && (p[1] == "albums" || p[1] == "places") {
+    if p.len() >= 2 && (p[1] == "albums" || p[1] == "places" || p[1] == "events") {
         return Some(super::albums::route(app, m, p, q, me, body).await);
     }
     if p.len() >= 2 && (p[1] == "people" || p[1] == "faces") {
@@ -70,6 +74,7 @@ pub async fn route(
         1 => list(app, q, me).await,
         2 if post => switch(app, q, me, p[1] == "enable").await,
         2 if p[1] == "status" => status(app, me).await,
+        2 if p[1] == "duplicates" => duplicates(app, q, me).await,
         4 if p[1] == "thumb" => thumb(app, me, p[2].clone(), &p[3], q.get("v").map(String::as_str), headers).await,
         _ => error(404, "not found"),
     })
@@ -159,6 +164,7 @@ async fn list(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>)
     if !["taken", "name", "modified"].contains(&sort.as_str()) {
         return error(400, "sort is taken, name or modified");
     }
+    let stars = stars_of(app, me.as_ref()).await;
     let q2 = q.clone();
     // Who may see the folder, and the store's ids of the files in it (under the store lock).
     let checked = blocking(app, move |a| -> Result<Checked, Response<Body>> {
@@ -182,7 +188,7 @@ async fn list(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>)
     let got = off(move || {
         let svc = service(&a.store)?;
         if !svc.covers(&f2) {
-            return Some((false, Vec::new(), 0));
+            return Some((false, Vec::new(), HashMap::new(), 0));
         }
         // Rescanned by the scanner thread; one folder is waited for (briefly), a whole tree not.
         if let Some(ticket) = svc.look_at(&f2, deep)
@@ -191,11 +197,24 @@ async fn list(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>)
             svc.wait_scan(ticket, Duration::from_millis(1500));
         }
         let (queued, working) = svc.queued();
-        Some((true, svc.rows(&f2, deep), queued + working))
+        let mut rows = svc.rows(&f2, deep);
+        // Videos aren't read into the index: their length and shoot date come from the file itself.
+        let mut lengths = HashMap::new();
+        for r in rows.iter_mut().filter(|r| super::video::is_video(&r.media)) {
+            if let Some(i) = super::video::info_of(&a.store, &r.path, r.size, r.mtime_ns) {
+                if let Some(d) = i.duration {
+                    lengths.insert(r.path.clone(), d);
+                }
+                if r.meta.taken.is_none() {
+                    r.meta.taken = i.created.map(iso);
+                }
+            }
+        }
+        Some((true, rows, lengths, queued + working))
     })
     .await
     .flatten();
-    let Some((enabled, rows, waiting)) = got else { return error(503, super::NOT_SET_UP) };
+    let Some((enabled, rows, lengths, waiting)) = got else { return error(503, super::NOT_SET_UP) };
     // Where pictures were taken: for people who may edit, through their account (not a link).
     let places = role >= sharing::Role::Edit && named;
     let mut items: Vec<(String, Value)> = rows
@@ -208,7 +227,10 @@ async fn list(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>)
                 "modified" => format!("{modified:020}"),
                 _ => r.meta.taken.clone().map(|t| t.chars().take(19).collect()).unwrap_or_else(|| iso(modified)),
             };
-            let v = photo_json(&r, id, places);
+            let mut v = photo_json(&r, id, places);
+            if let Some(d) = lengths.get(&r.path) {
+                v["duration"] = json!(d);
+            }
             Some((format!("{key}\u{0}{}", r.path), v))
         })
         .collect();
@@ -216,7 +238,9 @@ async fn list(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>)
     if desc {
         items.reverse();
     }
-    let photos: Vec<Value> = items.into_iter().map(|(_, v)| v).collect();
+    let mut photos: Vec<Value> = items.into_iter().map(|(_, v)| v).collect();
+    mark_stars(&mut photos, &stars);
+    let photos = stack_raw_pairs(photos);
     send_json(
         &json!({
             "folder": folder, "sub": deep, "role": role.name(), "enabled": enabled,
@@ -225,6 +249,115 @@ async fn list(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>)
         }),
         200,
     )
+}
+
+/// Stacks a camera RAW file with the JPEG of the same base name in the same folder
+/// (IMG_0001.CR2 + IMG_0001.JPG): the RAW leaves the list and rides on the JPEG as `stack`
+/// (id, name, size, media, v, state). A RAW with no JPEG beside it stays a picture of its own.
+pub(super) fn stack_raw_pairs(photos: Vec<Value>) -> Vec<Value> {
+    let key = |p: &Value| {
+        let name = p["name"].as_str().unwrap_or("");
+        let stem = name.rsplit_once('.').map_or(name, |(s, _)| s).to_lowercase();
+        (p["folder"].as_str().unwrap_or("").to_string(), stem)
+    };
+    let mut jpegs: HashMap<(String, String), usize> = HashMap::new();
+    for (i, p) in photos.iter().enumerate() {
+        if p["media"] == "image/jpeg" {
+            jpegs.entry(key(p)).or_insert(i);
+        }
+    }
+    let mut stacks: HashMap<usize, Vec<Value>> = HashMap::new();
+    let mut hidden = HashSet::new();
+    for (i, p) in photos.iter().enumerate() {
+        if p["media"] != "image/x-raw" {
+            continue;
+        }
+        if let Some(&j) = jpegs.get(&key(p)) {
+            let file = json!({ "id": p["id"], "name": p["name"], "size": p["size"], "media": p["media"], "v": p["v"], "state": p["state"] });
+            stacks.entry(j).or_default().push(file);
+            hidden.insert(i);
+        }
+    }
+    photos
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| !hidden.contains(i))
+        .map(|(i, mut p)| {
+            if let Some(s) = stacks.remove(&i) {
+                p["stack"] = Value::Array(s);
+            }
+            p
+        })
+        .collect()
+}
+
+/// GET /api/photos/duplicates: pictures with the same content hash, in groups.
+async fn duplicates(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>) -> Response<Body> {
+    let q2 = q.clone();
+    let checked = blocking(app, move |a| -> Result<Checked, Response<Body>> {
+        let acc = sharing::Access::new(&a.store, a.auth, me.as_ref());
+        let (folder, role, named) = folder_of(a, &acc, &q2)?;
+        let inside = |p: &str| {
+            let parent = store::parent_of(p);
+            parent == folder || folder.is_empty() || parent.starts_with(&format!("{folder}/"))
+        };
+        let ids = acc.file_paths.iter().filter(|(_, p)| inside(p)).map(|(id, p)| (p.clone(), id.clone())).collect();
+        Ok((folder, ids, role, named))
+    })
+    .await
+    .unwrap_or_else(|| Err(error(500, "server error")));
+    let (folder, ids, role, named) = match checked {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    let a = app.clone();
+    let f2 = folder.clone();
+    let got = off(move || {
+        let svc = service(&a.store)?;
+        if !svc.covers(&f2) {
+            return Some((false, Vec::new()));
+        }
+        svc.look_at(&f2, true);
+        Some((true, svc.rows(&f2, true)))
+    })
+    .await
+    .flatten();
+    let Some((enabled, rows)) = got else { return error(503, super::NOT_SET_UP) };
+    let places = role >= sharing::Role::Edit && named;
+    let mut by: HashMap<String, Vec<Value>> = HashMap::new();
+    let mut sizes: HashMap<String, u64> = HashMap::new();
+    for r in rows {
+        let (Some(id), Some(h)) = (ids.get(&r.path), r.hash.clone()) else { continue };
+        sizes.insert(h.clone(), r.size);
+        by.entry(h).or_default().push(photo_json(&r, id, places));
+    }
+    let mut groups: Vec<(u64, String, Vec<Value>)> = by
+        .into_iter()
+        .filter(|(_, v)| v.len() > 1)
+        .map(|(h, mut v)| {
+            v.sort_by(|a, b| a["folder"].as_str().cmp(&b["folder"].as_str()).then(a["name"].as_str().cmp(&b["name"].as_str())));
+            (sizes[&h] * (v.len() as u64 - 1), h, v)
+        })
+        .collect();
+    groups.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    let wasted: u64 = groups.iter().map(|g| g.0).sum();
+    let groups: Vec<Value> = groups.into_iter().map(|(w, h, v)| json!({ "key": tag(&h), "wasted": w, "photos": v })).collect();
+    send_json(&json!({ "folder": folder, "enabled": enabled, "wasted": wasted, "groups": groups }), 200)
+}
+
+/// `me`'s starred files (`f:<file id>`), to mark pictures in a listing with [`mark_stars`].
+pub(super) async fn stars_of(app: &Shared, me: Option<&auth::User>) -> HashSet<String> {
+    let Some(me) = me.cloned() else { return HashSet::new() };
+    blocking(app, move |a| crate::spaces::starred(&a.store, &me).into_iter().collect()).await.unwrap_or_default()
+}
+
+/// Sets each listed picture's `starred`. Photos reads the star from here: a picture in a subfolder,
+/// an album, an event or a place isn't in the Drive's listing of the open folder.
+pub(super) fn mark_stars(photos: &mut [Value], stars: &HashSet<String>) {
+    for p in photos {
+        let on = p["id"].as_str().is_some_and(|id| stars.contains(&format!("f:{id}")));
+        p["starred"] = json!(on);
+    }
 }
 
 /// One picture as the listings show it (`gps` only when `places`: people who may edit).
@@ -249,7 +382,7 @@ pub(super) fn photo_json(r: &super::index::Row, id: &str, places: bool) -> Value
         "height": if ready { Some(r.meta.height) } else { None },
         "orientation": if ready { Some(r.meta.orientation) } else { None },
         "camera": (!camera.is_empty()).then_some(camera),
-        "gps": r.meta.lat.zip(r.meta.lon).filter(|_| places).map(|(lat, lon)| json!({"lat": lat, "lon": lon, "alt": r.meta.alt})),
+        "gps": r.meta.lat.zip(r.meta.lon).filter(|_| places).map(|(lat, lon)| json!({"lat": lat, "lon": lon, "alt": r.meta.alt, "place": super::albums::place_name(lat, lon)})),
     })
 }
 
@@ -277,7 +410,7 @@ async fn thumb(app: &Shared, me: Option<auth::User>, id: String, size: &str, v: 
         return error(400, "size is 256 or 1024");
     };
     let path = blocking(app, move |a| -> Result<String, Response<Body>> {
-        let acc = sharing::Access::new(&a.store, a.auth, me.as_ref());
+        let acc = sharing::Access::with_locked(&a.store, a.auth, me.as_ref());
         if acc.file_role(&id) < sharing::Role::View {
             return Err(error(403, "You don't have access to that."));
         }
@@ -359,4 +492,31 @@ async fn thumb(app: &Shared, me: Option<auth::User>, id: String, size: &str, v: 
         .header(header::CONTENT_DISPOSITION, crate::preview::disposition("inline", &format!("{stem}-{size}.{ext}")))
         .body(Body::from(bytes))
         .unwrap()
+}
+
+#[cfg(test)]
+mod stack_tests {
+    use super::*;
+
+    fn pic(id: &str, name: &str, folder: &str, media: &str) -> Value {
+        json!({ "id": id, "name": name, "folder": folder, "media": media, "size": 1, "v": null, "state": "ready" })
+    }
+
+    #[test]
+    fn a_raw_and_its_jpeg_make_one_stack() {
+        let out = stack_raw_pairs(vec![
+            pic("a", "IMG_0001.CR2", "trip", "image/x-raw"),
+            pic("b", "img_0001.JPG", "trip", "image/jpeg"),
+            pic("c", "IMG_0002.CR2", "trip", "image/x-raw"),
+            pic("d", "IMG_0001.CR2", "other", "image/x-raw"),
+            pic("e", "IMG_0003.JPG", "trip", "image/jpeg"),
+            pic("f", "IMG_0001.mp4", "trip", "video/mp4"),
+        ]);
+        let ids: Vec<&str> = out.iter().map(|p| p["id"].as_str().unwrap()).collect();
+        // The RAW beside its JPEG is gone; a lone RAW (other folder, other name) stays.
+        assert_eq!(ids, ["b", "c", "d", "e", "f"]);
+        assert_eq!(out[0]["stack"][0]["id"], "a");
+        assert_eq!(out[0]["stack"].as_array().unwrap().len(), 1);
+        assert!(out[1].get("stack").is_none() && out[2].get("stack").is_none() && out[4].get("stack").is_none());
+    }
 }

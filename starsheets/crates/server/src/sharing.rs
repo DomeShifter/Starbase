@@ -53,6 +53,8 @@ pub struct Share {
     pub people: Vec<(String, Role)>,
     /// What anyone signed in with the link may do (None = restricted).
     pub link: Role,
+    /// Keep where a photo was taken when someone else downloads it (off by default).
+    pub keep_location: bool,
 }
 
 impl Share {
@@ -99,6 +101,7 @@ fn parse(v: &Value) -> Share {
             .filter(|(_, r)| *r != Role::None)
             .collect(),
         link: Role::parse(v.get("link").and_then(Value::as_str).unwrap_or("none")),
+        keep_location: v.get("keep_location").and_then(Value::as_bool).unwrap_or(false),
     }
 }
 
@@ -111,7 +114,7 @@ pub fn set(store: &Store, item: Item, share: &Share) -> std::io::Result<()> {
     let mut group = all.get(item.group()).and_then(Value::as_object).cloned().unwrap_or_default();
     if share.is_shared() {
         let people: Vec<Value> = share.people.iter().map(|(u, r)| json!({ "username": u, "role": r.name() })).collect();
-        group.insert(item.id(), json!({ "people": people, "link": share.link.name() }));
+        group.insert(item.id(), json!({ "people": people, "link": share.link.name(), "keep_location": share.keep_location }));
     } else {
         group.remove(&item.id());
     }
@@ -162,10 +165,21 @@ pub struct Access {
     /// Folder path → id, and file id → path.
     pub folder_ids: HashMap<String, String>,
     pub file_paths: HashMap<String, String>,
+    /// Locked pictures (photos/locked.rs): left out of every list and refused to everyone.
+    hidden: std::collections::HashSet<String>,
 }
 
 impl Access {
     pub fn new(store: &Store, auth: bool, user: Option<&User>) -> Access {
+        Self::build(store, auth, user, false)
+    }
+
+    /// Like `new`, but `user`'s own locked pictures show too while their Locked is open.
+    pub fn with_locked(store: &Store, auth: bool, user: Option<&User>) -> Access {
+        Self::build(store, auth, user, true)
+    }
+
+    fn build(store: &Store, auth: bool, user: Option<&User>, with_mine: bool) -> Access {
         let all = load(store);
         let group = |g: &str| -> HashMap<String, Share> {
             all.get(g).and_then(Value::as_object).map(|m| m.iter().map(|(k, v)| (k.clone(), parse(v))).collect()).unwrap_or_default()
@@ -173,8 +187,9 @@ impl Access {
         let folder_ids: HashMap<String, String> = store.synced_folders().unwrap_or_default().into_iter().map(|(id, p)| (p, id)).collect();
         let by_id = group("folders");
         let folders = folder_ids.iter().filter_map(|(p, id)| Some((p.clone(), by_id.get(id)?.clone()))).collect();
-        let file_paths = store.synced_index().unwrap_or_default().into_iter().collect();
-        Access { auth, user: user.cloned(), files: group("files"), folders, folder_ids, file_paths }
+        let hidden = crate::photos::locked::hidden_for(store, user.map(|u| u.username.as_str()), with_mine);
+        let file_paths = store.synced_index().unwrap_or_default().into_iter().filter(|(id, _)| !hidden.contains(id)).collect();
+        Access { auth, user: user.cloned(), files: group("files"), folders, folder_ids, file_paths, hidden }
     }
 
     fn me(&self) -> &str {
@@ -224,6 +239,9 @@ impl Access {
 
     /// What I may do with a file.
     pub fn file_role(&self, file: &str) -> Role {
+        if self.hidden.contains(file) {
+            return Role::None;
+        }
         if self.admin() {
             return Role::Owner;
         }
@@ -236,6 +254,13 @@ impl Access {
         }
         let own = self.files.get(file).cloned().into_iter();
         self.role_from(own.chain(self.shares_above(&crate::store::parent_of(path)).cloned()), false)
+    }
+
+    /// Whether a photo's location may go with it to people who aren't its owner: the file's own
+    /// share, or a folder it's in, says to keep it.
+    pub fn keeps_location(&self, file: &str) -> bool {
+        let Some(path) = self.file_paths.get(file) else { return false };
+        self.files.get(file).is_some_and(|s| s.keep_location) || self.shares_above(&crate::store::parent_of(path)).any(|s| s.keep_location)
     }
 
     /// Whether a file shows in my lists: mine, or shared with me by name (itself or a folder it's
@@ -313,7 +338,11 @@ pub fn describe(store: &Store, item: Item, relpath: &str, you: Role) -> Value {
     let owner = owner_of(store, relpath);
     let mut people = vec![person(&owner, "owner")];
     people.extend(share.people.iter().filter(|(u, _)| *u != owner).map(|(u, r)| person(u, r.name())));
-    json!({ "people": people, "link": share.link.name(), "you": you.name(), "folder": matches!(item, Item::Folder(_)) })
+    let public = match item {
+        Item::File(id) => crate::publiclink::describe(store, id),
+        Item::Folder(_) => json!({ "on": false }),
+    };
+    json!({ "people": people, "link": share.link.name(), "keep_location": share.keep_location, "you": you.name(), "folder": matches!(item, Item::Folder(_)), "public": public })
 }
 
 /// Applies the Share dialog's changes: `people` maps username → "view", "comment", "edit" or
@@ -343,6 +372,12 @@ pub fn update(store: &Store, item: Item, relpath: &str, body: &Value) -> Result<
     }
     if let Some(link) = body.get("link").and_then(Value::as_str) {
         share.link = Role::parse(link);
+    }
+    if let Some(k) = body.get("keep_location").and_then(Value::as_bool) {
+        share.keep_location = k;
+    }
+    if let Item::File(id) = item {
+        crate::publiclink::update(store, id, body)?;
     }
     set(store, item, &share).map_err(|e| e.to_string())
 }

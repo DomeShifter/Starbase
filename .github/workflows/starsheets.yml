@@ -98,10 +98,13 @@ jobs:
           mkdir -p ~/cargo-home
           docker run --rm -v "$PWD":/src -v ~/cargo-home:/cargo-home -e CARGO_HOME=/cargo-home -e STARSHEETS_BUILD -w /src rust:1.100.0-trixie bash -c '
             set -e
-            apt-get update -qq && apt-get install -y -qq gcc-aarch64-linux-gnu libc6-dev-arm64-cross >/dev/null
+            apt-get update -qq && apt-get install -y -qq gcc-aarch64-linux-gnu g++-aarch64-linux-gnu libc6-dev-arm64-cross >/dev/null
             rustup target add aarch64-unknown-linux-gnu
             export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc
-            cargo build --release -p starsheets-server --target x86_64-unknown-linux-gnu --target aarch64-unknown-linux-gnu
+            # --features ml: face recognition (Photos > People). ort links ONNX Runtime statically from
+            # pyke's prebuilt archive (fetched at build time, SHA-256 checked by ort-sys); the binary then
+            # needs only glibc and libstdc++6 (both in debian slim). Desktop/Flatpak builds never enable it.
+            cargo build --release -p starsheets-server --features ml --target x86_64-unknown-linux-gnu --target aarch64-unknown-linux-gnu
             mkdir -p server-bin/amd64 server-bin/arm64
             cp target/x86_64-unknown-linux-gnu/release/starsheets-server server-bin/amd64/
             cp target/aarch64-unknown-linux-gnu/release/starsheets-server server-bin/arm64/
@@ -203,6 +206,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+      - name: Flatpak manifest commits equal the upstream.pin files
+        run: ../packaging/linux/flatpak/pin-engines.sh --check
       - name: Fetch GridCraft at the pinned commit of our fork
         run: scripts/fetch-upstream.sh
       # starbase-open asks its one question with the system's dialogs (rfd: Wayland/GTK).

@@ -25,7 +25,7 @@ use serde_json::{Map, Value, json};
 pub const BIN_DAYS: i64 = 30;
 
 /// Files the apps edit (Sheets, Docs and Slides). Every other file is stored, listed, shared, moved and
-/// binned the same way, but has no versions and is never opened in a live room: the Drive
+/// binned and versioned the same way, but is never opened in a live room: the Drive
 /// previews it (preview.rs) or downloads it.
 pub const EXTS: [&str; 8] = [".xlsx", ".xlsm", ".xls", ".csv", ".ods", ".docx", ".odt", ".pptx"];
 
@@ -40,7 +40,11 @@ pub fn is_doc(name: &str) -> bool {
     DOC_EXTS.iter().any(|x| lower.ends_with(x))
 }
 
-/// Whether a file is one the apps edit (a spreadsheet or a document): only these keep versions.
+/// The biggest file of another type (photo, PDF, video...) that keeps versions: copies of bigger
+/// ones would eat the disk, so their old content goes to the bin instead.
+pub const MAX_VERSIONED_OTHER: u64 = 64 * 1024 * 1024;
+
+/// Whether a file is one the apps edit (a spreadsheet, document or presentation).
 pub fn is_editable(name: &str) -> bool {
     let lower = name.to_lowercase();
     EXTS.iter().any(|x| lower.ends_with(x))
@@ -465,6 +469,30 @@ pub struct Store {
 }
 
 /// The first part of a path: whose space it's in (spaces on).
+/// Bytes of the regular files below `dir` (no links followed; bounded depth).
+fn dir_bytes(dir: &Path, depth: u32) -> u64 {
+    let Ok(rd) = fs::read_dir(dir) else { return 0 };
+    let mut n = 0;
+    for e in rd.flatten() {
+        let Ok(m) = fs::symlink_metadata(e.path()) else { continue };
+        if m.is_file() {
+            n += m.len();
+        } else if m.is_dir() && depth < 64 {
+            n += dir_bytes(&e.path(), depth + 1);
+        }
+    }
+    n
+}
+
+/// Free bytes on the disk holding `path` (None if it can't be told).
+fn free_bytes(path: &Path) -> Option<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: c is a valid NUL-terminated path and st a valid out-pointer.
+    (unsafe { libc::statvfs(c.as_ptr(), &mut st) } == 0).then(|| st.f_bavail as u64 * st.f_frsize as u64)
+}
+
 pub fn space_of(relpath: &str) -> &str {
     relpath.split('/').next().unwrap_or("")
 }
@@ -713,6 +741,13 @@ impl Store {
         Ok(format!("{:x}-{:x}", mtime(&m).1, m.len()))
     }
 
+    /// The name of the newest kept version of a file ("" when none): changes whenever someone's
+    /// save keeps a new one, which the file's own timestamp can't tell (it ticks in milliseconds,
+    /// so two saves of equal length can share a version string).
+    pub fn newest_kept(&self, fid: &str) -> String {
+        version_names(&self.versions().join(fid)).pop().unwrap_or_default()
+    }
+
     /// Writes a file atomically (temp file in .starsheets, then rename).
     pub fn write_file(&self, path: &Path, data: &[u8]) -> io::Result<()> {
         fs::create_dir_all(self.meta())?;
@@ -849,7 +884,18 @@ impl Store {
     /// The bin's name for what was just binned, and whose bin it is: an Undo puts it back with
     /// `POST /api/bin/restore?name=…&expect=<original>&exact=1`.
     fn binned(&self, relpath: &str, name: String) -> Value {
-        json!({"ok": true, "bin": name, "space": if self.spaces { space_of(relpath) } else { "" }})
+        json!({"ok": true, "bin": name, "original": relpath, "space": if self.spaces { space_of(relpath) } else { "" }})
+    }
+
+    /// A file in `folder` (not below it) whose bytes are exactly `body`: sizes first, then the bytes.
+    fn same_bytes_in(&self, folder: &str, body: &[u8]) -> Option<String> {
+        for e in fs::read_dir(self.full(folder)).ok()?.flatten() {
+            let Ok(m) = e.metadata() else { continue };
+            if m.is_file() && m.len() == body.len() as u64 && fs::read(e.path()).is_ok_and(|b| b == body) {
+                return Some(join(folder, &e.file_name().to_string_lossy()));
+            }
+        }
+        None
     }
 
     /// Reserves a free file name in `folder` (stem.ext, stem (2).ext, …) by creating it exclusively.
@@ -927,8 +973,23 @@ impl Store {
             Some("files") => self.route_files(method, p, q, if_match, body, &mut index),
             Some("folders") => self.route_folders(method, p, q, &mut index),
             Some("bin") => self.route_bin(method, p, q, &mut index),
+            Some("usage") if p.len() == 1 && method == "GET" => self.storage(q),
             _ => Err(Bad::new(404, "not found")),
         }
+    }
+
+    /// GET /api/usage: bytes used by the person's own files (their space, hidden folders and the
+    /// bin left out), what their bin holds, and the free space of the disk. There is no quota.
+    fn storage(&self, q: &HashMap<String, String>) -> R<Reply> {
+        let space = if self.spaces { rel(qs(q, "space"))? } else { String::new() };
+        if self.spaces && (space.is_empty() || space.contains('/')) {
+            return Err(Bad::new(400, "whose storage?"));
+        }
+        let (mut files, mut folders) = (Vec::new(), Vec::new());
+        self.walk_dir(&space, &mut files, &mut folders);
+        let used: u64 = files.iter().filter_map(|f| fs::symlink_metadata(self.full(f)).ok()).map(|m| m.len()).sum();
+        let bin_bytes = dir_bytes(&self.bin(&space), 0);
+        ok(json!({"used": used, "files": files.len(), "bin": bin_bytes, "free": free_bytes(&self.root)}))
     }
 
     fn route_files(
@@ -962,6 +1023,14 @@ impl Store {
         if p.len() == 1 && method == "POST" {
             let folder = rel(qs(q, "folder"))?;
             self.need_folder(&folder)?;
+            // ?skip_dup=1 (phone uploads): a file already in this folder with exactly these bytes
+            // is not saved again; the reply says which one it is ("duplicate", no new "id").
+            if qs(q, "skip_dup") == Some("1")
+                && let Some(same) = self.same_bytes_in(&folder, body)
+            {
+                let id = index.iter().find(|(_, p)| **p == same).map(|(i, _)| i.clone()).unwrap_or_default();
+                return Ok(Reply::Json(json!({"duplicate": true, "existing": id, "name": base_of(&same), "folder": folder}), 200));
+            }
             // ?as_is=1: a file uploaded to the Drive keeps its name and type, whatever it is
             // (photo.jpg stays photo.jpg); otherwise a name that isn't a spreadsheet or document
             // gets .xlsx, as before.
@@ -996,8 +1065,9 @@ impl Store {
                 {
                     return Ok(Reply::Json(json!({"error": "changed elsewhere", "name": base_of(&path)}), 409));
                 }
-                // Versions are for Sheets and Docs files; another file's old content goes to the bin.
-                if is_editable(&path) {
+                // Every file keeps its earlier versions (Drive's "Manage versions"); only a big file the
+                // apps don't edit goes to the bin instead, so versions can't fill the disk.
+                if is_editable(&path) || fs::metadata(&fpath).map_or(0, |m| m.len()) <= MAX_VERSIONED_OTHER {
                     self.keep_version(fid, &fpath)?;
                 } else {
                     self.copy_to_bin(&path)?;
@@ -1547,6 +1617,24 @@ mod tests {
         let store = Store { root: dir.clone(), keep: 3, spaces: false };
         let id = store.synced_index().unwrap().keys().next().unwrap().clone();
         (dir, store, id)
+    }
+
+    #[test]
+    fn storage_counts_own_files_and_the_bin_separately() {
+        let dir = std::env::temp_dir().join(format!("starsheets-stor-{}", random_hex(6)));
+        fs::create_dir_all(dir.join("ann/docs")).unwrap();
+        fs::create_dir_all(dir.join("ann/.bin")).unwrap();
+        fs::create_dir_all(dir.join("bob")).unwrap();
+        fs::write(dir.join("ann/a.xlsx"), vec![0u8; 100]).unwrap();
+        fs::write(dir.join("ann/docs/b.bin"), vec![0u8; 50]).unwrap();
+        fs::write(dir.join("ann/.bin/old.xlsx"), vec![0u8; 7]).unwrap();
+        fs::write(dir.join("bob/c.xlsx"), vec![0u8; 1000]).unwrap();
+        let store = Store { root: dir.clone(), keep: 3, spaces: true };
+        let (code, v) = call(&store, "GET", "usage?space=ann");
+        assert_eq!((code, v["used"].as_u64(), v["bin"].as_u64(), v["files"].as_u64()), (200, Some(150), Some(7), Some(2)), "{v}");
+        assert!(v["free"].as_u64().is_some());
+        assert_eq!(call(&store, "GET", "usage").0, 400, "no space named");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

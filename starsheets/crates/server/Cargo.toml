@@ -17,6 +17,7 @@ axum = { version = "0.8", features = ["ws"] }
 gridcraft-engine = { workspace = true }
 starsheets-sync = { path = "../sync", features = ["thumbs"] }
 starbase-photo-edit = { path = "../photo-edit" }
+starbase-templates = { path = "../templates" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "fs", "net", "time", "io-util"] }
 # Streams big files (downloads, video previews) from disk instead of reading them whole.
 futures-util = { version = "0.3", default-features = false }
@@ -58,6 +59,8 @@ kamadak-exif = "0.6"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 jpeg-decoder = { version = "0.3.2", default-features = false }
 fast_image_resize = "6.2"
+# Drive tiles: a picture of the first page of a PDF (pure Rust, no system libraries; arm64 too).
+hayro = "0.9"
 notify = "9.0"
 # Face recognition (photos/ml.rs): ONNX Runtime, only with `--features ml`. 2.0 is still a
 # release candidate; using it was agreed by the project owner (2026-11).
