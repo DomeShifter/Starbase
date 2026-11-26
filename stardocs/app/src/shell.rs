@@ -2308,3 +2308,10 @@ fn palette<'a>(ui: &mut Ui, colours: impl Iterator<Item = (&'a str, &'a str)>, m
         }
     });
 }
+
+/// Whether leaving the page now would lose something: the editor's unsaved flag, a save still in the
+/// browser's picker, or one not yet on the server. All saved: never prompt.
+#[cfg(any(target_arch = "wasm32", test))]
+pub(crate) fn should_guard_unload(dirty: bool, save_pending: bool, server_unsaved: bool) -> bool {
+    dirty || save_pending || server_unsaved
+}
