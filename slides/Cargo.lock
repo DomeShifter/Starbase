@@ -4783,6 +4783,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "starbase-savestate"
+version = "0.4.0"
+dependencies = [
+ "egui",
+]
+
+[[package]]
 name = "starslides"
 version = "0.18.1"
 dependencies = [
@@ -4802,6 +4809,7 @@ dependencies = [
  "rfd",
  "serde_json",
  "starbase-connect",
+ "starbase-savestate",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

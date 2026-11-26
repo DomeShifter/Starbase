@@ -519,6 +519,10 @@ impl crate::shell::Drive for Link {
         }
     }
 
+    fn history_open(&self) -> bool {
+        self.dialogs.borrow().1.is_open()
+    }
+
     fn dialogs(&self, ctx: &egui::Context) {
         let mut d = self.dialogs.borrow_mut();
         d.0.ui(ctx);

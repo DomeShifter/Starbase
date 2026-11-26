@@ -26,6 +26,8 @@ log = { workspace = true }
 serde_json = { workspace = true }
 # SVG loader for the toolbar icons (resvg).
 egui_extras = { workspace = true, features = ["svg"] }
+# The save-state icon on the title row (shared with Sheets and Docs).
+starbase-savestate = { path = "../../starsheets/crates/savestate" }
 
 # The desktop program (native.rs): the same window in a native eframe window, drawn with OpenGL
 # through glow as the web build draws with WebGL2; the system's file dialogs (rfd, waited for on
