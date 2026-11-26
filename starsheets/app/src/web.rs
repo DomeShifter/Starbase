@@ -745,6 +745,41 @@ fn mime_for(name: &str) -> &'static str {
     }
 }
 
+/// The browser's file picker for any kind of file: a hidden `<input type=file multiple>` clicked
+/// at once (inside the user's click), read with `Blob.arrayBuffer`. `got` is called for each file.
+/// (The `rfd` crate's picker opened in Firefox but never delivered the files.)
+pub(crate) fn pick_any(got: Box<dyn Fn(String, Vec<u8>)>) {
+    use wasm_bindgen::closure::Closure;
+    let Some(doc) = web_sys::window().and_then(|w| w.document()) else { return };
+    let Some(input) = doc.create_element("input").ok().and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) else { return };
+    input.set_type("file");
+    input.set_multiple(true);
+    let _ = input.set_attribute("style", "display:none");
+    if let Some(body) = doc.body() {
+        let _ = body.append_child(&input);
+    }
+    let got: std::rc::Rc<dyn Fn(String, Vec<u8>)> = std::rc::Rc::from(got);
+    let i2 = input.clone();
+    let done = Closure::<dyn FnMut()>::new(move || {
+        if let Some(files) = i2.files() {
+            for n in 0..files.length() {
+                let Some(file) = files.get(n) else { continue };
+                let got = got.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    if let Ok(buf) = wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await {
+                        got(file.name(), js_sys::Uint8Array::new(&buf).to_vec());
+                    }
+                });
+            }
+        }
+        i2.remove();
+    });
+    let _ = input.add_event_listener_with_callback("change", done.as_ref().unchecked_ref());
+    let _ = input.add_event_listener_with_callback("cancel", done.as_ref().unchecked_ref());
+    done.forget();
+    input.click();
+}
+
 /// Trigger a browser save dialog or download of `bytes` named after `name`.
 pub(crate) fn download_file(name: &str, bytes: &[u8]) -> Result<(), String> {
     download(name, bytes)
