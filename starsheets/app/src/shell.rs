@@ -1110,6 +1110,7 @@ pub fn set_save_status(ctx: &egui::Context, status: Option<SaveStatus>) {
 }
 
 /// The save symbol's status: what was set, else saved or not by the workbook's changed flag.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code, reason = "the web test hook's only"))]
 pub fn save_status(ctx: &egui::Context, dirty: bool) -> SaveStatus {
     let set = ctx.data(|m| m.get_temp::<SaveStatus>(egui::Id::unique(SAVE_STATUS)));
     set.unwrap_or_else(|| if dirty { SaveStatus::new(SaveState::Problem, "Not saved") } else { SaveStatus::new(SaveState::Saved, "Saved") })
