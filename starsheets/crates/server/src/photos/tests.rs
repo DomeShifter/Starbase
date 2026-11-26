@@ -636,7 +636,8 @@ mod http {
 
         // Everything (all=1): the pictures I may see wherever they are, read ones only; never
         // another person's (Bob sees what is shared with him (Trip and the folder inside), not Private).
-        let names_of = |g: &Got| -> Vec<String> { g.json["photos"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap().to_string()).collect() };
+        let names_of =
+            |g: &Got| -> Vec<String> { g.json["photos"].as_array().unwrap().iter().map(|p| p["name"].as_str().unwrap().to_string()).collect() };
         let g = get(&app, "/api/photos?all=1&sort=name", Some("bob"), &[]).await;
         assert_eq!((g.status, names_of(&g)), (200, ["a.jpg", "b.jpg", "c.png"].map(String::from).to_vec()), "{}", g.json);
         assert_eq!((g.json["all"].as_bool(), g.json["can_enable"].as_bool()), (Some(true), Some(false)));

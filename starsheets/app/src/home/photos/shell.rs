@@ -223,8 +223,11 @@ impl Home {
                     });
                 } else {
                     let dark = self.photos.shell.dark;
-                    let t = pill(ui, Some(if dark { "light_mode" } else { "dark_mode" }), "", false)
-                        .on_hover_text(if dark { "Light theme" } else { "Dark theme" });
+                    let t = pill(ui, Some(if dark { "light_mode" } else { "dark_mode" }), "", false).on_hover_text(if dark {
+                        "Light theme"
+                    } else {
+                        "Dark theme"
+                    });
                     house::target(&ctx, "photo-theme", t.rect);
                     if t.clicked() {
                         self.photos.shell.dark = !dark;

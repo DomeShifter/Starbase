@@ -300,11 +300,12 @@ pub fn dialog_frame() -> Frame {
 
 /// The frame of a floating card (a note, a link, the date picker): 16 px padding.
 pub fn card_frame() -> Frame {
-    Frame::NONE
-        .fill(theme::card())
-        .inner_margin(Margin::same(L as i8))
-        .corner_radius(CornerRadius::same(PANEL_RADIUS))
-        .shadow(egui::epaint::Shadow { offset: [0, 2], blur: 10, spread: 0, color: Color32::from_black_alpha(45) })
+    Frame::NONE.fill(theme::card()).inner_margin(Margin::same(L as i8)).corner_radius(CornerRadius::same(PANEL_RADIUS)).shadow(egui::epaint::Shadow {
+        offset: [0, 2],
+        blur: 10,
+        spread: 0,
+        color: Color32::from_black_alpha(45),
+    })
 }
 
 /// A small floating bubble (the calculation preview): 8 x 4 padding, 4 px corners.
@@ -329,7 +330,9 @@ pub fn form_style(ui: &mut Ui) {
         st.text_styles.insert(ts, egui::FontId::proportional(BODY));
     }
     let w = &mut st.visuals.widgets;
-    for (state, stroke) in [(&mut w.inactive, theme::edge()), (&mut w.hovered, theme::text()), (&mut w.active, theme::BLUE), (&mut w.open, theme::BLUE)] {
+    for (state, stroke) in
+        [(&mut w.inactive, theme::edge()), (&mut w.hovered, theme::text()), (&mut w.active, theme::BLUE), (&mut w.open, theme::BLUE)]
+    {
         state.bg_fill = theme::card();
         state.weak_bg_fill = theme::card();
         state.bg_stroke = Stroke::new(1.0, stroke);

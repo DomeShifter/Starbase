@@ -301,7 +301,9 @@ impl PhotoMode {
                     }
                     ui.label(RichText::new(&c.name).size(house::TITLE).color(theme::text()));
                     let n = self.pics.len();
-                    ui.label(RichText::new(format!("{n} {}", if n == 1 { "picture" } else { "pictures" })).size(house::BODY).color(theme::text_dim()));
+                    ui.label(
+                        RichText::new(format!("{n} {}", if n == 1 { "picture" } else { "pictures" })).size(house::BODY).color(theme::text_dim()),
+                    );
                     if t == Tab::Events && !self.pics.is_empty() && self.pill(ui, "Save as album", false) {
                         self.create(ui.ctx(), store, &c.name, true);
                     }
