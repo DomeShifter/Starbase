@@ -35,6 +35,7 @@ pub mod edits;
 mod events;
 pub mod export;
 pub mod index;
+pub mod locked;
 pub mod model;
 pub mod raw;
 pub mod routes;

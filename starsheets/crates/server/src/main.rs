@@ -301,12 +301,12 @@ async fn blocking<T: Send + 'static>(app: &Shared, f: impl FnOnce(&App) -> T + S
 
 /// Runs password hashing or checking (Argon2: slow on purpose) off the async threads and NOT
 /// under the store lock, a few at a time, so sign-in tries can't hold up everyone's files.
-async fn slow<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
+pub(crate) async fn slow<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Option<T> {
     let _turn = ARGON_AT_ONCE.acquire().await.ok()?;
     tokio::task::spawn_blocking(f).await.ok()
 }
 
-fn too_many() -> Response<Body> {
+pub(crate) fn too_many() -> Response<Body> {
     error(429, "Too many tries. Wait a few minutes, then try again.")
 }
 
@@ -326,7 +326,7 @@ fn opt_field(body: &Value, key: &str) -> Option<String> {
 }
 
 /// Waits a moment after a wrong password or code (slows down guessing), then says so.
-async fn wrong(code: u16, why: &str) -> Response<Body> {
+pub(crate) async fn wrong(code: u16, why: &str) -> Response<Body> {
     tokio::time::sleep(WRONG_WAIT).await;
     error(code, why)
 }
@@ -1979,6 +1979,9 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
         return resp;
     }
     if let Some(resp) = findpath::route(&app, &m, &p, &q, me.clone()).await {
+        return resp;
+    }
+    if let Some(resp) = photos::locked::route(&app, &m, &p, me.clone(), ask.ip, &body).await {
         return resp;
     }
     // Photos: folder listings with EXIF dates, thumbnails, edits, the index's status (photos/).
