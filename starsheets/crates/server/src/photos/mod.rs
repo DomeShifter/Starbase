@@ -33,6 +33,7 @@ pub mod crs;
 pub mod decode;
 pub mod edits;
 mod events;
+mod everything;
 pub mod export;
 pub mod faces;
 #[cfg(test)]

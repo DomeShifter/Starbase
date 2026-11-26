@@ -22,6 +22,7 @@ mod dups;
 mod locked;
 mod people;
 mod pick;
+pub(super) mod shell;
 mod upload;
 
 pub(super) use pick::{Act, Out};
@@ -292,6 +293,8 @@ pub(super) struct PhotoMode {
     pub lk: locked::Locked,
     /// Upload from this device (upload.rs).
     pub up: upload::Uploads,
+    /// Photo Mode's room: dark look, set of pictures, type filter, search (shell.rs).
+    pub shell: shell::Shell,
     /// What the Drive around Photos is asked to do (stars, the bin, Details).
     pub out: Vec<Out>,
 }
@@ -313,6 +316,7 @@ impl Default for PhotoMode {
             waiting: 0,
             listed_at: -1e9,
             up: Default::default(),
+            shell: Default::default(),
             inbox: Arc::default(),
             tex: Textures { budget: BUDGET, ..Default::default() },
             asking: HashSet::new(),
@@ -359,7 +363,11 @@ impl PhotoMode {
         self.listed_at = now;
         self.loading = true;
         let order = if self.newest_first { "&desc=1" } else { "" };
-        let url = format!("api/photos?folder={}&sort=taken{order}{}", enc(folder), if self.sub { "&sub=1" } else { "" });
+        let url = if self.shell.scope == shell::Scope::All {
+            format!("api/photos?all=1&sort=taken{order}")
+        } else {
+            format!("api/photos?folder={}&sort=taken{order}{}", enc(folder), if self.sub { "&sub=1" } else { "" })
+        };
         let (inbox, ctx2, f, sub) = (self.inbox.clone(), ctx.clone(), folder.to_string(), self.sub);
         store.call(
             ctx,
@@ -464,10 +472,8 @@ impl PhotoMode {
                 self.retry_at.remove(&(p.id.clone(), SMALL));
             }
         }
-        self.pics = pics;
-        if let Some(vw) = &mut self.viewer {
-            vw.fit_list(self.pics.len());
-        }
+        self.shell.full = pics;
+        self.refilter();
     }
 
     /// Each frame: answers, and the listing again while pictures are still being read.
@@ -646,20 +652,31 @@ impl PhotoMode {
     pub fn ui(&mut self, ui: &mut Ui, store: &Backend, folder: &str) {
         let ctx = ui.ctx().clone();
         self.alb.boot_cards(&ctx, store, &self.inbox);
+        // On a phone the nav is a wrapped row above the pictures, not a column beside them.
+        if ui.available_width() < 560.0 {
+            ui.horizontal_wrapped(|ui| self.nav_ui(ui, store));
+            ui.separator();
+            self.tab_ui(ui, store, folder);
+            return;
+        }
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 ui.set_width(130.0);
                 self.nav_ui(ui, store);
             });
             ui.separator();
-            ui.vertical(|ui| match self.alb.tab {
-                albums::Tab::Photos => self.folder_ui(ui, store, folder),
-                albums::Tab::People => self.people_ui(ui, store),
-                albums::Tab::Duplicates => self.dups_ui(ui, store, folder),
-                albums::Tab::Locked => self.locked_ui(ui, store),
-                _ => self.cards_ui(ui, store),
-            });
+            ui.vertical(|ui| self.tab_ui(ui, store, folder));
         });
+    }
+
+    fn tab_ui(&mut self, ui: &mut Ui, store: &Backend, folder: &str) {
+        match self.alb.tab {
+            albums::Tab::Photos => self.folder_ui(ui, store, folder),
+            albums::Tab::People => self.people_ui(ui, store),
+            albums::Tab::Duplicates => self.dups_ui(ui, store, folder),
+            albums::Tab::Locked => self.locked_ui(ui, store),
+            _ => self.cards_ui(ui, store),
+        }
     }
 
     /// The grid (or the question whether to turn Photos on) for `folder`.
@@ -675,7 +692,7 @@ impl PhotoMode {
         match self.enabled {
             None => {
                 ui.add_space(house::XL);
-                ui.label(RichText::new(if self.loading { "Loading…" } else { "" }).size(house::BODY).color(theme::TEXT_DIM));
+                ui.label(RichText::new(if self.loading { "Loading…" } else { "" }).size(house::BODY).color(theme::text_dim()));
                 return;
             }
             Some(false) => {
@@ -694,8 +711,16 @@ impl PhotoMode {
         ui.add_space(house::S);
         if self.pics.is_empty() {
             ui.add_space(house::XL);
-            let text = if self.loading { "Loading…" } else { "No pictures in this folder." };
-            ui.label(RichText::new(text).size(house::BODY).color(theme::TEXT_DIM));
+            let text = if self.loading {
+                "Loading…"
+            } else if self.shell.filtering() && !self.shell.full.is_empty() {
+                "No pictures match the search or the type."
+            } else if self.shell.scope == shell::Scope::All {
+                "No pictures yet. Turn on Photos in a folder to see its pictures here."
+            } else {
+                "No pictures in this folder."
+            };
+            ui.label(RichText::new(text).size(house::BODY).color(theme::text_dim()));
             return;
         }
         self.grid(ui, store);
@@ -789,7 +814,7 @@ impl PhotoMode {
                 egui::Align2::CENTER_TOP,
                 short,
                 egui::FontId::proportional(house::NOTE),
-                theme::TEXT_DIM,
+                theme::text_dim(),
             );
         }
         if self.pics[i].is_video() {
@@ -842,22 +867,17 @@ impl PhotoMode {
             if self.waiting > 0 {
                 text.push_str(&format!(" · preparing {}", self.waiting));
             }
-            ui.label(RichText::new(text).size(house::BODY).color(theme::TEXT_DIM));
+            ui.label(RichText::new(text).size(house::BODY).color(theme::text_dim()));
             ui.add_space(house::M);
             let pill = |ui: &mut Ui, label: &str, on: bool| -> egui::Response {
                 ui.add(
-                    egui::Button::new(RichText::new(label).size(house::BODY).color(theme::TEXT))
-                        .fill(if on { theme::SHARE } else { Color32::WHITE })
-                        .stroke(egui::Stroke::new(1.0, theme::BOX))
+                    egui::Button::new(RichText::new(label).size(house::BODY).color(theme::text()))
+                        .fill(if on { theme::share() } else { theme::card() })
+                        .stroke(egui::Stroke::new(1.0, theme::edge()))
                         .corner_radius(16)
                         .min_size(vec2(0.0, 32.0)),
                 )
             };
-            if pill(ui, "Include subfolders", self.sub).clicked() {
-                self.sub = !self.sub;
-                self.pics.clear();
-                self.list(&ctx, store, folder);
-            }
             if pill(ui, if self.newest_first { "Newest first" } else { "Oldest first" }, false).clicked() {
                 self.newest_first = !self.newest_first;
                 store.set_setting("starsheets_home_photos_order", if self.newest_first { "new" } else { "old" });
@@ -890,7 +910,7 @@ impl PhotoMode {
         ui.add_space(house::XL);
         house::card_frame().show(ui, |ui| {
             ui.set_max_width(520.0);
-            ui.label(RichText::new("Show this folder as photos?").size(house::TITLE).color(theme::TEXT));
+            ui.label(RichText::new("Show this folder as photos?").size(house::TITLE).color(theme::text()));
             ui.add_space(house::S);
             house::text(
                 ui,
@@ -929,6 +949,11 @@ impl PhotoMode {
             "canEnable": self.can_enable,
             "canDisable": self.can_disable,
             "sub": self.sub,
+            "scope": self.shell.scope.label(),
+            "types": self.shell.types.iter().enumerate().filter(|(_, t)| **t).map(|(i, _)| shell::KINDS[i]).collect::<Vec<_>>(),
+            "dark": crate::theme::photo_dark(),
+            "query": self.shell.query,
+            "total": self.shell.full.len(),
             "newestFirst": self.newest_first,
             "loading": self.loading,
             "waiting": self.waiting,

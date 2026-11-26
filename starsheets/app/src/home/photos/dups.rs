@@ -99,7 +99,7 @@ impl PhotoMode {
             get(&ctx, store, &self.inbox, &format!("api/photos/duplicates?folder={}", enc(folder)), move |v| Got::Dups(f, v));
         }
         ui.add_space(house::S);
-        let dim = |t: String| RichText::new(t).size(house::BODY).color(theme::TEXT_DIM);
+        let dim = |t: String| RichText::new(t).size(house::BODY).color(theme::text_dim());
         if !self.dups.loaded {
             ui.label(dim("Looking for duplicates…".into()));
             return;
@@ -120,7 +120,7 @@ impl PhotoMode {
                 human(self.dups.wasted)
             ))
             .size(house::BODY)
-            .color(theme::TEXT),
+            .color(theme::text()),
         );
         ui.add_space(house::S);
         let mut keep = None;
@@ -142,11 +142,11 @@ impl PhotoMode {
                             }
                             let path = if folder.is_empty() { p.name.clone() } else { format!("{folder}/{}", p.name) };
                             ui.set_max_width(side);
-                            ui.label(RichText::new(path).size(house::NOTE).color(theme::TEXT)).on_hover_text(&p.name);
+                            ui.label(RichText::new(path).size(house::NOTE).color(theme::text())).on_hover_text(&p.name);
                             ui.label(
                                 RichText::new(format!("{} · {}", human(p.size), date_label(p.taken.as_deref(), p.modified)))
                                     .size(house::NOTE)
-                                    .color(theme::TEXT_DIM),
+                                    .color(theme::text_dim()),
                             );
                             if ui.add(house::link("Keep this one")).clicked() {
                                 keep = Some((gi, pi));

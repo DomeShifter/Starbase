@@ -1,5 +1,6 @@
 //! Photos over HTTP (docs/photos-api.md):
 //!
+//! - `GET /api/photos?all=1` (instead of folder): every picture I may see, anywhere (everything.rs).
 //! - `GET /api/photos?folder=PATH` (or `folder_id=ID`; `sub=1` with every folder inside;
 //!   `sort=taken|name|modified`, `desc=1`): the pictures in a folder, with their EXIF date.
 //! - `GET /api/photos/thumb/ID/SIZE` (SIZE 256 or 1024, `?v=` the picture's `v`): a thumbnail.
@@ -163,6 +164,9 @@ async fn list(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>)
     let desc = q.get("desc").is_some_and(|v| v == "1" || v == "true");
     if !["taken", "name", "modified"].contains(&sort.as_str()) {
         return error(400, "sort is taken, name or modified");
+    }
+    if q.get("all").is_some_and(|v| v == "1" || v == "true") {
+        return super::everything::list_all(app, &sort, desc, me).await;
     }
     let stars = stars_of(app, me.as_ref()).await;
     let q2 = q.clone();
@@ -387,7 +391,7 @@ pub(super) fn photo_json(r: &super::index::Row, id: &str, places: bool) -> Value
 }
 
 /// Seconds since 1970 as `YYYY-MM-DDTHH:MM:SS` (UTC), to sort pictures without an EXIF date.
-fn iso(secs: i64) -> String {
+pub(super) fn iso(secs: i64) -> String {
     let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
     // Civil date from days since 1970 (Howard Hinnant's algorithm).
     let z = days + 719_468;
