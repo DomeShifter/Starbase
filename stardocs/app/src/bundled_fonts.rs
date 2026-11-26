@@ -14,6 +14,17 @@ const ARIMO: [&[u8]; 4] = [
     include_bytes!("../fonts/Arimo-BoldItalic.ttf"),
 ];
 
+/// Noto Emoji (app/fonts, SIL Open Font License 1.1), a monochrome emoji font: the fallback that
+/// draws an emoji in the page, as egui's own copy does in the interface (the browser has no system
+/// emoji font). Added as a document font, so the layout finds it when the text's font lacks the glyph.
+const NOTO_EMOJI: &[u8] = include_bytes!("../fonts/NotoEmoji-Regular.ttf");
+
+/// Whether the page can draw every character of `s`: in a loaded face or a system fallback.
+pub fn body_can_draw(s: &str) -> bool {
+    let db = wordcraft_fonts::FontDb::global();
+    s.chars().all(|c| matches!(c, '\u{200d}' | '\u{fe0f}') || db.fallback_for(c, u32::MAX).is_some())
+}
+
 /// Carlito's and Caladea's faces (app/fonts/office, SIL Open Font License 1.1): file, family.
 pub const OFFICE: [(&str, &str); 8] = [
     ("Carlito-Regular.ttf", "Carlito"),
@@ -51,6 +62,7 @@ fn add_files(files: Vec<(Vec<u8>, String)>, what: &str) {
 /// not in the program (3.0 MB, 0.83 MB brotli: a tenth more to download): [`fetch_office`] fetches them.
 pub fn add() {
     add_files(ARIMO.iter().map(|b| (b.to_vec(), "Arimo".to_string())).collect(), "Arimo (the bundled stand-in for Arial)");
+    add_files(vec![(NOTO_EMOJI.to_vec(), "Noto Emoji".to_string())], "Noto Emoji (the emoji fallback)");
     #[cfg(not(target_arch = "wasm32"))]
     add_files(
         OFFICE_BYTES.iter().zip(OFFICE).map(|(b, (_, family))| (b.to_vec(), family.to_string())).collect(),
