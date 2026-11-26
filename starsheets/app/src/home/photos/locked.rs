@@ -31,10 +31,13 @@ pub(in crate::home) struct Locked {
     pub ask: Option<Vec<String>>,
     /// "Move out" asked from the Info panel, done on the next frame.
     pub out_req: Vec<String>,
+    /// Left the Locked tab while open: the server is told to relock on the next frame.
+    pub lock_req: bool,
 }
 
 impl Locked {
     pub fn reset(&mut self) {
+        self.lock_req |= self.unlocked;
         self.unlocked = false;
         self.checked = false;
         self.busy = false;
@@ -117,9 +120,6 @@ impl PhotoMode {
 
     /// Closes Locked now: the server forgets the unlock, the screen asks for the password again.
     pub(super) fn relock(&mut self, ctx: &egui::Context, store: &Backend) {
-        if self.lk.unlocked {
-            call(ctx, store, &self.inbox, "api/photos/locked/lock", None, |_, _| Got::Nothing);
-        }
         self.lk.reset();
         self.lk.checked = true;
         self.pics.clear();
@@ -158,6 +158,10 @@ impl PhotoMode {
         if !self.lk.out_req.is_empty() {
             let ids = std::mem::take(&mut self.lk.out_req);
             self.move_locked(ctx, store, ids, false);
+        }
+        if self.lk.lock_req {
+            self.lk.lock_req = false;
+            call(ctx, store, &self.inbox, "api/photos/locked/lock", None, |_, _| Got::Nothing);
         }
         if !self.locked_tab() {
             if self.lk.unlocked {
