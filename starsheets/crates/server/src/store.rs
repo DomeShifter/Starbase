@@ -1079,6 +1079,24 @@ impl Store {
                 let name = self.to_bin(&path, index)?;
                 ok(self.binned(&path, name))
             }
+            // A file made from a template (or blank) that its tab closed without a single change:
+            // gone for good, not in the bin. Only when it is still exactly what was created
+            // (?version=<the one it was created with>, ?name=<its name then>, no saved version
+            // since); anything else, a rename or a save, keeps it.
+            (["discard"], "POST") => {
+                let untouched = qs(q, "version") == Some(self.version_of(&fpath)?.as_str())
+                    && qs(q, "name") == Some(base_of(&path).as_str())
+                    && self.newest_kept(fid).is_empty();
+                if !untouched {
+                    return ok(json!({"discarded": false}));
+                }
+                let name = self.to_bin(&path, index)?;
+                let space = if self.spaces { space_of(&path) } else { "" };
+                let mut bins = self.load_json(&self.bin_index_path());
+                self.forget(&self.bin(space), space, &name, &mut bins)?;
+                self.save_json(&self.bin_index_path(), &Value::Object(bins))?;
+                ok(json!({"discarded": true}))
+            }
             // ?from=<path it should be at> (an Undo: refused when it was moved or renamed since);
             // ?exact=1: that name or nothing, never "name (2)".
             (["rename"], "POST") => {

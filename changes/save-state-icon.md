@@ -1,0 +1,2 @@
+### Changed
+- Sheets and Docs: one save-state icon on the title row. An ochre floppy while a change is not saved yet or is saving, a green clock once saved, grey with a red dot when offline, red when it could not save. Hovering shows a short card (saved when, last version or editor, "Click for version history"); a click opens version history. Docs loses the "Saved to Starbase" text beside the name.

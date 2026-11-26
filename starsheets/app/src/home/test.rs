@@ -25,6 +25,8 @@ impl Home {
             "menu": self.menu_rects.iter().map(|(l, r)| json!({ "label": l, "rect": [r.min.x, r.min.y, r.max.x, r.max.y] })).collect::<Vec<_>>(),
             "photos": self.photos.test_state(self.photo_folder().is_some()),
             "view": view,
+            "list": self.list,
+            "view_opts": json!({ "cols": self.vo.cols_str(), "grid": self.vo.grid_str() }),
             "storage": self.storage.map(|(u, b, f)| json!({ "used": u, "bin": b, "free": f })),
             "loading": self.loading,
             "versions": self.versions.as_ref().map(|(_, v)| super::history::rows(v)),

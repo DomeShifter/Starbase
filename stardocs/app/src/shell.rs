@@ -149,7 +149,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Toggle("Show outline", "view.navigationPane", "navPane", "Ctrl+Alt+H"),
             Toggle("Show comments", "view.commentsPane", "commentsPane", ""),
             Toggle("Show word count", "stardocs.words", "stardocs.words", ""),
-            Toggle("Show non-printing characters", "view.marks", "marks", "Ctrl+Shift+P"),
+            Toggle("Show non-printing characters", "view.marks", "marks", "Ctrl+8"),
             Toggle("Show the menus", "stardocs.compact", "stardocs.menus", "Ctrl+Shift+F"),
             Sep,
             Cmd("Zoom in", "view.zoomIn", NO, ""),
@@ -275,7 +275,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
                     Cmd("Bold", "format.bold", NO, "Ctrl+B"),
                     Cmd("Italic", "format.italic", NO, "Ctrl+I"),
                     Cmd("Underline", "format.underline", NO, "Ctrl+U"),
-                    Cmd("Strikethrough", "format.strikethrough", NO, "Alt+Shift+5"),
+                    Cmd("Strikethrough", "format.strikethrough", NO, "Ctrl+Shift+X"),
                     Cmd("Small caps", "format.smallCaps", NO, ""),
                     Cmd("Superscript", "format.superscript", NO, "Ctrl+."),
                     Cmd("Subscript", "format.subscript", NO, "Ctrl+,"),
@@ -370,10 +370,10 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Sub(
                 "Align and indent",
                 &[
-                    Cmd("Left", "para.alignLeft", NO, "Ctrl+Shift+L"),
-                    Cmd("Centre", "para.alignCenter", NO, "Ctrl+Shift+E"),
-                    Cmd("Right", "para.alignRight", NO, "Ctrl+Shift+R"),
-                    Cmd("Justified", "para.justify", NO, "Ctrl+Shift+J"),
+                    Cmd("Left", "para.alignLeft", NO, "Ctrl+L"),
+                    Cmd("Centre", "para.alignCenter", NO, "Ctrl+E"),
+                    Cmd("Right", "para.alignRight", NO, "Ctrl+R"),
+                    Cmd("Justified", "para.justify", NO, "Ctrl+J"),
                     Sep,
                     Cmd("Increase indent", "para.indent", NO, "Ctrl+]"),
                     Cmd("Decrease indent", "para.outdent", NO, "Ctrl+["),
@@ -1059,6 +1059,26 @@ impl Shell {
         Ok(json!(true))
     }
 
+    /// What the save-state icon shows for this document.
+    fn save_info(&self, app: &WordApp, link: &Link) -> starbase_savestate::SaveInfo {
+        use starbase_savestate::{SaveInfo, SaveKind};
+        let local = link.saved_text().contains("this computer");
+        let (kind, detail) = match link.saved() {
+            _ if link.view_only() => (SaveKind::ViewOnly, String::new()),
+            Saved::Failed(why) => (SaveKind::Problem, why),
+            Saved::Saving => (SaveKind::Saving, String::new()),
+            _ if app.session.dirty => (SaveKind::Unsaved, String::new()),
+            Saved::Done | Saved::Nothing => (SaveKind::Saved, String::new()),
+        };
+        // The latest version from the history list, once it has been loaded.
+        let version = self.history.list.as_ref().and_then(|list| {
+            let last = list.iter().max_by_key(|v| v.saved)?;
+            let by = if last.author.is_empty() { String::new() } else { last.author.clone() };
+            Some((u32::try_from(list.len()).unwrap_or(u32::MAX), by))
+        });
+        SaveInfo { kind, when: None, version, detail, local, history: !local }
+    }
+
     #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code, reason = "the test hook's, browser and tests only"))]
     pub fn test_state(&mut self, app: &mut WordApp, link: Option<&Link>) -> Value {
         let cur = current(app);
@@ -1072,6 +1092,7 @@ impl Shell {
             "title": link.map(Link::name),
             "saved": saved,
             "notice": link.and_then(Link::notice),
+            "saveIcon": link.map(|l| self.save_info(app, l).kind.word()),
             "viewOnly": link.is_some_and(Link::view_only),
             "commentOnly": link.is_some_and(Link::comment_only),
             "mode": match Mode::of(app) {
@@ -1942,18 +1963,18 @@ impl Shell {
             }
         }
         if let Some(link) = link {
-            let (text, colour) = match link.saved() {
-                _ if link.view_only() => ("View only".to_string(), TEXT_DIM),
-                Saved::Nothing => (String::new(), TEXT_DIM),
-                Saved::Saving => ("Saving…".to_string(), TEXT_DIM),
-                Saved::Done => (link.saved_text(), TEXT_DIM),
-                Saved::Failed(why) => (why, Color32::from_rgb(0xb3, 0x26, 0x1e)),
-            };
-            // Both stay on the title row, cut short to fit the window. A cut-short label shows
-            // its whole text on hover by itself: a tooltip of our own showed it twice.
-            if !text.is_empty() {
-                ui.add_space(10.0);
-                ui.add(egui::Label::new(RichText::new(&text).size(13.0).color(colour)).truncate());
+            // The save-state icon shared with Sheets and Slides (to-do 3 row 38); its card says
+            // what the old text beside the name said, shorter.
+            ui.add_space(6.0);
+            let info = self.save_info(app, link);
+            let pal = starbase_savestate::SavePalette::house(TEXT_DIM, PAGE);
+            let out = starbase_savestate::save_icon(ui, &info, &pal);
+            target(ui.ctx(), "save-icon", out.response.rect);
+            if let Some(card) = out.card {
+                target(ui.ctx(), "save-icon-card", card);
+            }
+            if out.response.clicked() && info.history {
+                self.flags.history = true;
             }
             if let Some(notice) = link.notice() {
                 ui.add_space(10.0);

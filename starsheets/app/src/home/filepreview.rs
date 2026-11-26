@@ -75,6 +75,13 @@ pub(super) fn shown_as(name: &str) -> Shown {
     }
 }
 
+/// Pictures the viewer shows as the server draws them (`api/files/ID/picture`), not decoded here:
+/// no browser reads TIFF.
+pub(super) fn server_drawn(name: &str) -> bool {
+    let ext = name.rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    matches!(ext.as_str(), "tif" | "tiff")
+}
+
 /// Whether a key pressed on the page (`KeyboardEvent.key` and its modifiers) closes the preview:
 /// Esc on its own. Used by the page-level listener that still hears Esc once a PDF frame or a
 /// film has the keyboard focus (egui only hears keys while the canvas has it).
@@ -201,10 +208,12 @@ impl FilePreview {
     fn fetch(&self, ctx: &egui::Context, store: &Backend) {
         let (got, ctx2, id, image) = (self.got.clone(), ctx.clone(), self.id.clone(), self.shown == Shown::Image);
         let max = (ctx.input(|i| i.max_texture_side) as u32).min(4096);
+        // Pictures browsers can't read (TIFF): the server's 1024-pixel JPEG of it.
+        let url = if image && server_drawn(&self.name) { format!("api/files/{id}/picture") } else { format!("api/files/{id}") };
         store.call(
             ctx,
             Method::Get,
-            &format!("api/files/{id}"),
+            &url,
             None,
             Box::new(move |answer| match answer {
                 Ok((s, bytes)) if s < 400 => {
@@ -693,9 +702,15 @@ mod tests {
 
     /// Every extension Drive knows, and how its preview shows it.
     #[test]
+    fn tiff_is_drawn_by_the_server() {
+        assert!(server_drawn("Scan.TIF") && server_drawn("a.tiff"));
+        assert!(!server_drawn("a.bmp") && !server_drawn("a.ico") && !server_drawn("a.png") && !server_drawn("tif"));
+    }
+
+    #[test]
     fn every_type_has_its_viewer() {
         let table: &[(&[&str], Shown)] = &[
-            (&["png", "jpg", "jpeg", "jfif", "gif", "webp", "avif", "bmp", "ico"], Shown::Image),
+            (&["png", "jpg", "jpeg", "jfif", "gif", "webp", "avif", "bmp", "ico", "tif", "tiff"], Shown::Image),
             (&["pdf"], Shown::Pdf),
             (&["mp4", "m4v", "webm", "ogv", "mov"], Shown::Video),
             (&["mp3", "wav", "ogg", "oga", "opus", "flac", "m4a", "aac"], Shown::Audio),
