@@ -235,6 +235,51 @@ pub const VIEW_BAR: Color32 = Color32::from_rgb(0x20, 0x21, 0x24);
 pub const VIEW_BAR_TEXT: Color32 = Color32::WHITE;
 pub const VIEW_BAR_FIELD: Color32 = TIP_BG;
 pub const VIEW_BAR_HOVER: Color32 = Color32::from_rgba_premultiplied(31, 31, 31, 31);
+/// Grey text on the dark bar and panel (labels, counts, the date under a name).
+pub const VIEW_BAR_DIM: Color32 = Color32::from_rgb(0xBD, 0xC1, 0xC6);
+/// A link on the dark bar and panel (Google's light blue, readable on near-black).
+pub const VIEW_BAR_LINK: Color32 = Color32::from_rgb(0x8A, 0xB4, 0xF8);
+/// The dark bar's height (the photo viewer's, a file preview's).
+pub const VIEW_BAR_HEIGHT: f32 = 56.0;
+/// An icon's size inside an [`icon_button`].
+pub const ICON: f32 = 24.0;
+
+/// Styles a Ui on the dark bar or panel: white text, and the hovered / lit fills of its buttons
+/// from the `VIEW_BAR_*` colours (so [`icon_button`] looks right there in both themes).
+pub fn view_bar_style(ui: &mut Ui) {
+    let v = ui.visuals_mut();
+    v.override_text_color = Some(VIEW_BAR_TEXT);
+    for w in [&mut v.widgets.hovered, &mut v.widgets.active] {
+        w.weak_bg_fill = VIEW_BAR_HOVER;
+        w.bg_fill = VIEW_BAR_HOVER;
+        w.bg_stroke = Stroke::NONE;
+        w.fg_stroke.color = VIEW_BAR_TEXT;
+    }
+    v.widgets.inactive.weak_bg_fill = VIEW_BAR_FIELD;
+    v.widgets.inactive.bg_stroke = Stroke::NONE;
+    v.widgets.inactive.fg_stroke.color = VIEW_BAR_TEXT;
+    v.selection.bg_fill = VIEW_BAR_FIELD;
+    v.selection.stroke = Stroke::new(1.0, VIEW_BAR_TEXT);
+}
+
+/// A round 36 × 36 icon button: no frame until hovered, lit when `on`, named by its tooltip.
+pub fn icon_button(ui: &mut Ui, icon: &str, tip: &str, on: bool) -> egui::Response {
+    let b = match crate::icons::icon(icon) {
+        Some(img) => egui::Button::image(img.fit_to_exact_size(vec2(ICON, ICON))),
+        None => egui::Button::new(RichText::new(tip).size(BODY)),
+    };
+    let b = b.selected(on).frame_when_inactive(on).corner_radius(CornerRadius::same(BUTTON_RADIUS));
+    ui.add(b.min_size(vec2(BUTTON_HEIGHT, BUTTON_HEIGHT))).on_hover_text(tip)
+}
+
+/// A secondary button on the dark bar or panel: a dark grey pill with white text.
+pub fn secondary_dark(text: &str) -> egui::Button<'static> {
+    egui::Button::new(RichText::new(text.to_string()).size(BODY).color(VIEW_BAR_TEXT))
+        .fill(VIEW_BAR_FIELD)
+        .stroke(Stroke::NONE)
+        .corner_radius(CornerRadius::same(BUTTON_RADIUS))
+        .min_size(vec2(88.0, BUTTON_HEIGHT))
+}
 /// A tooltip's faint light edge: unseen on white, it parts a tooltip from a dark bar under it.
 const TIP_EDGE: Color32 = Color32::from_rgba_premultiplied(70, 70, 70, 70);
 /// The picked row in a dark popup (white text stays readable on it).

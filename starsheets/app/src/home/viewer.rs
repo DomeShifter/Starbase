@@ -15,6 +15,7 @@
 use egui::{Color32, Key, Modifiers, Order, Rect, RichText, Sense, Vec2, pos2, vec2};
 
 use super::photos::{LARGE, ORIGINAL, PhotoMode, SMALL, date_label};
+use crate::house;
 use crate::store::Backend;
 
 /// Slideshow intervals offered (seconds).
@@ -168,7 +169,7 @@ impl Viewer {
 
 /// Keys, buttons, drags and drawing; false when the viewer was closed.
 /// The Info panel's width: the picture shrinks to the left of it.
-const INFO_W: f32 = 300.0;
+const INFO_W: f32 = 320.0;
 
 pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bool {
     if pm.viewer.is_none() || pm.pics.is_empty() {
@@ -383,25 +384,30 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
             }
             None if is_video => {}
             None => {
-                painter.text(area.center(), egui::Align2::CENTER_CENTER, "Loading…", egui::FontId::proportional(16.0), Color32::from_gray(200));
+                painter.text(area.center(), egui::Align2::CENTER_CENTER, "Loading…", egui::FontId::proportional(house::BODY), house::VIEW_BAR_DIM);
             }
         }
         // The bar at the top: close, name and date, where we are; zoom, slideshow, download.
-        let bar = Rect::from_min_size(rect.min, vec2(rect.width(), 56.0));
-        painter.rect_filled(bar, 0, Color32::from_black_alpha(160));
+        let bar = Rect::from_min_size(rect.min, vec2(rect.width(), house::VIEW_BAR_HEIGHT));
+        painter.rect_filled(bar, 0, house::VIEW_BAR);
+        house::target(ctx, "viewer:bar", bar);
         let mut bar_ui =
-            ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(12.0, 8.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+            ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(house::L, 0.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        house::view_bar_style(&mut bar_ui);
+        bar_ui.spacing_mut().item_spacing.x = house::XS;
         if button(&mut bar_ui, "white_close", "Close (Esc)") {
             open = false;
         }
-        bar_ui.add_space(8.0);
+        bar_ui.add_space(house::S);
         bar_ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.add_space(house::M); // two text lines (about 32 px) centred in the 56 px bar
             let shown = match (&raw_file, v.raw) {
                 (Some(f), true) => f.name.clone(),
                 _ => name.clone(),
             };
-            ui.label(RichText::new(&shown).size(15.0).color(Color32::WHITE));
-            ui.label(RichText::new(format!("{date} · {} of {}", v.pos + 1, n)).size(12.0).color(Color32::from_gray(200)));
+            ui.add(egui::Label::new(RichText::new(&shown).size(house::BODY).color(house::VIEW_BAR_TEXT)).truncate());
+            ui.label(RichText::new(format!("{date} · {} of {}", v.pos + 1, n)).size(house::NOTE).color(house::VIEW_BAR_DIM));
         });
         bar_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if button(ui, "white_delete", "Move to bin (Delete)") {
@@ -420,15 +426,7 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
             if raw_file.is_some() {
                 let label = if v.raw { "JPEG" } else { "RAW" };
                 let tip = if v.raw { "Show the JPEG (Alt-R)" } else { "Show the RAW file (Alt-R)" };
-                if ui
-                    .add(
-                        egui::Button::new(RichText::new(label).size(13.0).strong().color(Color32::WHITE))
-                            .fill(Color32::from_white_alpha(if v.raw { 70 } else { 30 }))
-                            .corner_radius(10),
-                    )
-                    .on_hover_text(tip)
-                    .clicked()
-                {
+                if bar_text(ui, None, label, tip, v.raw, "viewer:raw").clicked() {
                     v.raw = !v.raw;
                 }
             }
@@ -446,9 +444,7 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
                 crate::house::toast(ctx, "Downloading the original");
             }
             // A small menu under the button: what can really be done with the original.
-            let with = ui
-                .add(egui::Button::new(RichText::new("Open with…").size(13.0).color(Color32::WHITE)).frame(false).min_size(vec2(40.0, 36.0)))
-                .on_hover_text("Open this picture another way");
+            let with = bar_text(ui, None, "Open with…", "Open this picture another way", v.menu, "viewer:open-with");
             if with.clicked() {
                 v.menu = !v.menu;
             }
@@ -456,12 +452,7 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
             if toggle(ui, "white_info", "Info (I)", v.info) {
                 v.info = !v.info;
             }
-            let edit_icon = crate::icons::icon_in("edit", Color32::WHITE).map(|i| i.fit_to_exact_size(vec2(20.0, 20.0)));
-            let b = match edit_icon {
-                Some(img) => egui::Button::image_and_text(img, RichText::new("Edit").size(14.0).color(Color32::WHITE)),
-                None => egui::Button::new(RichText::new("Edit").size(14.0).color(Color32::WHITE)),
-            };
-            if ui.add(b.fill(Color32::from_white_alpha(40)).corner_radius(18).min_size(vec2(0.0, 36.0))).on_hover_text("Edit (E)").clicked() {
+            if bar_text(ui, Some("edit"), "Edit", "Edit (E)", true, "viewer:edit").clicked() {
                 edit = true;
             }
             if toggle(ui, "white_shuffle", if v.shuffle { "Shuffle: on" } else { "Shuffle: off" }, v.shuffle) {
@@ -469,11 +460,7 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
                 v.set_shuffle(!v.shuffle, seed);
             }
             let every = format!("{} s", v.every);
-            if ui
-                .add(egui::Button::new(RichText::new(every).size(13.0).color(Color32::WHITE)).frame(false).min_size(vec2(40.0, 36.0)))
-                .on_hover_text("Slideshow speed")
-                .clicked()
-            {
+            if bar_text(ui, None, &every, "Slideshow speed", false, "viewer:speed").clicked() {
                 let k = EVERY.iter().position(|&e| e == v.every).unwrap_or(1);
                 v.every = EVERY[(k + 1) % EVERY.len()];
                 v.next_at = now + v.every;
@@ -501,12 +488,15 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
                 if cfg!(target_arch = "wasm32") { &["Download original", "Edit in Starbase editor"] } else { &["Edit in Starbase editor"] };
             let r = egui::Area::new(egui::Id::unique("photo_open_with"))
                 .order(Order::Tooltip)
-                .fixed_pos(pos2(at.right() - 200.0, at.bottom() + 6.0))
+                .fixed_pos(pos2(at.right() - 200.0, at.bottom() + house::XS))
                 .show(ctx, |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
                         ui.set_width(200.0);
                         for (k, e) in entries.iter().enumerate() {
-                            if ui.add(egui::Button::new(*e).frame(false).min_size(vec2(200.0, 32.0))).clicked() {
+                            let row =
+                                ui.add(egui::Button::new(RichText::new(*e).size(house::BODY)).frame(false).min_size(vec2(200.0, house::ROW_HEIGHT)));
+                            house::target(ctx, &format!("viewer:open-with:{e}"), row.rect);
+                            if row.clicked() {
                                 chosen = Some(k);
                             }
                         }
@@ -532,8 +522,11 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
             && let Some(p) = pm.pics.get(v.index())
         {
             let in_locked = pm.locked_tab();
-            let (g, lock) = info_panel(ui, rect, p, &pm.alb.albums_of(&p.id), in_locked);
+            let (g, lock, shut) = info_panel(ui, rect, p, &pm.alb.albums_of(&p.id), in_locked);
             goto = g;
+            if shut {
+                v.info = false;
+            }
             if lock {
                 if in_locked {
                     pm.lk.out_req.push(p.id.clone());
@@ -594,27 +587,35 @@ fn p_has_size(w: f32, h: f32) -> bool {
     w > 1.0 && h > 1.0
 }
 
-/// The facts about a picture. Where it was taken only when the server sent it (people who may edit).
-pub(super) fn info_lines(p: &super::photos::Pic, albums: &[&super::photos::albums::Card]) -> Vec<(&'static str, String)> {
-    let mut rows = vec![("File name", p.name.clone()), ("Date taken", super::photos::date_label(p.taken.as_deref(), p.modified))];
-    if let Some(c) = &p.camera {
-        rows.push(("Camera", c.clone()));
-    }
+/// The facts about a picture, in the Info panel's groups (WHAT, WHEN AND WHERE, CAMERA, IN); a
+/// group with nothing in it is left out. Where it was taken only when the server sent it (people
+/// who may edit).
+pub(super) fn info_groups(p: &super::photos::Pic, albums: &[&super::photos::albums::Card]) -> Vec<(&'static str, Vec<(&'static str, String)>)> {
+    let mut what = vec![("File name", p.name.clone())];
     if p.width > 0 {
-        rows.push(("Size", format!("{} × {} px, {}", p.width, p.height, human(p.size))));
+        what.push(("Size", format!("{} × {} px, {}", p.width, p.height, human(p.size))));
     }
     if !p.stack.is_empty() {
         let mut files = vec![format!("{}, {}", p.name, human(p.size))];
         files.extend(p.stack.iter().map(|f| format!("{}, {}", f.name, human(f.size))));
-        rows.push(("Files", files.join("\n")));
+        what.push(("Files", files.join("\n")));
     }
+    let mut when = vec![("Date taken", super::photos::date_label(p.taken.as_deref(), p.modified))];
     if let Some((lat, lon)) = p.gps {
-        rows.push(("Place", p.place.clone().unwrap_or_else(|| format!("{lat:.2}, {lon:.2}"))));
+        when.push(("Place", p.place.clone().unwrap_or_else(|| format!("{lat:.2}, {lon:.2}"))));
     }
+    let camera = p.camera.iter().map(|c| ("Camera", c.clone())).collect();
+    let mut inside = vec![];
     if !albums.is_empty() {
-        rows.push(("Albums", albums.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", ")));
+        inside.push(("Albums", albums.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", ")));
     }
-    rows
+    [("What", what), ("When and where", when), ("Camera", camera), ("In", inside)].into_iter().filter(|(_, rows)| !rows.is_empty()).collect()
+}
+
+/// The same facts as one list (the test hook's `info_rows`).
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(super) fn info_lines(p: &super::photos::Pic, albums: &[&super::photos::albums::Card]) -> Vec<(&'static str, String)> {
+    info_groups(p, albums).into_iter().flat_map(|(_, rows)| rows).collect()
 }
 
 fn human(b: u64) -> String {
@@ -625,57 +626,121 @@ fn human(b: u64) -> String {
     }
 }
 
-/// The Info panel; returns the album whose name was clicked.
-/// The second answer is true when "Move to Locked folder" (or, inside Locked, "Move out") was clicked.
+/// How wide the labels' column is in the Info panel.
+const INFO_LABEL_W: f32 = 88.0;
+
+/// The Info panel: a title row with a close button, then the groups of [`info_groups`] as
+/// two-column rows (dim label, value), then the Locked folder button. Returns the album whose name
+/// was clicked, whether "Move to Locked folder" (inside Locked, "Move out") was clicked, and
+/// whether the panel's close button was.
 fn info_panel(
     ui: &mut egui::Ui,
     rect: Rect,
     p: &super::photos::Pic,
     albums: &[&super::photos::albums::Card],
     in_locked: bool,
-) -> (Option<super::photos::albums::Card>, bool) {
-    let panel = Rect::from_min_max(pos2(rect.right() - INFO_W, rect.top() + 56.0), pos2(rect.right(), rect.bottom()));
-    ui.painter().rect_filled(panel, 0, Color32::from_black_alpha(190));
-    let mut c = ui.new_child(egui::UiBuilder::new().max_rect(panel.shrink(16.0)));
-    c.label(RichText::new("Info").size(16.0).strong().color(Color32::WHITE));
-    c.add_space(8.0);
+) -> (Option<super::photos::albums::Card>, bool, bool) {
+    let ctx = ui.ctx().clone();
+    let panel = Rect::from_min_max(pos2(rect.right() - INFO_W, rect.top() + house::VIEW_BAR_HEIGHT), pos2(rect.right(), rect.bottom()));
+    ui.painter().rect_filled(panel, 0, house::VIEW_BAR);
+    ui.painter().vline(panel.left(), panel.y_range(), egui::Stroke::new(1.0, house::VIEW_BAR_FIELD));
+    house::target(&ctx, "viewer:info-panel", panel);
+    let mut c = ui.new_child(egui::UiBuilder::new().max_rect(panel.shrink(house::L)).layout(egui::Layout::top_down(egui::Align::Min)));
+    house::view_bar_style(&mut c);
+    c.spacing_mut().item_spacing = vec2(house::S, 0.0);
+    let mut close = false;
+    c.horizontal(|ui| {
+        ui.vertical(|ui| {
+            ui.add_space(house::S); // centre the title on the 36 px close button
+            ui.label(RichText::new("Info").size(house::BODY).strong().color(house::VIEW_BAR_TEXT));
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let r = house::icon_button(ui, "white_close", "Close Info (I)", false);
+            house::target(&ctx, "viewer:info:close", r.rect);
+            close = r.clicked();
+        });
+    });
     let mut go = None;
-    for (k, v) in info_lines(p, albums) {
-        c.label(RichText::new(k).size(12.0).color(Color32::from_gray(170)));
-        if k == "Albums" {
-            // One link per album (a name may hold a comma, so the cards, not the joined text).
-            for a in albums {
-                let r = c.add(
-                    egui::Label::new(RichText::new(&a.name).size(14.0).color(Color32::from_rgb(138, 180, 248)).underline()).sense(Sense::click()),
-                );
-                if r.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
-                    go = Some((*a).clone());
+    let mut lock = false;
+    egui::ScrollArea::vertical().auto_shrink([false, true]).show(&mut c, |c| {
+        for (heading, rows) in info_groups(p, albums) {
+            c.add_space(house::L);
+            c.label(RichText::new(heading.to_uppercase()).size(house::CAPS).strong().color(house::VIEW_BAR_DIM));
+            c.add_space(house::M);
+            for (i, (k, v)) in rows.iter().enumerate() {
+                if i > 0 {
+                    c.add_space(house::S);
                 }
+                c.horizontal_top(|row| {
+                    row.spacing_mut().item_spacing.x = 0.0;
+                    let (lab, _) = row.allocate_exact_size(vec2(INFO_LABEL_W, house::BODY + house::XS), Sense::hover());
+                    row.painter().text(
+                        pos2(lab.left(), lab.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        *k,
+                        egui::FontId::proportional(house::NOTE),
+                        house::VIEW_BAR_DIM,
+                    );
+                    row.vertical(|val| {
+                        val.set_width(val.available_width());
+                        val.spacing_mut().item_spacing.y = house::XS;
+                        if *k == "Albums" {
+                            // One link per album (a name may hold a comma, so the cards, not the joined text).
+                            for (n, a) in albums.iter().enumerate() {
+                                let r = val.add(
+                                    egui::Label::new(RichText::new(&a.name).size(house::BODY).color(house::VIEW_BAR_LINK)).sense(Sense::click()),
+                                );
+                                house::target(&ctx, &format!("viewer:info:album:{n}"), r.rect);
+                                let r = r.on_hover_cursor(egui::CursorIcon::PointingHand);
+                                if r.hovered() {
+                                    val.painter().hline(r.rect.x_range(), r.rect.bottom(), egui::Stroke::new(1.0, house::VIEW_BAR_LINK));
+                                }
+                                if r.clicked() {
+                                    go = Some((*a).clone());
+                                }
+                            }
+                        } else {
+                            val.add(egui::Label::new(RichText::new(v).size(house::BODY).color(house::VIEW_BAR_TEXT)).wrap());
+                        }
+                    });
+                });
             }
-        } else {
-            c.label(RichText::new(v).size(14.0).color(Color32::WHITE));
         }
-        c.add_space(6.0);
-    }
-    c.add_space(8.0);
-    let label = if in_locked { "Move out of Locked folder" } else { "Move to Locked folder" };
-    let lock = c.add(egui::Label::new(RichText::new(label).size(14.0).color(Color32::from_rgb(138, 180, 248)).underline()).sense(Sense::click()));
-    (go, lock.on_hover_cursor(egui::CursorIcon::PointingHand).clicked())
+        c.add_space(house::L);
+        c.painter().hline(c.max_rect().x_range(), c.cursor().top(), egui::Stroke::new(1.0, house::VIEW_BAR_FIELD));
+        c.add_space(house::L);
+        let label = if in_locked { "Move out of Locked folder" } else { "Move to Locked folder" };
+        let r = c.add(house::secondary_dark(label));
+        house::target(&ctx, "viewer:info:lock", r.rect);
+        lock = r.clicked();
+    });
+    (go, lock, close)
 }
 
-/// A white icon button on the dark bar.
+/// A white icon button on the dark bar (its hook target is `viewer:<icon>`).
 fn button(ui: &mut egui::Ui, icon: &str, tip: &str) -> bool {
     toggle(ui, icon, tip, false)
 }
 
 /// A white icon button on the dark bar, lit when `on`.
 fn toggle(ui: &mut egui::Ui, icon: &str, tip: &str, on: bool) -> bool {
-    let b = match crate::icons::icon(icon) {
-        Some(img) => egui::Button::image(img.fit_to_exact_size(vec2(24.0, 24.0))),
-        None => egui::Button::new(RichText::new(tip).color(Color32::WHITE)),
+    let r = house::icon_button(ui, icon, tip, on);
+    house::target(ui.ctx(), &format!("viewer:{}", icon.trim_start_matches("white_")), r.rect);
+    r.clicked()
+}
+
+/// A text button on the dark bar (Open with…, the slideshow speed, RAW / JPEG, Edit), with an icon
+/// in front when one is named; lit when `on`.
+fn bar_text(ui: &mut egui::Ui, icon: Option<&str>, label: &str, tip: &str, on: bool, target: &str) -> egui::Response {
+    let text = RichText::new(label.to_string()).size(house::BODY).color(house::VIEW_BAR_TEXT);
+    let b = match icon.and_then(|i| crate::icons::icon_in(i, house::VIEW_BAR_TEXT)) {
+        Some(img) => egui::Button::image_and_text(img.fit_to_exact_size(vec2(house::ICON - house::XS, house::ICON - house::XS)), text),
+        None => egui::Button::new(text),
     };
-    let b = if on { b.fill(Color32::from_white_alpha(60)).corner_radius(20) } else { b.frame(false) };
-    ui.add(b.min_size(vec2(40.0, 40.0))).on_hover_text(tip).clicked()
+    let b = b.selected(on).frame_when_inactive(on).corner_radius(egui::CornerRadius::same(house::BUTTON_RADIUS));
+    let r = ui.add(b.min_size(vec2(house::BUTTON_HEIGHT, house::BUTTON_HEIGHT))).on_hover_text(tip);
+    house::target(ui.ctx(), target, r.rect);
+    r
 }
 
 /// Downloads the original (the server sends it as an attachment).
@@ -691,6 +756,27 @@ fn download(id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn info_groups_leave_out_empty_ones_and_keep_their_order() {
+        let mut p = super::super::photos::Pic { name: "IMG_2041.jpg".into(), ..Default::default() };
+        let heads = |p: &super::super::photos::Pic| info_groups(p, &[]).iter().map(|(h, _)| *h).collect::<Vec<_>>();
+        // A bare picture: only its name and a date.
+        assert_eq!(heads(&p), ["What", "When and where"]);
+        p.width = 4032;
+        p.height = 3024;
+        p.size = 3_100_000;
+        p.camera = Some("Pixel 8".into());
+        p.gps = Some((38.72, -9.14));
+        p.place = Some("Lisbon".into());
+        let g = info_groups(&p, &[]);
+        assert_eq!(g.iter().map(|(h, _)| *h).collect::<Vec<_>>(), ["What", "When and where", "Camera"]);
+        assert_eq!(g[0].1[1], ("Size", "4032 × 3024 px, 3.1 MB".to_string()));
+        assert_eq!(g[1].1[1], ("Place", "Lisbon".to_string()));
+        // The flat list (the test hook's info_rows) is the groups in order.
+        let keys = info_lines(&p, &[]).iter().map(|(k, _)| *k).collect::<Vec<_>>();
+        assert_eq!(keys, ["File name", "Size", "Date taken", "Place", "Camera"]);
+    }
 
     #[test]
     fn steps_go_round() {
