@@ -338,7 +338,20 @@ impl PhotoMode {
             }
             return;
         }
-        if t == Tab::Albums {
+        // Places opens on the world map (map.rs); "List" there shows these cards.
+        if t == Tab::Places && !self.map.list {
+            self.map_ui(ui, store);
+            return;
+        }
+        if t == Tab::Places {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Places").size(house::TITLE).color(theme::TEXT));
+                if self.pill(ui, "Map", false) {
+                    self.map.list = false;
+                }
+            });
+            self.alb.boot_cards(&ctx, store, &self.inbox);
+        } else if t == Tab::Albums {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Albums").size(house::TITLE).color(theme::text()));
                 if self.pill(ui, "New album", false) {
@@ -385,15 +398,16 @@ impl PhotoMode {
         }
     }
 
-    fn pill(&self, ui: &mut Ui, label: &str, on: bool) -> bool {
-        ui.add(
+    pub(super) fn pill(&self, ui: &mut Ui, label: &str, on: bool) -> bool {
+        let r = ui.add(
             egui::Button::new(RichText::new(label).size(house::BODY).color(theme::text()))
                 .fill(if on { theme::share() } else { theme::card() })
                 .stroke(egui::Stroke::new(1.0, theme::edge()))
                 .corner_radius(16)
                 .min_size(vec2(0.0, 32.0)),
-        )
-        .clicked()
+        );
+        house::target(ui.ctx(), &format!("pill-{label}"), r.rect);
+        r.clicked()
     }
 
     fn card_ui(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend, c: &Card) -> bool {

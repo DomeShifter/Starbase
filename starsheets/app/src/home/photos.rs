@@ -21,6 +21,7 @@ pub(super) mod albums;
 mod dups;
 mod justify;
 mod locked;
+mod map;
 mod pick;
 pub(super) mod shell;
 mod upload;
@@ -150,6 +151,8 @@ pub(super) enum Got {
     Error(String),
     /// The album or place list (albums.rs), and one opened.
     Cards(albums::Tab, Json),
+    /// Every picture with a position, for the Places map (map.rs).
+    Map(Json),
     /// The Duplicates list for a folder (dups.rs).
     Dups(String, Json),
     Opened(albums::Tab, String, Json),
@@ -282,6 +285,8 @@ pub(super) struct PhotoMode {
     pub editor: Option<super::photo_edit::Editor>,
     /// Albums and Places beside the grid (albums.rs).
     pub alb: albums::Albums,
+    /// Places as a world map (map.rs).
+    pub(super) map: map::PlacesMap,
     /// The Duplicates tab (dups.rs).
     pub dups: dups::Dups,
     /// Selecting, the right-click menu, Add to album (pick.rs).
@@ -325,6 +330,7 @@ impl Default for PhotoMode {
             viewer: None,
             editor: None,
             alb: albums::Albums::default(),
+            map: map::PlacesMap::default(),
             dups: dups::Dups::default(),
             pick: pick::Pick::default(),
             lk: locked::Locked::default(),
@@ -484,6 +490,7 @@ impl PhotoMode {
         for g in got {
             match g {
                 Got::Cards(t, v) => self.alb.take_cards(t, &v),
+                Got::Map(v) => self.map.take(&v),
                 Got::Opened(t, key, v) => self.take_opened(t, &key, &v),
                 Got::Dups(f, v) => self.dups.take(&f, &v),
                 Got::Changed => self.alb.changed(ctx, store, &self.inbox),
@@ -590,7 +597,9 @@ impl PhotoMode {
         if self.asking.len() >= AT_ONCE {
             return;
         }
-        let url = if size == ORIGINAL {
+        let url = if let Some(t) = id.strip_prefix("tile/") {
+            format!("api/photos/tiles/{t}.png")
+        } else if size == ORIGINAL {
             format!("api/files/{id}/raw")
         } else {
             match v {
@@ -1030,6 +1039,7 @@ impl PhotoMode {
             "error": self.error,
             "count": self.pics.len(),
             "albums": self.alb.test_state(),
+            "map": self.map.test_state(),
             "dups": self.dups.test_state(),
             "pick": self.pick.test_state(),
             "locked": self.locked_state(),

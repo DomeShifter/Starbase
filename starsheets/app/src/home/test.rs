@@ -177,6 +177,7 @@ impl Home {
             "home:photos:locked:unlock" | "home:photos:locked:lock" | "home:photos:locked:idle" | "home:photos:locked:confirm" => {
                 pm.locked_test(ctx, &self.store, id, params)?
             }
+            "home:photos:map" => pm.map_test(params)?,
             "home:photos:tab" | "home:photos:dups:keep" | "home:photos:select" | "home:photos:place:open" => {
                 pm.alb_test(ctx, &self.store, id, params)?
             }
