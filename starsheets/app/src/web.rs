@@ -390,6 +390,7 @@ impl eframe::App for WebShell {
         self.share.ui(&ctx);
         self.account.ui(&ctx);
         self.dates.ui(&mut self.app, ui);
+        crate::notes::mentions::set_file(self.files.linked().map(|l| l.1), &ctx);
         self.notes.intercept(&mut self.app, &ctx);
         self.notes.ui(&mut self.app, ui);
         self.error_tip.ui(&self.app, &ctx);
@@ -748,14 +749,29 @@ fn mime_for(name: &str) -> &'static str {
 /// The browser's file picker for pictures and videos: `accept="image/*,video/*" multiple`, which
 /// on a phone offers the camera roll and the camera. `got` is called for each file picked.
 pub(crate) fn pick_media(got: Box<dyn Fn(String, Vec<u8>)>) {
+    pick(Some("image/*,video/*"), Some("starbase_photo_upload"), got);
+}
+
+/// The browser's file picker for any kind of file. `got` is called for each file picked.
+pub(crate) fn pick_any(got: Box<dyn Fn(String, Vec<u8>)>) {
+    pick(None, None, got);
+}
+
+/// A hidden `<input type=file multiple>` clicked at once (inside the user's click), read with
+/// `Blob.arrayBuffer`. (The `rfd` crate's picker opened in Firefox but never delivered the files.)
+fn pick(accept: Option<&str>, id: Option<&str>, got: Box<dyn Fn(String, Vec<u8>)>) {
     use wasm_bindgen::closure::Closure;
     let Some(doc) = web_sys::window().and_then(|w| w.document()) else { return };
     let Some(input) = doc.create_element("input").ok().and_then(|e| e.dyn_into::<web_sys::HtmlInputElement>().ok()) else { return };
     input.set_type("file");
-    input.set_accept("image/*,video/*");
+    if let Some(accept) = accept {
+        input.set_accept(accept);
+    }
     input.set_multiple(true);
     let _ = input.set_attribute("style", "display:none");
-    let _ = input.set_attribute("id", "starbase_photo_upload");
+    if let Some(id) = id {
+        let _ = input.set_attribute("id", id);
+    }
     if let Some(body) = doc.body() {
         let _ = body.append_child(&input);
     }

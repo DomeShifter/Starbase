@@ -405,7 +405,9 @@ impl DvPanel {
             if ui.add(crate::house::secondary("Remove rule")).clicked() {
                 out = Some(false);
             }
-            if ui.add(crate::house::primary("Done")).clicked() {
+            let done = ui.add(crate::house::primary("Done"));
+            crate::house::target(ui.ctx(), "dv:done", done.rect);
+            if done.clicked() {
                 out = Some(true);
             }
         });
@@ -461,12 +463,13 @@ fn criterion_inputs(ui: &mut Ui, d: &mut Draft) {
             for (i, it) in d.items.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
                     chip_colour(ui, i, &mut it.colour);
-                    ui.add(
+                    let field = ui.add(
                         egui::TextEdit::singleline(&mut it.text)
                             .hint_text(format!("Option {}", i + 1))
                             .desired_width(PANEL_W - 84.0)
                             .margin(vec2(8.0, 6.0)),
                     );
+                    crate::house::target(ui.ctx(), &format!("dv:item:{i}"), field.rect);
                     if let Some(img) = crate::icons::icon("delete")
                         && ui.add(egui::Button::image(img.fit_to_exact_size(vec2(18.0, 18.0))).frame(false)).on_hover_text("Delete item").clicked()
                     {
@@ -477,16 +480,20 @@ fn criterion_inputs(ui: &mut Ui, d: &mut Draft) {
             if let Some(i) = drop {
                 d.items.remove(i);
             }
-            if ui.add(crate::house::secondary("Add another item")).clicked() {
+            let add = ui.add(crate::house::secondary("Add another item"));
+            crate::house::target(ui.ctx(), "dv:add", add.rect);
+            if add.clicked() {
                 d.items.push(Item::default());
             }
             ui.add_space(4.0);
-            ui.checkbox(&mut d.multiple, "Allow multiple selections");
+            let multi = ui.checkbox(&mut d.multiple, "Allow multiple selections");
+            crate::house::target(ui.ctx(), "dv:multiple", multi.rect);
         }
         Crit::DropdownRange => {
             boxed(ui, &mut d.v1, "e.g. Sheet1!A1:A10");
             ui.add_space(4.0);
-            ui.checkbox(&mut d.multiple, "Allow multiple selections");
+            let multi = ui.checkbox(&mut d.multiple, "Allow multiple selections");
+            crate::house::target(ui.ctx(), "dv:multiple", multi.rect);
         }
         Crit::TextContains | Crit::TextNotContains | Crit::TextExactly => boxed(ui, &mut d.v1, "Value or formula"),
         Crit::Email | Crit::Url | Crit::ValidDate | Crit::TickBox => {}

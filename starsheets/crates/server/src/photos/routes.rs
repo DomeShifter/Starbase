@@ -237,6 +237,7 @@ async fn list(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>)
     }
     let mut photos: Vec<Value> = items.into_iter().map(|(_, v)| v).collect();
     mark_stars(&mut photos, &stars);
+    let photos = stack_raw_pairs(photos);
     send_json(
         &json!({
             "folder": folder, "sub": deep, "role": role.name(), "enabled": enabled,
@@ -245,6 +246,46 @@ async fn list(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>)
         }),
         200,
     )
+}
+
+/// Stacks a camera RAW file with the JPEG of the same base name in the same folder
+/// (IMG_0001.CR2 + IMG_0001.JPG): the RAW leaves the list and rides on the JPEG as `stack`
+/// (id, name, size, media, v, state). A RAW with no JPEG beside it stays a picture of its own.
+pub(super) fn stack_raw_pairs(photos: Vec<Value>) -> Vec<Value> {
+    let key = |p: &Value| {
+        let name = p["name"].as_str().unwrap_or("");
+        let stem = name.rsplit_once('.').map_or(name, |(s, _)| s).to_lowercase();
+        (p["folder"].as_str().unwrap_or("").to_string(), stem)
+    };
+    let mut jpegs: HashMap<(String, String), usize> = HashMap::new();
+    for (i, p) in photos.iter().enumerate() {
+        if p["media"] == "image/jpeg" {
+            jpegs.entry(key(p)).or_insert(i);
+        }
+    }
+    let mut stacks: HashMap<usize, Vec<Value>> = HashMap::new();
+    let mut hidden = HashSet::new();
+    for (i, p) in photos.iter().enumerate() {
+        if p["media"] != "image/x-raw" {
+            continue;
+        }
+        if let Some(&j) = jpegs.get(&key(p)) {
+            let file = json!({ "id": p["id"], "name": p["name"], "size": p["size"], "media": p["media"], "v": p["v"], "state": p["state"] });
+            stacks.entry(j).or_default().push(file);
+            hidden.insert(i);
+        }
+    }
+    photos
+        .into_iter()
+        .enumerate()
+        .filter(|(i, _)| !hidden.contains(i))
+        .map(|(i, mut p)| {
+            if let Some(s) = stacks.remove(&i) {
+                p["stack"] = Value::Array(s);
+            }
+            p
+        })
+        .collect()
 }
 
 /// GET /api/photos/duplicates: pictures with the same content hash, in groups.
@@ -338,7 +379,7 @@ pub(super) fn photo_json(r: &super::index::Row, id: &str, places: bool) -> Value
         "height": if ready { Some(r.meta.height) } else { None },
         "orientation": if ready { Some(r.meta.orientation) } else { None },
         "camera": (!camera.is_empty()).then_some(camera),
-        "gps": r.meta.lat.zip(r.meta.lon).filter(|_| places).map(|(lat, lon)| json!({"lat": lat, "lon": lon, "alt": r.meta.alt})),
+        "gps": r.meta.lat.zip(r.meta.lon).filter(|_| places).map(|(lat, lon)| json!({"lat": lat, "lon": lon, "alt": r.meta.alt, "place": super::albums::place_name(lat, lon)})),
     })
 }
 
@@ -448,4 +489,31 @@ async fn thumb(app: &Shared, me: Option<auth::User>, id: String, size: &str, v: 
         .header(header::CONTENT_DISPOSITION, crate::preview::disposition("inline", &format!("{stem}-{size}.{ext}")))
         .body(Body::from(bytes))
         .unwrap()
+}
+
+#[cfg(test)]
+mod stack_tests {
+    use super::*;
+
+    fn pic(id: &str, name: &str, folder: &str, media: &str) -> Value {
+        json!({ "id": id, "name": name, "folder": folder, "media": media, "size": 1, "v": null, "state": "ready" })
+    }
+
+    #[test]
+    fn a_raw_and_its_jpeg_make_one_stack() {
+        let out = stack_raw_pairs(vec![
+            pic("a", "IMG_0001.CR2", "trip", "image/x-raw"),
+            pic("b", "img_0001.JPG", "trip", "image/jpeg"),
+            pic("c", "IMG_0002.CR2", "trip", "image/x-raw"),
+            pic("d", "IMG_0001.CR2", "other", "image/x-raw"),
+            pic("e", "IMG_0003.JPG", "trip", "image/jpeg"),
+            pic("f", "IMG_0001.mp4", "trip", "video/mp4"),
+        ]);
+        let ids: Vec<&str> = out.iter().map(|p| p["id"].as_str().unwrap()).collect();
+        // The RAW beside its JPEG is gone; a lone RAW (other folder, other name) stays.
+        assert_eq!(ids, ["b", "c", "d", "e", "f"]);
+        assert_eq!(out[0]["stack"][0]["id"], "a");
+        assert_eq!(out[0]["stack"].as_array().unwrap().len(), 1);
+        assert!(out[1].get("stack").is_none() && out[2].get("stack").is_none() && out[4].get("stack").is_none());
+    }
 }

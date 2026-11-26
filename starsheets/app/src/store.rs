@@ -261,16 +261,8 @@ impl Store for ServerStore {
     }
 
     fn pick_files(&self, got: Box<dyn Fn(String, Vec<u8>)>) {
-        wasm_bindgen_futures::spawn_local(async move {
-            // The Drive keeps any kind of file.
-            let Some(picked) = rfd::AsyncFileDialog::new().pick_files().await else {
-                return;
-            };
-            for f in picked {
-                let (name, bytes) = (f.file_name(), f.read().await);
-                got(name, bytes);
-            }
-        });
+        // The Drive keeps any kind of file.
+        crate::web::pick_any(got);
     }
 
     fn pick_media(&self, got: Box<dyn Fn(String, Vec<u8>)>) {

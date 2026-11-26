@@ -27,6 +27,8 @@ impl Home {
             "view": view,
             "storage": self.storage.map(|(u, b, f)| json!({ "used": u, "bin": b, "free": f })),
             "loading": self.loading,
+            "versions": self.versions.as_ref().map(|(_, v)| super::history::rows(v)),
+            "details_tab": self.details_tab,
             "activity": self.activity.as_ref().map(|(_, v)| super::activity::rows(v)),
             "search": self.search,
             // Files whose text matched the search, with the snippet shown for each.
@@ -45,7 +47,7 @@ impl Home {
                         super::Thumb::Loading => "loading",
                         super::Thumb::None => "none",
                     });
-                    json!({ "id": f.id, "name": f.name, "folder": f.folder, "starred": f.starred, "kind": super::items::file_kind(&f.name), "thumb": thumb, "rect": self.tile_rects.get(&f.id).map(|r| [r.min.x, r.min.y, r.max.x, r.max.y]) })
+                    json!({ "id": f.id, "name": f.name, "folder": f.folder, "starred": f.starred, "mentioned_by": f.mentioned_by, "kind": super::items::file_kind(&f.name), "thumb": thumb, "rect": self.tile_rects.get(&f.id).map(|r| [r.min.x, r.min.y, r.max.x, r.max.y]) })
                 })
                 .collect::<Vec<_>>(),
         })

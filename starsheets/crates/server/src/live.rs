@@ -86,6 +86,8 @@ enum RoomMsg {
 #[derive(Default)]
 pub struct Rooms {
     map: Mutex<HashMap<String, Sender<RoomMsg>>>,
+    /// Commenter saves being rebuilt right now (see commenting.rs): per server, not per process.
+    pub building: std::sync::atomic::AtomicUsize,
 }
 
 impl Rooms {

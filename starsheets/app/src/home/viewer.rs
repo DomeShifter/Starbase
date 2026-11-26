@@ -35,6 +35,8 @@ pub(super) struct Viewer {
     pub shuffle: bool,
     /// The Info panel (ⓘ, or I) is open.
     pub info: bool,
+    /// Showing the stacked RAW file instead of the JPEG.
+    pub raw: bool,
     /// The "Open with" menu is showing.
     pub menu: bool,
     pub every: f64,
@@ -84,6 +86,7 @@ impl Viewer {
             playing: false,
             shuffle: false,
             info: false,
+            raw: false,
             menu: false,
             every: EVERY[1],
             next_at: 0.0,
@@ -116,6 +119,7 @@ impl Viewer {
         self.pos = (self.pos as i64 + by as i64).rem_euclid(n) as usize;
         self.zoom = 1.0;
         self.pan = Vec2::ZERO;
+        self.raw = false;
     }
 
     pub fn play(&mut self, now: f64) {
@@ -184,9 +188,12 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
     let mut open = true;
     let mut edit = false;
     let mut menu_at: Option<Rect> = None;
+    // An album clicked in the Info panel: opened once the viewer is closed.
+    let mut goto: Option<super::photos::albums::Card> = None;
     // What the person asked for on this picture (keys or buttons): L add to album, Shift-L out of
     // the open album, F favourite, Delete move to bin. Run after drawing, on the picture shown.
     let mut acts: Vec<super::photos::Act> = Vec::new();
+    let mut toggle_raw = false;
     // Not while an album picker or a text box has the keys (typing "l" in its search box).
     let typing = pm.pick_busy() || ctx.memory(|m| m.focused().is_some());
     // Keys first, so nothing behind the viewer gets them.
@@ -201,6 +208,9 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
             }
             if i.consume_key(Modifiers::NONE, Key::F) {
                 acts.push(Act::Favourite);
+            }
+            if i.consume_key(Modifiers::NONE, Key::R) {
+                toggle_raw = true;
             }
             if i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::SHIFT, Key::Delete) {
                 acts.push(Act::Delete);
@@ -263,8 +273,18 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
     }
     let screen = ctx.content_rect();
     let i = v.index();
+    if toggle_raw && pm.pics.get(i).is_some_and(|p| !p.stack.is_empty()) {
+        v.raw = !v.raw;
+    }
     // Ask for this picture, then its neighbours (the slideshow's next first).
     pm.want(ctx, store, i, LARGE);
+    let raw_file = pm.pics.get(i).and_then(|p| p.stack.first().cloned());
+    if raw_file.is_none() {
+        v.raw = false;
+    }
+    if let (true, Some(f)) = (v.raw, &raw_file) {
+        pm.want_id(ctx, store, &f.id, f.v.as_deref(), LARGE);
+    }
     let n = v.order.len();
     for d in [1, n.saturating_sub(1)] {
         if n > 1 {
@@ -316,14 +336,19 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
         let mut area = rect.shrink2(vec2(0.0, 56.0));
         area.max.x -= side;
         let is_video = p.is_video();
-        let want_original = !is_video && {
+        let want_original = !is_video && !v.raw && {
             let fit = (area.width() / pw).min(area.height() / ph);
             pw * fit * v.zoom * ctx.pixels_per_point() > LARGE as f32 + 1.0 && pw.max(ph) > LARGE as f32
         };
         if want_original {
             pm.want(ctx, store, v.index(), ORIGINAL);
         }
-        let best = if is_video { None } else { pm.best(v.index(), if want_original { ORIGINAL } else { LARGE }) };
+        let want = if want_original { ORIGINAL } else { LARGE };
+        let best = match (&raw_file, v.raw) {
+            (Some(f), true) => pm.best_id(&f.id, LARGE),
+            _ if is_video => None,
+            _ => pm.best(v.index(), want),
+        };
         if is_video {
             // The browser's own player over the picture area; a slideshow would step away from it.
             v.playing = false;
@@ -365,7 +390,11 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
         }
         bar_ui.add_space(8.0);
         bar_ui.vertical(|ui| {
-            ui.label(RichText::new(&name).size(15.0).color(Color32::WHITE));
+            let shown = match (&raw_file, v.raw) {
+                (Some(f), true) => f.name.clone(),
+                _ => name.clone(),
+            };
+            ui.label(RichText::new(&shown).size(15.0).color(Color32::WHITE));
             ui.label(RichText::new(format!("{date} · {} of {}", v.pos + 1, n)).size(12.0).color(Color32::from_gray(200)));
         });
         bar_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -382,7 +411,25 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
             if toggle(ui, if starred { "white_star_fill" } else { "white_star" }, "Favourite (F)", starred) {
                 acts.push(super::photos::Act::Favourite);
             }
+            if raw_file.is_some() {
+                let label = if v.raw { "JPEG" } else { "RAW" };
+                let tip = if v.raw { "Show the JPEG (R)" } else { "Show the RAW file (R)" };
+                if ui
+                    .add(
+                        egui::Button::new(RichText::new(label).size(13.0).strong().color(Color32::WHITE))
+                            .fill(Color32::from_white_alpha(if v.raw { 70 } else { 30 }))
+                            .corner_radius(10),
+                    )
+                    .on_hover_text(tip)
+                    .clicked()
+                {
+                    v.raw = !v.raw;
+                }
+            }
             if button(ui, "white_download", "Download") {
+                if let Some(f) = &raw_file {
+                    download(&f.id);
+                }
                 download(&id);
                 crate::house::toast(ctx, "Downloading the original");
             }
@@ -472,7 +519,7 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
         if v.info
             && let Some(p) = pm.pics.get(v.index())
         {
-            info_panel(ui, rect, p);
+            goto = info_panel(ui, rect, p, &pm.alb.albums_of(&p.id));
         }
         // Arrows at the sides (the right one beside the Info panel).
         if n > 1 {
@@ -506,6 +553,12 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
     } else {
         super::video::hide();
     }
+    if let Some(c) = goto {
+        pm.viewer = None;
+        pm.go(super::photos::albums::Tab::Albums);
+        pm.open_card(ctx, store, c);
+        return false;
+    }
     open
 }
 
@@ -521,16 +574,24 @@ fn p_has_size(w: f32, h: f32) -> bool {
 }
 
 /// The facts about a picture. Where it was taken only when the server sent it (people who may edit).
-pub(super) fn info_lines(p: &super::photos::Pic) -> Vec<(&'static str, String)> {
-    let mut rows = vec![("Date taken", super::photos::date_label(p.taken.as_deref(), p.modified))];
+pub(super) fn info_lines(p: &super::photos::Pic, albums: &[&super::photos::albums::Card]) -> Vec<(&'static str, String)> {
+    let mut rows = vec![("File name", p.name.clone()), ("Date taken", super::photos::date_label(p.taken.as_deref(), p.modified))];
     if let Some(c) = &p.camera {
         rows.push(("Camera", c.clone()));
     }
     if p.width > 0 {
         rows.push(("Size", format!("{} × {} px, {}", p.width, p.height, human(p.size))));
     }
+    if !p.stack.is_empty() {
+        let mut files = vec![format!("{}, {}", p.name, human(p.size))];
+        files.extend(p.stack.iter().map(|f| format!("{}, {}", f.name, human(f.size))));
+        rows.push(("Files", files.join("\n")));
+    }
     if let Some((lat, lon)) = p.gps {
-        rows.push(("Location", format!("{lat:.5}, {lon:.5}")));
+        rows.push(("Place", p.place.clone().unwrap_or_else(|| format!("{lat:.2}, {lon:.2}"))));
+    }
+    if !albums.is_empty() {
+        rows.push(("Albums", albums.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", ")));
     }
     rows
 }
@@ -543,17 +604,32 @@ fn human(b: u64) -> String {
     }
 }
 
-fn info_panel(ui: &mut egui::Ui, rect: Rect, p: &super::photos::Pic) {
+/// The Info panel; returns the album whose name was clicked.
+fn info_panel(ui: &mut egui::Ui, rect: Rect, p: &super::photos::Pic, albums: &[&super::photos::albums::Card]) -> Option<super::photos::albums::Card> {
     let panel = Rect::from_min_max(pos2(rect.right() - INFO_W, rect.top() + 56.0), pos2(rect.right(), rect.bottom()));
     ui.painter().rect_filled(panel, 0, Color32::from_black_alpha(190));
     let mut c = ui.new_child(egui::UiBuilder::new().max_rect(panel.shrink(16.0)));
     c.label(RichText::new("Info").size(16.0).strong().color(Color32::WHITE));
     c.add_space(8.0);
-    for (k, v) in info_lines(p) {
+    let mut go = None;
+    for (k, v) in info_lines(p, albums) {
         c.label(RichText::new(k).size(12.0).color(Color32::from_gray(170)));
-        c.label(RichText::new(v).size(14.0).color(Color32::WHITE));
+        if k == "Albums" {
+            // One link per album (a name may hold a comma, so the cards, not the joined text).
+            for a in albums {
+                let r = c.add(
+                    egui::Label::new(RichText::new(&a.name).size(14.0).color(Color32::from_rgb(138, 180, 248)).underline()).sense(Sense::click()),
+                );
+                if r.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                    go = Some((*a).clone());
+                }
+            }
+        } else {
+            c.label(RichText::new(v).size(14.0).color(Color32::WHITE));
+        }
         c.add_space(6.0);
     }
+    go
 }
 
 /// A white icon button on the dark bar.

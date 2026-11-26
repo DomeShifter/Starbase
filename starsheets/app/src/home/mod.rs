@@ -26,6 +26,7 @@ mod activity;
 mod bin;
 mod filepreview;
 mod filters;
+mod history;
 mod input;
 mod items;
 mod photo_edit;
@@ -72,6 +73,8 @@ struct FileRow {
     opened: Option<i64>,
     /// Who saved the last change (username), when known.
     changed_by: String,
+    /// Who mentioned you in a comment here (username), until you open the file.
+    mentioned_by: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -127,6 +130,8 @@ enum Reply {
     Access(Item, Json),
     /// A file's Activity list (file id, answer).
     Activity(String, Json),
+    /// A file's version history (file id, answer).
+    Versions(String, Json),
     /// One request of an undoable action answered: what it did (None: nothing), or why not.
     Did(u64, Result<Option<undo::Step>, String>),
     /// One request of an undo answered.
@@ -195,6 +200,8 @@ pub struct Home {
     /// Details: 0 = Details, 1 = Activity; and the Activity list once it arrives (file id, list).
     details_tab: usize,
     activity: Option<(String, Json)>,
+    /// Details › Versions: the file's history (file id, answer).
+    versions: Option<(String, Json)>,
     search: String,
     /// Files whose text holds the search words (id → snippet), for the search in `found_for`.
     found: HashMap<String, String>,
@@ -458,6 +465,7 @@ impl Home {
                 shared: f["shared"].as_bool().unwrap_or(false),
                 opened: f["opened"].as_i64(),
                 changed_by: s(f, "changed_by"),
+                mentioned_by: s(f, "mentioned_by"),
             })
             .collect();
         let info = v["folder_info"].as_object().cloned().unwrap_or_default();
@@ -965,6 +973,11 @@ impl Home {
                 Reply::Activity(id, v) => {
                     if matches!(&self.details, Some((Item::File(i), _)) if *i == id) {
                         self.activity = Some((id, v));
+                    }
+                }
+                Reply::Versions(id, v) => {
+                    if matches!(&self.details, Some((Item::File(i), _)) if *i == id) {
+                        self.versions = Some((id, v));
                     }
                 }
                 Reply::Access(item, v) => {

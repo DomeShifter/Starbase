@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use egui::{Color32, Rect, RichText, Sense, Ui, pos2, vec2};
 use serde_json::Value as Json;
 
-mod albums;
+pub(super) mod albums;
 mod dups;
 mod pick;
 mod upload;
@@ -68,13 +68,31 @@ pub(super) struct Pic {
     pub camera: Option<String>,
     /// Where it was taken, only when the server says this person may see it.
     pub gps: Option<(f64, f64)>,
+    /// The town (or rounded position) of `gps`, named by the server.
+    pub place: Option<String>,
     /// The media type ("image/jpeg", "video/mp4"...).
     pub media: String,
     /// A video's length, seconds.
     pub duration: Option<f64>,
+    /// Camera RAW files stacked under this JPEG (same base name, same folder).
+    pub stack: Vec<StackFile>,
+}
+
+/// A file stacked under a picture: its RAW twin.
+#[derive(Clone, Debug, Default)]
+pub(super) struct StackFile {
+    pub id: String,
+    pub name: String,
+    pub v: Option<String>,
+    pub size: u64,
 }
 
 impl Pic {
+    /// This picture's id and its stacked files' ids (what Download and Delete act on).
+    pub fn with_stack(&self) -> Vec<String> {
+        std::iter::once(self.id.clone()).chain(self.stack.iter().map(|f| f.id.clone())).collect()
+    }
+
     pub fn is_video(&self) -> bool {
         self.media.starts_with("video/")
     }
@@ -88,6 +106,13 @@ pub(super) fn duration_label(secs: f64) -> String {
 }
 
 /// A video's tile: a play triangle in a dark disc in the middle, its length at the bottom right.
+/// A stack's tile: a small dark chip with the number of files, bottom left.
+fn stack_badge(painter: &egui::Painter, rect: Rect, n: usize) {
+    let chip = Rect::from_min_size(rect.left_bottom() + vec2(6.0, -26.0), vec2(34.0, 20.0));
+    painter.rect_filled(chip, 10, Color32::from_black_alpha(170));
+    painter.text(chip.center(), egui::Align2::CENTER_CENTER, n.to_string(), egui::FontId::proportional(12.0), Color32::WHITE);
+}
+
 fn video_badge(painter: &egui::Painter, rect: Rect, duration: Option<f64>) {
     let c = rect.center();
     let r = (rect.width() * 0.16).clamp(14.0, 30.0);
@@ -394,8 +419,20 @@ impl PhotoMode {
                 size: p["size"].as_u64().unwrap_or(0),
                 camera: p["camera"].as_str().map(str::to_string),
                 gps: p["gps"]["lat"].as_f64().zip(p["gps"]["lon"].as_f64()),
+                place: p["gps"]["place"].as_str().map(str::to_string),
                 media: s(p, "media"),
                 duration: p["duration"].as_f64(),
+                stack: p["stack"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|f| StackFile {
+                        id: s(f, "id"),
+                        name: s(f, "name"),
+                        v: f["v"].as_str().map(str::to_string),
+                        size: f["size"].as_u64().unwrap_or(0),
+                    })
+                    .collect(),
             })
             .collect()
     }
@@ -565,6 +602,12 @@ impl PhotoMode {
     /// The best texture there is of picture `i`, preferring `size`: (texture, its size key).
     pub fn best(&mut self, i: usize, prefer: u32) -> Option<(egui::TextureHandle, u32)> {
         let id = self.pics.get(i)?.id.clone();
+        self.best_id(&id, prefer)
+    }
+
+    /// The same for a file by its id (a stacked RAW).
+    pub fn best_id(&mut self, id: &str, prefer: u32) -> Option<(egui::TextureHandle, u32)> {
+        let id = id.to_string();
         let order: &[u32] = match prefer {
             ORIGINAL => &[ORIGINAL, LARGE, SMALL],
             LARGE => &[LARGE, ORIGINAL, SMALL],
@@ -727,6 +770,9 @@ impl PhotoMode {
         if self.pics[i].is_video() {
             video_badge(&painter, rect, self.pics[i].duration);
         }
+        if !self.pics[i].stack.is_empty() {
+            stack_badge(&painter, rect, 1 + self.pics[i].stack.len());
+        }
         if resp.hovered() {
             painter.rect_filled(rect, 0, Color32::from_black_alpha(40));
         }
@@ -869,7 +915,7 @@ impl PhotoMode {
             "upload": self.up.test_state(),
             "textures": { "count": self.tex.len(), "bytes": self.tex.total, "budget": self.tex.budget, "asking": self.asking.len() },
             "items": self.pics.iter().take(60).map(|p| json!({
-                "id": p.id, "name": p.name, "taken": p.taken, "state": p.state, "v": p.v, "media": p.media, "duration": p.duration,
+                "id": p.id, "name": p.name, "taken": p.taken, "state": p.state, "v": p.v, "media": p.media, "duration": p.duration, "stack": p.stack.iter().map(|f| &f.name).collect::<Vec<_>>(),
                 "thumb": has(&p.id, SMALL), "large": has(&p.id, LARGE), "original": has(&p.id, ORIGINAL),
             })).collect::<Vec<_>>(),
             "photo_edit": self.editor.as_ref().map_or_else(|| json!({ "open": false }), |e| e.test_state()),
@@ -877,7 +923,7 @@ impl PhotoMode {
                 let p = self.pics.get(v.index());
                 json!({
                     "index": v.index(), "pos": v.pos, "id": p.map(|p| &p.id), "name": p.map(|p| &p.name),
-                    "info": v.info, "menu": v.menu, "toast": crate::house::toast_text(), "info_rows": p.map(|p| super::viewer::info_lines(p).iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>()), "zoom": v.zoom, "playing": v.playing, "shuffle": v.shuffle, "every": v.every, "showing": v.showing,
+                    "info": v.info, "menu": v.menu, "toast": crate::house::toast_text(), "info_rows": p.map(|p| super::viewer::info_lines(p, &self.alb.albums_of(&p.id)).iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>()), "zoom": v.zoom, "playing": v.playing, "shuffle": v.shuffle, "every": v.every, "showing": v.showing, "raw": v.raw,
                 })
             }),
         })

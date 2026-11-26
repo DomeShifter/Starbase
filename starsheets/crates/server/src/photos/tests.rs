@@ -555,6 +555,7 @@ mod http {
         assert_eq!(names, ["a.jpg", "b.jpg"], "by date taken; no spreadsheets; not the folder inside");
         assert_eq!(g.json["photos"][0]["taken"], "2021-01-01T00:00:00+01:00");
         assert!(g.json["photos"][0]["gps"]["lat"].as_f64().is_some(), "the owner sees where: {}", g.json);
+        assert!(g.json["photos"][0]["gps"]["place"].as_str().is_some_and(|p| !p.is_empty()), "named for the Info panel: {}", g.json);
         // With the folders inside (rescanned in the background: asked again until it's there).
         let t = Instant::now();
         loop {
