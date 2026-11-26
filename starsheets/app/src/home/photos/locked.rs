@@ -35,6 +35,9 @@ pub(in crate::home) struct Locked {
     pub lock_req: bool,
 }
 
+/// What the Locked tab says while empty: how to put pictures in.
+pub(super) const LOCKED_EMPTY: &str = "Nothing here yet. To lock a picture: right-click it in Photos, then Move to Locked folder.";
+
 impl Locked {
     pub fn reset(&mut self) {
         self.lock_req |= self.unlocked;
@@ -208,7 +211,7 @@ impl PhotoMode {
             ui.add_space(house::S);
             if self.pics.is_empty() {
                 ui.add_space(house::XL);
-                let text = if self.loading { "Loading…" } else { "Nothing in the Locked folder." };
+                let text = if self.loading { "Loading…" } else { LOCKED_EMPTY };
                 ui.label(RichText::new(text).size(house::BODY).color(theme::text_dim()));
                 return;
             }
