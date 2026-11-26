@@ -119,7 +119,7 @@ jobs:
         run: |
           [ -f site/index.html ] && [ -f site/docs/index.html ] && [ -f site/slides/index.html ] && [ -f server-bin/amd64/starsheets-server ] && [ -f server-bin/arm64/starsheets-server ]
           (cd site && zip -qr "../starbase-web-$VERSION.zip" .)
-          find site -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.css' -o -name '*.html' -o -name '*.svg' -o -name '*.json' -o -name '*.txt' -o -name '*.ttf' -o -name '*.otf' \) -exec gzip -k -9 {} \;
+          ../scripts/precompress.sh site
           cp ../docker/Dockerfile .
           du -sh site site/docs site/slides; ls -la server-bin/*
       - uses: docker/setup-qemu-action@v4

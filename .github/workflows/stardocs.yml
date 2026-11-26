@@ -8,9 +8,9 @@ name: StarDocs
 on:
   push:
     branches: [main]
-    paths: ["stardocs/**", "starsheets/crates/connect/**", ".github/workflows/stardocs.yml", "rustfmt.toml"]
+    paths: ["stardocs/**", "starsheets/crates/connect/**", "starsheets/crates/savestate/**", ".github/workflows/stardocs.yml", "rustfmt.toml"]
   pull_request:
-    paths: ["stardocs/**", "starsheets/crates/connect/**", ".github/workflows/stardocs.yml", "rustfmt.toml"]
+    paths: ["stardocs/**", "starsheets/crates/connect/**", "starsheets/crates/savestate/**", ".github/workflows/stardocs.yml", "rustfmt.toml"]
   workflow_dispatch:
   workflow_call: # from release.yml (the Starbase image)
 
