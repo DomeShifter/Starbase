@@ -61,7 +61,9 @@ def rec(browser, name, ok, detail=""):
 
 def run(kind):
     with sync_playwright() as pw:
-        b = getattr(pw, kind).launch(headless=False)
+        # Playwright's Firefox turns its PDF viewer off (PDFs download); users have it on.
+        prefs = {"firefox_user_prefs": {"pdfjs.disabled": False}} if kind == "firefox" else {}
+        b = getattr(pw, kind).launch(headless=False, **prefs)
         ctx = b.new_context(viewport={"width": 1280, "height": 800})
         pg = ctx.new_page()
         r = pg.request.post(BASE + "/api/login", data=json.dumps({"username": "ada", "password": "adapassword"}), headers={"content-type": "application/json"})
@@ -120,12 +122,16 @@ def run(kind):
             rec(kind, "double-click opens preview", bool(p) and p["id"] == ids["pv_b.txt"], str(p and p["content"]))
             pg.mouse.move(640, 400); pg.keyboard.press("Escape"); time.sleep(0.5)
             xy = tile("pv_g.csv")
+            # Earlier runs leave files behind: scroll the tile into the window first.
+            for _ in range(15):
+                if xy[1] < 740: break
+                pg.mouse.move(640, 500); pg.mouse.wheel(0, 300); time.sleep(0.4); xy = tile("pv_g.csv")
             pg.mouse.click(*xy, button="right"); time.sleep(0.6)
             row = next((m["rect"] for m in state().get("menu", []) if m["label"] == "Preview"), None)
             if row:
                 pg.mouse.click((row[0] + row[2]) / 2, (row[1] + row[3]) / 2)
             p = wait_content("text")
-            rec(kind, "right-click > Preview opens", bool(p) and p["id"] == ids["pv_g.csv"], str(p and p["content"]))
+            rec(kind, "right-click > Preview opens", bool(p) and p["id"] == ids["pv_g.csv"], f"{p and p['content']} tile={xy} row={row} menu={[m['label'] for m in state().get('menu', [])][:4]}")
             pg.mouse.move(640, 400); pg.keyboard.press("Escape"); time.sleep(0.5)
             rec(kind, "Esc closes (after mouse open)", pv() is None)
         else:
@@ -146,7 +152,8 @@ def run(kind):
         rec(kind, "menu closed -> pdf frame back", vis == "visible", vis)
         # Click into the PDF: the keyboard stays there, so its text can be selected and copied.
         subprocess.run(["xclip", "-selection", "clipboard"], input=b"before", timeout=5)
-        pg.mouse.click(640, 450); time.sleep(1.0)
+        time.sleep(2.0)  # the PDF viewer renders its text layer
+        pg.mouse.click(640, 450); time.sleep(1.5)
         foc = pg.evaluate("document.activeElement && document.activeElement.tagName")
         rec(kind, "click into pdf keeps focus there", foc == "IFRAME", f"focus={foc}")
         pg.keyboard.press("Control+a"); time.sleep(0.3)

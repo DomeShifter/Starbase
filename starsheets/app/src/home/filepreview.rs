@@ -91,8 +91,6 @@ pub(super) enum FrameEvent {
     PointerLeft,
     /// A click on the page, outside the frame.
     ClickOutside,
-    /// The page lost the keyboard, e.g. to a click into the PDF.
-    PageBlur,
 }
 
 /// Whether `ev` hands the keyboard back from a PDF frame to the page, so Esc and the arrows work
@@ -100,8 +98,8 @@ pub(super) enum FrameEvent {
 /// select and copy its text and use its own Find. The × in the top bar always closes.
 pub(super) fn frame_gives_focus_back(ev: FrameEvent) -> bool {
     match ev {
+        // Not when the page merely loses the keyboard to the PDF (a click into it): no event for that.
         FrameEvent::Loaded | FrameEvent::PointerLeft | FrameEvent::ClickOutside => true,
-        FrameEvent::PageBlur => false,
     }
 }
 
@@ -748,7 +746,7 @@ mod tests {
     #[test]
     fn pdf_frame_focus_comes_back_only_off_the_pdf() {
         use FrameEvent::*;
-        let table = [(Loaded, true), (PointerLeft, true), (ClickOutside, true), (PageBlur, false)];
+        let table = [(Loaded, true), (PointerLeft, true), (ClickOutside, true)];
         for (ev, want) in table {
             assert_eq!(frame_gives_focus_back(ev), want, "{ev:?}");
         }
