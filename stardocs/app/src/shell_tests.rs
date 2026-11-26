@@ -210,6 +210,21 @@ fn bold_button_makes_typed_text_bold() {
 }
 
 #[test]
+fn ctrl_b_i_u_format_the_selection() {
+    let mut h = window(1400.0);
+    type_text(&mut h, "plain words");
+    run(&mut h, "select.all", json!({}));
+    for key in [Key::B, Key::I, Key::U] {
+        keys(&mut h, Modifiers::COMMAND, key);
+    }
+    let f = h.state_mut().app.run("format.state", json!({})).unwrap();
+    assert_eq!((f["bold"].clone(), f["italic"].clone(), f["underline"].as_bool().is_some_and(|u| u)), (json!(true), json!(true), true), "{f}");
+    keys(&mut h, Modifiers::COMMAND, Key::Z);
+    let f = h.state_mut().app.run("format.state", json!({})).unwrap();
+    assert_ne!(f["underline"], json!(true), "Ctrl+Z undoes the underline: {f}");
+}
+
+#[test]
 fn toolbar_click_gives_the_keyboard_back_to_the_page() {
     let mut h = window(1400.0);
     click(&mut h, "Italic (Ctrl+I)");

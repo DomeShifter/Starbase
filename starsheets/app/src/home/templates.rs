@@ -64,7 +64,7 @@ impl Home {
                 call(&self.store, &self.inbox, ctx, Method::Post, copy_url(&t, &folder), None, move |b| {
                     let v: Json = serde_json::from_slice(&b).unwrap_or_default();
                     let (id, name) = (v["id"].as_str().unwrap_or(""), v["name"].as_str().unwrap_or(""));
-                    match store.open(id, name) {
+                    match store.open_new(id, name, v["version"].as_str().unwrap_or("")) {
                         Ok(()) => Reply::Refresh,
                         Err(e) => Reply::Error(e),
                     }

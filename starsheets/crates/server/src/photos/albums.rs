@@ -148,7 +148,9 @@ pub async fn route(
         (Some("albums"), "POST", None, _, 2) => create(app, me, b).await,
         (Some("albums"), "GET", Some(id), None, 3) => open_album(app, me, id).await,
         (Some("albums"), "POST", Some(id), Some(act @ ("rename" | "add" | "remove" | "delete")), 4) => change(app, me, id, act.to_string(), b).await,
-        (Some("places"), "GET", None, _, 2) => places(app, me, q.get("place").cloned()).await,
+        (Some("places"), "GET", None, _, 2) if q.contains_key("all") => places(app, me, None, true).await,
+        (Some("places"), "GET", None, _, 2) => places(app, me, q.get("place").cloned(), false).await,
+        (Some("tiles"), "GET", Some(z), Some(x), 5) => super::tiles::tile(&z, x, &p[4]).await,
         (Some("events"), "GET", None, _, 2) => super::events::events(app, me, q.get("event").cloned()).await,
         _ => error(404, "not found"),
     }
@@ -286,7 +288,9 @@ async fn change(app: &Shared, me: Option<auth::User>, id: String, act: String, b
     }
 }
 
-async fn places(app: &Shared, me: Option<auth::User>, place: Option<String>) -> Response<Body> {
+/// The place cards, one place's pictures (`place`), or (`all`, for the map) every picture with a
+/// position plus the optional detailed tile source.
+async fn places(app: &Shared, me: Option<auth::User>, place: Option<String>, all: bool) -> Response<Body> {
     let stars = stars_of(app, me.as_ref()).await;
     // Pictures whose position I may know: ids by path, under the store lock.
     let mine = blocking(app, move |a| {
@@ -313,6 +317,11 @@ async fn places(app: &Shared, me: Option<auth::User>, place: Option<String>) -> 
     })
     .await
     .unwrap_or_default();
+    if all {
+        let mut photos: Vec<Value> = groups.iter().flat_map(|g| g.1.iter()).map(|(id, r, gps)| photo_json(r, id, *gps)).collect();
+        mark_stars(&mut photos, &stars);
+        return send_json(&json!({"photos": photos, "tiles": super::tiles::info(), "waiting": waiting}), 200);
+    }
     if let Some(name) = place {
         let Some(g) = groups.iter().find(|g| g.0 == name) else { return error(404, "no such place") };
         let mut photos: Vec<Value> = g.1.iter().map(|(id, r, gps)| photo_json(r, id, *gps)).collect();

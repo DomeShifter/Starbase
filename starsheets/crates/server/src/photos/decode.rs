@@ -127,6 +127,20 @@ pub fn sniff(bytes: &[u8]) -> Option<ImageFormat> {
     }
 }
 
+/// The other formats thumbnails are made of (BMP, ICO, TIFF): checked after the RAW previews,
+/// since RAW files are TIFFs too. Not used by edits or export (those stay JPEG/PNG/WebP/GIF).
+pub fn sniff_other(bytes: &[u8]) -> Option<ImageFormat> {
+    if bytes.starts_with(b"BM") {
+        Some(ImageFormat::Bmp)
+    } else if bytes.starts_with(&[0, 0, 1, 0]) {
+        Some(ImageFormat::Ico)
+    } else if bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*") {
+        Some(ImageFormat::Tiff)
+    } else {
+        None
+    }
+}
+
 /// What a child is asked to do besides reading the picture (`photo-worker MEMORY JOB`).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -158,13 +172,14 @@ pub fn make_with(bytes: &[u8], limits: &Limits, edits: Option<&Edits>) -> Result
         Some(_) => (bytes, None),
         None => match super::raw::preview(bytes) {
             Some(jpeg) => (jpeg, Some(exif_meta(bytes))),
-            None => return Err("not a JPEG, PNG, WebP or GIF picture, or a RAW file with a preview".into()),
+            None if sniff_other(bytes).is_some() => (bytes, None),
+            None => return Err("not a JPEG, PNG, WebP, GIF, BMP, ICO or TIFF picture, or a RAW file with a preview".into()),
         },
     };
-    let format = sniff(bytes).ok_or("not a JPEG, PNG, WebP or GIF picture")?;
+    let format = sniff(bytes).or_else(|| sniff_other(bytes)).ok_or("not a JPEG, PNG, WebP, GIF, BMP, ICO or TIFF picture")?;
     let mut meta = match raw_meta {
         Some(m) => m,
-        None if format == ImageFormat::Gif => Meta::default(),
+        None if matches!(format, ImageFormat::Gif | ImageFormat::Bmp | ImageFormat::Ico) => Meta::default(),
         None => exif_meta(bytes),
     };
     let (w, h) = image::ImageReader::with_format(Cursor::new(bytes), format).into_dimensions().map_err(|e| format!("unreadable: {e}"))?;

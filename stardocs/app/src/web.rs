@@ -483,23 +483,41 @@ fn guard_unload(dirty: Rc<Cell<bool>>, saves: AsyncSaves) -> Result<(), String> 
 /// (Insert Link) went to Chromium's search box and took the keyboard away from the page. The
 /// listener only stops the browser's action; eframe still receives the key.
 fn keep_app_shortcuts() -> Result<(), String> {
-    let document = web_sys::window().and_then(|w| w.document()).ok_or("no document")?;
+    let window = web_sys::window().ok_or("no window")?;
     let on_key = wasm_bindgen::closure::Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
-        if is_app_shortcut(&e.key(), e.ctrl_key() || e.meta_key(), e.alt_key(), e.shift_key()) {
+        if is_app_shortcut(&e.key(), &e.code(), e.ctrl_key() || e.meta_key(), e.alt_key(), e.shift_key()) {
             e.prevent_default();
         }
     });
-    document.add_event_listener_with_callback("keydown", on_key.as_ref().unchecked_ref()).map_err(|e| format!("{e:?}"))?;
+    // Capture phase on `window`: eframe stops the keydown from bubbling past its text input, so a
+    // `document` bubble listener never ran (measured in Firefox: Ctrl+B opened the bookmarks
+    // sidebar, which took the keyboard, and Ctrl+I/U then never reached the page).
+    window.add_event_listener_with_callback_and_bool("keydown", on_key.as_ref().unchecked_ref(), true).map_err(|e| format!("{e:?}"))?;
     // The listener lives as long as the page.
     on_key.forget();
     Ok(())
 }
 
-/// Whether a key with these modifiers is one of WordCraft's shortcuts the browser would take:
-/// Link (K), Underline (U), Replace (H), Font (D), Center (E), Justify (J), Go To (G), Find (F).
-/// Shift and Alt combinations stay the browser's (Ctrl+Shift+J opens its tools).
-fn is_app_shortcut(key: &str, command: bool, alt: bool, shift: bool) -> bool {
-    command && !alt && !shift && matches!(key.to_ascii_lowercase().as_str(), "k" | "u" | "h" | "d" | "e" | "j" | "g" | "f")
+/// Whether a key with these modifiers is one of the editor's shortcuts the browser would take
+/// (Ctrl+B bookmarks, Ctrl+I page info, Ctrl+U page source, Ctrl+L address bar, Ctrl+R reload,
+/// Ctrl+K search box, …). Ctrl+C/V/X stay the browser's: the clipboard events need them, and
+/// Ctrl+Shift+J (browser tools) and Ctrl+N/T/W (which a page can't keep) aren't listed. Letters
+/// are matched by the character typed, digits and brackets by the key's place (`code`), since
+/// Shift changes the character (Ctrl+Shift+7 types "&" on a US keyboard).
+fn is_app_shortcut(key: &str, code: &str, command: bool, alt: bool, shift: bool) -> bool {
+    if !command {
+        return false;
+    }
+    let key = key.to_ascii_lowercase();
+    match (alt, shift) {
+        (false, false) => {
+            matches!(key.as_str(), "b" | "i" | "u" | "k" | "h" | "d" | "e" | "l" | "r" | "j" | "g" | "f" | "y" | "m" | "s" | "p" | "o")
+                || matches!(code, "Backslash" | "BracketLeft" | "BracketRight")
+        }
+        (false, true) => matches!(key.as_str(), "x" | "z") || matches!(code, "Digit7" | "Digit8" | "Digit9" | "Period" | "Comma"),
+        (true, false) => matches!(code, "Digit0" | "Digit1" | "Digit2" | "Digit3" | "Digit4" | "Digit5" | "Digit6"),
+        (true, true) => false,
+    }
 }
 
 /// Trigger a browser save dialog or download of `bytes` named after the last component of `path`.
