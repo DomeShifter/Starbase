@@ -167,19 +167,19 @@ impl PhotoMode {
             if bad > 0 {
                 head.push_str(&format!(" · {bad} failed"));
             }
-            ui.label(RichText::new(head).size(house::BODY).color(theme::TEXT));
+            ui.label(RichText::new(head).size(house::BODY).color(theme::text()));
             ui.add(egui::ProgressBar::new(settled as f32 / total as f32).desired_height(8.0).fill(super::super::ACCENT));
             ui.add_space(house::S);
             for (i, u) in self.up.files.iter().enumerate() {
                 ui.horizontal_wrapped(|ui| {
                     let (text, colour) = match &u.state {
-                        State::Waiting => ("waiting".to_string(), theme::TEXT_DIM),
-                        State::Sending => ("uploading…".to_string(), theme::TEXT_DIM),
-                        State::Done => ("uploaded".to_string(), theme::TEXT),
-                        State::Duplicate => ("already here, skipped".to_string(), theme::TEXT_DIM),
+                        State::Waiting => ("waiting".to_string(), theme::text_dim()),
+                        State::Sending => ("uploading…".to_string(), theme::text_dim()),
+                        State::Done => ("uploaded".to_string(), theme::text()),
+                        State::Duplicate => ("already here, skipped".to_string(), theme::text_dim()),
                         State::Failed(e) => (format!("failed ({e})"), house::ERROR),
                     };
-                    ui.label(RichText::new(&u.name).size(house::NOTE).color(theme::TEXT));
+                    ui.label(RichText::new(&u.name).size(house::NOTE).color(theme::text()));
                     ui.label(RichText::new(text).size(house::NOTE).color(colour));
                     if matches!(u.state, State::Failed(_)) && ui.add(house::link("Retry")).clicked() {
                         retry = Some(i);

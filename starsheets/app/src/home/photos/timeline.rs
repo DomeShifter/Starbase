@@ -220,10 +220,10 @@ impl super::PhotoMode {
                 let y = rect.min.y + it.y;
                 match &it.kind {
                     Kind::Month(l) => {
-                        ui.painter().text(pos2(rect.min.x + 2.0, y + 10.0), Align2::LEFT_TOP, l, FontId::proportional(house::TITLE), theme::TEXT);
+                        ui.painter().text(pos2(rect.min.x + 2.0, y + 10.0), Align2::LEFT_TOP, l, FontId::proportional(house::TITLE), theme::text());
                     }
                     Kind::Day(l) => {
-                        ui.painter().text(pos2(rect.min.x + 2.0, y + 6.0), Align2::LEFT_TOP, l, FontId::proportional(house::BODY), theme::TEXT_DIM);
+                        ui.painter().text(pos2(rect.min.x + 2.0, y + 6.0), Align2::LEFT_TOP, l, FontId::proportional(house::BODY), theme::text_dim());
                     }
                     Kind::Row(a, b, h) => shown.push((y, *a, *b, *h)),
                 }
@@ -289,14 +289,14 @@ impl super::PhotoMode {
             seen += m.count;
             if m.year != last_year {
                 last_year = m.year;
-                painter.text(pos2(rect.max.x - 4.0, y), Align2::RIGHT_TOP, m.year.to_string(), FontId::proportional(house::NOTE), theme::TEXT_DIM);
+                painter.text(pos2(rect.max.x - 4.0, y), Align2::RIGHT_TOP, m.year.to_string(), FontId::proportional(house::NOTE), theme::text_dim());
             } else {
-                painter.line_segment([pos2(rect.max.x - 10.0, y + 1.0), pos2(rect.max.x - 4.0, y + 1.0)], (1.0, theme::TEXT_DIM));
+                painter.line_segment([pos2(rect.max.x - 10.0, y + 1.0), pos2(rect.max.x - 4.0, y + 1.0)], (1.0, theme::text_dim()));
             }
         }
         // Where the view is now.
         let cur = (self.tl.offset / total.max(1.0)).clamp(0.0, 1.0);
-        painter.rect_filled(Rect::from_center_size(pos2(rect.max.x - 2.0, y0 + span * cur + 8.0), vec2(4.0, 16.0)), 2, theme::SHARE);
+        painter.rect_filled(Rect::from_center_size(pos2(rect.max.x - 2.0, y0 + span * cur + 8.0), vec2(4.0, 16.0)), 2, theme::share());
         if (resp.dragged() || resp.clicked() || resp.is_pointer_button_down_on())
             && let Some(p) = resp.interact_pointer_pos()
         {

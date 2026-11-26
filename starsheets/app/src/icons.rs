@@ -165,11 +165,18 @@ const ICONS: &[(&str, &[u8])] = &[
     ("star", include_bytes!("../icons/star.svg")),
     ("star_fill", include_bytes!("../icons/star_fill.svg")),
     ("view_list", include_bytes!("../icons/view_list.svg")),
+    ("photo_mode", include_bytes!("../icons/photo_mode.svg")),
+    ("dark_mode", include_bytes!("../icons/dark_mode.svg")),
+    ("light_mode", include_bytes!("../icons/light_mode.svg")),
 ];
 
 /// The icon called `name`, 18 px, or None if it isn't embedded (the test below checks the names
 /// the toolbar uses).
 pub fn icon(name: &str) -> Option<Image<'static>> {
+    // Photo Mode's dark look: the grey outline icons turn light.
+    if crate::theme::photo_dark() {
+        return icon_in(name, crate::theme::text_dim());
+    }
     let (n, bytes) = ICONS.iter().find(|(n, _)| *n == name)?;
     Some(
         Image::new(ImageSource::Bytes { uri: format!("bytes://starsheets/{n}.svg").into(), bytes: (*bytes).into() })
