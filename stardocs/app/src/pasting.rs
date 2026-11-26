@@ -127,7 +127,7 @@ fn remember_copies(app: &WordApp, ctx: &egui::Context) {
 }
 
 /// The "Press Ctrl+V now" card at the top of the window: not a dialog, so the caret keeps the
-/// keyboard and Ctrl+V pastes there. Closes on the paste, on Esc or on its ✕.
+/// keyboard and Ctrl+V pastes there. Closes on the paste, on Esc or on its close button.
 fn prompt_ui(ctx: &egui::Context) {
     if !clip::prompt_shown() {
         return;
@@ -143,7 +143,12 @@ fn prompt_ui(ctx: &egui::Context) {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(clip::PROMPT_TITLE).size(16.0).strong().color(crate::shell::TEXT));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let r = ui.add(egui::Button::new("✕").frame(false));
+                        let x = match crate::icons::icon_px("close", 20.0) {
+                            Some(img) => egui::Button::image(img),
+                            None => egui::Button::new("×"),
+                        };
+                        let r = ui.add(x.frame(false));
+                        r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Close"));
                         crate::shell::target(ui.ctx(), "paste prompt: close", r.rect);
                         close = r.clicked();
                     });
