@@ -1591,7 +1591,9 @@ impl Account {
                     ui.label(RichText::new(c).monospace().size(house::BODY).color(theme::TEXT));
                 }
                 ui.add_space(house::S);
-                if ui.add(house::secondary("Done")).clicked() {
+                let done = ui.add(house::secondary("Done"));
+                house::target(ui.ctx(), "2fa:done", done.rect);
+                if done.clicked() {
                     self.ts_codes = None;
                 }
                 return;
@@ -1604,7 +1606,9 @@ impl Account {
                         "Ask for a 6-digit code from an authenticator app (on your phone) every time you sign in, as well as your password.",
                     );
                     ui.add_space(house::S);
-                    if ui.add(house::primary("Turn on")).clicked() {
+                    let on = ui.add(house::primary("Turn on"));
+                    house::target(ui.ctx(), "2fa:turn-on", on.rect);
+                    if on.clicked() {
                         action = 1;
                     }
                 }
@@ -1630,7 +1634,10 @@ impl Account {
                     house::note(ui, "2. Type the 6-digit code it shows.");
                     let r = Self::field(ui, &mut self.code, "6-digit code", false);
                     self.first(&r);
-                    if Self::enter(ui, &r) || ui.add(house::primary("Confirm and turn on")).clicked() {
+                    house::target(ui.ctx(), "2fa:code", r.rect);
+                    let confirm = ui.add(house::primary("Confirm and turn on"));
+                    house::target(ui.ctx(), "2fa:confirm", confirm.rect);
+                    if Self::enter(ui, &r) || confirm.clicked() {
                         action = 2;
                     }
                 }
@@ -1638,7 +1645,10 @@ impl Account {
                     house::note(ui, "Two-step sign-in is on. To turn it off, type a code from your app (or a backup code).");
                     let r = Self::field(ui, &mut self.code, "Code", false);
                     self.first(&r);
-                    if Self::enter(ui, &r) || ui.add(house::secondary("Turn off")).clicked() {
+                    house::target(ui.ctx(), "2fa:code", r.rect);
+                    let off = ui.add(house::secondary("Turn off"));
+                    house::target(ui.ctx(), "2fa:turn-off", off.rect);
+                    if Self::enter(ui, &r) || off.clicked() {
                         action = 3;
                     }
                 }
