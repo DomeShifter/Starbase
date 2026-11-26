@@ -2,3 +2,4 @@ target/
 dist/
 */upstream/
 *.cj
+__pycache__/
