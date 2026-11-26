@@ -238,6 +238,7 @@ pub async fn middleware(mut req: Request, next: Next) -> Response<Body> {
     if secure(peer, req.headers(), cfg) {
         drop_plain_cookies(req.headers_mut());
     }
+    let (method, path) = (req.method().clone(), req.uri().path().to_string());
     let mut resp = match check(req.method(), req.uri(), req.headers(), peer, cfg) {
         Err((code, msg)) => refuse(code, msg),
         Ok(()) => match tokio::time::timeout(QUEUE_WAIT, AT_ONCE.acquire()).await {
@@ -246,6 +247,11 @@ pub async fn middleware(mut req: Request, next: Next) -> Response<Body> {
         },
     };
     safety_headers(resp.headers_mut());
+    // One line per refused picture/file request, so a "no such file" a person saw can be traced
+    // (method, path, status only: no query, no contents).
+    if resp.status().as_u16() >= 400 && (path.starts_with("/api/photos") || path.starts_with("/api/files")) {
+        eprintln!("refused {method} {path} -> {}", resp.status().as_u16());
+    }
     resp
 }
 

@@ -31,6 +31,7 @@ mod input;
 mod items;
 mod photo_edit;
 mod photos;
+pub(crate) use photos::said;
 mod sidebar;
 mod templates;
 #[cfg(target_arch = "wasm32")]
@@ -312,12 +313,19 @@ fn call_any(
     then: impl FnOnce(Result<Vec<u8>, (u16, String)>) -> Reply + 'static,
 ) {
     let (inbox2, ctx2) = (inbox.clone(), ctx.clone());
+    // Kept for the console line below, so an error on screen can be traced to its request.
+    let (what, path) = (format!("{method:?}"), url.split('?').next().unwrap_or("").to_string());
     store.call(
         ctx,
         method,
         &url,
         body,
         Box::new(move |answer| {
+            match &answer {
+                Ok((s, _)) if *s >= 400 => log::warn!("request {what} /{path} failed: {s}"),
+                Err(e) => log::warn!("request {what} /{path} failed: {e}"),
+                _ => {}
+            }
             let reply = match answer {
                 Ok((s, bytes)) if s < 400 => then(Ok(bytes)),
                 Ok((401, _)) => {
