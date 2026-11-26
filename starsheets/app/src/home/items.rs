@@ -110,6 +110,9 @@ impl Home {
             self.bin_ui(ui);
             return;
         }
+        if self.view == Some(View::Storage) {
+            self.storage_header(ui);
+        }
         if let Some(folder) = self.photo_folder() {
             self.photos.ui(ui, &self.store, &folder);
             self.photo_outs(ui.ctx());
@@ -146,9 +149,9 @@ impl Home {
                 ui.label(RichText::new(empty).size(house::BODY).color(theme::TEXT_DIM));
             }
             let order = self.shown(&folders, &files);
-            if self.list && !order.is_empty() {
+            if (self.list || self.view == Some(View::Storage)) && !order.is_empty() {
                 self.list_ui(ui, &order, &mut clicked_item);
-            } else if self.mixed && self.view != Some(View::Recent) {
+            } else if self.mixed && !matches!(self.view, Some(View::Recent | View::Storage)) {
                 // Folders mixed in with files: everything as cards, in the sort's order.
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = vec2(house::M, house::M);
@@ -450,7 +453,22 @@ impl Home {
     pub(super) fn list_ui(&mut self, ui: &mut Ui, order: &[Item], clicked_item: &mut bool) {
         let w = ui.available_width() - 8.0;
         let (h, _) = ui.allocate_exact_size(vec2(w, 28.0), Sense::hover());
-        let cols = [(0.0, "Name"), (w * 0.52, if self.accounts { "Owner" } else { "" }), (w * 0.70, "Last modified"), (w - 90.0, "Size")];
+        let storage = self.view == Some(View::Storage);
+        let cols = [
+            (0.0, "Name"),
+            (
+                w * 0.52,
+                if storage {
+                    "Location"
+                } else if self.accounts {
+                    "Owner"
+                } else {
+                    ""
+                },
+            ),
+            (w * 0.70, "Last modified"),
+            (w - 90.0, "Size"),
+        ];
         for (x, label) in cols {
             ui.painter().text(
                 h.left_center() + vec2(x + if x == 0.0 { 44.0 } else { 0.0 }, 0.0),
@@ -533,7 +551,17 @@ impl Home {
                     }
                 }
             }
-            if self.accounts {
+            if storage {
+                let place = match &item {
+                    Item::File(id) => self.file(id).map(|f| f.folder.clone()).unwrap_or_default(),
+                    Item::Folder(_) => String::new(),
+                };
+                let place =
+                    if self.accounts { place.strip_prefix(self.space.as_str()).unwrap_or(&place).trim_start_matches('/').to_string() } else { place };
+                let place = if place.is_empty() { "My files".to_string() } else { place };
+                let place = one_line(&p, place, 13.0, theme::TEXT_DIM, w * 0.17);
+                p.galley(r.left_center() + vec2(w * 0.52, -7.0), place, theme::TEXT_DIM);
+            } else if self.accounts {
                 p.text(r.left_center() + vec2(w * 0.52, 0.0), Align2::LEFT_CENTER, self.person(&owner), FontId::proportional(13.0), theme::TEXT_DIM);
             }
             if modified > 0 {

@@ -77,3 +77,20 @@ impl Home {
         });
     }
 }
+
+impl Home {
+    /// The top of the Storage view: what my files and my bin take, and the link to the bin.
+    pub(super) fn storage_header(&mut self, ui: &mut Ui) {
+        let (used, bin) = self.storage.map_or((0, 0), |(u, b, _)| (u, b));
+        ui.horizontal(|ui| {
+            house::note(ui, &format!("{} used by your files, biggest first. The bin holds {} more.", size_text(used), size_text(bin)));
+            let link = ui.add(house::link("Empty bin"));
+            house::target(ui.ctx(), "Empty bin", link.rect);
+            if link.clicked() {
+                self.navigate(View::Bin);
+                self.load_bin(ui.ctx());
+            }
+        });
+        ui.add_space(house::S);
+    }
+}

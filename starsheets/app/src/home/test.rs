@@ -15,6 +15,7 @@ impl Home {
             Some(View::Recent) => json!("recent"),
             Some(View::Starred) => json!("starred"),
             Some(View::Bin) => json!("bin"),
+            Some(View::Storage) => json!("storage"),
             Some(View::Everyone(p)) => json!({ "everyone": p }),
             None => Json::Null,
         };
@@ -24,6 +25,7 @@ impl Home {
             "menu": self.menu_rects.iter().map(|(l, r)| json!({ "label": l, "rect": [r.min.x, r.min.y, r.max.x, r.max.y] })).collect::<Vec<_>>(),
             "photos": self.photos.test_state(self.photo_folder().is_some()),
             "view": view,
+            "storage": self.storage.map(|(u, b, f)| json!({ "used": u, "bin": b, "free": f })),
             "loading": self.loading,
             "search": self.search,
             // Files whose text matched the search, with the snippet shown for each.
@@ -112,6 +114,10 @@ impl Home {
             }
             "home:preview:close" => self.file_preview = None,
             "home:recent" => self.navigate(View::Recent),
+            "home:storage" => {
+                self.navigate(View::Storage);
+                self.load_storage(ctx);
+            }
             "home:starred" => self.navigate(View::Starred),
             "home:shared" => self.navigate(View::Shared(None)),
             "home:bin" => {
