@@ -1761,8 +1761,8 @@ mod tests {
         h.state_mut().ed.rotate();
         assert!(h.state().ed.dirty(), "rotated, not yet copied");
         h.state_mut().ed.copy(&c, &store);
-        h.run();
         let ed = &mut h.state_mut().ed;
+        ed.logic(&c, &store); // takes the server's answer, as the next frame would
         assert!(ed.message.as_deref().unwrap_or("").contains("Saved a copy"));
         assert!(!ed.dirty(), "the copy has the rotation; the original is unchanged");
         assert!(ed.unsaved(), "Save would still write it to the original");
