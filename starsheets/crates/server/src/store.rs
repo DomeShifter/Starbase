@@ -737,6 +737,13 @@ impl Store {
         Ok(format!("{:x}-{:x}", mtime(&m).1, m.len()))
     }
 
+    /// The name of the newest kept version of a file ("" when none): changes whenever someone's
+    /// save keeps a new one, which the file's own timestamp can't tell (it ticks in milliseconds,
+    /// so two saves of equal length can share a version string).
+    pub fn newest_kept(&self, fid: &str) -> String {
+        version_names(&self.versions().join(fid)).pop().unwrap_or_default()
+    }
+
     /// Writes a file atomically (temp file in .starsheets, then rename).
     pub fn write_file(&self, path: &Path, data: &[u8]) -> io::Result<()> {
         fs::create_dir_all(self.meta())?;

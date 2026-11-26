@@ -49,22 +49,21 @@ const COALESCE_SECS: u64 = 600;
 
 /// Commenter saves rebuilt at the same time, at most.
 const AT_ONCE: usize = 2;
-static BUILDING: AtomicUsize = AtomicUsize::new(0);
 
 /// One rebuild under way (see [`AT_ONCE`]); done when dropped.
-struct Turn;
-impl Turn {
-    fn take() -> Option<Turn> {
-        if BUILDING.fetch_add(1, Ordering::AcqRel) >= AT_ONCE {
-            BUILDING.fetch_sub(1, Ordering::AcqRel);
+struct Turn<'a>(&'a AtomicUsize);
+impl<'a> Turn<'a> {
+    fn take(count: &'a AtomicUsize) -> Option<Turn<'a>> {
+        if count.fetch_add(1, Ordering::AcqRel) >= AT_ONCE {
+            count.fetch_sub(1, Ordering::AcqRel);
             return None;
         }
-        Some(Turn)
+        Some(Turn(count))
     }
 }
-impl Drop for Turn {
+impl Drop for Turn<'_> {
     fn drop(&mut self) {
-        BUILDING.fetch_sub(1, Ordering::AcqRel);
+        self.0.fetch_sub(1, Ordering::AcqRel);
     }
 }
 
@@ -154,7 +153,7 @@ pub(crate) async fn put(
         return Some(error(413, "That is much bigger than the document: only comments can be saved."));
     }
     // Read and rebuilt outside the store lock, a few at a time.
-    let Some(turn) = Turn::take() else { return Some(error(503, "The server is busy saving comments: trying again shortly.")) };
+    let Some(turn) = Turn::take(&app.rooms.building) else { return Some(error(503, "The server is busy saving comments: trying again shortly.")) };
     let shown = clean_name(&me.name);
     let user = clean_name(&me.username);
     let name = if shown.is_empty() || shown == user { user } else { format!("{shown} ({user})") };
@@ -189,8 +188,9 @@ pub(crate) async fn put(
         let log = log_path(a);
         let mut all = a.store.load_json(&log);
         let last = all.get("runs").and_then(|r| r.get(&file)).cloned().unwrap_or(Value::Null);
-        let same_run =
-            last["version"].as_str() == Some(now_version.as_str()) && now().saturating_sub(last["at"].as_u64().unwrap_or(0)) < COALESCE_SECS;
+        let same_run = last["version"].as_str() == Some(now_version.as_str())
+            && last["kept"].as_str() == Some(a.store.newest_kept(&file).as_str())
+            && now().saturating_sub(last["at"].as_u64().unwrap_or(0)) < COALESCE_SECS;
         if !same_run && a.store.keep_version(&file, &fpath).is_err() {
             return error(500, "couldn't keep the earlier version");
         }
@@ -200,7 +200,7 @@ pub(crate) async fn put(
         let version = a.store.version_of(&fpath).unwrap_or_default();
         let at = if same_run { last["at"].as_u64().unwrap_or_else(now) } else { now() };
         let mut runs = all.get("runs").and_then(Value::as_object).cloned().unwrap_or_default();
-        runs.insert(file.clone(), json!({"by": me.username, "at": at, "version": version}));
+        runs.insert(file.clone(), json!({"by": me.username, "at": at, "version": version, "kept": a.store.newest_kept(&file)}));
         all.insert("runs".into(), Value::Object(runs));
         // Whose comments these are, for their next save.
         let mut owned = all.get("owned").and_then(Value::as_object).cloned().unwrap_or_default();
