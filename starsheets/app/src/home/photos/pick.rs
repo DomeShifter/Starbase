@@ -367,7 +367,7 @@ impl PhotoMode {
                 chosen = Some(None);
             }
             let n = self.alb.selected.len();
-            ui.label(RichText::new(format!("{n} selected")).size(house::TITLE - 4.0).color(theme::TEXT));
+            ui.label(RichText::new(format!("{n} selected")).size(house::TITLE - 4.0).color(theme::text()));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let mut rows =
                     vec![(Act::Delete, "delete", "Move to bin"), (Act::Download, "download", "Download"), (Act::Favourite, "star", "Favourite")];
@@ -376,13 +376,13 @@ impl PhotoMode {
                 }
                 rows.push((Act::AddTo, "photo_library", "Add to album"));
                 if ui
-                    .add(egui::Button::new(RichText::new("Select all").size(house::BODY).color(theme::TEXT)).frame(false).min_size(vec2(0.0, 36.0)))
+                    .add(egui::Button::new(RichText::new("Select all").size(house::BODY).color(theme::text())).frame(false).min_size(vec2(0.0, 36.0)))
                     .clicked()
                 {
                     chosen = Some(Some(Act::SelectAll));
                 }
                 for (act, icon, label) in rows {
-                    let text = RichText::new(label).size(house::BODY).color(theme::TEXT);
+                    let text = RichText::new(label).size(house::BODY).color(theme::text());
                     let b = match crate::icons::icon(icon) {
                         Some(img) => egui::Button::image_and_text(img.fit_to_exact_size(vec2(20.0, 20.0)), text),
                         None => egui::Button::new(text),
@@ -479,7 +479,7 @@ impl PhotoMode {
                 let hl = |ui: &mut Ui, on: bool| {
                     if on {
                         let r = ui.available_rect_before_wrap();
-                        ui.painter().rect_filled(Rect::from_min_size(r.min, vec2(r.width(), house::ROW_HEIGHT)), 0, theme::MENU_HOVER);
+                        ui.painter().rect_filled(Rect::from_min_size(r.min, vec2(r.width(), house::ROW_HEIGHT)), 0, theme::menu_hover());
                     }
                 };
                 hl(ui, d.cursor == 0);
@@ -634,7 +634,7 @@ impl PhotoMode {
                             ui.add_space(house::L);
                             if note.undo
                                 && ui
-                                    .add(egui::Button::new(RichText::new("Undo").size(house::BODY).strong().color(theme::SHARE)).frame(false))
+                                    .add(egui::Button::new(RichText::new("Undo").size(house::BODY).strong().color(theme::share())).frame(false))
                                     .clicked()
                             {
                                 self.pick.note = None;
@@ -642,7 +642,7 @@ impl PhotoMode {
                             }
                             if note.album.is_some()
                                 && ui
-                                    .add(egui::Button::new(RichText::new("Open album").size(house::BODY).strong().color(theme::SHARE)).frame(false))
+                                    .add(egui::Button::new(RichText::new("Open album").size(house::BODY).strong().color(theme::share())).frame(false))
                                     .clicked()
                             {
                                 open = true;

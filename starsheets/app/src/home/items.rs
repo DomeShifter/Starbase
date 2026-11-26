@@ -4,6 +4,10 @@ use super::*;
 
 impl Home {
     pub(super) fn main_ui(&mut self, ui: &mut Ui) {
+        if let Some(folder) = self.photo_folder() {
+            self.photo_main_ui(ui, &folder);
+            return;
+        }
         // Path (each part clickable and a drop target), view switch.
         // Anywhere empty in this area: right-click for New (items drawn later sit on top of it).
         let bg = ui.interact(ui.max_rect(), egui::Id::unique("home_bg"), Sense::click());
@@ -87,8 +91,9 @@ impl Home {
                     self.store.set_setting("starsheets_home_list", "1");
                     self.photos.set_on(&self.store, false);
                 }
-                if self.store.has_photos() && toggle(ui, "photo_library", photos, "View as photos") {
+                if self.store.has_photos() && toggle(ui, "photo_mode", photos, "Photo Mode") {
                     self.photos.set_on(&self.store, true);
+                    self.search.clear();
                 }
                 ui.add_space(house::S);
                 self.sort_menu(ui);
