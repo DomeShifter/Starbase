@@ -399,14 +399,15 @@ impl PhotoMode {
     }
 
     pub(super) fn pill(&self, ui: &mut Ui, label: &str, on: bool) -> bool {
-        ui.add(
+        let r = ui.add(
             egui::Button::new(RichText::new(label).size(house::BODY).color(theme::text()))
                 .fill(if on { theme::share() } else { theme::card() })
                 .stroke(egui::Stroke::new(1.0, theme::edge()))
                 .corner_radius(16)
                 .min_size(vec2(0.0, 32.0)),
-        )
-        .clicked()
+        );
+        house::target(ui.ctx(), &format!("pill-{label}"), r.rect);
+        r.clicked()
     }
 
     fn card_ui(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend, c: &Card) -> bool {
