@@ -218,7 +218,7 @@ fn harness_on_server(view_only: bool) -> Harness<'static, (State, FakeDrive)> {
 fn the_title_row_shows_the_server_name_without_pptx_and_the_save_state() {
     let h = harness_on_server(false);
     assert!(h.query_by_label("Quarterly plan").is_some(), "name without .pptx");
-    assert!(h.query_by_label("Saved to Starbase").is_some());
+    assert!(h.query_by_label("Saved").is_some(), "the save-state icon says it is saved");
 }
 
 #[test]
@@ -335,4 +335,22 @@ fn insert_image_from_drive_needs_the_server_and_an_editor() {
     let mut v = harness_on_server(true);
     let (s, d) = v.state_mut();
     assert!(!s.shell.allowed(&s.app, Some(&*d), "slides.driveImage"), "a viewer can't insert");
+}
+
+/// An idle window must not keep repainting: after it settles, every frame may only ask for the next
+/// one at least 200 ms later (at most 5 repaints a second), e.g. a caret blink or a clock.
+#[test]
+fn idle_window_does_not_repaint() {
+    let mut h = harness();
+    h.run_steps(20);
+    let mut fast = Vec::new();
+    for _ in 0..20 {
+        h.step();
+        let delay = h.output().viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+        if delay < std::time::Duration::from_millis(200) {
+            let causes: Vec<String> = h.ctx.repaint_causes().iter().map(|c| format!("{}:{} {}", c.file, c.line, c.reason)).collect();
+            fast.push(format!("{delay:?} {causes:?}"));
+        }
+    }
+    assert!(fast.is_empty(), "idle frames asked to repaint again within 200 ms: {fast:#?}");
 }

@@ -87,6 +87,19 @@ pub fn set_signup(store: &Store, on: bool, code: &str) -> Result<Signup, String>
     Ok(Signup { on, code })
 }
 
+/// Whether link cards may show a page preview (linkpreview.rs): off unless the owner turned it on.
+pub fn link_preview(store: &Store) -> bool {
+    let all = store.load_json(&users_path(store));
+    all.get("link_preview").and_then(|s| s.get("on")).and_then(Value::as_bool).unwrap_or(false)
+}
+
+pub fn set_link_preview(store: &Store, on: bool) -> Result<bool, String> {
+    let mut all = store.load_json(&users_path(store));
+    all.insert("link_preview".into(), json!({ "on": on }));
+    store.save_json(&users_path(store), &Value::Object(all)).map_err(|e| e.to_string())?;
+    Ok(on)
+}
+
 /// Whether sign-up may make an account now, with this code: only when the owner allows it
 /// (never the owner's account).
 pub fn signup_allowed(store: &Store, code: &str) -> Result<(), (u16, String)> {

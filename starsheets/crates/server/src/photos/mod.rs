@@ -47,6 +47,7 @@ pub mod raw;
 pub mod routes;
 pub mod sidecar;
 pub mod strip;
+pub mod tiles;
 pub mod video;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -84,10 +85,13 @@ pub fn media_of(name: &str) -> Option<(&'static str, bool)> {
         "png" => ("image/png", true),
         "webp" => ("image/webp", true),
         "gif" => ("image/gif", true),
-        // Camera RAW: thumbnails from the embedded JPEG preview (raw.rs). CR3 (not TIFF), HEIC (needs libheif), AVIF, TIFF: listed, no thumbnails yet.
+        "bmp" => ("image/bmp", true),
+        "ico" => ("image/x-icon", true),
+        "tif" | "tiff" => ("image/tiff", true),
+        // Camera RAW: thumbnails from the embedded JPEG preview (raw.rs). CR3 (not TIFF), HEIC (needs libheif),
+        // AVIF (decoding needs the native dav1d library): listed, no thumbnails yet.
         "heic" | "heif" => ("image/heic", false),
         "avif" => ("image/avif", false),
-        "tif" | "tiff" => ("image/tiff", false),
         "dng" | "cr2" | "nef" | "arw" | "orf" | "rw2" | "raf" | "pef" | "srw" => ("image/x-raw", true),
         "cr3" => ("image/x-raw", false),
         // Videos: listed with a generic tile, played by the browser from the Drive's Range-aware raw route.
@@ -304,6 +308,15 @@ static DRIVE_READING: Mutex<()> = Mutex::new(());
 /// read it (edits shown); otherwise the picture is read now, the same way Photos reads one (a
 /// child process when the server runs them), and the caller keeps the result.
 pub fn drive_thumb(store: &Store, path: &str) -> Result<Vec<u8>, String> {
+    drive_picture(store, path, decode::SIZES[0])
+}
+
+/// [`drive_thumb`] at `size` (one of [`decode::SIZES`]): the 1024-pixel one is what the Drive's
+/// viewer shows of pictures the browser can't read itself (TIFF).
+pub fn drive_picture(store: &Store, path: &str, size: u32) -> Result<Vec<u8>, String> {
+    if !decode::SIZES.contains(&size) {
+        return Err("no thumbnails of that size".into());
+    }
     if !media_of(path).is_some_and(|(_, thumbs)| thumbs) {
         return Err("no thumbnails of this kind of picture".into());
     }
@@ -311,7 +324,7 @@ pub fn drive_thumb(store: &Store, path: &str) -> Result<Vec<u8>, String> {
     if let Some(svc) = svc.as_ref().filter(|s| s.covers(path))
         && let Some(r) = svc.row(path).filter(|r| r.state == State::Ready && svc.fresh(r))
         && let Some(hash) = r.thumb_key()
-        && let Some((file, _)) = svc.thumb_file(hash, decode::SIZES[0])
+        && let Some((file, _)) = svc.thumb_file(hash, size)
         && let Ok(bytes) = std::fs::read(&file)
     {
         svc.used(&file);
@@ -331,7 +344,7 @@ pub fn drive_thumb(store: &Store, path: &str) -> Result<Vec<u8>, String> {
             decode::make_guarded(&bytes, &decode::Limits::for_memory(memory), None)?
         }
     };
-    made.thumbs.into_iter().find(|t| t.size == decode::SIZES[0]).map(|t| t.bytes).ok_or_else(|| "no thumbnail".into())
+    made.thumbs.into_iter().find(|t| t.size == size).map(|t| t.bytes).ok_or_else(|| "no thumbnail".into())
 }
 
 /// The photo service of `store`, started on first use.

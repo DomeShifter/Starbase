@@ -22,6 +22,8 @@ mod devices;
 mod docx_comments;
 mod findpath;
 mod guard;
+mod linkpreview;
+mod listcache;
 mod live;
 mod log;
 mod oidc;
@@ -464,6 +466,54 @@ async fn accounts(
                 Some(Err((code, why))) => error(code, &why),
                 None => error(500, "server error"),
             }
+        }
+        (["link-preview", "settings"], "GET" | "POST") => {
+            // Anyone signed in may read it (the card asks); only the owner changes it.
+            let posting = m == "POST";
+            if (on && me.is_none()) || (posting && on && me.as_ref().is_none_or(|u| !u.owner)) {
+                return Some(error(403, "Only the owner can do that."));
+            }
+            let want = json.get("on").and_then(Value::as_bool).unwrap_or(false);
+            let r =
+                blocking(app, move |app| if posting { auth::set_link_preview(&app.store, want) } else { Ok(auth::link_preview(&app.store)) }).await;
+            match r {
+                Some(Ok(on)) => send_json(&json!({ "on": on }), 200),
+                Some(Err(why)) => error(400, &why),
+                None => error(500, "server error"),
+            }
+        }
+        (["link-preview"] | ["link-preview", "image"], "GET") => {
+            if on && me.is_none() {
+                return Some(error(401, "Sign in first."));
+            }
+            let url = q.get("url").cloned().unwrap_or_default();
+            if url.len() > 2048 {
+                return Some(error(400, "That address is too long."));
+            }
+            let enabled = blocking(app, |app| auth::link_preview(&app.store)).await.unwrap_or(false);
+            if path.len() == 2 {
+                let kind = q.get("kind").cloned().unwrap_or_default();
+                let got = if enabled { tokio::task::spawn_blocking(move || linkpreview::image(&url, &kind)).await.ok().flatten() } else { None };
+                return Some(match got {
+                    Some(b) => Response::builder()
+                        .status(200)
+                        .header(header::CONTENT_TYPE, "image/png")
+                        .header(header::CACHE_CONTROL, "private, max-age=86400")
+                        .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff")
+                        .body(Body::from(b))
+                        .unwrap(),
+                    None => error(404, "no picture"),
+                });
+            }
+            if !enabled {
+                return Some(send_json(&json!({ "state": "off" }), 200));
+            }
+            let who = me.as_ref().map_or_else(|| ip_key("link-preview", ask.ip), |u| format!("link-preview:{}", u.username));
+            if !LIMITS.take(&who, guard::LINK_PREVIEW_USER) {
+                return Some(send_json(&json!({ "state": "busy" }), 200));
+            }
+            let v = tokio::task::spawn_blocking(move || linkpreview::preview(&url)).await.unwrap_or_else(|_| json!({ "state": "none" }));
+            send_json(&v, 200)
         }
         (["signup", "settings"], "GET" | "POST") => {
             if me.as_ref().is_none_or(|u| !u.owner) {
@@ -1135,6 +1185,13 @@ async fn gate(
                         // Into someone else's folder: it becomes theirs, so only its owner may.
                         need(role, if store::space_of(&target) == store::space_of(&path) { Role::Edit } else { Role::Owner })?;
                     }
+                    // A new file closed untouched is removed (store.rs), unless someone else has opened it.
+                    (["discard"], "POST") => {
+                        need(role, Role::Edit)?;
+                        if spaces::opened_by_others(id, &me.username) {
+                            return Err(send_json(&json!({"discarded": false}), 200));
+                        }
+                    }
                     // Activity: anyone who can see the file may read what happened to it.
                     (["activity"], "GET") => {
                         need(role, Role::View)?;
@@ -1683,6 +1740,40 @@ async fn thumb(app: &Shared, me: Option<auth::User>, file: String, headers: &Hea
         .unwrap()
 }
 
+/// GET /api/files/ID/picture: a picture's 1024-pixel version (JPEG, or PNG when it has
+/// transparency), what the Drive's viewer shows of pictures the browser can't read (TIFF).
+/// 404: not a picture thumbnails are made of.
+async fn picture(app: &Shared, me: Option<auth::User>, file: String) -> Response<Body> {
+    let got = blocking(app, move |app| -> Result<String, Response<Body>> {
+        if sharing::file_role(&app.store, app.auth, me.as_ref(), &file) < sharing::Role::View {
+            return Err(error(403, "You don't have access to that."));
+        }
+        let path = app.store.path_of(&file).ok().flatten().ok_or_else(|| error(404, "no such file"))?;
+        if !photos::media_of(&path).is_some_and(|(_, thumbs)| thumbs) {
+            return Err(error(404, "no picture for this kind of file"));
+        }
+        Ok(path)
+    })
+    .await
+    .unwrap_or_else(|| Err(error(500, "server error")));
+    let path = match got {
+        Ok(p) => p,
+        Err(resp) => return resp,
+    };
+    let a = app.clone();
+    let made = tokio::task::spawn_blocking(move || photos::drive_picture(&a.store, &path, 1024)).await;
+    let Ok(Ok(bytes)) = made else {
+        return error(404, "no picture");
+    };
+    let kind = if bytes.starts_with(b"\x89PNG") { "image/png" } else { "image/jpeg" };
+    Response::builder()
+        .status(200)
+        .header(header::CONTENT_TYPE, kind)
+        .header(header::CACHE_CONTROL, "private, no-cache")
+        .body(Body::from(bytes))
+        .unwrap()
+}
+
 /// PUT /api/files/ID/thumb?version=V: StarDocs' picture of the top of page 1 of document ID,
 /// taken right after saving version V (thumbs::take says what's refused).
 async fn put_thumb(app: &Shared, me: Option<auth::User>, file: String, q: &HashMap<String, String>, body: Bytes) -> Response<Body> {
@@ -1819,23 +1910,82 @@ async fn serve_site(site: &Path, path: &str, query: Option<&str>, headers: &Head
         }
     }
     let name = full.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let kind =
-        if name.ends_with(".wasm") { "application/wasm".to_string() } else { mime_guess::from_path(&full).first_or_octet_stream().to_string() };
-    let gz = PathBuf::from(format!("{}.gz", full.display()));
-    let zipped = headers.get(header::ACCEPT_ENCODING).and_then(|v| v.to_str().ok()).is_some_and(|v| v.contains("gzip")) && gz.is_file();
-    let Ok(data) = tokio::fs::read(if zipped { &gz } else { &full }).await else {
+    let kind = match full.extension().and_then(|e| e.to_str()) {
+        Some("wasm") => "application/wasm".to_string(),
+        Some("ttf") => "font/ttf".to_string(),
+        Some("otf") => "font/otf".to_string(),
+        Some("woff2") => "font/woff2".to_string(),
+        _ => mime_guess::from_path(&full).first_or_octet_stream().to_string(),
+    };
+    // Pre-compressed copies sit next to the file (release workflow): brotli first, then gzip.
+    let accepted = accepted_encodings(headers);
+    let mut served = full.clone();
+    let mut encoding = None;
+    for (token, ext) in [("br", "br"), ("gzip", "gz")] {
+        let cand = PathBuf::from(format!("{}.{ext}", full.display()));
+        if accepted.iter().any(|a| a == token) && cand.is_file() {
+            served = cand;
+            encoding = Some(token);
+            break;
+        }
+    }
+    let Ok(file) = tokio::fs::File::open(&served).await else {
+        return error(404, "not found");
+    };
+    let Ok(meta) = file.metadata().await else {
         return error(404, "not found");
     };
     let mut b = Response::builder().status(200).header(header::CONTENT_TYPE, kind).header("X-Content-Type-Options", "nosniff");
-    if zipped {
-        b = b.header(header::CONTENT_ENCODING, "gzip").header(header::VARY, "Accept-Encoding");
+    b = b.header(header::VARY, "Accept-Encoding");
+    if let Some(e) = encoding {
+        b = b.header(header::CONTENT_ENCODING, e);
     }
     if name == "index.html" || name == "build.json" {
         b = b.header(header::CACHE_CONTROL, "no-cache");
     } else if is_hashed(&name) {
         b = b.header(header::CACHE_CONTROL, "public, max-age=31536000, immutable");
+    } else {
+        // Fonts and other files without a hash in the name: kept by the browser but checked
+        // on every use (ETag, a 304 costs a few bytes), so an update is never stale.
+        let mtime = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0);
+        let tag = format!("\"{:x}-{:x}-{}\"", meta.len(), mtime, encoding.unwrap_or("id"));
+        if headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()).is_some_and(|v| v.split(',').any(|t| t.trim() == tag)) {
+            return Response::builder()
+                .status(304)
+                .header(header::ETAG, tag)
+                .header(header::CACHE_CONTROL, "no-cache")
+                .header(header::VARY, "Accept-Encoding")
+                .body(Body::empty())
+                .unwrap();
+        }
+        b = b.header(header::ETAG, tag).header(header::CACHE_CONTROL, "no-cache");
     }
-    b.body(Body::from(data)).unwrap()
+    // Streamed from disk in 64 KiB pieces, never the whole file in memory.
+    let stream = futures_util::stream::unfold(file, |mut f| async move {
+        use tokio::io::AsyncReadExt;
+        let mut buf = vec![0u8; 64 * 1024];
+        match f.read(&mut buf).await {
+            Ok(0) | Err(_) => None,
+            Ok(n) => {
+                buf.truncate(n);
+                Some((Ok::<_, std::io::Error>(axum::body::Bytes::from(buf)), f))
+            }
+        }
+    });
+    b.header(header::CONTENT_LENGTH, meta.len()).body(Body::from_stream(stream)).unwrap()
+}
+
+/// The content codings a request accepts (`gzip, br;q=0.5`; a coding with q=0 is refused).
+fn accepted_encodings(headers: &HeaderMap) -> Vec<String> {
+    let v = headers.get(header::ACCEPT_ENCODING).and_then(|v| v.to_str().ok()).unwrap_or("");
+    v.split(',')
+        .filter_map(|part| {
+            let mut it = part.split(';');
+            let name = it.next()?.trim().to_ascii_lowercase();
+            let refused = it.any(|p| p.trim().strip_prefix("q=").is_some_and(|q| q.trim().parse::<f32>().is_ok_and(|q| q <= 0.0)));
+            (!name.is_empty() && !refused).then_some(name)
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------- requests
@@ -1885,8 +2035,19 @@ async fn read_body(body: Body, headers: &HeaderMap, limit: u64, wait: Duration) 
     }
 }
 
-/// Every request but the live WebSocket.
+/// Every request but the live WebSocket. Whatever can change the Drive's file list tells the
+/// list cache once it is done (listcache.rs).
 async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
+    let parts: Vec<String> = req.uri().path().split('/').filter(|x| !x.is_empty()).map(str::to_string).collect();
+    let touches = parts.first().is_some_and(|a| a == "api") && listcache::may_change(req.method().as_str(), &parts[1..]);
+    let out = handle_inner(State(app), req).await;
+    if touches {
+        listcache::changed();
+    }
+    out
+}
+
+async fn handle_inner(State(app): State<Shared>, req: Request) -> Response<Body> {
     let (parts, body) = req.into_parts();
     let (method, uri, headers) = (parts.method, parts.uri, parts.headers);
     let peer = guard::peer(&parts.extensions);
@@ -2005,6 +2166,13 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
         return please_sign_in(&app, &headers);
     }
     let me = current_user(&app, &headers);
+    // The file list and the storage total: kept a few seconds per person (listcache.rs).
+    let cache_key =
+        (!app.auth || me.is_some()).then(|| listcache::key(&app.store.root, me.as_ref().map_or("", |u| u.username.as_str()), &m, &p, &q)).flatten();
+    let cache_gen = listcache::start();
+    if let Some(v) = cache_key.as_deref().and_then(listcache::get) {
+        return send_json(&v, 200);
+    }
     if let Some(resp) = contentsearch::route(&app, &m, &p, &q, me.clone()).await {
         return resp;
     }
@@ -2026,6 +2194,9 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
     }
     if m == "GET" && p.len() == 3 && p[0] == "files" && p[2] == "thumb" {
         return thumb(&app, me, p[1].clone(), &headers).await;
+    }
+    if m == "GET" && p.len() == 3 && p[0] == "files" && p[2] == "picture" {
+        return picture(&app, me, p[1].clone()).await;
     }
     if m == "PUT"
         && p.len() == 2
@@ -2177,6 +2348,9 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
                 && let Some(me) = me
             {
                 r = blocking(&app, move |app| after_files(app, &me, &m2, &p2, r)).await.unwrap_or(Err(Bad::new(500, "server error")));
+            }
+            if let (Some(k), Ok(Reply::Json(v, 200))) = (cache_key, &r) {
+                listcache::put(k, cache_gen, v.clone());
             }
             reply(r)
         }
@@ -2628,6 +2802,33 @@ mod tests {
         }
         let after: Vec<Vec<u8>> = starbase_templates::ALL.iter().map(|t| starbase_templates::bytes(t.key).unwrap().to_vec()).collect();
         assert_eq!(before, after, "the templates are unchanged");
+        // Closed untouched: gone for good (not in the bin); a rename, a save, or a wrong version keeps it.
+        let new = |tag: &str| {
+            let (app, ip, boss, url) = (app.clone(), ip.clone(), boss.clone(), format!("/api/templates/monthly-budget?folder={folder}"));
+            async move {
+                let g = send(&app, &ip, "POST", &url, &boss, &[], vec![]).await;
+                let _ = tag;
+                (
+                    g.json["id"].as_str().unwrap().to_string(),
+                    g.json["name"].as_str().unwrap().to_string(),
+                    g.json["version"].as_str().unwrap().to_string(),
+                )
+            }
+        };
+        let enc = |s: &str| form_urlencoded::byte_serialize(s.as_bytes()).collect::<String>();
+        let (id, name, ver) = new("a").await;
+        let d = |id: &str, name: &str, ver: &str| format!("/api/files/{id}/discard?version={}&name={}", enc(ver), enc(name));
+        assert_eq!(send(&app, &ip, "POST", &d(&id, &name, "wrong"), &boss, &[], vec![]).await.json["discarded"], false);
+        assert_eq!(send(&app, &ip, "POST", &d(&id, "Other.xlsx", &ver), &boss, &[], vec![]).await.json["discarded"], false, "renamed since");
+        assert_eq!(send(&app, &ip, "POST", &d(&id, &name, &ver), &vic, &[], vec![]).await.status, 403);
+        assert_eq!(send(&app, &ip, "POST", &d(&id, &name, &ver), &boss, &[], vec![]).await.json["discarded"], true);
+        assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{id}"), &boss, &[], vec![]).await.status, 404);
+        assert_eq!(send(&app, &ip, "GET", "/api/bin", &boss, &[], vec![]).await.json.as_array().map_or(0, Vec::len), 0, "not in the bin");
+        let (id, name, ver) = new("b").await;
+        let put = send(&app, &ip, "PUT", &format!("/api/files/{id}"), &boss, &[], b"edited".to_vec()).await;
+        assert_eq!(put.status, 200);
+        assert_eq!(send(&app, &ip, "POST", &d(&id, &name, &ver), &boss, &[], vec![]).await.json["discarded"], false, "edited");
+        assert_eq!(send(&app, &ip, "GET", &format!("/api/files/{id}"), &boss, &[], vec![]).await.status, 200);
         // The Drive opened without `dir` (no folder known yet): the copy goes to the person's
         // own top folder, never to a folder with an empty name.
         for url in ["/api/templates/monthly-budget", "/api/templates/monthly-budget?folder="] {
@@ -2664,6 +2865,64 @@ mod tests {
         assert_eq!(kinds, ["edited", "renamed", "link", "shared", "created"], "newest first");
         assert_eq!(g.json["activity"][0]["by"], "boss");
         assert_eq!(g.json["activity"][3]["detail"], "ann (can view)");
+        let _ = std::fs::remove_dir_all(&app.store.root);
+    }
+
+    /// The file list and storage total are kept a few seconds per person (listcache.rs), but a
+    /// change (upload, rename, move, share, delete, a save) shows at once, and nobody is ever
+    /// given another person's answer.
+    #[tokio::test]
+    async fn list_cache_never_stale_never_shared() {
+        let (app, ip, boss) = owned().await;
+        for who in ["ann", "vic"] {
+            let g = post(&app, &ip, "/api/users", &boss, json!({"username": who, "name": who, "password": format!("{who}password")})).await;
+            assert_eq!(g.status, 200);
+        }
+        let ann = cookie_of(&post(&app, &ip, "/api/login", "", json!({"username": "ann", "password": "annpassword"})).await);
+        let vic = cookie_of(&post(&app, &ip, "/api/login", "", json!({"username": "vic", "password": "vicpassword"})).await);
+        let names =
+            |g: &Got| -> Vec<String> { g.json["files"].as_array().unwrap().iter().map(|f| f["name"].as_str().unwrap().to_string()).collect() };
+        let list = |who: String| {
+            let (app, ip) = (app.clone(), ip.clone());
+            async move { send(&app, &ip, "GET", "/api/files", &who, &[], vec![]).await }
+        };
+        let used = |who: String| {
+            let (app, ip) = (app.clone(), ip.clone());
+            async move { send(&app, &ip, "GET", "/api/usage", &who, &[], vec![]).await.json["files"].as_u64().unwrap() }
+        };
+        // Warm the cache for everyone, twice (the second is a hit).
+        for who in [&boss, &ann, &vic] {
+            list(who.clone()).await;
+            assert!(names(&list(who.clone()).await).is_empty());
+        }
+        // Upload: shows at once for the uploader, and only for them.
+        let id = send(&app, &ip, "POST", "/api/files?name=Mine.xlsx", &ann, &[], b"one".to_vec()).await.json["id"].as_str().unwrap().to_string();
+        assert_eq!(names(&list(ann.clone()).await), ["Mine.xlsx"]);
+        assert!(names(&list(vic.clone()).await).is_empty(), "another person's file never shows");
+        assert_eq!(used(ann.clone()).await, 1);
+        assert_eq!(used(ann.clone()).await, 1);
+        assert_eq!(used(vic.clone()).await, 0);
+        // Rename.
+        assert_eq!(send(&app, &ip, "POST", &format!("/api/files/{id}/rename?name=Yours"), &ann, &[], vec![]).await.status, 200);
+        assert_eq!(names(&list(ann.clone()).await), ["Yours.xlsx"]);
+        // Share, then unshare: the other person's list changes at once.
+        assert_eq!(post(&app, &ip, &format!("/api/files/{id}/sharing"), &ann, json!({"people": {"vic": "view"}})).await.status, 200);
+        assert_eq!(names(&list(vic.clone()).await), ["Yours.xlsx"]);
+        assert_eq!(post(&app, &ip, &format!("/api/files/{id}/sharing"), &ann, json!({"people": {"vic": "remove"}})).await.status, 200);
+        assert!(names(&list(vic.clone()).await).is_empty(), "unsharing shows at once");
+        // Save (size changes).
+        let before = list(ann.clone()).await.json["files"][0]["size"].as_u64().unwrap();
+        assert_eq!(send(&app, &ip, "PUT", &format!("/api/files/{id}"), &ann, &[], b"longer bytes".to_vec()).await.status, 200);
+        assert_ne!(list(ann.clone()).await.json["files"][0]["size"].as_u64().unwrap(), before);
+        // Move into a new folder.
+        let made = send(&app, &ip, "POST", "/api/folders?name=Box&path=ann", &ann, &[], vec![]).await;
+        assert!(made.status < 300, "{:?}", made.json);
+        assert_eq!(send(&app, &ip, "POST", &format!("/api/files/{id}/move?folder=ann/Box"), &ann, &[], vec![]).await.status, 200);
+        assert_eq!(list(ann.clone()).await.json["files"][0]["folder"], "ann/Box");
+        // Delete.
+        assert_eq!(send(&app, &ip, "DELETE", &format!("/api/files/{id}"), &ann, &[], vec![]).await.status, 200);
+        assert!(names(&list(ann.clone()).await).is_empty());
+        assert_eq!(used(ann.clone()).await, 0);
         let _ = std::fs::remove_dir_all(&app.store.root);
     }
 
@@ -2825,6 +3084,33 @@ mod tests {
         assert_eq!(r.headers()[header::CONTENT_ENCODING], "gzip");
         assert!(r.headers()[header::CACHE_CONTROL].to_str().unwrap().contains("immutable"));
         assert_eq!(body(r).await, b"zipped");
+
+        // Brotli is preferred when offered and present; gzip-only clients still get gzip.
+        std::fs::write(site.join("docs/app-0123456789abcdef_bg.wasm.br"), b"brotlied").unwrap();
+        let r = serve_site(&site, "/docs/app-0123456789abcdef_bg.wasm", None, &gzip).await;
+        assert_eq!(r.headers()[header::CONTENT_ENCODING], "br");
+        assert_eq!(r.headers()[header::VARY], "Accept-Encoding");
+        assert_eq!(r.headers()[header::CONTENT_LENGTH], "8");
+        assert_eq!(body(r).await, b"brotlied");
+        let mut only_gzip = HeaderMap::new();
+        only_gzip.insert(header::ACCEPT_ENCODING, "gzip, br;q=0".parse().unwrap());
+        let r = serve_site(&site, "/docs/app-0123456789abcdef_bg.wasm", None, &only_gzip).await;
+        assert_eq!(r.headers()[header::CONTENT_ENCODING], "gzip");
+        let r = serve_site(&site, "/docs/app-0123456789abcdef_bg.wasm", None, &none).await;
+        assert!(r.headers().get(header::CONTENT_ENCODING).is_none());
+        assert_eq!(body(r).await, b"\0asm");
+
+        // Fonts: right type, compressed when offered, revalidated by ETag (no hash in the name).
+        std::fs::write(site.join("Font-Regular.ttf"), b"ttfdata").unwrap();
+        std::fs::write(site.join("Font-Regular.ttf.br"), b"ttfbr").unwrap();
+        let r = serve_site(&site, "/Font-Regular.ttf", None, &gzip).await;
+        assert_eq!(r.headers()[header::CONTENT_TYPE], "font/ttf");
+        assert_eq!(r.headers()[header::CONTENT_ENCODING], "br");
+        let tag = r.headers()[header::ETAG].to_str().unwrap().to_string();
+        assert_eq!(r.headers()[header::CACHE_CONTROL], "no-cache");
+        let mut again = gzip.clone();
+        again.insert(header::IF_NONE_MATCH, tag.parse().unwrap());
+        assert_eq!(serve_site(&site, "/Font-Regular.ttf", None, &again).await.status(), 304);
         let _ = std::fs::remove_dir_all(&site);
     }
 

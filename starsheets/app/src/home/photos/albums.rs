@@ -17,6 +17,7 @@ use crate::theme;
 pub(in crate::home) enum Tab {
     #[default]
     Photos,
+    Timeline,
     Albums,
     Places,
     People,
@@ -30,6 +31,7 @@ impl Tab {
     fn name(self) -> &'static str {
         match self {
             Tab::Photos => "photos",
+            Tab::Timeline => "timeline",
             Tab::Albums => "albums",
             Tab::Places => "places",
             Tab::People => "people",
@@ -114,7 +116,7 @@ pub(super) fn get(ctx: &egui::Context, store: &Backend, inbox: &Inbox, url: &str
                 Ok((200, b)) => wrap(serde_json::from_slice(&b).unwrap_or_default()),
                 Ok((s, b)) => {
                     let v: Json = serde_json::from_slice(&b).unwrap_or_default();
-                    Got::Error(v["error"].as_str().map_or(format!("The server said {s}."), str::to_string))
+                    Got::Error(crate::home::photos::said(&v, s))
                 }
                 Err(e) => Got::Error(e),
             };
@@ -135,7 +137,7 @@ pub(super) fn post(ctx: &egui::Context, store: &Backend, inbox: &Inbox, url: &st
                 Ok((200, _)) => Got::Changed,
                 Ok((s, b)) => {
                     let v: Json = serde_json::from_slice(&b).unwrap_or_default();
-                    Got::Error(v["error"].as_str().map_or(format!("The server said {s}."), str::to_string))
+                    Got::Error(crate::home::photos::said(&v, s))
                 }
                 Err(e) => Got::Error(e),
             };
@@ -172,7 +174,7 @@ impl Albums {
             Tab::Places => self.places = cards(v, "places"),
             Tab::People => self.ppl.take(v),
             Tab::Events => self.events = cards(v, "events"),
-            Tab::Photos | Tab::Duplicates | Tab::Locked => {}
+            Tab::Photos | Tab::Timeline | Tab::Duplicates | Tab::Locked => {}
         }
     }
 
@@ -213,7 +215,7 @@ impl PhotoMode {
             self.pics.clear();
             self.viewer = None;
             // Back to the folder: listed again.
-            if t == Tab::Photos {
+            if matches!(t, Tab::Photos | Tab::Timeline) {
                 self.folder = None;
             }
         }
@@ -224,6 +226,7 @@ impl PhotoMode {
         ui.add_space(house::S);
         for (t, label, icon) in [
             (Tab::Photos, "Photos", "photo_library"),
+            (Tab::Timeline, "Timeline", "schedule"),
             (Tab::Albums, "Albums", "collections"),
             (Tab::Places, "Places", "location_on"),
             (Tab::People, "People", "face"),
@@ -245,7 +248,9 @@ impl PhotoMode {
                 }
                 None => b,
             };
-            if ui.add(b).clicked() {
+            let resp = ui.add(b);
+            crate::house::target(ui.ctx(), label, resp.rect);
+            if resp.clicked() {
                 self.go(t);
             }
         }
@@ -355,7 +360,20 @@ impl PhotoMode {
             }
             return;
         }
-        if t == Tab::Albums {
+        // Places opens on the world map (map.rs); "List" there shows these cards.
+        if t == Tab::Places && !self.map.list {
+            self.map_ui(ui, store);
+            return;
+        }
+        if t == Tab::Places {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Places").size(house::TITLE).color(theme::TEXT));
+                if self.pill(ui, "Map", false) {
+                    self.map.list = false;
+                }
+            });
+            self.alb.boot_cards(&ctx, store, &self.inbox);
+        } else if t == Tab::Albums {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Albums").size(house::TITLE).color(theme::text()));
                 if self.pill(ui, "New album", false) {
@@ -410,7 +428,7 @@ impl PhotoMode {
                 .corner_radius(16)
                 .min_size(vec2(0.0, 32.0)),
         );
-        house::target(ui.ctx(), label, r.rect);
+        house::target(ui.ctx(), &format!("pill-{label}"), r.rect);
         r.clicked()
     }
 
@@ -514,13 +532,14 @@ impl PhotoMode {
             "home:photos:tab" => {
                 let t = match s("tab").as_str() {
                     "photos" => Tab::Photos,
+                    "timeline" => Tab::Timeline,
                     "albums" => Tab::Albums,
                     "people" => Tab::People,
                     "places" => Tab::Places,
                     "events" => Tab::Events,
                     "duplicates" => Tab::Duplicates,
                     "locked" => Tab::Locked,
-                    _ => return Err("tab is photos, albums, people, places, events, duplicates or locked".into()),
+                    _ => return Err("tab is photos, timeline, albums, people, places, events, duplicates or locked".into()),
                 };
                 self.go(t);
             }

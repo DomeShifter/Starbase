@@ -228,8 +228,13 @@ impl Files {
         {
             link.saved = at;
         }
-        let last_edit =
-            live.as_ref().and_then(|l| l.last_edit.clone()).map(|e| format!("Last edit was {} by {}", ago(e.at), e.by)).unwrap_or_default();
+        let last_edit = live.as_ref().and_then(|l| l.last_edit.clone()).map(|e| format!("Last edit by {}", e.by)).unwrap_or_default();
+        let when = self
+            .link
+            .as_ref()
+            .filter(|l| app.session.active().is_some_and(|d| d.uid == l.doc) && l.saved > 0)
+            .map(|l| ago(l.saved))
+            .unwrap_or_default();
         use crate::shell::{SaveState, SaveStatus};
         let status = if let Some(l) = live {
             Some(l.status)
@@ -250,6 +255,7 @@ impl Files {
         ctx.data_mut(|m| {
             m.insert_temp(egui::Id::unique(STATUS_TIP), tip);
             m.insert_temp(egui::Id::unique(LAST_EDIT), last_edit);
+            m.insert_temp(egui::Id::unique(crate::shell::SAVE_WHEN), when);
         });
     }
 
@@ -1273,6 +1279,9 @@ fn get_then(url: String, inbox: Rc<RefCell<Vec<Reply>>>, ctx: egui::Context, the
 /// The server's `error` text, or `what` and the status.
 fn server_error(status: u16, body: &[u8], what: &str) -> String {
     let v: Json = serde_json::from_slice(body).unwrap_or_default();
+    if v["error"].as_str().is_some_and(|e| e.trim().eq_ignore_ascii_case("no such file")) {
+        return crate::home::said(&v, status);
+    }
     v["error"].as_str().map_or_else(|| format!("{what} ({status})"), str::to_string)
 }
 

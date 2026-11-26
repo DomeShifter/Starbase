@@ -210,6 +210,21 @@ fn bold_button_makes_typed_text_bold() {
 }
 
 #[test]
+fn ctrl_b_i_u_format_the_selection() {
+    let mut h = window(1400.0);
+    type_text(&mut h, "plain words");
+    run(&mut h, "select.all", json!({}));
+    for key in [Key::B, Key::I, Key::U] {
+        keys(&mut h, Modifiers::COMMAND, key);
+    }
+    let f = h.state_mut().app.run("format.state", json!({})).unwrap();
+    assert_eq!((f["bold"].clone(), f["italic"].clone(), f["underline"].as_bool().is_some_and(|u| u)), (json!(true), json!(true), true), "{f}");
+    keys(&mut h, Modifiers::COMMAND, Key::Z);
+    let f = h.state_mut().app.run("format.state", json!({})).unwrap();
+    assert_ne!(f["underline"], json!(true), "Ctrl+Z undoes the underline: {f}");
+}
+
+#[test]
 fn toolbar_click_gives_the_keyboard_back_to_the_page() {
     let mut h = window(1400.0);
     click(&mut h, "Italic (Ctrl+I)");
@@ -1137,4 +1152,22 @@ fn leave_page_guard_only_while_something_is_unsaved() {
     for (d, p, s, want) in [(false, false, false, false), (true, false, false, true), (false, true, false, true), (false, false, true, true)] {
         assert_eq!(g(d, p, s), want, "dirty={d} pending={p} server={s}");
     }
+}
+
+/// An idle window must not keep repainting: after it settles, every frame may only ask for the next
+/// one at least 200 ms later (at most 5 repaints a second), e.g. a caret blink or a clock.
+#[test]
+fn idle_window_does_not_repaint() {
+    let mut h = window(1400.0);
+    steps(&mut h, 20);
+    let mut fast = Vec::new();
+    for _ in 0..20 {
+        steps(&mut h, 1);
+        let delay = h.output().viewport_output[&egui::ViewportId::ROOT].repaint_delay;
+        if delay < std::time::Duration::from_millis(200) {
+            let causes: Vec<String> = h.ctx.repaint_causes().iter().map(|c| format!("{}:{} {}", c.file, c.line, c.reason)).collect();
+            fast.push(format!("{delay:?} {causes:?}"));
+        }
+    }
+    assert!(fast.is_empty(), "idle frames asked to repaint again within 200 ms: {fast:#?}");
 }

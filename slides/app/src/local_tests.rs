@@ -90,7 +90,7 @@ fn a_new_presentation_is_a_named_pptx_in_documents_starbase_on_its_first_change(
     let bytes = std::fs::read(&saved).unwrap_or_default();
     assert!(bytes.starts_with(b"PK"), "a PowerPoint (zip) file at {}", saved.display());
     assert_eq!(h.state().link.saved(), Saved::Done);
-    assert!(h.query_by_label("Saved to this computer").is_some());
+    assert!(h.query_by_label("Saved on this computer").is_some());
     assert_eq!(h.state().link.recent(), Vec::<PathBuf>::new(), "the open file isn't in its own recent list");
     let names: Vec<_> = std::fs::read_dir(&docs).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
     assert_eq!(names, [NEW_NAME], "one file, no .deckcraft, no temporary file");

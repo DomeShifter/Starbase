@@ -149,12 +149,20 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Toggle("Show outline", "view.navigationPane", "navPane", "Ctrl+Alt+H"),
             Toggle("Show comments", "view.commentsPane", "commentsPane", ""),
             Toggle("Show word count", "stardocs.words", "stardocs.words", ""),
-            Toggle("Show non-printing characters", "view.marks", "marks", "Ctrl+Shift+P"),
+            Toggle("Show non-printing characters", "view.marks", "marks", "Ctrl+8"),
             Toggle("Show the menus", "stardocs.compact", "stardocs.menus", "Ctrl+Shift+F"),
             Sep,
             Cmd("Zoom in", "view.zoomIn", NO, ""),
             Cmd("Zoom out", "view.zoomOut", NO, ""),
             Cmd("Fit page width", "view.zoom", r#"{"value":"pageWidth"}"#, ""),
+            Sub(
+                "Pages side by side",
+                &[
+                    Toggle("1 page", "stardocs.pages1", "stardocs.pages1", ""),
+                    Toggle("2 pages", "stardocs.pages2", "stardocs.pages2", ""),
+                    Toggle("Auto: as many as fit", "stardocs.pagesAuto", "stardocs.pagesAuto", ""),
+                ],
+            ),
             Sep,
             Cmd("Full screen", "view.fullScreen", NO, ""),
         ],
@@ -267,7 +275,7 @@ pub const MENUS: &[(&str, &[Item])] = &[
                     Cmd("Bold", "format.bold", NO, "Ctrl+B"),
                     Cmd("Italic", "format.italic", NO, "Ctrl+I"),
                     Cmd("Underline", "format.underline", NO, "Ctrl+U"),
-                    Cmd("Strikethrough", "format.strikethrough", NO, "Alt+Shift+5"),
+                    Cmd("Strikethrough", "format.strikethrough", NO, "Ctrl+Shift+X"),
                     Cmd("Small caps", "format.smallCaps", NO, ""),
                     Cmd("Superscript", "format.superscript", NO, "Ctrl+."),
                     Cmd("Subscript", "format.subscript", NO, "Ctrl+,"),
@@ -362,10 +370,10 @@ pub const MENUS: &[(&str, &[Item])] = &[
             Sub(
                 "Align and indent",
                 &[
-                    Cmd("Left", "para.alignLeft", NO, "Ctrl+Shift+L"),
-                    Cmd("Centre", "para.alignCenter", NO, "Ctrl+Shift+E"),
-                    Cmd("Right", "para.alignRight", NO, "Ctrl+Shift+R"),
-                    Cmd("Justified", "para.justify", NO, "Ctrl+Shift+J"),
+                    Cmd("Left", "para.alignLeft", NO, "Ctrl+L"),
+                    Cmd("Centre", "para.alignCenter", NO, "Ctrl+E"),
+                    Cmd("Right", "para.alignRight", NO, "Ctrl+R"),
+                    Cmd("Justified", "para.justify", NO, "Ctrl+J"),
                     Sep,
                     Cmd("Increase indent", "para.indent", NO, "Ctrl+]"),
                     Cmd("Decrease indent", "para.outdent", NO, "Ctrl+["),
@@ -615,8 +623,56 @@ struct Flags {
     /// Asks for File › Version history: the panel, or the Name current version dialog.
     history: bool,
     name_version: bool,
+    /// How many pages sit side by side in Print layout (View › Pages side by side).
+    pages: Pages,
     /// Read from storage yet.
     loaded: bool,
+}
+
+/// View › Pages side by side: one page per row, two, or (the default, as before) as many whole pages as
+/// fit the window's width. Kept with the other flags, so each browser remembers its user's pick.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+enum Pages {
+    One,
+    Two,
+    #[default]
+    Auto,
+}
+
+impl Pages {
+    /// The command id (also the menu key) and the stored word for each choice.
+    const ALL: [(Pages, &'static str, &'static str); 3] =
+        [(Pages::One, "stardocs.pages1", "pages1"), (Pages::Two, "stardocs.pages2", "pages2"), (Pages::Auto, "stardocs.pagesAuto", "pagesAuto")];
+
+    fn from_id(id: &str) -> Option<Pages> {
+        Self::ALL.iter().find(|(_, i, _)| *i == id).map(|(p, _, _)| *p)
+    }
+
+    fn word(self) -> &'static str {
+        Self::ALL.iter().find(|(p, _, _)| *p == self).map_or("pages1", |(_, _, w)| w)
+    }
+
+    /// The most pages across WordCraft may show, 0 for as many as fit.
+    fn max_cols(self) -> usize {
+        match self {
+            Pages::One => 1,
+            Pages::Two => 2,
+            Pages::Auto => 0,
+        }
+    }
+
+    /// Sets the choice on the view; a fit mode that keeps one page per row (Page Width, One
+    /// Page) gives way to the zoom it shows, so the pages can sit side by side at that zoom.
+    fn choose(self, app: &mut WordApp) {
+        let v = &mut app.session.view;
+        v.max_page_cols = self.max_cols();
+        if self != Pages::One {
+            v.single_column = false;
+            if v.fit == "pageWidth" || v.fit == "onePage" {
+                v.fit.clear();
+            }
+        }
+    }
 }
 
 const FLAGS_KEY: &str = "stardocs.flags";
@@ -656,9 +712,23 @@ impl Flags {
             if let Some(v) = store::get(FLAGS_KEY) {
                 self.words = v.contains("words");
                 self.compact = v.contains("compact");
+                self.pages = if v.contains("pages1") {
+                    Pages::One
+                } else if v.contains("pages2") {
+                    Pages::Two
+                } else {
+                    Pages::Auto
+                };
             }
-        } else if (self.words, self.compact) != (before.words, before.compact) {
-            let v = [("words", self.words), ("compact", self.compact)].iter().filter(|(_, on)| *on).map(|(k, _)| *k).collect::<Vec<_>>().join(",");
+        } else if (self.words, self.compact, self.pages) != (before.words, before.compact, before.pages) {
+            let pages = (self.pages != Pages::Auto).then_some(self.pages.word());
+            let v = [("words", self.words), ("compact", self.compact)]
+                .iter()
+                .filter(|(_, on)| *on)
+                .map(|(k, _)| *k)
+                .chain(pages)
+                .collect::<Vec<_>>()
+                .join(",");
             store::set(FLAGS_KEY, &v);
         }
     }
@@ -676,6 +746,7 @@ fn is_on(app: &mut WordApp, flags: &Flags, key: &str) -> bool {
     match key {
         "stardocs.words" => flags.words,
         "stardocs.menus" => !flags.compact,
+        k if Pages::from_id(k).is_some() => Pages::from_id(k) == Some(flags.pages),
         "stardocs.print" => app.run("view.state", json!({})).ok().is_some_and(|v| v["mode"] == "print"),
         "trackChanges" => app.session.doc.settings.track_changes,
         "para.spaceBefore" => selection_para(app).space_before > 0.0,
@@ -767,6 +838,9 @@ fn is_own(id: &str) -> bool {
         id,
         "stardocs.words"
             | "stardocs.compact"
+            | "stardocs.pages1"
+            | "stardocs.pages2"
+            | "stardocs.pagesAuto"
             | "stardocs.shortcuts"
             | "stardocs.editing"
             | "stardocs.suggesting"
@@ -791,6 +865,10 @@ fn run_menu(app: &mut WordApp, ctx: &egui::Context, flags: &mut Flags, link: Opt
     match (id, link) {
         ("stardocs.words", _) => flags.words = !flags.words,
         ("stardocs.compact", _) => flags.compact = !flags.compact,
+        (id, _) if Pages::from_id(id).is_some() => {
+            flags.pages = Pages::from_id(id).unwrap_or_default();
+            flags.pages.choose(app);
+        }
         ("stardocs.shortcuts", _) => flags.shortcuts = true,
         ("stardocs.restartNumbering", _) => flags.restart = true,
         ("stardocs.emoji", _) => flags.emoji = true,
@@ -981,6 +1059,26 @@ impl Shell {
         Ok(json!(true))
     }
 
+    /// What the save-state icon shows for this document.
+    fn save_info(&self, app: &WordApp, link: &Link) -> starbase_savestate::SaveInfo {
+        use starbase_savestate::{SaveInfo, SaveKind};
+        let local = link.saved_text().contains("this computer");
+        let (kind, detail) = match link.saved() {
+            _ if link.view_only() => (SaveKind::ViewOnly, String::new()),
+            Saved::Failed(why) => (SaveKind::Problem, why),
+            Saved::Saving => (SaveKind::Saving, String::new()),
+            _ if app.session.dirty => (SaveKind::Unsaved, String::new()),
+            Saved::Done | Saved::Nothing => (SaveKind::Saved, String::new()),
+        };
+        // The latest version from the history list, once it has been loaded.
+        let version = self.history.list.as_ref().and_then(|list| {
+            let last = list.iter().max_by_key(|v| v.saved)?;
+            let by = if last.author.is_empty() { String::new() } else { last.author.clone() };
+            Some((u32::try_from(list.len()).unwrap_or(u32::MAX), by))
+        });
+        SaveInfo { kind, when: None, version, detail, local, history: !local }
+    }
+
     #[cfg_attr(not(any(target_arch = "wasm32", test)), allow(dead_code, reason = "the test hook's, browser and tests only"))]
     pub fn test_state(&mut self, app: &mut WordApp, link: Option<&Link>) -> Value {
         let cur = current(app);
@@ -994,6 +1092,7 @@ impl Shell {
             "title": link.map(Link::name),
             "saved": saved,
             "notice": link.and_then(Link::notice),
+            "saveIcon": link.map(|l| self.save_info(app, l).kind.word()),
             "viewOnly": link.is_some_and(Link::view_only),
             "commentOnly": link.is_some_and(Link::comment_only),
             "mode": match Mode::of(app) {
@@ -1005,6 +1104,10 @@ impl Shell {
             },
             "compact": self.flags.compact,
             "wordCountShown": self.flags.words,
+            "pagesSideBySide": self.flags.pages.word(),
+            "pageCols": app.canvas.cols,
+            "canvasRect": app.canvas.canvas_rect.map(|r| [r.min.x, r.min.y, r.width(), r.height()]),
+            "pageRects": app.canvas.page_rects.iter().map(|r| [r.min.x, r.min.y, r.width(), r.height()]).collect::<Vec<_>>(),
             "renaming": self.renaming,
             "dialogs": {
                 "share": self.share.is_open(),
@@ -1071,6 +1174,7 @@ impl Shell {
             });
         self.version_history(app, ui, link);
         self.zoom_on_open(app, ui.available_width());
+        app.session.view.max_page_cols = self.flags.pages.max_cols();
         self.share.ui(ui.ctx());
         self.custom_colour(app, ui.ctx());
         if std::mem::take(&mut self.flags.shortcuts) {
@@ -1089,7 +1193,41 @@ impl Shell {
         if self.flags.words {
             self.word_count.ui(app, ui.ctx());
         }
+        self.pages_control(app, ui.ctx());
         self.flags.sync(before);
+    }
+
+    /// The small "pages side by side" switch at the bottom right, as Word's status bar has: one
+    /// page, two, or as many as fit (View › Pages side by side). Print layout only.
+    fn pages_control(&mut self, app: &mut WordApp, ctx: &egui::Context) {
+        if app.session.view.mode != wordcraft_engine::layout::ViewMode::Print || app.session.view.read_mode {
+            return;
+        }
+        let mut picked = None;
+        egui::Area::new(egui::Id::unique("stardocs_pages_side_by_side"))
+            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-24.0, -16.0))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).inner_margin(egui::vec2(6.0, 3.0)).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        let choices =
+                            [(Pages::One, "1", "one page per row"), (Pages::Two, "2", "two pages"), (Pages::Auto, "Auto", "as many as fit")];
+                        for (p, label, tip) in choices {
+                            let text = egui::RichText::new(label).size(12.0);
+                            let r = ui.selectable_label(self.flags.pages == p, text).on_hover_text(format!("Pages side by side: {tip}"));
+                            target(ui.ctx(), &format!("pages {label}"), r.rect);
+                            if r.clicked() {
+                                picked = Some(p);
+                            }
+                        }
+                    });
+                });
+            });
+        if let Some(p) = picked {
+            self.flags.pages = p;
+            p.choose(app);
+        }
     }
 
     /// File › Version history: the panel on the right (drawn before the page, so the page takes
@@ -1825,18 +1963,18 @@ impl Shell {
             }
         }
         if let Some(link) = link {
-            let (text, colour) = match link.saved() {
-                _ if link.view_only() => ("View only".to_string(), TEXT_DIM),
-                Saved::Nothing => (String::new(), TEXT_DIM),
-                Saved::Saving => ("Saving…".to_string(), TEXT_DIM),
-                Saved::Done => (link.saved_text(), TEXT_DIM),
-                Saved::Failed(why) => (why, Color32::from_rgb(0xb3, 0x26, 0x1e)),
-            };
-            // Both stay on the title row, cut short to fit the window. A cut-short label shows
-            // its whole text on hover by itself: a tooltip of our own showed it twice.
-            if !text.is_empty() {
-                ui.add_space(10.0);
-                ui.add(egui::Label::new(RichText::new(&text).size(13.0).color(colour)).truncate());
+            // The save-state icon shared with Sheets and Slides (to-do 3 row 38); its card says
+            // what the old text beside the name said, shorter.
+            ui.add_space(6.0);
+            let info = self.save_info(app, link);
+            let pal = starbase_savestate::SavePalette::house(TEXT_DIM, PAGE);
+            let out = starbase_savestate::save_icon(ui, &info, &pal);
+            target(ui.ctx(), "save-icon", out.response.rect);
+            if let Some(card) = out.card {
+                target(ui.ctx(), "save-icon-card", card);
+            }
+            if out.response.clicked() && info.history {
+                self.flags.history = true;
             }
             if let Some(notice) = link.notice() {
                 ui.add_space(10.0);

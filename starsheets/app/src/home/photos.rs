@@ -19,10 +19,13 @@ use serde_json::Value as Json;
 
 pub(super) mod albums;
 mod dups;
+mod justify;
 mod locked;
 mod people;
+mod map;
 mod pick;
 pub(super) mod shell;
+mod timeline;
 mod upload;
 
 pub(super) use pick::{Act, Out};
@@ -38,8 +41,7 @@ pub(super) const LARGE: u32 = 1024;
 pub(super) const ORIGINAL: u32 = 0;
 /// Pictures asked for at once.
 const AT_ONCE: usize = 6;
-/// Target size of a grid square, and the gap between squares.
-const TILE: f32 = 180.0;
+/// The gap between pictures (the rows' target height: justify.rs).
 const GAP: f32 = 4.0;
 /// How long to wait before asking again for a thumbnail the server is still making (s).
 const RETRY: f64 = 2.0;
@@ -101,6 +103,43 @@ impl Pic {
     }
 }
 
+/// What to show for a failed request: the server's own words, except "no such file" (a picture
+/// moved or deleted since the list was drawn), which read like a leaked internal message at the
+/// top of Photos (To-do 3 row 43).
+pub(crate) fn said(v: &Json, status: u16) -> String {
+    said_in(v, status, "")
+}
+
+/// Like [`said`], with a prefix for the fallback ("Not saved: the server said 500.").
+pub(crate) fn said_in(v: &Json, status: u16, what: &str) -> String {
+    match v["error"].as_str() {
+        Some(e) if e.trim().eq_ignore_ascii_case("no such file") => "That picture isn't there any more. It was moved or deleted.".to_string(),
+        Some(e) => e.to_string(),
+        None if what.is_empty() => format!("The server said {status}."),
+        None => format!("{what}: the server said {status}."),
+    }
+}
+
+#[cfg(test)]
+mod said_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn no_such_file_is_never_shown_raw() {
+        let t = said(&json!({"error": "no such file"}), 404);
+        assert!(!t.contains("no such file") && t.contains("isn't there"), "{t}");
+        assert_eq!(said_in(&json!({"error": "no such file"}), 404, "Not saved"), t);
+    }
+
+    #[test]
+    fn other_messages_pass_through() {
+        assert_eq!(said(&json!({"error": "You don't have access to that."}), 403), "You don't have access to that.");
+        assert_eq!(said(&json!({}), 500), "The server said 500.");
+        assert_eq!(said_in(&json!({}), 500, "No copy made"), "No copy made: the server said 500.");
+    }
+}
+
 /// A video's length as the tile shows it: `0:07`, `12:30`, `1:02:03`.
 pub(super) fn duration_label(secs: f64) -> String {
     let t = secs.max(0.0).round() as u64;
@@ -151,6 +190,8 @@ pub(super) enum Got {
     Error(String),
     /// The album or place list (albums.rs), and one opened.
     Cards(albums::Tab, Json),
+    /// Every picture with a position, for the Places map (map.rs).
+    Map(Json),
     /// The Duplicates list for a folder (dups.rs).
     Dups(String, Json),
     Opened(albums::Tab, String, Json),
@@ -167,6 +208,8 @@ pub(super) enum Got {
     Unlocked,
     Wrong(String),
     Moved(Vec<String>, bool),
+    /// A picture was turned (id, left, the new thumbnail version) or couldn't be.
+    Rotated(String, bool, Result<Option<String>, String>),
     Nothing,
     /// A file picked for upload (name, bytes), and the answer for upload number n (true: a duplicate).
     Picked(String, Vec<u8>),
@@ -222,13 +265,6 @@ impl Textures {
     }
 }
 
-/// Columns and square size for a grid `width` wide (at least two columns).
-pub(super) fn layout(width: f32) -> (usize, f32) {
-    let cols = (((width + GAP) / (TILE + GAP)).floor() as usize).max(2);
-    let tile = ((width - GAP * (cols as f32 - 1.0)) / cols as f32).max(40.0);
-    (cols, tile)
-}
-
 /// The part of a picture `w` × `h` that fills a square (the middle of it), as texture coordinates.
 pub(super) fn cover_uv(w: f32, h: f32) -> Rect {
     if w <= 0.0 || h <= 0.0 {
@@ -258,10 +294,19 @@ pub(super) fn date_label(taken: Option<&str>, modified: i64) -> String {
     super::ago(modified)
 }
 
+/// The setting that remembers the Locked folder note was dismissed ("1").
+pub const LOCKED_HINT_KEY: &str = "starsheets_home_photos_hint_locked";
+/// The one-time note shown above the pictures in Photo Mode.
+pub const LOCKED_HINT: &str = "Hide private pictures: right-click a picture and choose Move to Locked folder. Find them under Locked on the left.";
+
 pub(super) struct PhotoMode {
     /// The switch: show folders as photos.
     pub on: bool,
     booted: bool,
+    /// The one-time "how to hide pictures" note: Got it was pressed (a setting, kept).
+    hint_dismissed: bool,
+    /// The note was drawn this frame (for the test hook).
+    hint_shown: bool,
     /// The folder listed, and whether with its subfolders.
     pub folder: Option<String>,
     pub sub: bool,
@@ -278,6 +323,11 @@ pub(super) struct PhotoMode {
     pub tex: Textures,
     asking: HashSet<Key>,
     retry_at: HashMap<Key, f64>,
+    /// The real width / height of pictures whose thumbnail has loaded and differs from the
+    /// listing's (turned by EXIF or by an edit): the grid lays out with it.
+    ratios: HashMap<String, f32>,
+    /// Rotations asked for and not yet answered, and the ones that worked (one Undo for all).
+    turning: (usize, Vec<super::undo::Step>),
     failed: HashSet<Key>,
     pub frame: u64,
     pub viewer: Option<Viewer>,
@@ -285,12 +335,16 @@ pub(super) struct PhotoMode {
     pub editor: Option<super::photo_edit::Editor>,
     /// Albums and Places beside the grid (albums.rs).
     pub alb: albums::Albums,
+    /// Places as a world map (map.rs).
+    pub(super) map: map::PlacesMap,
     /// The Duplicates tab (dups.rs).
     pub dups: dups::Dups,
     /// Selecting, the right-click menu, Add to album (pick.rs).
     pub pick: pick::Pick,
     /// The Locked tab (locked.rs).
     pub lk: locked::Locked,
+    /// The Timeline tab (timeline.rs).
+    pub tl: timeline::Timeline,
     /// Upload from this device (upload.rs).
     pub up: upload::Uploads,
     /// Photo Mode's room: dark look, set of pictures, type filter, search (shell.rs).
@@ -304,6 +358,8 @@ impl Default for PhotoMode {
         PhotoMode {
             on: false,
             booted: false,
+            hint_dismissed: false,
+            hint_shown: false,
             folder: None,
             sub: false,
             newest_first: true,
@@ -321,14 +377,18 @@ impl Default for PhotoMode {
             tex: Textures { budget: BUDGET, ..Default::default() },
             asking: HashSet::new(),
             retry_at: HashMap::new(),
+            ratios: HashMap::new(),
+            turning: (0, Vec::new()),
             failed: HashSet::new(),
             frame: 0,
             viewer: None,
             editor: None,
             alb: albums::Albums::default(),
+            map: map::PlacesMap::default(),
             dups: dups::Dups::default(),
             pick: pick::Pick::default(),
             lk: locked::Locked::default(),
+            tl: timeline::Timeline::default(),
             out: Vec::new(),
         }
     }
@@ -340,7 +400,44 @@ impl PhotoMode {
             self.booted = true;
             self.on = store.setting("starsheets_home_photos") == Some("1".into());
             self.newest_first = store.setting("starsheets_home_photos_order") != Some("old".into());
+            self.hint_dismissed = store.setting(LOCKED_HINT_KEY).as_deref() == Some("1");
         }
+    }
+
+    /// "Got it" on the Locked folder note: never shown again for this person.
+    pub fn dismiss_locked_hint(&mut self, store: &Backend) {
+        self.hint_dismissed = true;
+        store.set_setting(LOCKED_HINT_KEY, "1");
+    }
+
+    /// Drive's "Locked" entry: Photo Mode on, at the Locked tab (which asks for the password).
+    pub(in crate::home) fn open_locked(&mut self, store: &Backend) {
+        self.boot(store);
+        self.set_on(store, true);
+        self.go(albums::Tab::Locked);
+    }
+
+    /// The one-time note above the grid on how to hide pictures and where to find them.
+    fn locked_hint_ui(&mut self, ui: &mut Ui, store: &Backend) {
+        if self.hint_dismissed {
+            return;
+        }
+        self.hint_shown = true;
+        ui.add_space(house::S);
+        let card = house::card_frame().show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                if let Some(img) = crate::icons::icon("lock") {
+                    ui.add(img.fit_to_exact_size(vec2(18.0, 18.0)));
+                }
+                ui.label(RichText::new(LOCKED_HINT).size(house::BODY).color(theme::text()));
+                let ok = ui.add(house::link("Got it"));
+                crate::house::target(ui.ctx(), "photos:hint-locked:ok", ok.rect);
+                if ok.clicked() {
+                    self.dismiss_locked_hint(store);
+                }
+            });
+        });
+        crate::house::target(ui.ctx(), "photos:hint-locked", card.response.rect);
     }
 
     pub fn set_on(&mut self, store: &Backend, on: bool) {
@@ -379,7 +476,7 @@ impl PhotoMode {
                     Ok((200, b)) => Got::Listed(f, sub, serde_json::from_slice(&b).unwrap_or_default()),
                     Ok((s, b)) => {
                         let v: Json = serde_json::from_slice(&b).unwrap_or_default();
-                        Got::Error(v["error"].as_str().map_or(format!("The server said {s}."), str::to_string))
+                        Got::Error(crate::home::photos::said(&v, s))
                     }
                     Err(e) => Got::Error(e),
                 };
@@ -402,7 +499,7 @@ impl PhotoMode {
                     Ok((200, _)) => Got::Switched,
                     Ok((s, b)) => {
                         let v: Json = serde_json::from_slice(&b).unwrap_or_default();
-                        Got::Error(v["error"].as_str().map_or(format!("The server said {s}."), str::to_string))
+                        Got::Error(crate::home::photos::said(&v, s))
                     }
                     Err(e) => Got::Error(e),
                 };
@@ -485,6 +582,7 @@ impl PhotoMode {
         for g in got {
             match g {
                 Got::Cards(t, v) => self.alb.take_cards(t, &v),
+                Got::Map(v) => self.map.take(&v),
                 Got::Opened(t, key, v) => self.take_opened(t, &key, &v),
                 Got::Dups(f, v) => self.dups.take(&f, &v),
                 Got::Changed => self.alb.changed(ctx, store, &self.inbox),
@@ -498,6 +596,7 @@ impl PhotoMode {
                     self.lk.error = Some(e);
                 }
                 Got::Moved(ids, into) => self.moved(ctx, store, &ids, into),
+                Got::Rotated(id, left, r) => self.rotated(ctx, id, left, r),
                 Got::Nothing => {}
                 Got::Picked(name, bytes) => {
                     let f = folder.clone().or_else(|| self.folder.clone()).unwrap_or_default();
@@ -505,7 +604,7 @@ impl PhotoMode {
                 }
                 Got::Uploaded(i, r) => self.upload_answer(i, r, now),
                 Got::Listed(f, sub, v) => {
-                    if Some(&f) == self.folder.as_ref() && sub == self.sub && self.alb.tab == albums::Tab::Photos {
+                    if Some(&f) == self.folder.as_ref() && sub == self.sub && matches!(self.alb.tab, albums::Tab::Photos | albums::Tab::Timeline) {
                         self.take_list(&v);
                     }
                 }
@@ -557,7 +656,7 @@ impl PhotoMode {
         if let Some(f) = &folder
             && !self.loading
             && self.enabled == Some(true)
-            && self.alb.tab == albums::Tab::Photos
+            && matches!(self.alb.tab, albums::Tab::Photos | albums::Tab::Timeline)
             && (self.waiting > 0 || self.pics.iter().any(|p| p.state == "pending"))
             && now - self.listed_at > RELIST
         {
@@ -591,7 +690,9 @@ impl PhotoMode {
         if self.asking.len() >= AT_ONCE {
             return;
         }
-        let url = if size == ORIGINAL {
+        let url = if let Some(t) = id.strip_prefix("tile/") {
+            format!("api/photos/tiles/{t}.png")
+        } else if size == ORIGINAL {
             format!("api/files/{id}/raw")
         } else {
             match v {
@@ -615,10 +716,62 @@ impl PhotoMode {
         );
     }
 
+    /// Turns pictures a quarter (not videos or ones that can't be shown), as a saved edit.
+    pub(super) fn rotate(&mut self, ctx: &egui::Context, store: &Backend, ids: Vec<String>, left: bool) {
+        let ok = |p: &Pic| !p.is_video() && !matches!(p.state.as_str(), "failed" | "unsupported");
+        let ids: Vec<String> = ids.into_iter().filter(|id| self.pics.iter().any(|p| &p.id == id && ok(p))).collect();
+        if ids.is_empty() || self.turning.0 > 0 {
+            return;
+        }
+        self.turning = (ids.len(), Vec::new());
+        for id in ids {
+            let (inbox, ctx2, id2) = (self.inbox.clone(), ctx.clone(), id.clone());
+            store.call(
+                ctx,
+                Method::Post,
+                &format!("api/photos/rotate/{}", enc(&id)),
+                Some(super::undo::rotate_body(left)),
+                Box::new(move |a| {
+                    let r = match a {
+                        Ok((200, b)) => Ok(serde_json::from_slice::<Json>(&b).ok().and_then(|v| v["thumb_v"].as_str().map(str::to_string))),
+                        Ok((s, b)) => {
+                            let v: Json = serde_json::from_slice(&b).unwrap_or_default();
+                            Err(crate::home::photos::said(&v, s))
+                        }
+                        Err(e) => Err(e),
+                    };
+                    Self::push(&inbox, &ctx2, Got::Rotated(id2, left, r));
+                }),
+            );
+        }
+    }
+
+    /// One picture's turn answered: its thumbnail is asked for again, and when all are, Undo is offered.
+    fn rotated(&mut self, ctx: &egui::Context, id: String, left: bool, r: Result<Option<String>, String>) {
+        self.turning.0 = self.turning.0.saturating_sub(1);
+        match r {
+            Ok(v) => {
+                // The grid already lays it out turned; the new thumbnail confirms it.
+                let was = self.pics.iter().find(|p| p.id == id).map_or(4.0 / 3.0, |p| self.ratio_of(p));
+                self.edited(&id, v);
+                self.ratios.insert(id.clone(), 1.0 / was);
+                self.turning.1.push(super::undo::Step::Rotate { id, left });
+            }
+            Err(e) => self.error = Some(format!("Couldn't turn the picture: {e}")),
+        }
+        if self.turning.0 == 0 && !self.turning.1.is_empty() {
+            let steps = std::mem::take(&mut self.turning.1);
+            let label = format!("Rotated {}", if left { "left" } else { "right" });
+            self.say_undo(ctx, label.clone());
+            self.out.push(Out::Did(label, steps));
+        }
+    }
+
     /// Picture `id`'s edits were saved: its thumbnails are asked for again at version `v`
     /// (the server's thumbnails show the edited picture).
     pub fn edited(&mut self, id: &str, v: Option<String>) {
         self.tex.forget(id);
+        self.ratios.remove(id);
         for p in self.pics.iter_mut().filter(|p| p.id == id) {
             if v.is_some() {
                 p.v = v.clone();
@@ -651,6 +804,7 @@ impl PhotoMode {
     /// Left nav (Photos, Albums, Places) and what it shows.
     pub fn ui(&mut self, ui: &mut Ui, store: &Backend, folder: &str) {
         let ctx = ui.ctx().clone();
+        self.hint_shown = false;
         self.alb.boot_cards(&ctx, store, &self.inbox);
         // On a phone the nav is a wrapped row above the pictures, not a column beside them.
         if ui.available_width() < 560.0 {
@@ -671,7 +825,7 @@ impl PhotoMode {
 
     fn tab_ui(&mut self, ui: &mut Ui, store: &Backend, folder: &str) {
         match self.alb.tab {
-            albums::Tab::Photos => self.folder_ui(ui, store, folder),
+            albums::Tab::Photos | albums::Tab::Timeline => self.folder_ui(ui, store, folder),
             albums::Tab::People => self.people_ui(ui, store),
             albums::Tab::Duplicates => self.dups_ui(ui, store, folder),
             albums::Tab::Locked => self.locked_ui(ui, store),
@@ -703,6 +857,7 @@ impl PhotoMode {
         }
         if self.alb.selected.is_empty() {
             self.bar_ui(ui, store, folder);
+            self.locked_hint_ui(ui, store);
         } else {
             self.sel_bar_ui(ui, store);
         }
@@ -723,37 +878,54 @@ impl PhotoMode {
             ui.label(RichText::new(text).size(house::BODY).color(theme::text_dim()));
             return;
         }
-        self.grid(ui, store);
+        if self.alb.tab == albums::Tab::Timeline {
+            self.timeline_ui(ui, store);
+        } else {
+            self.grid(ui, store);
+        }
     }
 
-    /// The scrolling grid of `pics`.
+    /// The ratio (width / height) picture `i` is laid out with.
+    fn ratio_of(&self, p: &Pic) -> f32 {
+        self.ratios.get(&p.id).copied().unwrap_or_else(|| justify::ratio(p.width, p.height))
+    }
+
+    /// The scrolling grid of `pics`: justified rows, every picture in its own aspect ratio.
     pub(super) fn grid(&mut self, ui: &mut Ui, store: &Backend) {
         let ctx = ui.ctx().clone();
-        let (cols, tile) = layout(ui.available_width() - house::SCROLL_ROOM);
-        let rows = self.pics.len().div_ceil(cols);
-        ui.spacing_mut().item_spacing = vec2(GAP, GAP);
+        let width = (ui.available_width() - house::SCROLL_ROOM).max(80.0);
+        let ratios: Vec<f32> = self.pics.iter().map(|p| self.ratio_of(p)).collect();
+        let rows = justify::rows(&ratios, width, justify::target_for(width), GAP);
+        let (tops, total) = justify::offsets(&rows, GAP);
         let mut hit = None;
-        let shown = egui::ScrollArea::vertical().auto_shrink([false, false]).show_rows(ui, tile, rows, |ui, range| {
-            for row in range.clone() {
-                ui.horizontal(|ui| {
-                    for c in 0..cols {
-                        let i = row * cols + c;
-                        if i >= self.pics.len() {
-                            break;
-                        }
-                        if let Some(h) = self.tile_ui(ui, &ctx, store, i, tile) {
-                            hit = Some((i, h));
-                        }
+        let mut seen = 0..0;
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show_viewport(ui, |ui, view| {
+            let (_, area) = ui.allocate_space(vec2(width, total));
+            // One screen above and below what is shown.
+            let (lo, hi) = (view.min.y - view.height(), view.max.y + view.height());
+            let first = tops.partition_point(|t| *t < lo).saturating_sub(1);
+            let last = tops.partition_point(|t| *t < hi).min(rows.len());
+            seen = first..last;
+            for (row, top) in rows[first..last].iter().zip(&tops[first..last]) {
+                let mut x = 0.0;
+                for (i, r) in ratios.iter().enumerate().take(row.end).skip(row.start) {
+                    let w = r * row.height;
+                    let rect = Rect::from_min_size(area.min + vec2(x, *top), vec2(w, row.height));
+                    x += w + GAP;
+                    // Only what is on screen is asked for first; the rest below.
+                    if rect.max.y < area.min.y + view.min.y || rect.min.y > area.min.y + view.max.y {
+                        continue;
                     }
-                });
+                    if let Some(h) = self.tile_ui(ui, &ctx, store, i, rect) {
+                        hit = Some((i, h));
+                    }
+                }
             }
-            range
         });
-        // One screen ahead, after everything on screen was asked for.
-        let range = shown.inner;
-        let ahead = range.end..(range.end + range.len()).min(rows);
+        // A screen ahead, after everything on screen was asked for.
         let n = self.pics.len();
-        for i in ahead.flat_map(|r| r * cols..((r + 1) * cols).min(n)) {
+        let ahead = rows.get(seen.end..).unwrap_or(&[]).iter().take(seen.len().max(1));
+        for i in ahead.flat_map(|r| r.start..r.end.min(n)) {
             self.want(&ctx, store, i, SMALL);
         }
         match hit {
@@ -792,8 +964,8 @@ impl PhotoMode {
     }
 
     /// One square of the grid: a click (on its checkbox or not), or a right-click menu command.
-    fn tile_ui(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend, i: usize, tile: f32) -> Option<Hit> {
-        let (rect, resp) = ui.allocate_exact_size(vec2(tile, tile), Sense::click());
+    fn tile_ui(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend, i: usize, rect: Rect) -> Option<Hit> {
+        let resp = ui.interact(rect, ui.auto_id_with(("photo_tile", i)), Sense::click());
         self.want(ctx, store, i, SMALL);
         let p = &self.pics[i];
         let (name, date, state) = (p.name.clone(), date_label(p.taken.as_deref(), p.modified), p.state.clone());
@@ -801,7 +973,14 @@ impl PhotoMode {
         painter.rect_filled(rect, 0, Color32::from_rgb(0xE8, 0xEA, 0xED));
         if let Some((t, _)) = self.best(i, SMALL) {
             let [w, h] = t.size();
-            painter.image(t.id(), rect, cover_uv(w as f32, h as f32), Color32::WHITE);
+            painter.image(t.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            // The picture's real shape (turned by EXIF or an edit) replaces the listing's.
+            let real = justify::ratio(w as u32, h as u32);
+            let id = self.pics[i].id.clone();
+            let listed = justify::ratio(self.pics[i].width, self.pics[i].height);
+            if self.ratios.get(&id).map_or((real / listed - 1.0).abs() > 0.02, |r| (real / r - 1.0).abs() > 0.02) {
+                self.ratios.insert(id, real);
+            }
         } else if self.pics[i].is_video() {
             painter.rect_filled(rect, 0, Color32::from_rgb(0x3C, 0x40, 0x43));
         } else if state == "failed" || state == "unsupported" {
@@ -959,11 +1138,14 @@ impl PhotoMode {
             "waiting": self.waiting,
             "error": self.error,
             "count": self.pics.len(),
+            "timeline": self.tl.test_state(),
             "albums": self.alb.test_state(),
             "people": self.alb.ppl.test_state(),
+            "map": self.map.test_state(),
             "dups": self.dups.test_state(),
             "pick": self.pick.test_state(),
             "locked": self.locked_state(),
+            "lockedHint": { "shown": self.hint_shown, "dismissed": self.hint_dismissed },
             "upload": self.up.test_state(),
             "textures": { "count": self.tex.len(), "bytes": self.tex.total, "budget": self.tex.budget, "asking": self.asking.len() },
             "items": self.pics.iter().take(60).map(|p| json!({
@@ -1062,6 +1244,58 @@ pub(super) async fn decode_web(bytes: Vec<u8>, max: u32) -> Option<egui::ColorIm
 mod tests {
     use super::*;
 
+    /// Remembers settings like a browser's local storage; nothing else.
+    #[derive(Default)]
+    struct Settings(std::cell::RefCell<HashMap<String, String>>);
+
+    impl crate::store::Store for Settings {
+        fn call(&self, _: &egui::Context, _: crate::store::Method, _: &str, _: Option<Vec<u8>>, _: crate::store::Done) {}
+        fn open(&self, _: &str, _: &str) -> Result<(), String> {
+            Ok(())
+        }
+        fn new_file(&self, _: &str, _: bool) -> Result<(), String> {
+            Ok(())
+        }
+        fn pick_files(&self, _: Box<dyn Fn(String, Vec<u8>)>) {}
+        fn download(&self, _: &str, _: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn setting(&self, key: &str) -> Option<String> {
+            self.0.borrow().get(key).cloned()
+        }
+        fn set_setting(&self, key: &str, value: &str) {
+            self.0.borrow_mut().insert(key.into(), value.into());
+        }
+        fn has_photos(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn locked_hint_shows_until_got_it_then_never_again() {
+        let store = Backend(std::rc::Rc::new(Settings::default()));
+        let mut p = PhotoMode::default();
+        p.boot(&store);
+        assert!(!p.hint_dismissed, "new person: the note shows");
+        p.dismiss_locked_hint(&store);
+        assert!(p.hint_dismissed);
+        assert_eq!(store.setting(LOCKED_HINT_KEY).as_deref(), Some("1"), "kept as a setting");
+        let mut again = PhotoMode::default();
+        again.boot(&store);
+        assert!(again.hint_dismissed, "next visit: not shown again");
+    }
+
+    #[test]
+    fn drive_locked_entry_turns_photo_mode_on_at_locked() {
+        let store = Backend(std::rc::Rc::new(Settings::default()));
+        let mut p = PhotoMode::default();
+        assert!(!p.on);
+        p.open_locked(&store);
+        assert!(p.on, "Photo Mode on");
+        assert_eq!(store.setting("starsheets_home_photos").as_deref(), Some("1"), "and remembered");
+        assert!(p.alb.tab == albums::Tab::Locked, "at the Locked tab (asks for the password)");
+    }
+
     #[test]
     fn video_lengths_read_like_a_player() {
         assert_eq!([duration_label(7.4), duration_label(750.0), duration_label(3723.0)], ["0:07", "12:30", "1:02:03"]);
@@ -1084,14 +1318,6 @@ mod tests {
             assert_eq!(stars_on(&sel, &pics, drive), on, "{why}");
         }
         assert!(!stars_on(&ids(&["d"]), &[], |_| Some(true)), "the Drive answers for pictures Photos hasn't listed");
-    }
-
-    #[test]
-    fn the_grid_fills_the_width() {
-        assert_eq!(layout(1000.0).0, 5);
-        let (cols, tile) = layout(1000.0);
-        assert!((cols as f32 * tile + GAP * (cols - 1) as f32 - 1000.0).abs() < 0.01);
-        assert_eq!(layout(200.0).0, 2, "a phone still gets two columns");
     }
 
     #[test]

@@ -13,6 +13,8 @@ path = "src/main.rs"
 [dependencies]
 gridcraft-engine = { workspace = true }
 gridcraft-ui-egui = { workspace = true }
+# The save-state icon on the title row (shared with Docs and Slides).
+starbase-savestate = { path = "../crates/savestate" }
 gridcraft-chart = { workspace = true }
 # SVG loader for the toolbar icons (resvg).
 egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
@@ -28,6 +30,7 @@ png = "0.18"
 # decoders: the browser decodes).
 starbase-photo-edit = { path = "../crates/photo-edit" }
 starbase-templates = { path = "../crates/templates" }
+starbase-clipboard = { path = "../crates/clipboard" }
 image = { version = "0.25", default-features = false }
 # Drive previews of Markdown files (home/textpreview.rs): parsing only, no HTML output.
 pulldown-cmark = { version = "0.13", default-features = false }
@@ -54,7 +57,7 @@ rfd = { workspace = true }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "Event", "EventTarget", "BeforeUnloadEvent", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "HtmlIFrameElement", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration", "Clipboard", "ClipboardItem", "Navigator", "MessageEvent", "UrlSearchParams", "AddEventListenerOptions", "Storage", "CustomEvent", "CustomEventInit", "Request", "RequestInit", "Response", "Headers", "History", "WebSocket", "BinaryType", "CloseEvent", "ImageBitmap", "ImageBitmapOptions", "ResizeQuality", "OffscreenCanvas", "OffscreenCanvasRenderingContext2d", "ImageData", "HtmlTextAreaElement", "PointerEvent", "MouseEvent", "KeyboardEvent", "FocusEvent", "FocusOptions", "DomRect", "HtmlInputElement", "FileList", "File"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "Event", "EventTarget", "BeforeUnloadEvent", "HtmlElement", "HtmlCanvasElement", "HtmlAnchorElement", "HtmlIFrameElement", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration", "Clipboard", "ClipboardItem", "Navigator", "MessageEvent", "UrlSearchParams", "AddEventListenerOptions", "Storage", "CustomEvent", "CustomEventInit", "Request", "RequestInit", "Response", "Headers", "History", "WebSocket", "BinaryType", "CloseEvent", "ImageBitmap", "ImageBitmapOptions", "ResizeQuality", "OffscreenCanvas", "OffscreenCanvasRenderingContext2d", "ImageData", "HtmlTextAreaElement", "PointerEvent", "MouseEvent", "KeyboardEvent", "FocusEvent", "FocusOptions", "DomRect", "HtmlInputElement", "HtmlHeadElement", "FileList", "File"] }
 
 # Native tests of the photo editor (home/photo_edit.rs): egui_kittest's accessibility tree, no GPU.
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]

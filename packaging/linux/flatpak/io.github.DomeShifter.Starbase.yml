@@ -99,7 +99,7 @@ modules:
       # starsheets/scripts/fetch-upstream.sh fetches). pin-engines.sh keeps the two equal.
       - type: git
         url: https://github.com/DomeShifter/gridcraft.git
-        commit: 8634647f297c35410659e07a3591879172591555
+        commit: 06fc152e301c850f143283af45f097fc376e7e4c
         dest: starsheets/upstream/gridcraft
       - cargo-sources-starsheets.json
 
@@ -146,7 +146,7 @@ modules:
       # two equal (pin-engines.sh). stardocs/Cargo.toml is committed, so gen-cargo.py need not run.
       - type: git
         url: https://github.com/DomeShifter/wordcraft.git
-        commit: 297d5165ec2df41651752a7387f94689e0aa3417
+        commit: 95d9dbe22ef29eed38595ef28ffa5f77a938f2f3
         dest: stardocs/upstream/wordcraft
       - cargo-sources-stardocs.json
 

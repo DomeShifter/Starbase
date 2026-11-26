@@ -7,6 +7,7 @@
 // `--version`/`--help` join the terminal that started them (starbase_connect::attach_terminal).
 #![recursion_limit = "256"] // the Photos test-state json! has grown past the default
 #![cfg_attr(all(windows, not(debug_assertions), not(test)), windows_subsystem = "windows")]
+#![recursion_limit = "256"]
 
 #[cfg(target_arch = "wasm32")]
 mod account;
@@ -61,7 +62,9 @@ mod namespanel;
 mod native;
 mod notes;
 mod panels;
+mod pasteprompt;
 mod pivotpanel;
+mod prefetch;
 #[cfg(target_arch = "wasm32")]
 mod prefs;
 mod protectpanel;

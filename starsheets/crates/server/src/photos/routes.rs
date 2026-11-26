@@ -55,7 +55,7 @@ pub async fn route(
     if p.first().map(String::as_str) != Some("photos") {
         return None;
     }
-    if p.len() >= 2 && (p[1] == "albums" || p[1] == "places" || p[1] == "events") {
+    if p.len() >= 2 && (p[1] == "albums" || p[1] == "places" || p[1] == "events" || p[1] == "tiles") {
         return Some(super::albums::route(app, m, p, q, me, body).await);
     }
     if p.len() >= 2 && (p[1] == "people" || p[1] == "faces") {
@@ -63,6 +63,9 @@ pub async fn route(
     }
     if p.len() == 3 && p[1] == "edits" {
         return Some(super::edits::route(app, m, p[2].clone(), me, headers, body).await);
+    }
+    if p.len() == 3 && p[1] == "rotate" {
+        return Some(super::edits::rotate(app, m, p[2].clone(), me, body).await);
     }
     if p.len() == 3 && p[1] == "export" {
         return Some(super::export::route(app, m, p[2].clone(), me, body).await);

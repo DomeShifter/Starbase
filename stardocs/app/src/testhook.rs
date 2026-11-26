@@ -208,9 +208,20 @@ fn snapshot(app: &mut WordApp, shell: &mut Shell, link: Option<&Link>, ctx: &egu
         }
         text.truncate(end);
     }
+    // Screen rects (egui points, [x, y, w, h]) of the pages and comment cards drawn last frame.
+    let r4 = |r: &egui::Rect| json!([r.min.x, r.min.y, r.width(), r.height()]);
+    let pages: Vec<Value> = app.canvas.page_rects.iter().map(r4).collect();
+    let pane_cards: Vec<Value> = app.canvas.pane_card_rects.iter().map(|(id, r)| json!({ "id": id, "rect": r4(r) })).collect();
+    let balloons: Vec<Value> = app.canvas.balloon_rects.iter().map(|(id, r)| json!({ "id": id, "rect": r4(r) })).collect();
     json!({
         "shell": shell_state,
         "targets": crate::shell::targets(ctx),
+        "pages": pages,
+        "balloons": balloons,
+        "paneCards": pane_cards,
+        "selectedText": app.session.selected_text(),
+        // The comment drawn as active (its text highlighted): the clicked card, else the one at the caret.
+        "shownComment": app.canvas.balloon.or_else(|| wordcraft_engine::cmd::review::comment_range_at_caret(&app.session)),
         "format": format,
         "view": view,
         "words": words,

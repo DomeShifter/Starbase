@@ -31,6 +31,8 @@ mod input;
 mod items;
 mod photo_edit;
 mod photos;
+#[cfg(target_arch = "wasm32")]
+pub(crate) use photos::said;
 mod sidebar;
 mod templates;
 #[cfg(target_arch = "wasm32")]
@@ -39,12 +41,15 @@ pub(crate) mod textpreview;
 mod undo;
 mod video;
 mod viewer;
+mod viewopts;
 
 const LEFT: f32 = 256.0;
 const TOP: f32 = 64.0;
 const CARD_W: f32 = 216.0;
 const CARD_H: f32 = 196.0;
 const PIC_H: f32 = 144.0;
+/// Height of a card's second text line (date / owner), dropped when dates are off.
+const SUB_H: f32 = 16.0;
 const CHIP_H: f32 = 48.0;
 const ROW: f32 = 40.0;
 /// Starbase Drive's accent: Google Drive's blue (drop targets, dialog buttons), not Sheets' green.
@@ -135,7 +140,7 @@ enum Reply {
     /// One request of an undoable action answered: what it did (None: nothing), or why not.
     Did(u64, Result<Option<undo::Step>, String>),
     /// One request of an undo answered.
-    Undone(Result<(), String>),
+    Undone(Result<Option<(String, Option<String>)>, String>),
     /// The files whose text matches a search: (the search, [(file id, snippet)]).
     Found(String, Vec<(String, String)>),
     Error(String),
@@ -190,6 +195,8 @@ pub struct Home {
     forward: Vec<View>,
     expanded: HashSet<String>,
     list: bool,
+    /// List columns and grid cards (viewopts.rs).
+    vo: viewopts::ViewOpts,
     /// Sort: by (0 name, 1 date modified, 2 size), Z–A / newest / largest first, and whether
     /// folders are mixed in with files instead of kept at the top.
     sort_by: u8,
@@ -206,6 +213,8 @@ pub struct Home {
     /// Files whose text holds the search words (id → snippet), for the search in `found_for`.
     found: HashMap<String, String>,
     found_for: String,
+    /// Whether grid cards carry a second line (date on, or an owner/snippet line somewhere): sets the card height.
+    card_sub: bool,
     /// The search last sent to the server for text matches.
     asked: String,
     /// The chips under the search box (filters.rs).
@@ -309,12 +318,19 @@ fn call_any(
     then: impl FnOnce(Result<Vec<u8>, (u16, String)>) -> Reply + 'static,
 ) {
     let (inbox2, ctx2) = (inbox.clone(), ctx.clone());
+    // Kept for the console line below, so an error on screen can be traced to its request.
+    let (what, path) = (format!("{method:?}"), url.split('?').next().unwrap_or("").to_string());
     store.call(
         ctx,
         method,
         &url,
         body,
         Box::new(move |answer| {
+            match &answer {
+                Ok((s, _)) if *s >= 400 => log::warn!("request {what} /{path} failed: {s}"),
+                Err(e) => log::warn!("request {what} /{path} failed: {e}"),
+                _ => {}
+            }
             let reply = match answer {
                 Ok((s, bytes)) if s < 400 => then(Ok(bytes)),
                 Ok((401, _)) => {
@@ -324,7 +340,7 @@ fn call_any(
                 }
                 Ok((s, bytes)) => {
                     let v: Json = serde_json::from_slice(&bytes).unwrap_or_default();
-                    then(Err((s, v["error"].as_str().map_or(format!("The server said {s}."), str::to_string))))
+                    then(Err((s, crate::home::photos::said(&v, s))))
                 }
                 Err(e) => then(Err((0, e))),
             };
@@ -836,20 +852,12 @@ impl Home {
             None => egui::Button::new(label),
         };
         let r = ui.add(b.fill(Color32::WHITE).stroke(Stroke::new(1.0, theme::BOX)).corner_radius(16).min_size(vec2(88.0, 32.0)));
+        house::target(ui.ctx(), "Sort", r.rect);
         egui::Popup::menu(&r).show(|ui| {
             house::menu(ui, 240.0);
             let tick = |on: bool| Some(if on { "check" } else { "" });
             house::menu_inset(ui, |ui| house::caps(ui, "Sort by"));
-            for (i, l) in ["Name", "Date modified", "Size"].iter().enumerate() {
-                if house::menu_row(ui, tick(self.sort_by == i as u8), l, "", true) {
-                    // Dates and sizes read best newest / largest first.
-                    if self.sort_by != i as u8 {
-                        self.descending = i != 0;
-                    }
-                    self.sort_by = i as u8;
-                    self.save_sort();
-                }
-            }
+            self.sort_by_rows(ui);
             house::menu_sep(ui);
             house::menu_inset(ui, |ui| house::caps(ui, "Sort direction"));
             let (up, down) = match self.sort_by {
@@ -872,6 +880,21 @@ impl Home {
                 self.save_sort();
             }
         });
+    }
+
+    /// The Sort by rows (Sort menu and the Grid ▾ menu).
+    fn sort_by_rows(&mut self, ui: &mut Ui) {
+        let tick = |on: bool| Some(if on { "check" } else { "" });
+        for (i, l) in ["Name", "Date modified", "Size"].iter().enumerate() {
+            if house::menu_row(ui, tick(self.sort_by == i as u8), l, "", true) {
+                // Dates and sizes read best newest / largest first.
+                if self.sort_by != i as u8 {
+                    self.descending = i != 0;
+                }
+                self.sort_by = i as u8;
+                self.save_sort();
+            }
+        }
     }
 
     fn title(&self) -> Vec<(String, Option<View>)> {
@@ -919,6 +942,7 @@ impl Home {
         if !self.booted {
             self.booted = true;
             self.list = self.store.setting("starsheets_home_list") == Some("1".into());
+            self.vo = viewopts::ViewOpts::load(&self.store);
             if let Some(s) = self.store.setting("starsheets_home_sort").filter(|s| s.len() == 3) {
                 let b = s.as_bytes();
                 self.sort_by = (b[0] - b'0').min(2);
@@ -1089,6 +1113,7 @@ impl Home {
 
     pub fn ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        crate::prefetch::tick(&ctx, self.loading, ui.input(|i| i.time));
         self.templates_ui(&ctx);
         let photo_mode = self.photo_folder().is_some();
         ui.painter().rect_filled(ui.max_rect(), 0, theme::page());

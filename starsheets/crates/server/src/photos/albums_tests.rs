@@ -39,10 +39,18 @@ async fn albums_are_virtual_and_show_only_what_the_viewer_may_see() {
     for f in ["ann/Trip", "ann/Private"] {
         assert_eq!(send(&app, "POST", &format!("/api/photos/enable?folder={f}"), Some("ann"), &[], "").await.status, 200);
     }
-    // Wait until the pictures are read (the place needs the GPS).
+    // Wait until ALL three pictures are read, not just the one with GPS: adding to an album
+    // only takes pictures the index knows, so c.jpg could still be missing under load.
     let t = Instant::now();
-    while get(&app, "/api/photos/places", Some("ann"), &[]).await.json["places"].as_array().is_none_or(|p| p.is_empty()) {
-        assert!(t.elapsed() < Duration::from_secs(20), "never read");
+    loop {
+        let places = get(&app, "/api/photos/places", Some("ann"), &[]).await;
+        let st = get(&app, "/api/photos/status", Some("boss"), &[]).await;
+        let ready = st.json["pictures"]["ready"].as_u64().unwrap_or(0);
+        let pending = st.json["pictures"]["pending"].as_u64().unwrap_or(1);
+        if places.json["places"].as_array().is_some_and(|p| !p.is_empty()) && ready >= 3 && pending == 0 {
+            break;
+        }
+        assert!(t.elapsed() < Duration::from_secs(30), "never read: {}", st.json);
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
@@ -103,6 +111,14 @@ async fn albums_are_virtual_and_show_only_what_the_viewer_may_see() {
     let g = get(&app, &format!("/api/photos/places?place={}", name.replace(' ', "%20").replace(',', "%2C")), Some("ann"), &[]).await;
     assert_eq!((g.status, g.json["photos"].as_array().map(Vec::len)), (200, Some(1)), "{}", g.json);
     assert_eq!(get(&app, "/api/photos/places?place=Nowhere", Some("ann"), &[]).await.status, 404);
+    // The map: every picture with a position, with lat/lon; nothing for a viewer; no tiles unless set.
+    let g = get(&app, "/api/photos/places?all=1", Some("ann"), &[]).await;
+    let pts = g.json["photos"].as_array().unwrap();
+    assert_eq!(pts.len(), 1, "{}", g.json);
+    assert!(pts[0]["gps"]["lat"].as_f64().is_some_and(|l| (51.0..52.0).contains(&l)), "{}", g.json);
+    assert!(g.json["tiles"].is_null(), "{}", g.json);
+    assert_eq!(get(&app, "/api/photos/places?all=1", Some("bob"), &[]).await.json["photos"], json!([]));
+    assert_eq!(get(&app, "/api/photos/tiles/1/0/0.png", Some("bob"), &[]).await.status, 404);
 
     // Remove, then delete: the files stay.
     let g = post(&app, &format!("{url}/remove"), "ann", json!({"files": [b]})).await;

@@ -81,12 +81,18 @@ impl Home {
                         .clicked()
                 };
                 let photos = self.photo_folder().is_some();
-                if toggle(ui, "grid_view", !self.list && !photos, "Grid") {
+                // [Grid | ▾] and [List | ▾]: the ▾ holds that view's options (viewopts.rs).
+                let (grid, more) = self.view_button(ui, "grid_view", !self.list && !photos, "Grid");
+                self.grid_menu(&more);
+                if grid {
                     self.list = false;
                     self.store.set_setting("starsheets_home_list", "0");
                     self.photos.set_on(&self.store, false);
                 }
-                if toggle(ui, "view_list", self.list && !photos, "List") {
+                ui.add_space(house::S);
+                let (list, more) = self.view_button(ui, "view_list", self.list && !photos, "List");
+                self.list_menu(&more);
+                if list {
                     self.list = true;
                     self.store.set_setting("starsheets_home_list", "1");
                     self.photos.set_on(&self.store, false);
@@ -154,6 +160,7 @@ impl Home {
                 ui.label(RichText::new(empty).size(house::BODY).color(theme::TEXT_DIM));
             }
             let order = self.shown(&folders, &files);
+            self.card_sub = files.iter().any(|f| !self.card_sub_text(f).is_empty());
             if (self.list || self.view == Some(View::Storage)) && !order.is_empty() {
                 self.list_ui(ui, &order, &mut clicked_item);
             } else if self.mixed && !matches!(self.view, Some(View::Recent | View::Storage)) {
@@ -304,7 +311,8 @@ impl Home {
 
     pub(super) fn folder_chip(&mut self, ui: &mut Ui, f: &FolderRow, clicked_item: &mut bool) {
         let item = Item::Folder(f.path.clone());
-        let (r, resp) = ui.allocate_exact_size(vec2(CARD_W, CHIP_H), Sense::click_and_drag());
+        let (cw, _, _) = self.vo.card_with(self.vo.dates || self.card_sub);
+        let (r, resp) = ui.allocate_exact_size(vec2(cw, CHIP_H), Sense::click_and_drag());
         let sel = self.selected.contains(&item);
         let p = ui.painter().clone();
         p.rect_filled(
@@ -326,7 +334,7 @@ impl Home {
             img.paint_at(ui, Rect::from_center_size(r.right_center() - vec2(if f.starred { 40.0 } else { 18.0 }, 0.0), vec2(16.0, 16.0)));
         }
         if !self.renaming_ui(ui, &item, Rect::from_min_max(r.min + vec2(44.0, 8.0), r.max - vec2(8.0, 8.0))) {
-            let galley = p.layout(self.folder_label(&f.path), FontId::proportional(14.0), theme::TEXT, CARD_W - 76.0);
+            let galley = p.layout(self.folder_label(&f.path), FontId::proportional(14.0), theme::TEXT, cw - 76.0);
             p.galley(egui::pos2(r.left() + 44.0, r.center().y - galley.size().y.min(20.0) / 2.0), galley, theme::TEXT);
         }
         if f.starred
@@ -346,7 +354,8 @@ impl Home {
     /// A folder the size of a file card (when folders are mixed in with files).
     pub(super) fn folder_card(&mut self, ui: &mut Ui, f: &FolderRow, clicked_item: &mut bool) {
         let item = Item::Folder(f.path.clone());
-        let (r, resp) = ui.allocate_exact_size(vec2(CARD_W, CARD_H), Sense::click_and_drag());
+        let (cw, ch, ph) = self.vo.card_with(self.vo.dates || self.card_sub);
+        let (r, resp) = ui.allocate_exact_size(vec2(cw, ch), Sense::click_and_drag());
         let sel = self.selected.contains(&item);
         let p = ui.painter().clone();
         p.rect_filled(
@@ -360,18 +369,20 @@ impl Home {
                 theme::TOOLBAR
             },
         );
-        let pic = Rect::from_min_size(r.min + vec2(8.0, 8.0), vec2(CARD_W - 16.0, PIC_H - 8.0));
+        let pic = Rect::from_min_size(r.min + vec2(8.0, 8.0), vec2(cw - 16.0, ph - 8.0));
         p.rect_filled(pic, 6, Color32::WHITE);
         folder_icon(ui, f, Rect::from_center_size(pic.center(), vec2(64.0, 64.0)));
-        let line = Rect::from_min_max(egui::pos2(r.left() + 8.0, r.top() + PIC_H), r.max - vec2(8.0, 4.0));
+        let line = Rect::from_min_max(egui::pos2(r.left() + 8.0, r.top() + ph), r.max - vec2(8.0, 4.0));
         folder_icon(ui, f, Rect::from_center_size(egui::pos2(line.left() + 10.0, line.top() + 16.0), vec2(18.0, 18.0)));
         if !self.renaming_ui(ui, &item, Rect::from_min_size(egui::pos2(line.left() + 26.0, line.top() + 4.0), vec2(line.width() - 30.0, 26.0))) {
             let name = one_line(&p, self.folder_label(&f.path), 14.0, theme::TEXT, line.width() - 52.0);
             p.galley(egui::pos2(line.left() + 28.0, line.top() + 6.0), name, theme::TEXT);
         }
         let (newest, _) = self.folder_stats(&f.path);
-        let sub = if newest > 0 { format!("Folder · {}", ago(newest)) } else { "Folder".into() };
-        p.text(egui::pos2(line.left() + 28.0, line.top() + 36.0), Align2::LEFT_CENTER, sub, FontId::proportional(12.0), theme::TEXT_DIM);
+        if self.vo.dates {
+            let sub = if newest > 0 { format!("Folder · {}", ago(newest)) } else { "Folder".into() };
+            p.text(egui::pos2(line.left() + 28.0, line.top() + 36.0), Align2::LEFT_CENTER, sub, FontId::proportional(12.0), theme::TEXT_DIM);
+        }
         let resp = resp.on_hover_text(self.folder_label(&f.path));
         self.interact(ui, &item, &resp, clicked_item);
     }
@@ -379,7 +390,8 @@ impl Home {
     pub(super) fn file_card(&mut self, ui: &mut Ui, ctx: &egui::Context, f: &FileRow, clicked_item: &mut bool) {
         let item = Item::File(f.id.clone());
         let kind = kind_icon(&f.name);
-        let (r, resp) = ui.allocate_exact_size(vec2(CARD_W, CARD_H), Sense::click_and_drag());
+        let (cw, ch, ph) = self.vo.card_with(self.vo.dates || self.card_sub);
+        let (r, resp) = ui.allocate_exact_size(vec2(cw, ch), Sense::click_and_drag());
         if ui.is_rect_visible(r) {
             self.want_thumb(ctx, f);
         }
@@ -397,10 +409,10 @@ impl Home {
             },
         );
         // The picture, on white, in the top part.
-        let pic = Rect::from_min_size(r.min + vec2(8.0, 8.0), vec2(CARD_W - 16.0, PIC_H - 8.0));
+        let pic = Rect::from_min_size(r.min + vec2(8.0, 8.0), vec2(cw - 16.0, ph - 8.0));
         p.rect_filled(pic, 6, Color32::WHITE);
         match self.thumbs.get(&f.id).map(|(_, t)| t) {
-            Some(Thumb::Ready(tex)) => {
+            Some(Thumb::Ready(tex)) if self.vo.previews => {
                 // The picture's full width (columns A to L, as Drive shows), cut off at the bottom.
                 let tw = tex.size_vec2();
                 let scale = pic.width() / tw.x;
@@ -417,7 +429,7 @@ impl Home {
             }
         }
         p.rect_stroke(pic, 6, Stroke::new(1.0, theme::DIVIDER), egui::StrokeKind::Inside);
-        let line = Rect::from_min_max(egui::pos2(r.left() + 8.0, r.top() + PIC_H), r.max - vec2(8.0, 4.0));
+        let line = Rect::from_min_max(egui::pos2(r.left() + 8.0, r.top() + ph), r.max - vec2(8.0, 4.0));
         if let Some(img) = crate::icons::icon(kind) {
             img.paint_at(ui, Rect::from_center_size(egui::pos2(line.left() + 10.0, line.top() + 16.0), vec2(18.0, 18.0)));
         }
@@ -430,20 +442,34 @@ impl Home {
         {
             img.paint_at(ui, Rect::from_center_size(egui::pos2(line.right() - 10.0, line.top() + 16.0), vec2(16.0, 16.0)));
         }
-        let sub = match (&self.view, f.opened) {
-            (Some(View::Recent), Some(t)) => format!("You opened {}", ago(t)),
-            _ if self.found_snippet(&f.id).is_some() => self.found_snippet(&f.id).unwrap_or_default().to_string(),
-            _ if self.accounts && f.owner != self.space => format!("{} · {}", self.person(&f.owner), ago(f.modified)),
-            _ => format!("Modified {}", ago(f.modified)),
-        };
-        p.text(egui::pos2(line.left() + 28.0, line.top() + 36.0), Align2::LEFT_CENTER, sub, FontId::proportional(12.0), theme::TEXT_DIM);
+        let sub = self.card_sub_text(f);
+        let has_sub = !sub.is_empty();
+        if has_sub {
+            // Cut to the card's width: a long snippet must not run past the card.
+            let g = one_line(&p, sub, 12.0, theme::TEXT_DIM, line.width() - 52.0);
+            p.galley(egui::pos2(line.left() + 28.0, line.top() + 36.0 - g.size().y / 2.0), g, theme::TEXT_DIM);
+        }
         if f.shared
             && let Some(img) = crate::icons::icon("group")
         {
-            img.paint_at(ui, Rect::from_center_size(egui::pos2(line.right() - 10.0, line.top() + 36.0), vec2(14.0, 14.0)));
+            // Without a second line the shared mark sits on the name line, left of the star.
+            let (x, y) = if has_sub { (line.right() - 10.0, line.top() + 36.0) } else { (line.right() - 30.0, line.top() + 16.0) };
+            img.paint_at(ui, Rect::from_center_size(egui::pos2(x, y), vec2(14.0, 14.0)));
         }
         let resp = resp.on_hover_text(&f.name);
         self.interact(ui, &item, &resp, clicked_item);
+    }
+
+    /// A file card's second line: the date line (when shown), a search snippet, or the owner's name; empty when none applies.
+    pub(super) fn card_sub_text(&self, f: &FileRow) -> String {
+        match (&self.view, f.opened) {
+            (Some(View::Recent), Some(t)) if self.vo.dates => format!("You opened {}", ago(t)),
+            _ if self.found_snippet(&f.id).is_some() => self.found_snippet(&f.id).unwrap_or_default().to_string(),
+            _ if self.accounts && f.owner != self.space && !self.vo.dates => self.person(&f.owner),
+            _ if self.accounts && f.owner != self.space => format!("{} · {}", self.person(&f.owner), ago(f.modified)),
+            _ if !self.vo.dates => String::new(),
+            _ => format!("Modified {}", ago(f.modified)),
+        }
     }
 
     /// The words around the match inside this file, while a search that found text in it is shown.
@@ -459,29 +485,35 @@ impl Home {
         let w = ui.available_width() - 8.0;
         let (h, _) = ui.allocate_exact_size(vec2(w, 28.0), Sense::hover());
         let storage = self.view == Some(View::Storage);
-        let cols = [
-            (0.0, "Name"),
-            (
-                w * 0.52,
-                if storage {
-                    "Location"
-                } else if self.accounts {
-                    "Owner"
-                } else {
-                    ""
-                },
-            ),
-            (w * 0.70, "Last modified"),
-            (w - 90.0, "Size"),
-        ];
-        for (x, label) in cols {
+        // The columns chosen in List ▾ (viewopts.rs); drag the left edge of one to resize it.
+        let cols = self.vo.layout(&self.list_have(), w);
+        let name_w = cols[0].2;
+        let x_of = |key: &str| cols.iter().find(|c| c.0 == key).map(|c| (c.1, c.2));
+        for &(key, x, cw) in &cols {
             ui.painter().text(
-                h.left_center() + vec2(x + if x == 0.0 { 44.0 } else { 0.0 }, 0.0),
+                h.left_center() + vec2(x + if key == "name" { 44.0 } else { 0.0 }, 0.0),
                 Align2::LEFT_CENTER,
-                label,
+                super::viewopts::col_label(key, storage),
                 FontId::proportional(13.0),
                 theme::TEXT_DIM,
             );
+            if key == "name" {
+                continue;
+            }
+            let edge = Rect::from_center_size(egui::pos2(h.left() + x - 6.0, h.center().y), vec2(10.0, h.height()));
+            let r = ui.interact(edge, egui::Id::unique(("home_col_edge", key)), Sense::drag()).on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+            house::target(ui.ctx(), &format!("List column edge {}", super::viewopts::col_label(key, storage)), edge);
+            if r.hovered() || r.dragged() {
+                ui.painter().vline(edge.center().x, h.y_range(), Stroke::new(2.0, theme::DIVIDER));
+            }
+            if r.dragged() {
+                // Left makes this column wider (and Name narrower), never past either's minimum.
+                let most = cw + (name_w - super::viewopts::NAME_MIN).max(0.0);
+                self.vo.set_width(key, (cw - r.drag_delta().x).clamp(super::viewopts::COL_MIN, most.max(super::viewopts::COL_MIN)));
+            }
+            if r.drag_stopped() {
+                self.vo.save(&self.store);
+            }
         }
         ui.painter().hline(h.x_range(), h.bottom(), Stroke::new(1.0, theme::DIVIDER));
         let rows: Vec<ListRow> = order
@@ -532,9 +564,9 @@ impl Home {
                 }
             }
             let mut resp = resp;
-            if !self.renaming_ui(ui, &item, Rect::from_min_size(r.min + vec2(40.0, 5.0), vec2(w * 0.5 - 48.0, ROW - 10.0))) {
+            if !self.renaming_ui(ui, &item, Rect::from_min_size(r.min + vec2(40.0, 5.0), vec2(name_w - 48.0, ROW - 10.0))) {
                 // Cut short with "…" before the next column (the full name on hover), ★ after it.
-                let room = if self.accounts { w * 0.52 } else { w * 0.70 } - 44.0 - house::L - if starred { 24.0 } else { 0.0 };
+                let room = name_w - 44.0 - house::L - if starred { 24.0 } else { 0.0 };
                 let shown = if matches!(item, Item::File(_)) { shown_name(&name) } else { &name };
                 let galley = one_line(&p, shown.to_string(), 14.0, theme::TEXT, room);
                 let at = r.left_center() + vec2(44.0, -galley.size().y / 2.0);
@@ -563,7 +595,8 @@ impl Home {
                     }
                 }
             }
-            if storage {
+            let owner_col = x_of("owner");
+            if storage && let Some((ox, ow)) = owner_col {
                 let place = match &item {
                     Item::File(id) => self.file(id).map(|f| f.folder.clone()).unwrap_or_default(),
                     Item::Folder(_) => String::new(),
@@ -571,16 +604,25 @@ impl Home {
                 let place =
                     if self.accounts { place.strip_prefix(self.space.as_str()).unwrap_or(&place).trim_start_matches('/').to_string() } else { place };
                 let place = if place.is_empty() { "My files".to_string() } else { place };
-                let place = one_line(&p, place, 13.0, theme::TEXT_DIM, w * 0.17);
-                p.galley(r.left_center() + vec2(w * 0.52, -7.0), place, theme::TEXT_DIM);
-            } else if self.accounts {
-                p.text(r.left_center() + vec2(w * 0.52, 0.0), Align2::LEFT_CENTER, self.person(&owner), FontId::proportional(13.0), theme::TEXT_DIM);
+                let place = one_line(&p, place, 13.0, theme::TEXT_DIM, ow - house::M);
+                p.galley(r.left_center() + vec2(ox, -7.0), place, theme::TEXT_DIM);
+            } else if let Some((ox, ow)) = owner_col {
+                let who = one_line(&p, self.person(&owner), 13.0, theme::TEXT_DIM, ow - house::M);
+                p.galley(r.left_center() + vec2(ox, -who.size().y / 2.0), who, theme::TEXT_DIM);
             }
+            // Each column cut short before the next one.
+            let cell = |key: &str, text: String| {
+                if let Some((x, cw)) = x_of(key) {
+                    let g = one_line(&p, text, 13.0, theme::TEXT_DIM, cw - house::M);
+                    p.galley(r.left_center() + vec2(x, -g.size().y / 2.0), g, theme::TEXT_DIM);
+                }
+            };
             if modified > 0 {
-                p.text(r.left_center() + vec2(w * 0.70, 0.0), Align2::LEFT_CENTER, ago(modified), FontId::proportional(13.0), theme::TEXT_DIM);
+                cell("modified", ago(modified));
             }
+            cell("type", super::viewopts::type_label(&item, &name).to_string());
             if let Some(s) = size {
-                p.text(r.left_center() + vec2(w - 90.0, 0.0), Align2::LEFT_CENTER, size_text(s), FontId::proportional(13.0), theme::TEXT_DIM);
+                cell("size", size_text(s));
             }
             self.interact(ui, &item, &resp, clicked_item);
         }
@@ -718,7 +760,7 @@ pub(super) fn file_kind(name: &str) -> &'static str {
     }
     let ext = lower.rsplit_once('.').map_or("", |(_, e)| e);
     match ext {
-        "png" | "jpg" | "jpeg" | "jfif" | "gif" | "webp" | "avif" | "bmp" | "ico" => "image",
+        "png" | "jpg" | "jpeg" | "jfif" | "gif" | "webp" | "avif" | "bmp" | "ico" | "tif" | "tiff" => "image",
         "mp3" | "wav" | "ogg" | "oga" | "opus" | "flac" | "m4a" | "aac" => "audio",
         "mp4" | "m4v" | "webm" | "ogv" | "mov" => "video",
         "pdf" => "pdf",

@@ -732,3 +732,27 @@ fn drive_tiles_get_an_upright_thumbnail_without_photos_turned_on() {
     assert!(drive_thumb(&store, "missing.jpg").is_err());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn drive_tiles_and_viewer_pictures_of_bmp_tiff_and_ico() {
+    // Made here with the image crate: 40 × 20, red left, blue right.
+    let dir = tmp("drive-formats");
+    let img = image::DynamicImage::ImageRgb8(halves(40, 20));
+    for (name, format) in [("p.bmp", image::ImageFormat::Bmp), ("p.tif", image::ImageFormat::Tiff), ("p.ico", image::ImageFormat::Ico)] {
+        // An icon's PNG is RGBA (the decoder refuses others), as real icons are.
+        let img = if format == image::ImageFormat::Ico { image::DynamicImage::ImageRgba8(img.to_rgba8()) } else { img.clone() };
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut bytes, format).unwrap();
+        std::fs::write(dir.join(name), bytes.into_inner()).unwrap();
+    }
+    let store = Store { root: dir.clone(), keep: 3, spaces: false };
+    for name in ["p.bmp", "p.tif", "p.ico"] {
+        for size in decode::SIZES {
+            let t = image::load_from_memory(&drive_picture(&store, name, size).unwrap_or_else(|e| panic!("{name}: {e}"))).unwrap().to_rgb8();
+            assert_eq!(t.dimensions(), (40, 20), "{name} {size}: never enlarged");
+            assert!(t.get_pixel(3, 10)[0] > 200 && t.get_pixel(36, 10)[2] > 200, "{name}: the picture");
+        }
+        assert!(drive_picture(&store, name, 300).is_err(), "only the thumbnail sizes");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
