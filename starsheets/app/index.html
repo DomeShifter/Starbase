@@ -65,6 +65,7 @@
       <button type="button" class="ss_link" id="ss_password_link" hidden>Run this server? Sign in with your password</button>
       <input id="ss_username" name="username" type="text" autocomplete="username" placeholder="Username" autocapitalize="none" spellcheck="false" required>
       <input id="ss_password" name="password" type="password" autocomplete="current-password" placeholder="Password" required>
+      <input id="ss_code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="6-digit code (or backup code)" hidden>
       <div class="ss_error" id="ss_signin_error"></div>
       <div class="ss_note" id="ss_forgot">Forgotten your password? The person who runs this server can set a new one.</div>
       <button type="button" class="ss_link" id="ss_signup_link">New here? Create an account</button>
@@ -162,13 +163,14 @@
         e.preventDefault();
         go.disabled = true; err.textContent = '';
         fetch('api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
-          body: JSON.stringify({ username: form.username.value, password: form.password.value }) })
+          body: JSON.stringify({ username: form.username.value, password: form.password.value, code: form.code.value }) })
           .then(function (r) { return r.json().catch(function () { return {}; }).then(function (v) { return [r.status, v]; }); })
           .then(function (sv) {
             // Go on to the link that was opened while signed out (?next=, a path on this server
             // only: account.rs checks it), else start Drive again.
             if (sv[0] < 400) { if (window.__ssNext) location.replace(window.__ssNext); else location.reload(); return; }
             go.disabled = false;
+            if (sv[1].two_step) { form.code.hidden = false; form.code.focus(); }
             err.textContent = sv[1].error || ('The server said ' + sv[0] + '.');
             form.password.select();
           })
