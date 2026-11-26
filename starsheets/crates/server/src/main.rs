@@ -30,6 +30,7 @@ mod sharing;
 mod spaces;
 mod store;
 mod thumbs;
+mod zipdl;
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -2002,6 +2003,9 @@ async fn handle(State(app): State<Shared>, req: Request) -> Response<Body> {
     // (preview.rs says how they are kept safe).
     if m == "GET" && p.len() == 3 && p[0] == "files" && p[2] == "preview" {
         return preview::preview(&app, me, p[1].clone(), &headers).await;
+    }
+    if m == "GET" && p.len() == 1 && p[0] == "zip" {
+        return zipdl::zip(&app, me, &q).await;
     }
     if m == "GET" && p.len() == 3 && p[0] == "files" && p[2] == "raw" {
         return preview::raw(&app, me, p[1].clone(), &headers).await;
