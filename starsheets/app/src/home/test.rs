@@ -27,6 +27,8 @@ impl Home {
             "view": view,
             "storage": self.storage.map(|(u, b, f)| json!({ "used": u, "bin": b, "free": f })),
             "loading": self.loading,
+            "versions": self.versions.as_ref().map(|(_, v)| super::history::rows(v)),
+            "details_tab": self.details_tab,
             "activity": self.activity.as_ref().map(|(_, v)| super::activity::rows(v)),
             "search": self.search,
             // Files whose text matched the search, with the snippet shown for each.

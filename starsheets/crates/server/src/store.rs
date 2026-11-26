@@ -25,7 +25,7 @@ use serde_json::{Map, Value, json};
 pub const BIN_DAYS: i64 = 30;
 
 /// Files the apps edit (Sheets, Docs and Slides). Every other file is stored, listed, shared, moved and
-/// binned the same way, but has no versions and is never opened in a live room: the Drive
+/// binned and versioned the same way, but is never opened in a live room: the Drive
 /// previews it (preview.rs) or downloads it.
 pub const EXTS: [&str; 8] = [".xlsx", ".xlsm", ".xls", ".csv", ".ods", ".docx", ".odt", ".pptx"];
 
@@ -40,7 +40,11 @@ pub fn is_doc(name: &str) -> bool {
     DOC_EXTS.iter().any(|x| lower.ends_with(x))
 }
 
-/// Whether a file is one the apps edit (a spreadsheet or a document): only these keep versions.
+/// The biggest file of another type (photo, PDF, video...) that keeps versions: copies of bigger
+/// ones would eat the disk, so their old content goes to the bin instead.
+pub const MAX_VERSIONED_OTHER: u64 = 64 * 1024 * 1024;
+
+/// Whether a file is one the apps edit (a spreadsheet, document or presentation).
 pub fn is_editable(name: &str) -> bool {
     let lower = name.to_lowercase();
     EXTS.iter().any(|x| lower.ends_with(x))
@@ -1035,8 +1039,9 @@ impl Store {
                 {
                     return Ok(Reply::Json(json!({"error": "changed elsewhere", "name": base_of(&path)}), 409));
                 }
-                // Versions are for Sheets and Docs files; another file's old content goes to the bin.
-                if is_editable(&path) {
+                // Every file keeps its earlier versions (Drive's "Manage versions"); only a big file the
+                // apps don't edit goes to the bin instead, so versions can't fill the disk.
+                if is_editable(&path) || fs::metadata(&fpath).map_or(0, |m| m.len()) <= MAX_VERSIONED_OTHER {
                     self.keep_version(fid, &fpath)?;
                 } else {
                     self.copy_to_bin(&path)?;

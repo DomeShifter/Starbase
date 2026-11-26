@@ -82,6 +82,13 @@ impl Home {
             self.show_details(ui.ctx(), item.clone());
             ui.close();
         }
+        if let Item::File(_) = item
+            && row(ui, "history", "Version history", "", single && can_edit)
+        {
+            self.show_details(ui.ctx(), item.clone());
+            self.details_tab = 2;
+            ui.close();
+        }
         house::menu_sep(ui);
         if row(ui, "content_copy", "Copy", "Ctrl+C", !is_space) {
             self.clipboard = Some((targets.clone(), false));
@@ -440,6 +447,13 @@ impl Home {
         self.details = Some((item.clone(), None));
         self.details_tab = 0;
         self.activity = None;
+        self.versions = None;
+        if let (Item::File(id), true) = (&item, matches!(self.role_of(&item), "owner" | "edit")) {
+            let id = id.clone();
+            call(&self.store, &self.inbox, ctx, Method::Get, format!("api/files/{id}/history"), None, move |b| {
+                Reply::Versions(id, serde_json::from_slice(&b).unwrap_or_default())
+            });
+        }
         if let (Item::File(id), true) = (&item, self.accounts) {
             let id = id.clone();
             call(&self.store, &self.inbox, ctx, Method::Get, format!("api/files/{id}/activity"), None, move |b| {
@@ -452,6 +466,36 @@ impl Home {
                 Item::Folder(p) => format!("api/folders/sharing?path={}", enc(p)),
             };
             call(&self.store, &self.inbox, ctx, Method::Get, url, None, move |b| Reply::Access(item, serde_json::from_slice(&b).unwrap_or_default()));
+        }
+    }
+
+    /// A click in Details › Versions: download an earlier version, restore it (a new version;
+    /// the list is asked for again), or put a picked file over this one as its newest version.
+    fn version_act(&mut self, ctx: &egui::Context, id: &str, act: history::Act) {
+        let name = self.label_of(&Item::File(id.to_string()));
+        match act {
+            history::Act::Download(v) => {
+                call(&self.store, &self.inbox, ctx, Method::Get, format!("api/files/{id}/versions/{}", enc(&v)), None, move |b| {
+                    Reply::Download(name, b)
+                });
+            }
+            history::Act::Restore(v) => {
+                let (store, inbox, ctx2, id2) = (self.store.clone(), self.inbox.clone(), ctx.clone(), id.to_string());
+                call(&self.store, &self.inbox, ctx, Method::Post, format!("api/files/{id}/versions/{}/restore", enc(&v)), None, move |_| {
+                    reload_history(&store, &inbox, &ctx2, &id2);
+                    refresh_after(Vec::new())
+                });
+            }
+            history::Act::Upload => {
+                let (store, inbox, ctx2, id2) = (self.store.clone(), self.inbox.clone(), ctx.clone(), id.to_string());
+                self.store.pick_files(Box::new(move |_, bytes| {
+                    let (s, i, c, d) = (store.clone(), inbox.clone(), ctx2.clone(), id2.clone());
+                    call(&store, &inbox, &ctx2, Method::Put, format!("api/files/{id2}"), Some(bytes), move |_| {
+                        reload_history(&s, &i, &c, &d);
+                        refresh_after(Vec::new())
+                    });
+                }));
+            }
         }
     }
 
@@ -562,17 +606,22 @@ impl Home {
         let mut close = false;
         let mut done = false;
         let mut share = false;
+        let mut version_act = None;
         house::dialog(ctx, "home_details", 480.0, &title, Some(&mut close), |ui| {
             let is_file = matches!(&item, Item::File(_));
             if is_file && self.accounts {
                 let at = ui.cursor().min;
-                house::tabs(ui, &mut self.details_tab, &["Details", "Activity"]);
-                for (i, l) in ["Details", "Activity"].iter().enumerate() {
+                house::tabs(ui, &mut self.details_tab, &["Details", "Activity", "Versions"]);
+                for (i, l) in ["Details", "Activity", "Versions"].iter().enumerate() {
                     let c = egui::pos2(at.x + 44.0 + 88.0 * i as f32, at.y + 16.0);
                     house::target(ui.ctx(), &format!("details tab {l}"), egui::Rect::from_center_size(c, vec2(80.0, 28.0)));
                 }
             }
-            if self.details_tab == 1 && is_file {
+            if self.details_tab == 2 && is_file {
+                let can_edit = matches!(self.role_of(&item), "owner" | "edit");
+                let list = self.versions.as_ref().map(|(_, j)| j);
+                version_act = history::ui(ui, list, can_edit);
+            } else if self.details_tab == 1 && is_file {
                 let list = self.activity.as_ref().map(|(_, j)| j);
                 activity::ui(ui, list);
             } else {
@@ -604,6 +653,9 @@ impl Home {
                 None => {}
             }
         });
+        if let (Some(act), Item::File(id)) = (version_act, &item) {
+            self.version_act(ctx, id, act);
+        }
         if share {
             let (folder, key) = match &item {
                 Item::Folder(p) => (true, p.clone()),
@@ -650,4 +702,12 @@ struct PickTree<'a> {
     ok: &'a dyn Fn(&str, &str) -> bool,
     target: &'a mut Option<String>,
     expanded: &'a mut HashSet<String>,
+}
+
+/// Asks again for a file's version list (after a restore or a new version).
+fn reload_history(store: &Backend, inbox: &Rc<RefCell<Vec<Reply>>>, ctx: &egui::Context, id: &str) {
+    let id = id.to_string();
+    call(store, inbox, ctx, Method::Get, format!("api/files/{id}/history"), None, move |b| {
+        Reply::Versions(id, serde_json::from_slice(&b).unwrap_or_default())
+    });
 }
