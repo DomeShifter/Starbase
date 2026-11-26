@@ -63,8 +63,8 @@ pub fn auto_enhance(img: &RgbaImage, base: &Edits) -> Edits {
         let t = (mb - mr) / (0.15 * (mr + mb));
         let rb = (mr + mb) / 2.0;
         let ti = (mg - rb) / (0.12 * mg + 0.05 * rb);
-        e.temperature = (t * 0.7).round().clamp(-40.0, 40.0) as i32;
-        e.tint = (ti * 0.7).round().clamp(-40.0, 40.0) as i32;
+        e.temperature = (t * 70.0).round().clamp(-40.0, 40.0) as i32;
+        e.tint = (ti * 70.0).round().clamp(-40.0, 40.0) as i32;
     }
     e
 }
