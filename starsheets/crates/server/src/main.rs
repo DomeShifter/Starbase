@@ -33,6 +33,7 @@ mod sharing;
 mod spaces;
 mod store;
 mod thumbs;
+mod twostep;
 mod zipdl;
 
 use std::collections::HashMap;
@@ -372,7 +373,7 @@ async fn accounts(
             let only = app.oidc.as_ref().is_some_and(|o| o.cfg.only);
             let signup = on && !setup && s.on && !only;
             send_json(
-                &json!({ "location": app.location, "auth": on, "signed_in": !on || me.is_some(), "setup": setup, "signup": signup, "signup_code": signup && !s.code.is_empty(), "user": me.map(|u| u.json()), "sso": sso }),
+                &json!({ "location": app.location, "auth": on, "signed_in": !on || me.is_some(), "setup": setup, "signup": signup, "signup_code": signup && !s.code.is_empty(), "user": me.as_ref().map(|u| u.json()), "two_step": me.as_ref().is_some_and(|u| twostep::is_on(&app.store, &u.username)), "sso": sso }),
                 200,
             )
         }
@@ -501,8 +502,27 @@ async fn accounts(
             // A right password for anyone else gets exactly the answer a wrong one gets, so the
             // sign-in box can't be used to check passwords.
             let only = app.oidc.as_ref().is_some_and(|o| o.cfg.only);
+            let code = field(&json, "code");
             match user.filter(|u| right && (u.owner || !only)) {
-                Some(user) => blocking(app, move |app| session_reply(app, &user, secure)).await.unwrap_or_else(|| error(500, "server error")),
+                Some(user) => {
+                    // Two-step sign-in: a right password is not enough. No code yet is not a wrong
+                    // try (the sign-in box then asks for it); a wrong code counts like a wrong password.
+                    let who = user.username.clone();
+                    if blocking(app, move |app| twostep::is_on(&app.store, &who)).await.unwrap_or(false) {
+                        if code.trim().is_empty() {
+                            return Some(send_json(
+                                &json!({ "error": "Enter the 6-digit code from your authenticator app (or a backup code).", "two_step": true }),
+                                401,
+                            ));
+                        }
+                        let who = user.username.clone();
+                        if !blocking(app, move |app| twostep::check(&app.store, &who, &code)).await.unwrap_or(false) {
+                            LIMITS.take(&user_key, guard::LOGIN_USER);
+                            return Some(wrong(401, "That code isn't right.").await);
+                        }
+                    }
+                    blocking(app, move |app| session_reply(app, &user, secure)).await.unwrap_or_else(|| error(500, "server error"))
+                }
                 None => {
                     LIMITS.take(&user_key, guard::LOGIN_USER);
                     let why = if only {
@@ -532,6 +552,55 @@ async fn accounts(
                 }
             }
             cookie_reply("", 0, answer, secure)
+        }
+        (["me", "2fa", what], "POST") => {
+            let Some(me) = me else { return Some(please_sign_in(app, headers)) };
+            let user_key = format!("login-user:{}", me.username);
+            let code = field(&json, "code");
+            let who = me.username.clone();
+            match *what {
+                "start" => match blocking(app, move |app| twostep::start(&app.store, &who, "Starbase")).await {
+                    Some(Ok(s)) => send_json(&json!({ "ok": true, "secret": s.secret, "uri": s.uri, "qr": s.qr }), 200),
+                    Some(Err(why)) => error(400, &why),
+                    None => error(500, "server error"),
+                },
+                "on" | "off" => {
+                    if !LIMITS.can(&user_key, guard::LOGIN_USER) {
+                        return Some(too_many());
+                    }
+                    let on = *what == "on";
+                    let r = blocking(app, move |app| {
+                        if on {
+                            return twostep::turn_on(&app.store, &who, &code).map(Some);
+                        }
+                        if !twostep::check(&app.store, &who, &code) {
+                            return Err("That code isn't right.".to_string());
+                        }
+                        twostep::turn_off(&app.store, &who).map(|_| None)
+                    })
+                    .await;
+                    match r {
+                        Some(Ok(codes)) => send_json(&json!({ "ok": true, "backup_codes": codes }), 200),
+                        Some(Err(why)) => {
+                            LIMITS.take(&user_key, guard::LOGIN_USER);
+                            wrong(400, &why).await
+                        }
+                        None => error(500, "server error"),
+                    }
+                }
+                _ => error(404, "No such thing."),
+            }
+        }
+        (["users", "2fa"], "DELETE") => {
+            if me.as_ref().is_none_or(|u| !u.owner) {
+                return Some(error(403, "Only the owner can do that."));
+            }
+            let who = q.get("username").cloned().unwrap_or_default();
+            match blocking(app, move |app| twostep::turn_off(&app.store, &who)).await {
+                Some(Ok(())) => send_json(&json!({ "ok": true }), 200),
+                Some(Err(why)) => error(400, &why),
+                None => error(500, "server error"),
+            }
         }
         (["oidc", ..], _) => sso(app, &path, m, q, headers, &json, ask).await,
         (["devices", ..], _) => device_api(app, &path, m, q, headers, &json, ask).await,
@@ -620,6 +689,7 @@ async fn accounts(
                         }
                         if owner {
                             v["password"] = json!(auth::has_password(&app.store, &u.username));
+                            v["two_step"] = json!(twostep::is_on(&app.store, &u.username));
                         }
                         v
                     })
@@ -2420,6 +2490,62 @@ mod tests {
         let g = post(&app, &ip, "/api/setup", "", json!({"code": code, "username": "boss", "name": "Boss", "password": "bosspassword"})).await;
         assert_eq!(g.status, 200, "{:?}", g.json);
         (app, ip, cookie_of(&g))
+    }
+
+    fn totp_for(secret: &str, ahead: u64) -> String {
+        format!("{:06}", twostep::code_at(&twostep::unbase32(secret), (store::now() / 30.0) as u64 + ahead))
+    }
+
+    #[tokio::test]
+    async fn two_step_sign_in() {
+        let (app, ip, boss) = owned().await;
+        assert_eq!(post(&app, &ip, "/api/users", &boss, json!({"username": "ann", "name": "Ann", "password": "annpassword"})).await.status, 200);
+        assert_eq!(post(&app, &ip, "/api/users", &boss, json!({"username": "bob", "name": "Bob", "password": "bobpassword"})).await.status, 200);
+        let ann = cookie_of(&post(&app, &ip, "/api/login", "", json!({"username": "ann", "password": "annpassword"})).await);
+        let start = post(&app, &ip, "/api/me/2fa/start", &ann, json!({})).await;
+        assert_eq!(start.status, 200, "{:?}", start.json);
+        let secret = start.json["secret"].as_str().unwrap().to_string();
+        assert!(start.json["uri"].as_str().unwrap().starts_with("otpauth://totp/Starbase:ann?secret="));
+        assert!(start.json["qr"].as_array().unwrap().len() > 20, "a QR code comes with it");
+        // Not on until a right code confirms it.
+        assert_eq!(post(&app, &ip, "/api/login", "", json!({"username": "ann", "password": "annpassword"})).await.status, 200);
+        assert_eq!(post(&app, &ip, "/api/me/2fa/on", &ann, json!({"code": "000000"})).await.status, 400, "wrong code refused");
+        let on = post(&app, &ip, "/api/me/2fa/on", &ann, json!({"code": totp_for(&secret, 0)})).await;
+        assert_eq!(on.status, 200, "{:?}", on.json);
+        let backups: Vec<String> = on.json["backup_codes"].as_array().unwrap().iter().map(|c| c.as_str().unwrap().to_string()).collect();
+        assert_eq!(backups.len(), 10);
+        let users = std::fs::read_to_string(app.store.meta().join("users.json")).unwrap();
+        assert!(!users.contains(&backups[0]), "backup codes are stored hashed");
+        let login = |code: Option<String>| {
+            let body = match code {
+                Some(c) => json!({"username": "ann", "password": "annpassword", "code": c}),
+                None => json!({"username": "ann", "password": "annpassword"}),
+            };
+            post(&app, &ip, "/api/login", "", body)
+        };
+        let g = login(None).await;
+        assert_eq!((g.status, g.json["two_step"].as_bool()), (401, Some(true)), "password alone no longer signs in");
+        assert!(g.headers.get(header::SET_COOKIE).is_none());
+        assert_eq!(login(Some("123456".into())).await.status, 401, "wrong code");
+        assert_eq!(login(Some(totp_for(&secret, 0))).await.status, 401, "the code used to turn it on is spent");
+        let g = login(Some(totp_for(&secret, 1))).await;
+        assert_eq!(g.status, 200, "{:?}", g.json);
+        assert_eq!(login(Some(totp_for(&secret, 1))).await.status, 401, "replay in the same step refused");
+        // A backup code works once.
+        assert_eq!(login(Some(backups[0].clone())).await.status, 200);
+        assert_eq!(login(Some(backups[0].clone())).await.status, 401, "a backup code is used up");
+        // Someone without two-step sign-in is unaffected.
+        assert_eq!(post(&app, &ip, "/api/login", "", json!({"username": "bob", "password": "bobpassword"})).await.status, 200);
+        // Turning off needs a code; the owner can do it for someone who lost their phone.
+        assert_eq!(post(&app, &ip, "/api/me/2fa/off", &ann, json!({"code": "111111"})).await.status, 400);
+        assert_eq!(post(&app, &ip, "/api/me/2fa/off", &ann, json!({"code": backups[1]})).await.status, 200);
+        assert_eq!(login(None).await.status, 200, "off again");
+        let ann = cookie_of(&login(None).await);
+        let secret = post(&app, &ip, "/api/me/2fa/start", &ann, json!({})).await.json["secret"].as_str().unwrap().to_string();
+        assert_eq!(post(&app, &ip, "/api/me/2fa/on", &ann, json!({"code": totp_for(&secret, 0)})).await.status, 200);
+        assert_eq!(send(&app, &ip, "DELETE", "/api/users/2fa?username=ann", &ann, &[], vec![]).await.status, 403, "only the owner");
+        assert_eq!(send(&app, &ip, "DELETE", "/api/users/2fa?username=ann", &boss, &[], vec![]).await.status, 200);
+        assert_eq!(login(None).await.status, 200, "the owner turned it off");
     }
 
     #[tokio::test]

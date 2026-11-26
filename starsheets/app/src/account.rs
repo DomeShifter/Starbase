@@ -65,7 +65,7 @@ pub fn ask_sign_in() {
 /// Opens one of the avatar menu's dialogs, as the menu does (the test hook: `account:profile`,
 /// `account:password`, `account:people`).
 pub fn request(ctx: &egui::Context, what: &str) -> Result<(), String> {
-    if !matches!(what, "profile" | "password" | "people" | "storage" | "backups" | "devices") {
+    if !matches!(what, "profile" | "password" | "people" | "storage" | "backups" | "devices" | "twostep") {
         return Err(format!("no account dialog `{what}`"));
     }
     ctx.data_mut(|m| m.insert_temp(egui::Id::unique(REQUEST), what.to_string()));
@@ -195,6 +195,9 @@ pub fn me_ui(ui: &mut Ui) {
         } else if house::menu_row(ui, Some("lock"), "Set a password…", "", true) {
             ask(ui, "profile");
         }
+        if house::menu_row(ui, Some("lock"), "Two-step sign-in…", "", true) {
+            ask(ui, "twostep");
+        }
         if house::menu_row(ui, Some(""), "Your devices…", "", true) {
             ask(ui, "devices");
         }
@@ -280,6 +283,12 @@ enum Reply {
     Devices(Vec<Json>),
     /// A desktop app was removed: say so and look again.
     DeviceGone(String),
+    /// Whether two-step sign-in is on for you (GET /api/info).
+    TwoStepState(bool),
+    /// A new authenticator secret to scan (POST /api/me/2fa/start).
+    TwoStepSetup(Json),
+    /// Turned on: the backup codes, shown once.
+    TwoStepCodes(Vec<String>),
 }
 
 /// What the server says about single sign-on (GET /api/info `sso`).
@@ -310,6 +319,7 @@ struct Person {
     me: Me,
     link: Option<(String, String)>,
     password: bool,
+    two_step: bool,
 }
 
 fn sso_from(v: &Json) -> Option<Sso> {
@@ -406,7 +416,8 @@ fn people_from(v: Json) -> Reply {
                     (shown, format!("Subject: {sub}\nIssuer: {iss}"))
                 });
                 let password = p["password"].as_bool().unwrap_or(true);
-                me_from(p).map(|me| Person { me, link, password })
+                let two_step = p["two_step"].as_bool().unwrap_or(false);
+                me_from(p).map(|me| Person { me, link, password, two_step })
             })
             .collect(),
     )
@@ -449,6 +460,7 @@ enum Dialog {
     Storage,
     Backups,
     Devices,
+    TwoStep,
 }
 
 #[derive(Default)]
@@ -526,6 +538,10 @@ pub struct Account {
     devices_of: String,
     devices: Option<Vec<Json>>,
     device_armed: Option<String>,
+    /// Two-step sign-in dialog: on or off (None = loading), the secret being set up, backup codes just made.
+    ts_on: Option<bool>,
+    ts_setup: Option<Json>,
+    ts_codes: Option<Vec<String>>,
 }
 
 fn me_from(v: &Json) -> Option<Me> {
@@ -763,6 +779,18 @@ impl Account {
                     self.signup_secret = code;
                 }
                 Reply::Devices(list) => self.devices = Some(list),
+                Reply::TwoStepState(on) => {
+                    self.ts_on = Some(on);
+                    self.ts_setup = None;
+                    self.code.clear();
+                }
+                Reply::TwoStepSetup(v) => self.ts_setup = Some(v),
+                Reply::TwoStepCodes(c) => {
+                    self.ts_on = Some(true);
+                    self.ts_setup = None;
+                    self.ts_codes = Some(c);
+                    self.code.clear();
+                }
                 Reply::DeviceGone(msg) => {
                     self.done = Some(msg);
                     self.error = None;
@@ -783,6 +811,14 @@ impl Account {
             match req.as_str() {
                 "profile" => self.open(Dialog::Profile),
                 "password" => self.open(Dialog::Password),
+                "twostep" => {
+                    self.open(Dialog::TwoStep);
+                    self.ts_on = None;
+                    self.ts_setup = None;
+                    self.ts_codes = None;
+                    self.code.clear();
+                    call(&self.inbox, ctx, Method::Get, "api/info", None, |v| Reply::TwoStepState(v["two_step"].as_bool().unwrap_or(false)));
+                }
                 "storage" => {
                     self.open(Dialog::Storage);
                     self.load_storage(ctx);
@@ -962,6 +998,7 @@ impl Account {
             Dialog::Storage => self.storage_ui(ctx),
             Dialog::Backups => self.backups_ui(ctx),
             Dialog::Devices => self.devices_ui(ctx),
+            Dialog::TwoStep => self.two_step_ui(ctx),
         }
         self.restarting_ui(ctx);
     }
@@ -1539,6 +1576,100 @@ impl Account {
         }
     }
 
+    /// "Two-step sign-in": turn on (QR code, confirm with a code, backup codes) or off (needs a code).
+    fn two_step_ui(&mut self, ctx: &egui::Context) {
+        let mut close = false;
+        let mut action = 0; // 1 = ask for a QR code, 2 = confirm, 3 = turn off
+        house::dialog(ctx, "starsheets_twostep", 400.0, "Two-step sign-in", Some(&mut close), |ui| {
+            if let Some(codes) = self.ts_codes.clone() {
+                house::note(
+                    ui,
+                    "Two-step sign-in is on. Keep these backup codes somewhere safe: each works once if you lose your phone. They are shown only now.",
+                );
+                ui.add_space(house::S);
+                for c in &codes {
+                    ui.label(RichText::new(c).monospace().size(house::BODY).color(theme::TEXT));
+                }
+                ui.add_space(house::S);
+                let done = ui.add(house::secondary("Done"));
+                house::target(ui.ctx(), "2fa:done", done.rect);
+                if done.clicked() {
+                    self.ts_codes = None;
+                }
+                return;
+            }
+            match (self.ts_on, self.ts_setup.clone()) {
+                (None, _) => house::note(ui, "Loading…"),
+                (Some(false), None) => {
+                    house::note(
+                        ui,
+                        "Ask for a 6-digit code from an authenticator app (on your phone) every time you sign in, as well as your password.",
+                    );
+                    ui.add_space(house::S);
+                    let on = ui.add(house::primary("Turn on"));
+                    house::target(ui.ctx(), "2fa:turn-on", on.rect);
+                    if on.clicked() {
+                        action = 1;
+                    }
+                }
+                (Some(false), Some(setup)) => {
+                    house::note(ui, "1. Scan this with your authenticator app, or type the secret into it.");
+                    let rows: Vec<&str> = setup["qr"].as_array().into_iter().flatten().filter_map(Json::as_str).collect();
+                    let n = rows.len().max(1) as f32;
+                    let cell = (220.0 / n).max(2.0);
+                    let quiet = cell * 2.0;
+                    let (rect, _) = ui.allocate_exact_size(vec2(n * cell + 2.0 * quiet, n * cell + 2.0 * quiet), Sense::hover());
+                    ui.painter().rect_filled(rect, 0.0, Color32::WHITE);
+                    for (y, row) in rows.iter().enumerate() {
+                        for (x, c) in row.chars().enumerate() {
+                            if c == '1' {
+                                let min = rect.min + vec2(quiet + x as f32 * cell, quiet + y as f32 * cell);
+                                ui.painter().rect_filled(egui::Rect::from_min_size(min, vec2(cell, cell)), 0.0, Color32::BLACK);
+                            }
+                        }
+                    }
+                    ui.add_space(house::XS);
+                    ui.label(RichText::new(setup["secret"].as_str().unwrap_or("")).monospace().size(house::NOTE).color(theme::TEXT));
+                    ui.add_space(house::S);
+                    house::note(ui, "2. Type the 6-digit code it shows.");
+                    let r = Self::field(ui, &mut self.code, "6-digit code", false);
+                    self.first(&r);
+                    house::target(ui.ctx(), "2fa:code", r.rect);
+                    let confirm = ui.add(house::primary("Confirm and turn on"));
+                    house::target(ui.ctx(), "2fa:confirm", confirm.rect);
+                    if Self::enter(ui, &r) || confirm.clicked() {
+                        action = 2;
+                    }
+                }
+                (Some(true), _) => {
+                    house::note(ui, "Two-step sign-in is on. To turn it off, type a code from your app (or a backup code).");
+                    let r = Self::field(ui, &mut self.code, "Code", false);
+                    self.first(&r);
+                    house::target(ui.ctx(), "2fa:code", r.rect);
+                    let off = ui.add(house::secondary("Turn off"));
+                    house::target(ui.ctx(), "2fa:turn-off", off.rect);
+                    if Self::enter(ui, &r) || off.clicked() {
+                        action = 3;
+                    }
+                }
+            }
+            self.messages(ui);
+        });
+        if close {
+            self.dialog = Dialog::None;
+        } else if action != 0 && !self.busy {
+            self.busy = true;
+            self.error = None;
+            match action {
+                1 => call(&self.inbox, ctx, Method::Post, "api/me/2fa/start", Some(json!({})), Reply::TwoStepSetup),
+                2 => call(&self.inbox, ctx, Method::Post, "api/me/2fa/on", Some(json!({ "code": self.code })), |v| {
+                    Reply::TwoStepCodes(v["backup_codes"].as_array().into_iter().flatten().filter_map(|c| c.as_str().map(str::to_string)).collect())
+                }),
+                _ => call(&self.inbox, ctx, Method::Post, "api/me/2fa/off", Some(json!({ "code": self.code })), |_| Reply::TwoStepState(false)),
+            }
+        }
+    }
+
     fn change_password(&mut self, ctx: &egui::Context) {
         let mut close = false;
         let mut cancel = false;
@@ -1677,13 +1808,14 @@ impl Account {
         let mut add = false;
         let mut remove = None;
         let mut unlink: Option<String> = None;
+        let mut two_off: Option<String> = None;
         let mut save_signup = false;
         let mut devices_of = None;
         let me = me().unwrap_or_default();
         house::dialog(ctx, "starsheets_people", 460.0, "People", Some(&mut close), |ui| {
             house::note(ui, "Everyone with an account on this server. Each person sees only their own files and the ones shared with them.");
             house::gap(ui);
-            for Person { me: p, link: linked, password } in self.people.clone() {
+            for Person { me: p, link: linked, password, two_step } in self.people.clone() {
                 ui.horizontal(|ui| {
                     avatar(ui, &p.name, &p.colour, 28.0);
                     ui.add_space(house::S);
@@ -1695,6 +1827,16 @@ impl Account {
                                 devices_of = Some(p.username.clone());
                             }
                         });
+                        if two_step {
+                            ui.horizontal(|ui| {
+                                house::note(ui, "Two-step sign-in is on");
+                                if p.username != me.username
+                                    && ui.add(house::link("Turn off")).on_hover_text("For someone who lost their phone").clicked()
+                                {
+                                    two_off = Some(p.username.clone());
+                                }
+                            });
+                        }
                         if let Some((shown, ids)) = &linked {
                             ui.horizontal(|ui| {
                                 house::note_with_tip(ui, &format!("Single sign-on: {shown}"), ids);
@@ -1785,6 +1927,9 @@ impl Account {
             self.remove_armed = None;
             let url = format!("api/users?username={}", crate::files::enc(&who));
             call(&self.inbox, ctx, Method::Delete, &url, None, move |_| Reply::Done(format!("Removed {who}.")));
+        } else if let Some(who) = two_off {
+            let url = format!("api/users/2fa?username={}", crate::files::enc(&who));
+            call(&self.inbox, ctx, Method::Delete, &url, None, move |_| Reply::Done(format!("Turned off {who}'s two-step sign-in.")));
         } else if let Some(who) = unlink {
             let url = format!("api/users/sso?username={}", crate::files::enc(&who));
             call(&self.inbox, ctx, Method::Delete, &url, None, move |_| Reply::Done(format!("Removed {who}'s single sign-on link.")));

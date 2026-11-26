@@ -31,6 +31,12 @@ form_urlencoded = "1"
 argon2 = "0.6"
 sha2 = "0.11"
 hex = "0.4"
+# Two-step sign-in (twostep.rs): TOTP is HMAC-SHA1 (RFC 6238, what authenticator apps speak), already in the
+# tree through other crates; qrcode draws the set-up QR code (no image or SVG features).
+sha1 = "0.11"
+hmac = "0.13"
+subtle = "2"
+qrcode = { version = "0.14", default-features = false }
 tiny-skia = "0.11"
 ab_glyph = "0.2"
 png = "0.18"

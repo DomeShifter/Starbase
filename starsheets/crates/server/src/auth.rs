@@ -43,7 +43,7 @@ fn sessions_path(store: &Store) -> std::path::PathBuf {
     store.meta().join("sessions.json")
 }
 
-fn load(store: &Store) -> Vec<Map<String, Value>> {
+pub(crate) fn load(store: &Store) -> Vec<Map<String, Value>> {
     store
         .load_json(&users_path(store))
         .get("users")
@@ -55,7 +55,7 @@ fn load(store: &Store) -> Vec<Map<String, Value>> {
         .collect()
 }
 
-fn save(store: &Store, users: &[Map<String, Value>]) -> std::io::Result<()> {
+pub(crate) fn save(store: &Store, users: &[Map<String, Value>]) -> std::io::Result<()> {
     let mut all = store.load_json(&users_path(store));
     all.insert("users".into(), json!(users));
     store.save_json(&users_path(store), &Value::Object(all))
