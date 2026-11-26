@@ -6,7 +6,8 @@
 //!   `{"queued": n}`; 429 when I asked less than 30 s ago; 401 signed out.
 //! - `GET /api/photos/scan`: how my last "Scan now" is getting on: `{"busy", "queued",
 //!   "photos_new", "faces_on", "thumbs_waiting", "faces": {"done", "all"}, "faces_new"}`.
-//!   `busy` while a queued rescan hasn't finished; `faces` is the face worker's progress; `faces_new`
+//!   `busy` while a queued rescan hasn't finished; "new" = entered the index in my folders since
+//!   my previous "Scan now" (the first time: the last 10 minutes), also when the watcher found it first; `faces` is the face worker's progress; `faces_new`
 //!   counts only faces in pictures in my folders.
 //!
 //! Nothing here adds a schedule: the 10-minute rescan, the rescan on opening a folder and the
@@ -28,10 +29,24 @@ pub const GAP: Duration = Duration::from_secs(30);
 /// One person's last "Scan now".
 pub struct Run {
     at: Instant,
+    /// Unix seconds when this run started: the next run counts what is new since then.
+    at_unix: i64,
+    /// "New" = entered the index at or after this (the previous run, or 10 minutes back).
+    since: i64,
     tickets: Vec<u64>,
     folders: Vec<String>,
-    photos_before: usize,
-    faces_before: u64,
+}
+
+/// Tests: as if `who`'s last "Scan now" was more than 30 s ago.
+#[cfg(test)]
+pub(super) fn backdate(ph: &Photos, who: &str) {
+    if let Some(r) = ph.scan_now.lock().unwrap_or_else(|e| e.into_inner()).get_mut(who) {
+        r.at -= GAP + Duration::from_secs(1);
+    }
+}
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
 }
 
 /// The folders with Photos on that `me` may see.
@@ -41,15 +56,11 @@ fn my_folders(a: &crate::App, me: Option<&auth::User>, ph: &Photos) -> Vec<Strin
     on.into_iter().filter(|f| acc.folder_role(f) >= sharing::Role::View).collect()
 }
 
-/// Pictures in the index in `folders` (each counted once).
-fn photos_in(ph: &Photos, folders: &[String]) -> usize {
-    let mut seen = HashSet::new();
-    for f in folders {
-        for r in ph.rows(f, true) {
-            seen.insert(r.path);
-        }
-    }
-    seen.len()
+/// Pictures in `folders` that entered the index after `since`.
+fn new_in(ph: &Photos, folders: &[String], since: i64) -> Vec<String> {
+    let added: HashSet<String> = ph.with_db(|ix| ix.added_since(since).unwrap_or_default()).into_iter().collect();
+    let mine: HashSet<String> = folders.iter().flat_map(|f| ph.rows(f, true)).map(|r| r.path).filter(|p| added.contains(p)).collect();
+    mine.into_iter().collect()
 }
 
 /// (done, all) of the face worker (the whole server, as the People page shows it).
@@ -59,9 +70,9 @@ fn face_counts(ph: &Photos) -> (u64, u64) {
     (done, all)
 }
 
-/// Faces found in pictures in `folders` (only those: never other people's).
-fn faces_in(ph: &Photos, folders: &[String]) -> u64 {
-    let mine: HashSet<String> = folders.iter().flat_map(|f| ph.rows(f, true)).map(|r| r.path).collect();
+/// Faces found in the pictures at `paths` (mine only: never other people's).
+fn faces_in(ph: &Photos, paths: &[String]) -> u64 {
+    let mine: HashSet<&String> = paths.iter().collect();
     let model = ph.face_model().to_string();
     ph.with_db(|ix| {
         let thumbs: HashSet<String> =
@@ -98,8 +109,6 @@ fn start(a: &crate::App, me: Option<&auth::User>, who: &str, ph: &Photos) -> Res
         }
     }
     let folders = my_folders(a, me, ph);
-    let photos_before = photos_in(ph, &folders);
-    let faces_before = faces_in(ph, &folders);
     let tickets: Vec<u64> = folders.iter().map(|f| ph.request_scan(f, true, true)).collect();
     ph.ml.poke();
     let n = tickets.len();
@@ -107,31 +116,33 @@ fn start(a: &crate::App, me: Option<&auth::User>, who: &str, ph: &Photos) -> Res
     if runs.len() > 10_000 {
         runs.clear();
     }
-    runs.insert(who.to_string(), Run { at: Instant::now(), tickets, folders, photos_before, faces_before });
+    let at_unix = now_unix();
+    let since = runs.get(who).map_or(at_unix - 600, |r| r.at_unix);
+    runs.insert(who.to_string(), Run { at: Instant::now(), at_unix, since, tickets, folders });
     send_json(&json!({ "queued": n }), 200)
 }
 
 fn how_far(who: &str, ph: &Photos) -> Response<Body> {
-    let (tickets, folders, photos_before, faces_before) = {
+    let (tickets, folders, since) = {
         let runs = ph.scan_now.lock().unwrap_or_else(|e| e.into_inner());
         match runs.get(who) {
-            Some(r) => (r.tickets.clone(), r.folders.clone(), r.photos_before, r.faces_before),
-            None => (Vec::new(), Vec::new(), 0, 0),
+            Some(r) => (r.tickets.clone(), r.folders.clone(), r.since),
+            None => (Vec::new(), Vec::new(), 0),
         }
     };
+    let new = if tickets.is_empty() { Vec::new() } else { new_in(ph, &folders, since) };
     let busy = tickets.iter().any(|t| !ph.wait_scan(*t, Duration::ZERO));
-    let photos_new = if folders.is_empty() { 0 } else { photos_in(ph, &folders).saturating_sub(photos_before) };
     let (done, all) = face_counts(ph);
     let (queued, working) = ph.queued();
     send_json(
         &json!({
             "busy": busy,
             "queued": tickets.len(),
-            "photos_new": photos_new,
+            "photos_new": new.len(),
             "faces_on": ph.faces_on(),
             "thumbs_waiting": queued + working,
             "faces": { "done": done, "all": all },
-            "faces_new": if tickets.is_empty() { 0 } else { faces_in(ph, &folders).saturating_sub(faces_before) },
+            "faces_new": faces_in(ph, &new),
         }),
         200,
     )

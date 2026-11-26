@@ -76,6 +76,28 @@ async fn scan_now_queues_only_my_folders_and_waits_between_asks() {
     assert_eq!(get(&app, "/api/photos/scan", Some("ada"), &[]).await.json["faces_new"], 0, "Bob's face isn't counted for Ada");
     ph.with_db(|ix| faces::keep(ix, &ada_t, &model, &[face])).unwrap();
     assert_eq!(get(&app, "/api/photos/scan", Some("ada"), &[]).await.json["faces_new"], 1, "Ada's new face");
+    let first = get(&app, "/api/photos/scan", Some("ada"), &[]).await.json;
+    assert_eq!(first["photos_new"], 2, "first time: what entered in the last 10 minutes (a and c)");
+    // A picture the watcher indexes BEFORE the next click still counts as new.
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    std::fs::write(app.store.full("ada/Pics/d.jpg"), jpeg(&halves(50, 30))).unwrap();
+    let t = Instant::now();
+    while !ph.rows("ada/Pics", true).iter().any(|r| r.path == "ada/Pics/d.jpg") {
+        assert!(t.elapsed() < Duration::from_secs(20), "the watcher never indexed d.jpg");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    crate::photos::scan_now::backdate(&ph, "ada");
+    assert_eq!(send(&app, "POST", "/api/photos/scan", Some("ada"), &[], "").await.status, 200);
+    let t = Instant::now();
+    let st = loop {
+        let st = get(&app, "/api/photos/scan", Some("ada"), &[]).await.json;
+        if st["busy"] == false {
+            break st;
+        }
+        assert!(t.elapsed() < Duration::from_secs(20), "second scan never finished: {st}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(st["photos_new"], 1, "only d.jpg is new since Ada's last Scan now: {st}");
     // Each person sees their own run.
     let none = get(&app, "/api/photos/scan", Some("boss"), &[]).await.json;
     assert_eq!(none["queued"], 2);

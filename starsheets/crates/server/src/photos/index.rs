@@ -13,7 +13,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use super::decode::Meta;
 
 /// The schema version this server writes.
-pub const SCHEMA: i32 = 4;
+pub const SCHEMA: i32 = 5;
 
 /// Where a picture is in the work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -188,10 +188,25 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // People's names, per account (faces.rs).
         conn.execute_batch(super::faces::SCHEMA_V4)?;
     }
+    if v < 5 {
+        // When each picture entered the index ("Scan now" says what is new since last time).
+        conn.execute_batch(
+            "BEGIN;
+            ALTER TABLE photos ADD COLUMN added INTEGER NOT NULL DEFAULT 0;
+            PRAGMA user_version = 5;
+            COMMIT;",
+        )?;
+    }
     Ok(())
 }
 
 impl Index {
+    /// Paths of the pictures that entered the index after `since` (Unix seconds).
+    pub fn added_since(&self, since: i64) -> rusqlite::Result<Vec<String>> {
+        let mut st = self.conn.prepare("SELECT path FROM photos WHERE added > ?1")?;
+        st.query_map(params![since], |r| r.get(0))?.collect()
+    }
+
     /// The connection, for the faces tables (faces.rs).
     pub(super) fn conn(&self) -> &Connection {
         &self.conn
@@ -306,7 +321,7 @@ impl Index {
         match had {
             None => {
                 self.conn.execute(
-                    "INSERT INTO photos(path, folder, name, size, mtime_ns, media, state) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    "INSERT INTO photos(path, folder, name, size, mtime_ns, media, state, added) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, strftime('%s','now'))",
                     params![path, folder, name, size as i64, mtime_ns, media, want],
                 )?;
                 Ok(supported)
