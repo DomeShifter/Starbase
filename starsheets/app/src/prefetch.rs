@@ -7,6 +7,9 @@
 //! version: the list of files is remembered in local storage, and the hashed names change
 //! whenever the program does.
 
+// The test hook (and so test_state) is a web-build thing; native builds only compile this for the tests.
+#![cfg_attr(not(any(test, target_arch = "wasm32")), allow(dead_code))]
+
 use std::cell::RefCell;
 
 /// How long Drive must have been loaded and idle before anything is fetched.
