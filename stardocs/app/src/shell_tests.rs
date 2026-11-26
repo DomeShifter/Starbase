@@ -961,8 +961,14 @@ fn list_style_grid_items_apply_switch_and_round_trip_docx() {
             .and_then(|p| p.props.numbering)
             .expect("list survives .docx");
         let l = back.numbering.level(n.num, n.level).expect("level").clone();
-        let first = &h.state().app.session.doc.numbering;
-        let orig = first.level(first.nums.last().unwrap().id, 0).unwrap();
+        // Compare with the list the first paragraph really uses (a style switch may reuse an
+        // existing list definition, so the newest one is not necessarily it).
+        let live = &h.state().app.session.doc;
+        let m = live
+            .para(wordcraft_doc::StoryRef::Body, &live.para_paths(wordcraft_doc::StoryRef::Body)[0])
+            .and_then(|p| p.props.numbering)
+            .expect("live list");
+        let orig = live.numbering.level(m.num, m.level).unwrap();
         assert_eq!((l.format, l.text.clone()), (orig.format, orig.text.clone()), "{item} survives .docx");
         let _ = NumFormat::Bullet;
     }
