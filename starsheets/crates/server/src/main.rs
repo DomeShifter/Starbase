@@ -26,6 +26,8 @@ mod linkpreview;
 mod listcache;
 mod live;
 mod log;
+#[allow(dead_code, reason = "Root settings and route enforcement will be wired together")]
+mod mounts;
 mod oidc;
 mod photos;
 mod preview;

@@ -209,11 +209,11 @@ fn prefs_path(store: &Store, username: &str) -> std::path::PathBuf {
     store.meta().join("people").join(format!("{username}.json"))
 }
 
-fn prefs(store: &Store, username: &str) -> Map<String, Value> {
+pub(crate) fn prefs(store: &Store, username: &str) -> Map<String, Value> {
     store.load_json(&prefs_path(store, username))
 }
 
-fn save_prefs(store: &Store, username: &str, p: &Map<String, Value>) -> io::Result<()> {
+pub(crate) fn save_prefs(store: &Store, username: &str, p: &Map<String, Value>) -> io::Result<()> {
     fs::create_dir_all(store.meta().join("people"))?;
     store.save_json(&prefs_path(store, username), &Value::Object(p.clone()))
 }
