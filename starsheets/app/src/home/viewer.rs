@@ -806,7 +806,7 @@ fn info_panel(
                     row.label(RichText::new(&card.name).size(house::BODY).color(house::VIEW_BAR_LINK));
                 });
                 let r =
-                    c.interact(r.response.rect, egui::Id::new(("info_person", n)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+                    c.interact(r.response.rect, egui::Id::unique(("info_person", n)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
                 house::target(&ctx, &format!("photos:info-person:{n}"), r.rect);
                 if r.hovered() {
                     c.painter().hline(r.rect.x_range(), r.rect.bottom(), egui::Stroke::new(1.0, house::VIEW_BAR_LINK));
