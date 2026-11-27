@@ -155,3 +155,7 @@ tab kept the focus (a blur or hidden tab forgets it); otherwise https reads the 
 browser may ask); on http or a refused read a small card "Press Ctrl+V now" shows at the top,
 with one reason line and a "Don't explain again" tick (kept per browser). It is not a modal: the
 keyboard stays on the place the menu was opened for, so Ctrl+V pastes there and closes it.
+
+## Photos left list
+
+Above the divider are views (ways of looking at the pictures: Photos, Albums, People, Places, Timeline, Events). Below it are tools and settings (Duplicates, Locked, and any future management tool). No "More" menu. The list is defined by `nav_rows` in `app/src/home/photos/albums.rs`.
