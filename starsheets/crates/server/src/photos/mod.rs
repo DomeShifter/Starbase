@@ -562,8 +562,8 @@ impl Photos {
                 }
             };
             match path {
-                (path, None) if self.covers(&path) => self.process(&path),
-                (path, Some(f)) if self.covers(&path) => self.make_screen_copy(&path, f),
+                (path, None) if self.covers(&path) && self.in_current_library(&path) => self.process(&path),
+                (path, Some(f)) if self.covers(&path) && self.in_current_library(&path) => self.make_screen_copy(&path, f),
                 _ => {}
             }
             self.queue.lock().unwrap_or_else(|e| e.into_inner()).working -= 1;
@@ -826,10 +826,28 @@ impl Photos {
 
     // ------------------------------------------------------------ finding files
 
+    fn library_allows(path: &str, root: Option<&crate::mounts::Root>) -> bool {
+        match root {
+            None => !crate::mounts::private_path(path),
+            Some(crate::mounts::Root::Available(root)) => crate::mounts::within(path, root),
+            Some(crate::mounts::Root::Unavailable) => false,
+        }
+    }
+
+    fn in_current_library(&self, path: &str) -> bool {
+        let root = self
+            .store
+            .spaces
+            .then(|| crate::auth::users(&self.store))
+            .and_then(|users| users.into_iter().find(|user| user.username == crate::store::space_of(path)))
+            .and_then(|user| crate::mounts::configured_photos(&self.store, &user));
+        Self::library_allows(path, root.as_ref())
+    }
+
     /// Picture files at and below `folder` (only that folder unless `deep`): path → (size,
     /// modified ns), and the pictures' sidecars (`photo.jpg.xmp`): picture path → the sidecar's
     /// stat. None when the folder isn't there (or is reached through a link).
-    fn list(&self, folder: &str, deep: bool) -> Option<Listed> {
+    fn list(&self, folder: &str, deep: bool, libraries: &HashMap<String, crate::mounts::Root>) -> Option<Listed> {
         if !self.store.no_links(folder) || !std::fs::symlink_metadata(self.store.full(folder)).is_ok_and(|m| m.is_dir()) {
             return None;
         }
@@ -846,6 +864,12 @@ impl Photos {
                 // Never through a symbolic link (store.rs walk_dir says why).
                 let Ok(m) = std::fs::symlink_metadata(e.path()) else { continue };
                 let rel = crate::store::join(&here, &name);
+                let root = libraries.get(crate::store::space_of(&rel));
+                if !Self::library_allows(&rel, root)
+                    && !(m.is_dir() && matches!(root, Some(crate::mounts::Root::Available(root)) if crate::mounts::within(root, &rel)))
+                {
+                    continue;
+                }
                 if m.is_dir() {
                     if deep {
                         todo.push(rel);
@@ -889,11 +913,19 @@ impl Photos {
     /// Runs on the scanner thread (tests call it directly).
     fn scan(&self, scopes: &[(String, bool)]) -> usize {
         let scopes = self.covered_scopes(scopes);
+        let libraries: HashMap<_, _> = if self.store.spaces {
+            crate::auth::users(&self.store)
+                .into_iter()
+                .filter_map(|user| crate::mounts::configured_photos(&self.store, &user).map(|root| (user.username, root)))
+                .collect()
+        } else {
+            HashMap::new()
+        };
         let mut present: HashMap<String, (u64, i64)> = HashMap::new();
         let mut sides: HashMap<String, String> = HashMap::new();
         let mut gone_scopes = Vec::new();
         for (folder, deep) in &scopes {
-            match self.list(folder, *deep) {
+            match self.list(folder, *deep, &libraries) {
                 Some((found, side)) => {
                     present.extend(found);
                     sides.extend(side);
