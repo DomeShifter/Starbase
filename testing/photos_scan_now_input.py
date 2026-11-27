@@ -28,6 +28,9 @@ def main():
     tag = f"{br}{'-phone' if phone else ''}{int(time.time())}"
     folder = pg.request.post(f"{S.base}/api/folders?path=ada&name=Scan%20{q(tag)}").json()["path"]
     first = sorted(glob.glob(pics + "/*.jpg"))
+    # The library may already hold photos (the base data does): "new" counts them too, so compare against base + 4.
+    lib = pg.request.get(f"{S.base}/api/photos?all=1").json(); lib = lib.get("photos", lib.get("items", [])) if isinstance(lib, dict) else lib
+    n0 = len(lib)
     pg.request.post(f"{S.base}/api/files?name=start.jpg&as_is=1&folder={q(folder)}", data=open(first[0], "rb").read())
     S.open("drive", path=f"/?test&dir={q(folder)}"); time.sleep(2)
     S.hook("home:photos", on=True); time.sleep(2); S.hook("home:photos:enable"); time.sleep(6)
@@ -46,7 +49,7 @@ def main():
         S.wait_for(lambda: not st0().get("missing"), secs=600, every=5)
     pg.request.post(f"{S.base}/api/photos/faces", data=json.dumps({"on": True}), headers={"Content-Type": "application/json"})
     S.hook("home:photos:tab", tab="people"); time.sleep(2)
-    rec("faces on", S.wait_for(lambda: pe().get("on") is True, secs=300, every=3), json.dumps(st0())[:300])
+    rec("faces on", S.wait_for(lambda: st0().get("on") is True, secs=60, every=3), json.dumps(st0())[:300])
     S.hook("home:photos:tab", tab="photos"); time.sleep(2)
     before = items()
     # Three new portraits dropped on disk, then Scan now straight away.
@@ -62,7 +65,7 @@ def main():
     S.wait_for(watch, secs=240, every=0.3)
     said = sc().get("said", ""); print("SAID", sorted(seen), flush=True); S.shot(f"{tag}-1-done")
     rec("status went Looking → done", "Looking for new photos…" in seen and said.startswith(("Up to date", "No new photos")), said)
-    rec("status counts the new photos (start.jpg + 3 dropped: all entered since the last Scan now)", "4 new photos" in said, said)
+    rec("status counts the new photos (start.jpg + 3 dropped: all entered since the last Scan now)", f"{n0 + 4} new photos" in said, said)
     import re
     m = re.search(r"(\d+) new faces", said)
     rec("status counts new faces", m and int(m.group(1)) >= 1, said)  # "Finding faces: x of y" can be too quick to see
