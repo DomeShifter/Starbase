@@ -29,7 +29,7 @@ def main():
     up(first)
     S.open("drive", path=f"/?test&dir={q(folder)}"); time.sleep(2)
     S.hook("home:photos", on=True); time.sleep(2); S.hook("home:photos:enable"); time.sleep(8)
-    S.click_text("People"); time.sleep(2)
+    pass  # People is opened only after faces are on (the open page is not asked again)
     pe = lambda: S.snapshot("home.photos.people") or {}
     tg = lambda: S.snapshot("targets") or {}
     # Models and on/off aren't what this checks: through the API (the button is "Download face models and turn on").
@@ -41,7 +41,13 @@ def main():
     S.click_text("People"); time.sleep(2)
     S.wait_for(lambda: pe().get("on") is True, secs=30)
     n_people = len({who(f) for f in first})
-    S.wait_for(lambda: len(pe().get("named", [])) + len(pe().get("groups", [])) >= n_people, secs=900, every=5)
+    def _people_up():
+        S.click_text("Photos"); time.sleep(1); S.click_text("People"); time.sleep(2)
+        return len(pe().get("named", [])) + len(pe().get("groups", [])) >= n_people
+    srv_n = lambda: len(pg.request.get(f"{S.base}/api/photos/people").json().get("groups", []))
+    S.wait_for(lambda: srv_n() >= n_people, secs=300, every=5)
+    S.wait_for(_people_up, secs=300, every=15)
+    print("people state", json.dumps({k: v for k, v in pe().items() if k in ("on", "progress", "scan")}), "keys", sorted((S.snapshot("home.photos") or {}).keys())[:12], flush=True)
     time.sleep(5); st = pe(); S.shot(f"{br}-1-people")
     # 1. Sharp faces: every card has a face id, and its picture is a 256 px square.
     cards = st.get("named", []) + st.get("groups", [])
