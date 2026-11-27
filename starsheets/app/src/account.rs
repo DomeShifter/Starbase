@@ -67,7 +67,7 @@ pub fn ask_sign_in() {
 /// Opens one of the avatar menu's dialogs, as the menu does (the test hook: `account:profile`,
 /// `account:password`, `account:people`).
 pub fn request(ctx: &egui::Context, what: &str) -> Result<(), String> {
-    if !matches!(what, "profile" | "password" | "people" | "storage" | "backups" | "devices" | "settings" | "photos-settings") {
+    if !matches!(what, "profile" | "password" | "people" | "storage" | "backups" | "devices" | "settings" | "photos-settings" | "server-settings") {
         return Err(format!("no account dialog `{what}`"));
     }
     ctx.data_mut(|m| m.insert_temp(egui::Id::unique(REQUEST), what.to_string()));
@@ -215,9 +215,6 @@ pub fn me_ui(ui: &mut Ui) {
         if house::menu_row(ui, Some(""), "Your devices…", "", true) {
             ask(ui, "devices");
         }
-        if me.owner && house::menu_row(ui, Some("folder"), "Where files are kept…", "", true) {
-            ask(ui, "storage");
-        }
         if house::menu_row(ui, Some("settings"), "Settings…", "", true) {
             ask(ui, "settings");
         }
@@ -291,6 +288,7 @@ enum Reply {
     FaceSettingsChanged(Json),
     FaceModels,
     BackupEnabled(bool),
+    SettingsSaved(String),
     /// The backups kept (GET /api/backup/list).
     BackupList(Vec<Json>),
     /// Whose folders the backups hold (GET /api/backup/people).
@@ -468,7 +466,6 @@ enum Dialog {
     Profile,
     Password,
     People,
-    Storage,
     Settings,
     Devices,
 }
@@ -484,6 +481,8 @@ pub struct Account {
     sso: Option<Sso>,
     /// The owner's sign-up setting, as shown in People.
     signup_on: bool,
+    server_signup_loaded: bool,
+    server_preview_loaded: bool,
     signup_secret: String,
     link_preview_on: bool,
     dialog: Dialog,
@@ -799,9 +798,14 @@ impl Account {
                     self.dialog = Dialog::None;
                     self.restarting = Some(ctx.input(|i| i.time));
                 }
-                Reply::LinkPreview(on) => self.link_preview_on = on,
+                Reply::LinkPreview(on) => {
+                    self.link_preview_on = on;
+                    self.server_preview_loaded = true;
+                }
+                Reply::SettingsSaved(message) => self.done = Some(message),
                 Reply::Signup { on, code } => {
                     self.signup_on = on;
+                    self.server_signup_loaded = true;
                     self.signup_secret = code;
                 }
                 Reply::Devices(list) => self.devices = Some(list),
@@ -825,16 +829,14 @@ impl Account {
             match req.as_str() {
                 "profile" => self.open(Dialog::Profile),
                 "password" => self.open(Dialog::Password),
-                "storage" => {
-                    self.open(Dialog::Storage);
-                    self.load_storage(ctx);
-                }
-                "settings" | "photos-settings" | "backups" => {
+                "settings" | "photos-settings" | "backups" | "server-settings" | "storage" => {
                     self.open(Dialog::Settings);
                     let owner = me().is_some_and(|m| m.owner);
                     self.settings_tab = match req.as_str() {
                         "photos-settings" => 1,
                         "backups" if owner => 2,
+                        "server-settings" if owner => 3,
+                        "storage" if owner => 4,
                         _ => 0,
                     };
                     self.face_settings = None;
@@ -847,6 +849,7 @@ impl Account {
                     self.backup_whose = 0;
                     if owner {
                         call(&self.inbox, ctx, Method::Get, "api/backup", None, Reply::Backup);
+                        self.load_owner_tab(ctx);
                     }
                 }
                 "devices" => {
@@ -857,8 +860,6 @@ impl Account {
                 "people" => {
                     self.open(Dialog::People);
                     call(&self.inbox, ctx, Method::Get, "api/users", None, people_from);
-                    call(&self.inbox, ctx, Method::Get, "api/signup/settings", None, signup_reply);
-                    call(&self.inbox, ctx, Method::Get, "api/link-preview/settings", None, link_preview_reply);
                 }
                 "signout" => call(&self.inbox, ctx, Method::Post, "api/logout", None, |v| {
                     Reply::SignedOut(v["logout_url"].as_str().filter(|u| u.starts_with("https://") || u.starts_with("http://")).map(str::to_string))
@@ -1012,7 +1013,6 @@ impl Account {
             Dialog::Profile => self.profile(ctx),
             Dialog::Password => self.change_password(ctx),
             Dialog::People => self.people(ctx),
-            Dialog::Storage => self.storage_ui(ctx),
             Dialog::Settings => self.settings_ui(ctx),
             Dialog::Devices => self.devices_ui(ctx),
         }
@@ -1034,7 +1034,10 @@ impl Account {
         let mut cancel = false;
         let mut go = false;
         let v = self.storage.clone();
-        house::dialog(ctx, "starsheets_storage", 540.0, "Where files are kept", Some(&mut close), |ui| {
+        house::dialog(ctx, "starsheets_settings", 560.0, "Settings", Some(&mut close), |ui| {
+            if self.settings_tabs(ui) {
+                return;
+            }
             let Some(v) = &v else {
                 ui.label(RichText::new("Loading…").color(theme::text_dim()));
                 return;
@@ -1042,6 +1045,8 @@ impl Account {
             let location = v["location"].as_str().unwrap_or("the server");
             let current = v["current"].as_str().unwrap_or("");
             let here = |p: &str| if p.is_empty() { location.to_string() } else { format!("{location} › {}", p.replace('/', " › ")) };
+            let heading = ui.label(RichText::new("Where files are kept").strong().color(theme::text()));
+            house::target(ctx, "settings:storage", heading.rect);
             house::text(ui, &format!("Now: {}", here(current)));
             house::note(
                 ui,
@@ -1058,7 +1063,7 @@ impl Account {
                         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
                         let p = ui.painter().clone();
                         if pick == f {
-                            p.rect_filled(r, 6, theme::SHARE);
+                            p.rect_filled(r, 6, theme::drive_selection());
                         } else if resp.hovered() {
                             p.rect_filled(r, 6, theme::menu_hover());
                         }
@@ -1119,20 +1124,101 @@ impl Account {
     /// Backups (owner): where they go, once a day at what hour, the recovery key, how the last
     /// one went, "Back up now", and the backups kept, each with "Restore" (copies your files from
     /// then into a new folder; nothing is overwritten). See the server's backup.rs.
+    fn load_owner_tab(&mut self, ctx: &egui::Context) {
+        match self.settings_tab {
+            3 => {
+                self.server_signup_loaded = false;
+                self.server_preview_loaded = false;
+                call(&self.inbox, ctx, Method::Get, "api/signup/settings", None, signup_reply);
+                call(&self.inbox, ctx, Method::Get, "api/link-preview/settings", None, link_preview_reply);
+            }
+            4 => self.load_storage(ctx),
+            _ => {}
+        }
+    }
+
+    fn server_settings_ui(&mut self, ctx: &egui::Context) {
+        let mut close = false;
+        let mut save_signup = false;
+        let mut save_preview = false;
+        house::dialog(ctx, "starsheets_settings", 560.0, "Settings", Some(&mut close), |ui| {
+            if self.settings_tabs(ui) {
+                return;
+            }
+            if !self.server_signup_loaded || !self.server_preview_loaded {
+                house::note(ui, "Loading server settings…");
+                self.messages(ui);
+                return;
+            }
+            house::label(
+                ui,
+                "Sign-up",
+                "Let people make their own account from the sign-in box. Only turn this on if strangers can't reach your server, or set a code.",
+            );
+            let signup = ui.checkbox(&mut self.signup_on, "Let people make their own account");
+            house::target(ctx, "settings:signup", signup.rect);
+            let mut changed = signup.changed();
+            if self.signup_on {
+                ui.add_space(house::S);
+                let r = Self::field(ui, &mut self.signup_secret, "Sign-up code (optional, you give it out)", false);
+                changed |= r.lost_focus();
+            }
+            if changed {
+                save_signup = true;
+            }
+            house::gap(ui);
+            house::label(
+                ui,
+                "Link previews",
+                "When someone rests the pointer on a link in a sheet, the server fetches that page's title and picture to show on a card. Off by default; web addresses on your own network are never fetched.",
+            );
+            let r = ui.checkbox(&mut self.link_preview_on, "Show a page preview when hovering a link");
+            house::target(ui.ctx(), "settings:link-preview", r.rect);
+            LINK_PREVIEW_SHOWN.with(|c| c.set(Some(self.link_preview_on)));
+            if r.changed() {
+                save_preview = true;
+            }
+            house::gap(ui);
+            self.messages(ui);
+        });
+        if close || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.dialog = Dialog::None;
+        } else if save_signup {
+            let body = json!({ "on": self.signup_on, "code": self.signup_secret.trim() });
+            let on = self.signup_on;
+            call(&self.inbox, ctx, Method::Post, "api/signup/settings", Some(body), move |_| {
+                Reply::SettingsSaved(if on { "Sign-up is on.".into() } else { "Sign-up is off.".into() })
+            });
+        } else if save_preview {
+            let on = self.link_preview_on;
+            call(&self.inbox, ctx, Method::Post, "api/link-preview/settings", Some(json!({ "on": on })), move |_| {
+                Reply::SettingsSaved(if on { "Link previews are on.".into() } else { "Link previews are off.".into() })
+            });
+        }
+    }
+
     fn settings_tabs(&mut self, ui: &mut Ui) -> bool {
-        let labels: &[&str] = if me().is_some_and(|m| m.owner) { &["Appearance", "Photos", "Backups"] } else { &["Appearance", "Photos"] };
+        let labels: &[&str] =
+            if me().is_some_and(|m| m.owner) { &["Appearance", "Photos", "Backups", "Server", "Storage"] } else { &["Appearance", "Photos"] };
         if self.settings_tab >= labels.len() {
             self.settings_tab = 0;
         }
         let changed = house::tabs(ui, &mut self.settings_tab, labels);
+        if changed {
+            self.load_owner_tab(ui.ctx());
+        }
         house::gap(ui);
         changed
     }
 
     fn settings_ui(&mut self, ctx: &egui::Context) {
-        if self.settings_tab == 2 && me().is_some_and(|m| m.owner) {
-            self.backups_ui(ctx);
-            return;
+        if me().is_some_and(|m| m.owner) {
+            match self.settings_tab {
+                2 => return self.backups_ui(ctx),
+                3 => return self.server_settings_ui(ctx),
+                4 => return self.storage_ui(ctx),
+                _ => {}
+            }
         }
         let mut close = false;
         house::dialog(ctx, "starsheets_settings", 560.0, "Settings", Some(&mut close), |ui| {
@@ -1850,8 +1936,6 @@ impl Account {
         let mut add = false;
         let mut remove = None;
         let mut unlink: Option<String> = None;
-        let mut save_signup = false;
-        let mut save_preview = false;
         let mut devices_of = None;
         let me = me().unwrap_or_default();
         house::dialog(ctx, "starsheets_people", 460.0, "People", Some(&mut close), |ui| {
@@ -1904,31 +1988,8 @@ impl Account {
                 ui.add_space(house::XS);
             }
             house::gap(ui);
-            house::label(
-                ui,
-                "Sign-up",
-                "Let people make their own account from the sign-in box. Only turn this on if strangers can't reach your server, or set a code.",
-            );
-            let mut changed = ui.checkbox(&mut self.signup_on, "Let people make their own account").changed();
-            if self.signup_on {
-                ui.add_space(house::S);
-                let r = Self::field(ui, &mut self.signup_secret, "Sign-up code (optional, you give it out)", false);
-                changed |= r.lost_focus();
-            }
-            if changed {
-                save_signup = true;
-            }
-            house::gap(ui);
-            house::label(
-                ui,
-                "Link previews",
-                "When someone rests the pointer on a link in a sheet, the server fetches that page's title and picture to show on a card. Off by default; web addresses on your own network are never fetched.",
-            );
-            let r = ui.checkbox(&mut self.link_preview_on, "Show a page preview when hovering a link");
-            house::target(ui.ctx(), "people:link-preview", r.rect);
-            LINK_PREVIEW_SHOWN.with(|c| c.set(Some(self.link_preview_on)));
-            if r.changed() {
-                save_preview = true;
+            if ui.add(house::link("Server settings…")).clicked() {
+                let _ = request(ctx, "server-settings");
             }
             house::gap(ui);
             house::label(ui, "Add someone", "Give them their username and this password; they can change the password after signing in.");
@@ -1961,17 +2022,6 @@ impl Account {
                 Some(json!({ "name": self.name, "username": self.username, "password": self.password })),
                 move |_| Reply::Done(format!("Added {who}.")),
             );
-        } else if save_signup {
-            let body = json!({ "on": self.signup_on, "code": self.signup_secret.trim() });
-            let on = self.signup_on;
-            call(&self.inbox, ctx, Method::Post, "api/signup/settings", Some(body), move |_| {
-                Reply::Done(if on { "Sign-up is on.".into() } else { "Sign-up is off.".into() })
-            });
-        } else if save_preview {
-            let on = self.link_preview_on;
-            call(&self.inbox, ctx, Method::Post, "api/link-preview/settings", Some(json!({ "on": on })), move |_| {
-                Reply::Done(if on { "Link previews are on.".into() } else { "Link previews are off.".into() })
-            });
         } else if let Some(who) = remove {
             self.remove_armed = None;
             let url = format!("api/users?username={}", crate::files::enc(&who));
