@@ -183,8 +183,7 @@ pub fn me_ui(ui: &mut Ui) {
         ask(ui, "settings");
     }
     // Google's account menu: who you are at the top (username, a big avatar, "Hi, name!") with
-    // the main account button under it, then the rest, then Sign out. Always the light house
-    // colours, whatever the computer's theme.
+    // the main account button under it, then the rest, then Sign out.
     egui::Popup::menu(&r).id(menu_id()).show(|ui| {
         house::menu(ui, 300.0);
         house::menu_inset(ui, |ui| {
@@ -194,7 +193,7 @@ pub fn me_ui(ui: &mut Ui) {
                 ui.add_space(house::M);
                 avatar(ui, &me.name, &me.colour, 64.0);
                 ui.add_space(house::S);
-                ui.label(RichText::new(format!("Hi, {}!", me.name)).size(22.0).color(theme::TEXT));
+                ui.label(RichText::new(format!("Hi, {}!", me.name)).size(22.0).color(theme::text()));
                 ui.add_space(house::M);
                 if ui.add(house::secondary("Your name and colour")).clicked() {
                     ask(ui, "profile");
@@ -240,7 +239,7 @@ pub fn others_ui(ui: &mut Ui) {
         ui.add_space(2.0);
     }
     if others.len() > 5 {
-        ui.label(RichText::new(format!("+{}", others.len() - 5)).size(house::NOTE).color(theme::TEXT_DIM))
+        ui.label(RichText::new(format!("+{}", others.len() - 5)).size(house::NOTE).color(theme::text_dim()))
             .on_hover_text(others[5..].iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join("\n"));
     }
 }
@@ -1037,7 +1036,7 @@ impl Account {
         let v = self.storage.clone();
         house::dialog(ctx, "starsheets_storage", 540.0, "Where files are kept", Some(&mut close), |ui| {
             let Some(v) = &v else {
-                ui.label(RichText::new("Loading…").color(theme::TEXT_DIM));
+                ui.label(RichText::new("Loading…").color(theme::text_dim()));
                 return;
             };
             let location = v["location"].as_str().unwrap_or("the server");
@@ -1052,7 +1051,7 @@ impl Account {
             let folders: Vec<String> = v["folders"].as_array().into_iter().flatten().filter_map(|f| f.as_str().map(str::to_string)).collect();
             let with_files: Vec<String> = v["has_files"].as_array().into_iter().flatten().filter_map(|f| f.as_str().map(str::to_string)).collect();
             let pick = self.storage_pick.clone().unwrap_or_default();
-            egui::Frame::NONE.stroke(egui::Stroke::new(1.0, theme::DIVIDER)).corner_radius(8).inner_margin(egui::Margin::same(4)).show(ui, |ui| {
+            egui::Frame::NONE.stroke(egui::Stroke::new(1.0, theme::divider())).corner_radius(8).inner_margin(egui::Margin::same(4)).show(ui, |ui| {
                 egui::ScrollArea::vertical().max_height(280.0).min_scrolled_height(280.0).auto_shrink([false, false]).show(ui, |ui| {
                     for f in std::iter::once(String::new()).chain(folders.iter().cloned()) {
                         let depth = if f.is_empty() { 0 } else { f.matches('/').count() + 1 };
@@ -1061,7 +1060,7 @@ impl Account {
                         if pick == f {
                             p.rect_filled(r, 6, theme::SHARE);
                         } else if resp.hovered() {
-                            p.rect_filled(r, 6, theme::MENU_HOVER);
+                            p.rect_filled(r, 6, theme::menu_hover());
                         }
                         let x = r.left() + 8.0 + depth as f32 * 18.0;
                         if let Some(img) = crate::icons::icon("folder") {
@@ -1073,7 +1072,7 @@ impl Account {
                         } else if with_files.contains(&f) || (f.is_empty() && v["top_has_files"].as_bool().unwrap_or(false)) {
                             label.push_str("  · has Starbase files");
                         }
-                        p.text(egui::pos2(x + 28.0, r.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(14.0), theme::TEXT);
+                        p.text(egui::pos2(x + 28.0, r.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(14.0), theme::text());
                         if resp.clicked() {
                             self.storage_pick = Some(f.clone());
                             self.storage_use = with_files.contains(&f) || (f.is_empty() && v["top_has_files"].as_bool().unwrap_or(false));
@@ -1213,7 +1212,7 @@ impl Account {
                 if self.settings_tabs(ui) {
                     return;
                 }
-                ui.label(RichText::new("Loading…").color(theme::TEXT_DIM));
+                ui.label(RichText::new("Loading…").color(theme::text_dim()));
                 self.messages(ui);
             });
             if close || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -1278,7 +1277,7 @@ impl Account {
             }
             house::note(
                 ui,
-                "A copy of every file, version, bin and account, made once a day into a folder you choose: best a disk or NAS share that isn't the one your files are on. Backups are locked with a recovery key.",
+                "Starbase can back up files, versions, the bin and accounts daily to a folder you choose: best a disk or NAS share that isn't the one your files are on. Backups are locked with a recovery key.",
             );
             house::gap(ui);
             if set_up {
@@ -1327,7 +1326,7 @@ impl Account {
                 match &key {
                     Some(k) => {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(k).monospace().size(house::BODY).color(theme::TEXT));
+                            ui.label(RichText::new(k).monospace().size(house::BODY).color(theme::text()));
                             if ui.add(house::link("Copy")).clicked() {
                                 ui.ctx().copy_text(k.clone());
                                 self.done = Some("Recovery key copied.".into());
@@ -1626,7 +1625,7 @@ impl Account {
                     let (rect, r) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
                     ui.painter().circle_filled(rect.center(), 12.0, parse_colour(c));
                     if picked {
-                        ui.painter().circle_stroke(rect.center(), 13.5, egui::Stroke::new(2.0, theme::TEXT));
+                        ui.painter().circle_stroke(rect.center(), 13.5, egui::Stroke::new(2.0, theme::text()));
                     }
                     if r.clicked() {
                         self.colour = c.to_string();
@@ -1810,7 +1809,7 @@ impl Account {
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
                                 let name = d["name"].as_str().unwrap_or("A desktop app");
-                                ui.label(RichText::new(name).size(house::BODY).color(theme::TEXT));
+                                ui.label(RichText::new(name).size(house::BODY).color(theme::text()));
                                 let used = d["used"].as_f64().map_or_else(String::new, |t| ago(now - t));
                                 let this = if d["current"].as_bool() == Some(true) { " · this app" } else { "" };
                                 house::note(ui, &format!("Last used {used}{this}"));
@@ -1865,7 +1864,7 @@ impl Account {
                     avatar(ui, &p.name, &p.colour, 28.0);
                     ui.add_space(house::S);
                     ui.vertical(|ui| {
-                        ui.label(RichText::new(&p.name).size(house::BODY).color(theme::TEXT));
+                        ui.label(RichText::new(&p.name).size(house::BODY).color(theme::text()));
                         ui.horizontal(|ui| {
                             house::note(ui, &if p.owner { format!("{} · owner", p.username) } else { p.username.clone() });
                             if ui.add(house::link("Devices")).on_hover_text("The desktop apps connected to this account").clicked() {

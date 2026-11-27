@@ -18,7 +18,13 @@ impl Home {
             .shadow(egui::epaint::Shadow { offset: [0, 1], blur: 4, spread: 0, color: Color32::from_black_alpha(36) })
             .show(ui, |ui| {
                 ui.spacing_mut().button_padding = vec2(house::L, house::S);
-                ui.add(button.fill(theme::ON).corner_radius(16).min_size(vec2(104.0, 48.0)).stroke(Stroke::NONE))
+                ui.add(
+                    button
+                        .fill(if theme::photo_dark() { theme::drive_selection() } else { theme::ON })
+                        .corner_radius(16)
+                        .min_size(vec2(104.0, 48.0))
+                        .stroke(Stroke::NONE),
+                )
             })
             .inner;
         house::target(ui.ctx(), "New", new.rect);
@@ -200,7 +206,7 @@ impl Home {
         let p = ui.painter().clone();
         let dropping = self.dragging.is_some() && folder.is_some() && resp.contains_pointer();
         if current {
-            p.rect_filled(r, 17, theme::SHARE);
+            p.rect_filled(r, 17, theme::drive_selection());
         } else if dropping || resp.hovered() {
             p.rect_filled(r, 17, theme::hover());
         }

@@ -865,7 +865,7 @@ impl Home {
             Some(img) => egui::Button::image_and_text(img.fit_to_exact_size(vec2(20.0, 20.0)), label),
             None => egui::Button::new(label),
         };
-        let r = ui.add(b.fill(Color32::WHITE).stroke(Stroke::new(1.0, theme::BOX)).corner_radius(16).min_size(vec2(88.0, 32.0)));
+        let r = ui.add(b.fill(theme::card()).stroke(Stroke::new(1.0, theme::BOX)).corner_radius(16).min_size(vec2(88.0, 32.0)));
         house::target(ui.ctx(), "Sort", r.rect);
         egui::Popup::menu(&r).show(|ui| {
             house::menu(ui, 240.0);
@@ -1196,7 +1196,7 @@ impl Home {
             let w = (ui.available_width() - 100.0).clamp(220.0, 740.0);
             ui.allocate_ui_with_layout(vec2(w, 48.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 // One rounded box: the field itself draws no frame of its own.
-                egui::Frame::NONE.fill(theme::TOOLBAR).corner_radius(24).inner_margin(egui::Margin::symmetric(20, 12)).show(ui, |ui| {
+                egui::Frame::NONE.fill(theme::drive_surface()).corner_radius(24).inner_margin(egui::Margin::symmetric(20, 12)).show(ui, |ui| {
                     if let Some(img) = crate::icons::icon("search") {
                         ui.add(img.fit_to_exact_size(vec2(20.0, 20.0)));
                     }

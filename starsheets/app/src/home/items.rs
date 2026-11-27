@@ -76,8 +76,9 @@ impl Home {
                         Some(img) => egui::Button::image(img.fit_to_exact_size(vec2(20.0, 20.0))),
                         None => egui::Button::new(tip),
                     };
-                    let r =
-                        ui.add(b.fill(if on { theme::SHARE } else { theme::card() }).corner_radius(16).min_size(vec2(44.0, 32.0))).on_hover_text(tip);
+                    let r = ui
+                        .add(b.fill(if on { theme::drive_selection() } else { theme::card() }).corner_radius(16).min_size(vec2(44.0, 32.0)))
+                        .on_hover_text(tip);
                     house::target(ui.ctx(), &format!("drive:{icon}"), r.rect);
                     r.clicked()
                 };
@@ -320,11 +321,11 @@ impl Home {
             r,
             12,
             if sel {
-                theme::SHARE
+                theme::drive_selection()
             } else if resp.hovered() {
                 theme::hover()
             } else {
-                theme::TOOLBAR
+                theme::drive_surface()
             },
         );
         folder_icon(ui, f, Rect::from_center_size(r.left_center() + vec2(24.0, 0.0), vec2(22.0, 22.0)));
@@ -363,11 +364,11 @@ impl Home {
             r,
             12,
             if sel {
-                theme::SHARE
+                theme::drive_selection()
             } else if resp.hovered() {
                 theme::hover()
             } else {
-                theme::TOOLBAR
+                theme::drive_surface()
             },
         );
         let pic = Rect::from_min_size(r.min + vec2(8.0, 8.0), vec2(cw - 16.0, ph - 8.0));
@@ -402,11 +403,11 @@ impl Home {
             r,
             12,
             if sel {
-                theme::SHARE
+                theme::drive_selection()
             } else if resp.hovered() {
                 theme::hover()
             } else {
-                theme::TOOLBAR
+                theme::drive_surface()
             },
         );
         // The picture, on white, in the top part.
@@ -836,7 +837,7 @@ fn empty_folder(ui: &mut Ui, can_add: bool) -> bool {
     ui.vertical_centered(|ui| {
         ui.add_space(64.0);
         let (r, _) = ui.allocate_exact_size(vec2(120.0, 120.0), Sense::hover());
-        ui.painter().circle_filled(r.center(), 60.0, theme::TOOLBAR);
+        ui.painter().circle_filled(r.center(), 60.0, theme::drive_surface());
         if let Some(img) = crate::icons::icon(if can_add { "upload" } else { "folder_open" }) {
             img.fit_to_exact_size(vec2(56.0, 56.0)).paint_at(ui, Rect::from_center_size(r.center(), vec2(56.0, 56.0)));
         }

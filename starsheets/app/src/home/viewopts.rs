@@ -165,7 +165,7 @@ impl Home {
     /// One half-pair of the segmented view buttons, [List | ▾] / [Grid | ▾], drawn right to left
     /// (the ▾ first). Returns (main clicked, the ▾'s response).
     pub(super) fn view_button(&mut self, ui: &mut Ui, icon: &str, on: bool, tip: &str) -> (bool, egui::Response) {
-        let fill = if on { theme::SHARE } else { Color32::WHITE };
+        let fill = if on { theme::drive_selection() } else { theme::card() };
         let mut out = (false, None);
         ui.scope(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;

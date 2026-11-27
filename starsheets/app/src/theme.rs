@@ -180,3 +180,12 @@ pub fn hover() -> Color32 {
 pub fn card() -> Color32 {
     if photo_dark() { rgb(0x1B1D21) } else { Color32::WHITE }
 }
+
+/// Raised surfaces and selected items in the Drive layout.
+pub fn drive_surface() -> Color32 {
+    if photo_dark() { rgb(0x2B3038) } else { TOOLBAR }
+}
+
+pub fn drive_selection() -> Color32 {
+    if photo_dark() { rgb(0x34516D) } else { SHARE }
+}
