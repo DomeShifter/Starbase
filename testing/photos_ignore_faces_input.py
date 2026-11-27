@@ -64,16 +64,38 @@ def main():
     click("person:0", right=True); click("people:ctx-notface"); S.wait_for(lambda: pe().get("notfaces"), secs=20)
     rec("not a face", "people:notfaces" in tg(), pe().get("notfaces_count")); S.shot("3-notfaces")
     undo_all("people:isface:", "notfaces"); rec("it is a face: cards back", cards() == n0 and not pe()["notfaces"], (cards(), n0))
-    # 4. A face on a group page: right-click -> Ignore face; group page More -> Not a face (closes the page).
-    click("person:0"); S.wait_for(lambda: pe().get("faces", 0) > 0, secs=20)
+    # 4. A face on a group page: right-click -> Ignore face; then More -> Not a face for the rest (the page drops the ignored face).
+    click("person:0"); S.wait_for(lambda: pe().get("faces", 0) > 0, secs=20); nf0 = pe()["faces"]
     click("face:0", right=True); S.shot("4-face-menu"); click("people:ctx-ignore"); time.sleep(2)
-    click("people:more"); click("people:ctx-notface"); time.sleep(2)
+    rec("page drops the ignored face", pe().get("faces") == nf0 - 1, (nf0, pe().get("faces")))
+    click("people:more"); S.shot("4c-more"); click("people:ctx-notface"); time.sleep(3)
     rec("face ignore + More not a face", pe().get("ignored") and pe().get("notfaces"), (pe().get("ignored"), pe().get("notfaces")))
-    # 5. Ignored -> Group again; Not faces -> Assign to... the first person/group.
-    click("people:regroup:0"); time.sleep(3); rec("group again", not pe().get("ignored"))
-    k = len(pe().get("ignored", []))
-    click(f"people:assign:{k}"); S.wait_for(lambda: pe().get("assigning") is not None, secs=10); click("people:assign-to:0")
-    S.wait_for(lambda: not pe().get("notfaces"), secs=20); rec("assign to", not pe()["notfaces"]); S.shot("5-end")
+    S.shot("4d-sections")
+    # 5. One tile per group; open the ignored tile and undo ONE face; then group the rest again.
+    rec("one tile per group", pe()["ignored_tiles"] == [1] and len(pe()["notface_tiles"]) == 1, (pe()["ignored_tiles"], pe()["notface_tiles"]))
+    click("people:ignored-tile:0"); S.wait_for(lambda: pe().get("marked_open"), secs=10)
+    click("people:marked-undo:0"); S.wait_for(lambda: not pe().get("ignored"), secs=20)
+    rec("per-face undo (ignored)", not pe()["ignored"] and cards() == n0 - 1, (cards(), n0))
+    # 6. Not faces -> Assign to... the first person/group.
+    click("people:nf-assign:0"); S.wait_for(lambda: pe().get("assigning") is not None, secs=10); S.shot("6-assign-picker"); click("people:assign-to:0")
+    S.wait_for(lambda: not pe().get("notfaces"), secs=20); rec("assign not-face to", not pe()["notfaces"]); c1 = cards()
+    # 7. Ignore a whole group, then Assign to... another one: the ignored group joins it.
+    click("person:0", right=True); click("people:ctx-ignore"); S.wait_for(lambda: pe().get("ignored"), secs=20)
+    click("people:assign:0"); S.wait_for(lambda: pe().get("assigning") is not None, secs=10); click("people:assign-to:0")
+    S.wait_for(lambda: not pe().get("ignored"), secs=20); rec("assign ignored group to", not pe()["ignored"] and cards() == c1 - 1, (cards(), c1))
+    # 8. Scan now must not bring back a not-face.
+    click("person:0", right=True); click("people:ctx-notface"); S.wait_for(lambda: pe().get("notfaces"), secs=20); nfc = pe()["notfaces_count"]
+    click("photos:scan-now"); time.sleep(15); S.hook("home:photos:tab", tab="people"); time.sleep(5)
+    rec("scan now keeps the not-face", pe()["notfaces_count"] == nfc and not pe()["ignored"], (nfc, pe()["notfaces_count"])); S.shot("8-after-scan")
+    # 9. An ignored face is not listed in the viewer's People (API behind the Info panel).
+    click("person:0", right=True); click("people:ctx-ignore"); S.wait_for(lambda: pe().get("ignored"), secs=20)
+    api = pg.request.get(f"{S.base}/api/photos/people").json(); ig = api["ignored"][0]; pic = ig.get("pic") or ig.get("thumb") or ig.get("id")
+    info = pg.request.get(f"{S.base}/api/photos/faces/{pic}").json()
+    rec("ignored face not in the photo's People", info.get("people") == [], (pic, info))
+    n_in = len(info.get("people", [])) + info.get("unnamed", 0); rec("info counts exclude ignored", n_in == 0, info)
+    # Light theme: Photo Mode menu -> Light theme; the sections stay readable.
+    click("photos:view-menu"); click("Light theme"); time.sleep(2); S.shot("9-light-sections")
+    click("photos:view-menu"); click("Dark theme") if "Dark theme" in tg() else None
     print("RESULT", "PASS" if all(res) else "FAIL", f"{sum(res)}/{len(res)}"); sys.exit(0 if all(res) else 1)
 
 if __name__ == "__main__":

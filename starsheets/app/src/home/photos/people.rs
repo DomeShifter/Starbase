@@ -911,6 +911,9 @@ impl PhotoMode {
         }
         if let Some((act, face)) = mark {
             self.alb.ppl.selected.remove(&face);
+            // The page must not keep offering a face that has left People (a later "Not a face"
+            // for the page's faces would be refused as "not in People").
+            self.alb.ppl.faces.retain(|f| f.face != face);
             self.people_post(ctx, store, &format!("api/photos/people/faces/{act}"), json!({"faces": [face]}));
         }
         if let Some(id) = open
