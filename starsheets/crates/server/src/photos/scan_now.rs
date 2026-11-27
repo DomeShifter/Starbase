@@ -53,7 +53,19 @@ fn now_unix() -> i64 {
 fn my_folders(a: &crate::App, me: Option<&auth::User>, ph: &Photos) -> Vec<String> {
     let acc = sharing::Access::new(&a.store, a.auth, me);
     let on = ph.enabled.lock().unwrap_or_else(|e| e.into_inner()).clone();
-    on.into_iter().filter(|f| acc.folder_role(f) >= sharing::Role::View).collect()
+    on.into_iter()
+        .filter_map(|folder| {
+            let folder = match acc.photo_root(&a.store) {
+                None => folder,
+                Some(crate::mounts::Root::Available(root)) if super::inside(root, &folder) => root.clone(),
+                Some(crate::mounts::Root::Available(root)) if super::inside(&folder, root) => folder,
+                _ => return None,
+            };
+            (acc.folder_role(&folder) >= sharing::Role::View).then_some(folder)
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 /// Pictures in `folders` that entered the index after `since`.
@@ -92,7 +104,7 @@ pub async fn route(app: &Shared, m: &str, me: Option<auth::User>) -> Response<Bo
     }
     blocking(app, move |a| {
         let Some(ph) = service(&a.store) else { return error(503, super::NOT_SET_UP) };
-        if post { start(a, me.as_ref(), &who, &ph) } else { how_far(&who, &ph) }
+        if post { start(a, me.as_ref(), &who, &ph) } else { how_far(a, me.as_ref(), &who, &ph) }
     })
     .await
     .unwrap_or_else(|| error(500, "server error"))
@@ -122,7 +134,7 @@ fn start(a: &crate::App, me: Option<&auth::User>, who: &str, ph: &Photos) -> Res
     send_json(&json!({ "queued": n }), 200)
 }
 
-fn how_far(who: &str, ph: &Photos) -> Response<Body> {
+fn how_far(a: &crate::App, me: Option<&auth::User>, who: &str, ph: &Photos) -> Response<Body> {
     let (tickets, folders, since) = {
         let runs = ph.scan_now.lock().unwrap_or_else(|e| e.into_inner());
         match runs.get(who) {
@@ -130,7 +142,11 @@ fn how_far(who: &str, ph: &Photos) -> Response<Body> {
             None => (Vec::new(), Vec::new(), 0),
         }
     };
-    let new = if tickets.is_empty() { Vec::new() } else { new_in(ph, &folders, since) };
+    let mut new = if tickets.is_empty() { Vec::new() } else { new_in(ph, &folders, since) };
+    if !new.is_empty() {
+        let acc = sharing::Access::new(&a.store, a.auth, me);
+        new.retain(|path| acc.photo_allowed(&a.store, path));
+    }
     let busy = tickets.iter().any(|t| !ph.wait_scan(*t, Duration::ZERO));
     let (done, all) = face_counts(ph);
     let (queued, working) = ph.queued();
