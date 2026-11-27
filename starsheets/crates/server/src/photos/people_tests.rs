@@ -127,6 +127,6 @@ async fn a_name_is_seen_only_by_the_account_that_gave_it() {
     assert_eq!(post(&app, "/api/photos/people/faces/notface", "ada", json!({"faces": [ids[1]]})).await.status, 404, "already marked");
     let v = list("ada").await;
     assert_eq!((v["ignored_count"].clone(), v["notfaces_count"].clone()), (json!(1), json!(1)), "{v}");
-    assert_eq!(v["ignored"][0]["grp"].as_i64().is_some(), true, "marked faces say their group: {v}");
+    assert!(v["ignored"][0]["grp"].as_i64().is_some(), "marked faces say their group: {v}");
     let _ = std::fs::remove_dir_all(root);
 }

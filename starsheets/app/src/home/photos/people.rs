@@ -40,7 +40,13 @@ pub(in crate::home) struct Question {
 fn face_card(f: &Json) -> Option<FaceCard> {
     let b = f["box"].as_array()?;
     let n = |i: usize| b.get(i).and_then(Json::as_f64).unwrap_or(0.0) as f32;
-    Some(FaceCard { face: f["face"].as_i64()?, id: f["id"].as_str()?.to_string(), v: f["v"].as_str()?.to_string(), bx: [n(0), n(1), n(2), n(3)], grp: f["grp"].as_i64() })
+    Some(FaceCard {
+        face: f["face"].as_i64()?,
+        id: f["id"].as_str()?.to_string(),
+        v: f["v"].as_str()?.to_string(),
+        bx: [n(0), n(1), n(2), n(3)],
+        grp: f["grp"].as_i64(),
+    })
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
