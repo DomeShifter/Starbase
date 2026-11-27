@@ -174,6 +174,7 @@ const ICONS: &[(&str, &[u8])] = &[
     ("dark_mode", include_bytes!("../icons/dark_mode.svg")),
     ("light_mode", include_bytes!("../icons/light_mode.svg")),
     ("event", include_bytes!("../icons/event.svg")),
+    ("location_on", include_bytes!("../icons/location_on.svg")),
 ];
 
 /// The icon called `name`, 18 px, or None if it isn't embedded (the test below checks the names
