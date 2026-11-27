@@ -1164,10 +1164,10 @@ impl Account {
         let mut enabled = photos_available();
         let r = ui.checkbox(&mut enabled, "Show Photo Mode in Drive on this browser");
         house::target(ctx, "settings:photos-enabled", r.rect);
-        if r.changed() {
-            if let Some(storage) = browser_settings() {
-                let _ = storage.set_item(PHOTOS_AVAILABLE, if enabled { "1" } else { "0" });
-            }
+        if r.changed()
+            && let Some(storage) = browser_settings()
+        {
+            let _ = storage.set_item(PHOTOS_AVAILABLE, if enabled { "1" } else { "0" });
         }
         let Some(state) = &self.face_settings else {
             house::note(ui, "Loading face recognition settings…");
@@ -1182,11 +1182,11 @@ impl Account {
             self.error = None;
             call(&self.inbox, ctx, Method::Post, "api/photos/faces", Some(json!({"on": on})), Reply::FaceSettingsChanged);
         }
-        if state["can_download"].as_bool() == Some(true) {
-            if ui.add_enabled(!self.busy && !busy, house::secondary("Download face models")).clicked() {
-                self.busy = true;
-                call(&self.inbox, ctx, Method::Post, "api/photos/faces/models", Some(json!({})), |_| Reply::FaceModels);
-            }
+        if state["can_download"].as_bool() == Some(true)
+            && ui.add_enabled(!self.busy && !busy, house::secondary("Download face models")).clicked()
+        {
+            self.busy = true;
+            call(&self.inbox, ctx, Method::Post, "api/photos/faces/models", Some(json!({})), |_| Reply::FaceModels);
         }
         if busy {
             house::note(ui, "Downloading face models…");
