@@ -4,8 +4,8 @@
 Run:  photos_info_input.py http://<host>:<port> --browser chromium|firefox [--user ada --password adapassword] [--light]
 Uploads (api, as_is=1) one photo with rich EXIF (camera, lens, GPS + altitude, date with offset, copyright, artist,
 description, unique id) and one with none, then checks in the viewer's Info panel: rows in order, empty optional rows
-hidden, edits of Title/Caption/Labels/Copyright kept after a reload, original bytes unchanged (sha256), mini map click
-opens Places, and that the text is not smaller than the rest of the app (house::BODY rows are checked by the unit test)."""
+hidden, edits of Title/Caption/Labels/Copyright kept after a reload, original bytes unchanged (sha256), the offline mini
+map shows land and water and opens Places, and the text uses house::BODY (checked by the unit test)."""
 import base64, hashlib, http.cookiejar, json, os, struct, sys, time, urllib.parse, urllib.request
 sys.path.insert(0, os.path.expanduser("~/.claude/tools"))
 import starbase_ui as ui
@@ -47,6 +47,34 @@ def rich_jpeg():
     tiff = b"Exif\0\0II*\0" + struct.pack("<I", 8) + _ifd(ifd0, 8) + e + _ifd(gps, pos + len(e))
     app1 = b"\xff\xe1" + struct.pack(">H", len(tiff) + 2) + tiff
     return BASE_JPEG[:2] + app1 + BASE_JPEG[2:]
+
+
+def offline_map_colours(page, centre):
+    """The London fixture should show land and water around the pin at regional zoom."""
+    if not centre:
+        return [0, 0]
+    x, y = centre
+    top = max(0, int(y - 30))
+    bottom = min(page.viewport_size["height"], int(y + 30))
+    png = page.screenshot(clip={"x": int(x - 120), "y": top, "width": 240, "height": bottom - top})
+    return page.evaluate("""async (png) => {
+        const bytes = Uint8Array.from(atob(png), c => c.charCodeAt(0));
+        const image = await createImageBitmap(new Blob([bytes], {type: 'image/png'}));
+        const canvas = document.createElement('canvas');
+        canvas.width = image.width;
+        canvas.height = image.height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(image, 0, 0);
+        const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+        const colours = [[0x2b, 0x30, 0x37], [0x17, 0x1a, 0x1f]];
+        const counts = [0, 0];
+        for (let i = 0; i < pixels.length; i += 4) {
+            colours.forEach((rgb, k) => {
+                if (rgb.every((v, c) => Math.abs(pixels[i + c] - v) <= 2)) counts[k]++;
+            });
+        }
+        return counts;
+    }""", base64.b64encode(png).decode())
 
 
 class Api:
@@ -110,6 +138,9 @@ def main():
     rec("edits saved after reload", all(x in after for x in ("Harbour trip", "Evening light", "boats", "(c) Test 2026")), after)
     rec("original bytes unchanged after edits", sha("rich.jpg") == before["rich.jpg"] and sha("plain.jpg") == before["plain.jpg"], "")
     S.pg.mouse.move(1100, 500); S.pg.mouse.wheel(0, 3000); time.sleep(1.5)
+    if S.snapshot("home.photos.map.tiles") is None:
+        land, water = offline_map_colours(S.pg, tg().get("viewer:info:map"))
+        rec("offline mini map shows land and water", land > 100 and water > 100, {"land": land, "water": water})
     S.click_text("viewer:info:map"); time.sleep(4); st = S.snapshot("home.photos") or {}
     m = (S.snapshot("home.photos.map") or {}); c = m.get("centre") or [0, 0]; print("MAP", m.get("centre"), m.get("zoom"), flush=True)
     import math; wx = (-0.1278 + 180) / 360; wy = 0.5 - math.log(math.tan(math.pi / 4 + math.radians(51.5074) / 2)) / (2 * math.pi)  # London in map units

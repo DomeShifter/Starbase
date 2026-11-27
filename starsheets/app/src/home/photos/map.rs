@@ -32,10 +32,12 @@ const CLUSTER: f32 = 72.0;
 const THUMB: f32 = 56.0;
 const MIN_ZOOM: f32 = 0.0;
 const MAX_ZOOM: f32 = 18.0;
-/// Past this zoom the built-in map shows its close-up band (1:50m).
-/// The Info panel's small map's zoom, and the Places map's when opened from it.
-const MINI_ZOOM: f32 = 11.0;
+/// The offline preview needs a wide enough view for the bundled map's regional detail.
+const MINI_OVERVIEW_ZOOM: f32 = 6.0;
+const MINI_TILE_ZOOM: f32 = 11.0;
+/// The Places map's zoom when opened from the small map.
 const PLACES_ZOOM: f32 = 13.0;
+/// Past this zoom the built-in map shows its close-up band (1:50m).
 const CLOSE_UP: f32 = 2.6;
 /// Detailed tiles (when the server has them) take over from this zoom.
 const TILES_FROM: f32 = 3.0;
@@ -354,7 +356,7 @@ impl PhotoMode {
         self.map_boot(&ctx, store);
         let saved = (self.map.centre, self.map.zoom);
         self.map.centre = mercator(lat, lon);
-        self.map.zoom = MINI_ZOOM;
+        self.map.zoom = if self.map.tiles.is_some() { MINI_TILE_ZOOM } else { MINI_OVERVIEW_ZOOM };
         let painter = ui.painter_at(view);
         painter.rect_filled(view, 4, SEA);
         self.draw_base(&painter, view);
