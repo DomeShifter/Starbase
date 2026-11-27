@@ -392,6 +392,7 @@ impl PhotoMode {
     }
 
     /// Turn face recognition on (fetching the models first when they are missing).
+    #[cfg(not(target_arch = "wasm32"))]
     fn turn_on(&mut self, ctx: &egui::Context, store: &Backend, st: &Json) {
         self.people_post(ctx, store, "api/photos/faces", json!({"on": true}));
         if needs_models(st) {
@@ -426,6 +427,11 @@ impl PhotoMode {
     fn fr_menu_ui(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend, st: &Json) {
         let on = st["on"].as_bool() == Some(true);
         let busy = st["download"]["busy"].as_bool() == Some(true);
+        #[cfg(target_arch = "wasm32")]
+        if st["can_toggle"].as_bool() == Some(true) && house::menu_row(ui, Some("settings"), "Face recognition settings…", "", true) {
+            let _ = crate::account::request(ctx, "photos-settings");
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         if st["can_toggle"].as_bool() == Some(true) {
             if on {
                 if house::menu_row(ui, Some("visibility_off"), "Turn off face recognition", "", true) {
@@ -544,6 +550,10 @@ impl PhotoMode {
     /// The people and groups, or the opened one.
     pub(super) fn people_ui(&mut self, ui: &mut Ui, store: &Backend) {
         let ctx = ui.ctx().clone();
+        #[cfg(target_arch = "wasm32")]
+        if ctx.data_mut(|data| data.remove_temp::<bool>(egui::Id::unique(crate::account::FACES_SETTINGS_CHANGED))).unwrap_or(false) {
+            self.people_changed(&ctx, store, None);
+        }
         self.people_boot(&ctx, store);
         if let Some(e) = self.error.clone()
             && house::status_line(ui, house::Status::Error, &e)
@@ -564,7 +574,12 @@ impl PhotoMode {
         self.people_working(ui, &ctx, &st);
         if st["on"].as_bool() != Some(true) {
             let (title, hint, button) = off_view(&st);
+            #[cfg(target_arch = "wasm32")]
+            let button = button.map(|_| "Open face recognition settings");
             if house::empty_state(ui, Some("groups"), title, hint, button) {
+                #[cfg(target_arch = "wasm32")]
+                let _ = crate::account::request(&ctx, "photos-settings");
+                #[cfg(not(target_arch = "wasm32"))]
                 self.turn_on(&ctx, store, &st);
             }
             return;
@@ -1119,7 +1134,7 @@ fn fr_label(st: &Json) -> &'static str {
 fn off_view(st: &Json) -> (&'static str, &'static str, Option<&'static str>) {
     const TITLE: &str = "Face recognition is off";
     if st["can_toggle"].as_bool() != Some(true) {
-        return (TITLE, "Ask the owner of this server to turn it on (in Photos, People).", None);
+        return (TITLE, "Ask the owner of this server to turn it on.", None);
     }
     let hint = "It groups the same face across your pictures. It runs on this server only; nothing is sent anywhere.";
     if st["download"]["busy"].as_bool() == Some(true) {

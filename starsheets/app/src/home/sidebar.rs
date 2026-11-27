@@ -8,7 +8,7 @@ impl Home {
         let here = self.here();
         // The house's raised button with the + icon: a light blue tint (Google's "Compose" blue)
         // so it stands out from the page, and 48 px tall rather than 56 (to-do 3 row 17).
-        let label = RichText::new("New").size(15.0).color(theme::TEXT);
+        let label = RichText::new("New").size(15.0).color(theme::text());
         let button = match crate::icons::icon("add") {
             Some(img) => egui::Button::image_and_text(img.fit_to_exact_size(vec2(24.0, 24.0)), label),
             None => egui::Button::new(label),
@@ -18,7 +18,13 @@ impl Home {
             .shadow(egui::epaint::Shadow { offset: [0, 1], blur: 4, spread: 0, color: Color32::from_black_alpha(36) })
             .show(ui, |ui| {
                 ui.spacing_mut().button_padding = vec2(house::L, house::S);
-                ui.add(button.fill(theme::ON).corner_radius(16).min_size(vec2(104.0, 48.0)).stroke(Stroke::NONE))
+                ui.add(
+                    button
+                        .fill(if theme::photo_dark() { theme::drive_selection() } else { theme::ON })
+                        .corner_radius(16)
+                        .min_size(vec2(104.0, 48.0))
+                        .stroke(Stroke::NONE),
+                )
             })
             .inner;
         house::target(ui.ctx(), "New", new.rect);
@@ -75,7 +81,7 @@ impl Home {
             self.node(ui, "Starred", "star", Some(View::Starred), None, "starred");
             self.node(ui, "Bin", "delete", Some(View::Bin), None, "bin");
             // Photos' Locked folder, findable from the Drive too (it lives in Photo Mode).
-            if self.store.has_photos() {
+            if self.photos_available() {
                 let top = ui.cursor().min;
                 if self.row(ui, "Locked", "lock", None, 0, false, false, "locked:", None) {
                     self.open_locked();
@@ -92,7 +98,7 @@ impl Home {
                 };
                 ui.horizontal(|ui| {
                     ui.add_space(56.0);
-                    ui.label(RichText::new(text).size(12.0).color(theme::TEXT_DIM));
+                    ui.label(RichText::new(text).size(12.0).color(theme::text_dim()));
                 });
             }
             if self.accounts && self.admin {
@@ -200,9 +206,9 @@ impl Home {
         let p = ui.painter().clone();
         let dropping = self.dragging.is_some() && folder.is_some() && resp.contains_pointer();
         if current {
-            p.rect_filled(r, 17, theme::SHARE);
+            p.rect_filled(r, 17, theme::drive_selection());
         } else if dropping || resp.hovered() {
-            p.rect_filled(r, 17, theme::HOVER);
+            p.rect_filled(r, 17, theme::hover());
         }
         if dropping {
             p.rect_stroke(r, 17, Stroke::new(2.0, ACCENT), egui::StrokeKind::Inside);
@@ -233,8 +239,8 @@ impl Home {
             img.paint_at(ui, Rect::from_center_size(egui::pos2(x + 34.0, r.center().y), vec2(20.0, 20.0)));
         }
         let font = FontId::proportional(14.0);
-        let galley = p.layout(label.to_string(), font, theme::TEXT, r.right() - x - 56.0);
-        p.galley(egui::pos2(x + 52.0, r.center().y - galley.size().y / 2.0), galley, theme::TEXT);
+        let galley = p.layout(label.to_string(), font, theme::text(), r.right() - x - 56.0);
+        p.galley(egui::pos2(x + 52.0, r.center().y - galley.size().y / 2.0), galley, theme::text());
         resp.clicked() && !toggled
     }
 }

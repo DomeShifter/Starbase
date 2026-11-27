@@ -181,10 +181,10 @@ fn pick(ui: &mut Ui, names: &[&str], value: &mut u8) -> bool {
 
 /// One chip: a rounded button (tinted when it filters) that opens its menu.
 fn chip(ui: &mut Ui, label: &str, on: bool, menu: impl FnOnce(&mut Ui, &mut Filters) -> bool, f: &mut Filters) -> bool {
-    let text = RichText::new(format!("{label} ▾")).size(house::NOTE).color(theme::TEXT);
+    let text = RichText::new(format!("{label} ▾")).size(house::NOTE).color(theme::text());
     let r = ui.add(
         egui::Button::new(text)
-            .fill(if on { theme::SHARE } else { Color32::WHITE })
+            .fill(if on { theme::drive_selection() } else { theme::card() })
             .stroke(Stroke::new(1.0, theme::BOX))
             .corner_radius(14)
             .min_size(vec2(0.0, 28.0)),

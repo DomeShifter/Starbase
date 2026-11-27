@@ -67,7 +67,7 @@ pub fn ask_sign_in() {
 /// Opens one of the avatar menu's dialogs, as the menu does (the test hook: `account:profile`,
 /// `account:password`, `account:people`).
 pub fn request(ctx: &egui::Context, what: &str) -> Result<(), String> {
-    if !matches!(what, "profile" | "password" | "people" | "storage" | "backups" | "devices") {
+    if !matches!(what, "profile" | "password" | "people" | "storage" | "backups" | "devices" | "settings" | "photos-settings") {
         return Err(format!("no account dialog `{what}`"));
     }
     ctx.data_mut(|m| m.insert_temp(egui::Id::unique(REQUEST), what.to_string()));
@@ -159,6 +159,17 @@ pub fn open_menu(ctx: &egui::Context) -> Result<(), String> {
 }
 
 /// What the avatar menu asked for (in egui memory, picked up by `Account::logic`).
+pub(crate) const FACES_SETTINGS_CHANGED: &str = "starbase_faces_settings_changed";
+const PHOTOS_AVAILABLE: &str = "starbase_photos_available";
+
+fn browser_settings() -> Option<web_sys::Storage> {
+    web_sys::window()?.local_storage().ok()?
+}
+
+pub(crate) fn photos_available() -> bool {
+    browser_settings().and_then(|storage| storage.get_item(PHOTOS_AVAILABLE).ok().flatten()).as_deref() != Some("0")
+}
+
 const REQUEST: &str = "starsheets_account_request";
 
 /// The avatars at the right of the title row: the other people in this file (left of Share),
@@ -167,9 +178,12 @@ pub fn me_ui(ui: &mut Ui) {
     let Some(me) = me() else { return };
     let r = avatar(ui, &me.name, &me.colour, 32.0).on_hover_text(format!("{} ({})", me.name, me.username));
     let ask = |ui: &Ui, what: &str| ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(REQUEST), what.to_string()));
+    house::target(ui.ctx(), "account:avatar", r.rect);
+    if r.secondary_clicked() {
+        ask(ui, "settings");
+    }
     // Google's account menu: who you are at the top (username, a big avatar, "Hi, name!") with
-    // the main account button under it, then the rest, then Sign out. Always the light house
-    // colours, whatever the computer's theme.
+    // the main account button under it, then the rest, then Sign out.
     egui::Popup::menu(&r).id(menu_id()).show(|ui| {
         house::menu(ui, 300.0);
         house::menu_inset(ui, |ui| {
@@ -179,7 +193,7 @@ pub fn me_ui(ui: &mut Ui) {
                 ui.add_space(house::M);
                 avatar(ui, &me.name, &me.colour, 64.0);
                 ui.add_space(house::S);
-                ui.label(RichText::new(format!("Hi, {}!", me.name)).size(22.0).color(theme::TEXT));
+                ui.label(RichText::new(format!("Hi, {}!", me.name)).size(22.0).color(theme::text()));
                 ui.add_space(house::M);
                 if ui.add(house::secondary("Your name and colour")).clicked() {
                     ask(ui, "profile");
@@ -204,8 +218,8 @@ pub fn me_ui(ui: &mut Ui) {
         if me.owner && house::menu_row(ui, Some("folder"), "Where files are kept…", "", true) {
             ask(ui, "storage");
         }
-        if me.owner && house::menu_row(ui, Some("history"), "Backups…", "", true) {
-            ask(ui, "backups");
+        if house::menu_row(ui, Some("settings"), "Settings…", "", true) {
+            ask(ui, "settings");
         }
         if me.owner && house::menu_row(ui, Some("group"), "People…", "", true) {
             ask(ui, "people");
@@ -225,7 +239,7 @@ pub fn others_ui(ui: &mut Ui) {
         ui.add_space(2.0);
     }
     if others.len() > 5 {
-        ui.label(RichText::new(format!("+{}", others.len() - 5)).size(house::NOTE).color(theme::TEXT_DIM))
+        ui.label(RichText::new(format!("+{}", others.len() - 5)).size(house::NOTE).color(theme::text_dim()))
             .on_hover_text(others[5..].iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join("\n"));
     }
 }
@@ -273,6 +287,10 @@ enum Reply {
     Restarting,
     /// Backup settings and how the last one went (GET /api/backup).
     Backup(Json),
+    FaceSettings(Json),
+    FaceSettingsChanged(Json),
+    FaceModels,
+    BackupEnabled(bool),
     /// The backups kept (GET /api/backup/list).
     BackupList(Vec<Json>),
     /// Whose folders the backups hold (GET /api/backup/people).
@@ -451,7 +469,7 @@ enum Dialog {
     Password,
     People,
     Storage,
-    Backups,
+    Settings,
     Devices,
 }
 
@@ -512,6 +530,8 @@ pub struct Account {
     /// Backups (owner): what the server said, the backups kept (None = loading, or not set up),
     /// the form (folder, daily on/off, hour), the recovery key when shown, a key typed to use
     /// backups made before, and the backup a "Restore" was clicked on once.
+    settings_tab: usize,
+    face_settings: Option<Json>,
     backup: Option<Json>,
     backup_list: Option<Vec<Json>>,
     backup_to: String,
@@ -752,6 +772,18 @@ impl Account {
                         }
                     }
                 }
+                Reply::FaceSettings(v) => self.face_settings = Some(v),
+                Reply::FaceSettingsChanged(v) => {
+                    self.face_settings = Some(v);
+                    ctx.data_mut(|data| data.insert_temp(egui::Id::unique(FACES_SETTINGS_CHANGED), true));
+                }
+                Reply::FaceModels => call(&self.inbox, ctx, Method::Get, "api/photos/faces", None, Reply::FaceSettings),
+                Reply::BackupEnabled(enabled) => {
+                    if let Some(v) = &mut self.backup {
+                        v["enabled"] = json!(enabled);
+                    }
+                    self.done = Some(if enabled { "Backups enabled." } else { "Backups turned off." }.into());
+                }
                 Reply::BackupList(l) => self.backup_list = Some(l),
                 Reply::BackupPeople(p) => self.backup_people = p,
                 Reply::BackupKey(k) => self.backup_key = Some(k),
@@ -797,15 +829,25 @@ impl Account {
                     self.open(Dialog::Storage);
                     self.load_storage(ctx);
                 }
-                "backups" => {
-                    self.open(Dialog::Backups);
+                "settings" | "photos-settings" | "backups" => {
+                    self.open(Dialog::Settings);
+                    let owner = me().is_some_and(|m| m.owner);
+                    self.settings_tab = match req.as_str() {
+                        "photos-settings" => 1,
+                        "backups" if owner => 2,
+                        _ => 0,
+                    };
+                    self.face_settings = None;
+                    call(&self.inbox, ctx, Method::Get, "api/photos/faces", None, Reply::FaceSettings);
                     self.backup = None;
                     self.backup_list = None;
                     self.backup_key = None;
                     self.backup_armed = None;
                     self.backup_people.clear();
                     self.backup_whose = 0;
-                    call(&self.inbox, ctx, Method::Get, "api/backup", None, Reply::Backup);
+                    if owner {
+                        call(&self.inbox, ctx, Method::Get, "api/backup", None, Reply::Backup);
+                    }
                 }
                 "devices" => {
                     self.open(Dialog::Devices);
@@ -971,7 +1013,7 @@ impl Account {
             Dialog::Password => self.change_password(ctx),
             Dialog::People => self.people(ctx),
             Dialog::Storage => self.storage_ui(ctx),
-            Dialog::Backups => self.backups_ui(ctx),
+            Dialog::Settings => self.settings_ui(ctx),
             Dialog::Devices => self.devices_ui(ctx),
         }
         self.restarting_ui(ctx);
@@ -994,7 +1036,7 @@ impl Account {
         let v = self.storage.clone();
         house::dialog(ctx, "starsheets_storage", 540.0, "Where files are kept", Some(&mut close), |ui| {
             let Some(v) = &v else {
-                ui.label(RichText::new("Loading…").color(theme::TEXT_DIM));
+                ui.label(RichText::new("Loading…").color(theme::text_dim()));
                 return;
             };
             let location = v["location"].as_str().unwrap_or("the server");
@@ -1009,7 +1051,7 @@ impl Account {
             let folders: Vec<String> = v["folders"].as_array().into_iter().flatten().filter_map(|f| f.as_str().map(str::to_string)).collect();
             let with_files: Vec<String> = v["has_files"].as_array().into_iter().flatten().filter_map(|f| f.as_str().map(str::to_string)).collect();
             let pick = self.storage_pick.clone().unwrap_or_default();
-            egui::Frame::NONE.stroke(egui::Stroke::new(1.0, theme::DIVIDER)).corner_radius(8).inner_margin(egui::Margin::same(4)).show(ui, |ui| {
+            egui::Frame::NONE.stroke(egui::Stroke::new(1.0, theme::divider())).corner_radius(8).inner_margin(egui::Margin::same(4)).show(ui, |ui| {
                 egui::ScrollArea::vertical().max_height(280.0).min_scrolled_height(280.0).auto_shrink([false, false]).show(ui, |ui| {
                     for f in std::iter::once(String::new()).chain(folders.iter().cloned()) {
                         let depth = if f.is_empty() { 0 } else { f.matches('/').count() + 1 };
@@ -1018,7 +1060,7 @@ impl Account {
                         if pick == f {
                             p.rect_filled(r, 6, theme::SHARE);
                         } else if resp.hovered() {
-                            p.rect_filled(r, 6, theme::MENU_HOVER);
+                            p.rect_filled(r, 6, theme::menu_hover());
                         }
                         let x = r.left() + 8.0 + depth as f32 * 18.0;
                         if let Some(img) = crate::icons::icon("folder") {
@@ -1030,7 +1072,7 @@ impl Account {
                         } else if with_files.contains(&f) || (f.is_empty() && v["top_has_files"].as_bool().unwrap_or(false)) {
                             label.push_str("  · has Starbase files");
                         }
-                        p.text(egui::pos2(x + 28.0, r.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(14.0), theme::TEXT);
+                        p.text(egui::pos2(x + 28.0, r.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(14.0), theme::text());
                         if resp.clicked() {
                             self.storage_pick = Some(f.clone());
                             self.storage_use = with_files.contains(&f) || (f.is_empty() && v["top_has_files"].as_bool().unwrap_or(false));
@@ -1077,16 +1119,100 @@ impl Account {
     /// Backups (owner): where they go, once a day at what hour, the recovery key, how the last
     /// one went, "Back up now", and the backups kept, each with "Restore" (copies your files from
     /// then into a new folder; nothing is overwritten). See the server's backup.rs.
+    fn settings_tabs(&mut self, ui: &mut Ui) -> bool {
+        let labels: &[&str] = if me().is_some_and(|m| m.owner) { &["Appearance", "Photos", "Backups"] } else { &["Appearance", "Photos"] };
+        if self.settings_tab >= labels.len() {
+            self.settings_tab = 0;
+        }
+        let changed = house::tabs(ui, &mut self.settings_tab, labels);
+        house::gap(ui);
+        changed
+    }
+
+    fn settings_ui(&mut self, ctx: &egui::Context) {
+        if self.settings_tab == 2 && me().is_some_and(|m| m.owner) {
+            self.backups_ui(ctx);
+            return;
+        }
+        let mut close = false;
+        house::dialog(ctx, "starsheets_settings", 560.0, "Settings", Some(&mut close), |ui| {
+            if self.settings_tabs(ui) {
+                if self.settings_tab == 1 {
+                    call(&self.inbox, ctx, Method::Get, "api/photos/faces", None, Reply::FaceSettings);
+                }
+                return;
+            }
+            if self.settings_tab == 0 {
+                let mut dark = crate::theme::drive_dark();
+                let r = ui.checkbox(&mut dark, "Dark appearance in Drive");
+                house::target(ctx, "settings:dark", r.rect);
+                if r.changed() {
+                    crate::theme::set_drive_dark(dark);
+                }
+                house::note(ui, "This setting is saved in this browser. Photo Mode always uses the dark appearance.");
+            } else {
+                self.photos_settings_ui(ui, ctx);
+            }
+            self.messages(ui);
+        });
+        if close || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.dialog = Dialog::None;
+        }
+    }
+
+    fn photos_settings_ui(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+        let mut enabled = photos_available();
+        let r = ui.checkbox(&mut enabled, "Show Photo Mode in Drive on this browser");
+        house::target(ctx, "settings:photos-enabled", r.rect);
+        if r.changed()
+            && let Some(storage) = browser_settings()
+        {
+            let _ = storage.set_item(PHOTOS_AVAILABLE, if enabled { "1" } else { "0" });
+        }
+        let Some(state) = &self.face_settings else {
+            house::note(ui, "Loading face recognition settings…");
+            return;
+        };
+        let mut on = state["on"].as_bool().unwrap_or(false);
+        let busy = state["download"]["busy"].as_bool() == Some(true);
+        let r = ui.add_enabled(state["can_toggle"].as_bool() == Some(true) && !self.busy && !busy, egui::Checkbox::new(&mut on, "Face recognition"));
+        house::target(ctx, "settings:faces", r.rect);
+        if r.changed() {
+            self.busy = true;
+            self.error = None;
+            call(&self.inbox, ctx, Method::Post, "api/photos/faces", Some(json!({"on": on})), Reply::FaceSettingsChanged);
+        }
+        if state["can_download"].as_bool() == Some(true)
+            && ui.add_enabled(!self.busy && !busy, house::secondary("Download face models")).clicked()
+        {
+            self.busy = true;
+            call(&self.inbox, ctx, Method::Post, "api/photos/faces/models", Some(json!({})), |_| Reply::FaceModels);
+        }
+        if busy {
+            house::note(ui, "Downloading face models…");
+            if ctx.input(|i| i.time) - self.backup_polled > 2.0 {
+                self.backup_polled = ctx.input(|i| i.time);
+                call(&self.inbox, ctx, Method::Get, "api/photos/faces", None, Reply::FaceSettings);
+            }
+            ctx.request_repaint_after(std::time::Duration::from_secs(2));
+        }
+        house::note(ui, state["note"].as_str().unwrap_or("Turning off face recognition keeps names and groups."));
+    }
+
     fn backups_ui(&mut self, ctx: &egui::Context) {
         let mut close = false;
         let mut cancel = false;
         let mut save = false;
         let mut now = false;
         let mut restore = None;
+        let mut master = None;
         let mut show_key = false;
         let Some(v) = self.backup.clone() else {
-            house::dialog(ctx, "starsheets_backups", 560.0, "Backups", Some(&mut close), |ui| {
-                ui.label(RichText::new("Loading…").color(theme::TEXT_DIM));
+            house::dialog(ctx, "starsheets_settings", 560.0, "Settings", Some(&mut close), |ui| {
+                if self.settings_tabs(ui) {
+                    return;
+                }
+                ui.label(RichText::new("Loading…").color(theme::text_dim()));
                 self.messages(ui);
             });
             if close || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -1123,10 +1249,35 @@ impl Account {
             self.backup_whose = 0;
         }
         let when = |iso: &str| format!("{} UTC", iso.replace('T', " ").chars().take(16).collect::<String>());
-        house::dialog(ctx, "starsheets_backups", 560.0, "Backups", Some(&mut close), |ui| {
+        house::dialog(ctx, "starsheets_settings", 560.0, "Settings", Some(&mut close), |ui| {
+            if self.settings_tabs(ui) {
+                return;
+            }
+            let enabled = v["enabled"].as_bool().unwrap_or(true);
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(!self.busy, |ui| {
+                    let (track, response) = ui.allocate_exact_size(vec2(42.0, 24.0), Sense::click());
+                    let fill = if enabled { theme::BLUE } else { theme::text_dim() };
+                    ui.painter().rect_filled(track, 12.0, fill);
+                    let x = if enabled { track.right() - 12.0 } else { track.left() + 12.0 };
+                    ui.painter().circle_filled(egui::pos2(x, track.center().y), 8.0, Color32::WHITE);
+                    if response.has_focus() || response.hovered() {
+                        ui.painter().rect_stroke(track.expand(2.0), 14.0, egui::Stroke::new(1.0, fill), egui::StrokeKind::Outside);
+                    }
+                    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), enabled, "Enable backups"));
+                    house::target(ctx, "settings:backups-enabled", track);
+                    if response.clicked() {
+                        master = Some(!enabled);
+                    }
+                });
+                house::text(ui, if enabled { "Backups on" } else { "Backups off" });
+            });
+            if !enabled {
+                house::note(ui, "Scheduled and manual backups are off. Existing backups can still be restored.");
+            }
             house::note(
                 ui,
-                "A copy of every file, version, bin and account, made once a day into a folder you choose: best a disk or NAS share that isn't the one your files are on. Backups are locked with a recovery key.",
+                "Starbase can back up files, versions, the bin and accounts daily to a folder you choose: best a disk or NAS share that isn't the one your files are on. Backups are locked with a recovery key.",
             );
             house::gap(ui);
             if set_up {
@@ -1175,7 +1326,7 @@ impl Account {
                 match &key {
                     Some(k) => {
                         ui.horizontal(|ui| {
-                            ui.label(RichText::new(k).monospace().size(house::BODY).color(theme::TEXT));
+                            ui.label(RichText::new(k).monospace().size(house::BODY).color(theme::text()));
                             if ui.add(house::link("Copy")).clicked() {
                                 ui.ctx().copy_text(k.clone());
                                 self.done = Some("Recovery key copied.".into());
@@ -1238,10 +1389,17 @@ impl Account {
                 }
             }
             self.messages(ui);
-            let labels: &[&str] = if set_up { &["Close", "Back up now", "Save"] } else { &["Cancel", "Set up backups"] };
+            let can_run = set_up && enabled;
+            let labels: &[&str] = if can_run {
+                &["Close", "Back up now", "Save"]
+            } else if set_up {
+                &["Close", "Save"]
+            } else {
+                &["Cancel", "Set up backups"]
+            };
             match house::actions(ui, labels) {
                 Some(0) => cancel = true,
-                Some(1) if set_up => now = true,
+                Some(1) if can_run => now = true,
                 Some(_) => save = true,
                 None => {}
             }
@@ -1251,6 +1409,12 @@ impl Account {
             self.backup_key = None;
         } else if self.busy {
             // One request at a time.
+        } else if let Some(enabled) = master {
+            self.busy = true;
+            self.error = None;
+            call(&self.inbox, ctx, Method::Post, "api/backup", Some(json!({"enabled": enabled})), |v| {
+                Reply::BackupEnabled(v["enabled"].as_bool() == Some(true))
+            });
         } else if save {
             self.busy = true;
             self.error = None;
@@ -1461,7 +1625,7 @@ impl Account {
                     let (rect, r) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
                     ui.painter().circle_filled(rect.center(), 12.0, parse_colour(c));
                     if picked {
-                        ui.painter().circle_stroke(rect.center(), 13.5, egui::Stroke::new(2.0, theme::TEXT));
+                        ui.painter().circle_stroke(rect.center(), 13.5, egui::Stroke::new(2.0, theme::text()));
                     }
                     if r.clicked() {
                         self.colour = c.to_string();
@@ -1645,7 +1809,7 @@ impl Account {
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
                                 let name = d["name"].as_str().unwrap_or("A desktop app");
-                                ui.label(RichText::new(name).size(house::BODY).color(theme::TEXT));
+                                ui.label(RichText::new(name).size(house::BODY).color(theme::text()));
                                 let used = d["used"].as_f64().map_or_else(String::new, |t| ago(now - t));
                                 let this = if d["current"].as_bool() == Some(true) { " · this app" } else { "" };
                                 house::note(ui, &format!("Last used {used}{this}"));
@@ -1700,7 +1864,7 @@ impl Account {
                     avatar(ui, &p.name, &p.colour, 28.0);
                     ui.add_space(house::S);
                     ui.vertical(|ui| {
-                        ui.label(RichText::new(&p.name).size(house::BODY).color(theme::TEXT));
+                        ui.label(RichText::new(&p.name).size(house::BODY).color(theme::text()));
                         ui.horizontal(|ui| {
                             house::note(ui, &if p.owner { format!("{} · owner", p.username) } else { p.username.clone() });
                             if ui.add(house::link("Devices")).on_hover_text("The desktop apps connected to this account").clicked() {

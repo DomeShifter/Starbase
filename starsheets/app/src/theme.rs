@@ -113,6 +113,29 @@ pub fn sync_dark(ctx: &egui::Context, want: bool) {
     }
 }
 
+#[cfg(target_arch = "wasm32")]
+fn drive_storage() -> Option<web_sys::Storage> {
+    web_sys::window()?.local_storage().ok()?
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn set_drive_dark(dark: bool) {
+    if let Some(storage) = drive_storage() {
+        let _ = storage.set_item("starbase_drive_dark", if dark { "1" } else { "0" });
+    }
+}
+
+pub fn drive_dark() -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        drive_storage().and_then(|storage| storage.get_item("starbase_drive_dark").ok().flatten()).as_deref() == Some("1")
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        false
+    }
+}
+
 /// Like `TEXT`, but dark in Photo Mode's dark look.
 pub fn text() -> Color32 {
     if photo_dark() { rgb(0xE8EAED) } else { TEXT }
@@ -156,4 +179,13 @@ pub fn hover() -> Color32 {
 /// A card, field or panel: white, or a step lighter than the page in the dark look.
 pub fn card() -> Color32 {
     if photo_dark() { rgb(0x1B1D21) } else { Color32::WHITE }
+}
+
+/// Raised surfaces and selected items in the Drive layout.
+pub fn drive_surface() -> Color32 {
+    if photo_dark() { rgb(0x2B3038) } else { TOOLBAR }
+}
+
+pub fn drive_selection() -> Color32 {
+    if photo_dark() { rgb(0x34516D) } else { SHARE }
 }

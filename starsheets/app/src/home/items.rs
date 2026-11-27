@@ -38,10 +38,10 @@ impl Home {
             let last = crumbs.len().saturating_sub(1);
             for (i, (label, view)) in crumbs.into_iter().enumerate() {
                 if i > 0 {
-                    ui.label(RichText::new("›").size(20.0).color(theme::TEXT_DIM));
+                    ui.label(RichText::new("›").size(20.0).color(theme::text_dim()));
                 }
                 let r = ui.add(
-                    egui::Button::new(RichText::new(&label).size(22.0).color(if i == last { theme::TEXT } else { theme::TEXT_DIM })).frame(false),
+                    egui::Button::new(RichText::new(&label).size(22.0).color(if i == last { theme::text() } else { theme::text_dim() })).frame(false),
                 );
                 let folder = match &view {
                     Some(View::Mine(p) | View::Everyone(p)) if !p.is_empty() => Some(p.clone()),
@@ -63,7 +63,7 @@ impl Home {
             }
             if searching
                 && ui
-                    .add(egui::Button::new(RichText::new("×").size(22.0).color(theme::TEXT_DIM)).frame(false))
+                    .add(egui::Button::new(RichText::new("×").size(22.0).color(theme::text_dim())).frame(false))
                     .on_hover_text("Clear search")
                     .clicked()
             {
@@ -76,9 +76,11 @@ impl Home {
                         Some(img) => egui::Button::image(img.fit_to_exact_size(vec2(20.0, 20.0))),
                         None => egui::Button::new(tip),
                     };
-                    ui.add(b.fill(if on { theme::SHARE } else { Color32::WHITE }).corner_radius(16).min_size(vec2(44.0, 32.0)))
-                        .on_hover_text(tip)
-                        .clicked()
+                    let r = ui
+                        .add(b.fill(if on { theme::drive_selection() } else { theme::card() }).corner_radius(16).min_size(vec2(44.0, 32.0)))
+                        .on_hover_text(tip);
+                    house::target(ui.ctx(), &format!("drive:{icon}"), r.rect);
+                    r.clicked()
                 };
                 let photos = self.photo_folder().is_some();
                 // [Grid | ▾] and [List | ▾]: the ▾ holds that view's options (viewopts.rs).
@@ -97,7 +99,7 @@ impl Home {
                     self.store.set_setting("starsheets_home_list", "1");
                     self.photos.set_on(&self.store, false);
                 }
-                if self.store.has_photos() && toggle(ui, "photo_mode", photos, "Photo Mode") {
+                if self.photos_available() && toggle(ui, "photo_mode", photos, "Photo Mode") {
                     self.photos.set_on(&self.store, true);
                     self.search.clear();
                 }
@@ -157,7 +159,7 @@ impl Home {
                     }
                 };
                 ui.add_space(house::XL);
-                ui.label(RichText::new(empty).size(house::BODY).color(theme::TEXT_DIM));
+                ui.label(RichText::new(empty).size(house::BODY).color(theme::text_dim()));
             }
             let order = self.shown(&folders, &files);
             self.card_sub = files.iter().any(|f| !self.card_sub_text(f).is_empty());
@@ -319,11 +321,11 @@ impl Home {
             r,
             12,
             if sel {
-                theme::SHARE
+                theme::drive_selection()
             } else if resp.hovered() {
-                theme::HOVER
+                theme::hover()
             } else {
-                theme::TOOLBAR
+                theme::drive_surface()
             },
         );
         folder_icon(ui, f, Rect::from_center_size(r.left_center() + vec2(24.0, 0.0), vec2(22.0, 22.0)));
@@ -334,8 +336,8 @@ impl Home {
             img.paint_at(ui, Rect::from_center_size(r.right_center() - vec2(if f.starred { 40.0 } else { 18.0 }, 0.0), vec2(16.0, 16.0)));
         }
         if !self.renaming_ui(ui, &item, Rect::from_min_max(r.min + vec2(44.0, 8.0), r.max - vec2(8.0, 8.0))) {
-            let galley = p.layout(self.folder_label(&f.path), FontId::proportional(14.0), theme::TEXT, cw - 76.0);
-            p.galley(egui::pos2(r.left() + 44.0, r.center().y - galley.size().y.min(20.0) / 2.0), galley, theme::TEXT);
+            let galley = p.layout(self.folder_label(&f.path), FontId::proportional(14.0), theme::text(), cw - 76.0);
+            p.galley(egui::pos2(r.left() + 44.0, r.center().y - galley.size().y.min(20.0) / 2.0), galley, theme::text());
         }
         if f.starred
             && let Some(img) = crate::icons::icon("star_fill")
@@ -362,11 +364,11 @@ impl Home {
             r,
             12,
             if sel {
-                theme::SHARE
+                theme::drive_selection()
             } else if resp.hovered() {
-                theme::HOVER
+                theme::hover()
             } else {
-                theme::TOOLBAR
+                theme::drive_surface()
             },
         );
         let pic = Rect::from_min_size(r.min + vec2(8.0, 8.0), vec2(cw - 16.0, ph - 8.0));
@@ -375,13 +377,13 @@ impl Home {
         let line = Rect::from_min_max(egui::pos2(r.left() + 8.0, r.top() + ph), r.max - vec2(8.0, 4.0));
         folder_icon(ui, f, Rect::from_center_size(egui::pos2(line.left() + 10.0, line.top() + 16.0), vec2(18.0, 18.0)));
         if !self.renaming_ui(ui, &item, Rect::from_min_size(egui::pos2(line.left() + 26.0, line.top() + 4.0), vec2(line.width() - 30.0, 26.0))) {
-            let name = one_line(&p, self.folder_label(&f.path), 14.0, theme::TEXT, line.width() - 52.0);
-            p.galley(egui::pos2(line.left() + 28.0, line.top() + 6.0), name, theme::TEXT);
+            let name = one_line(&p, self.folder_label(&f.path), 14.0, theme::text(), line.width() - 52.0);
+            p.galley(egui::pos2(line.left() + 28.0, line.top() + 6.0), name, theme::text());
         }
         let (newest, _) = self.folder_stats(&f.path);
         if self.vo.dates {
             let sub = if newest > 0 { format!("Folder · {}", ago(newest)) } else { "Folder".into() };
-            p.text(egui::pos2(line.left() + 28.0, line.top() + 36.0), Align2::LEFT_CENTER, sub, FontId::proportional(12.0), theme::TEXT_DIM);
+            p.text(egui::pos2(line.left() + 28.0, line.top() + 36.0), Align2::LEFT_CENTER, sub, FontId::proportional(12.0), theme::text_dim());
         }
         let resp = resp.on_hover_text(self.folder_label(&f.path));
         self.interact(ui, &item, &resp, clicked_item);
@@ -401,11 +403,11 @@ impl Home {
             r,
             12,
             if sel {
-                theme::SHARE
+                theme::drive_selection()
             } else if resp.hovered() {
-                theme::HOVER
+                theme::hover()
             } else {
-                theme::TOOLBAR
+                theme::drive_surface()
             },
         );
         // The picture, on white, in the top part.
@@ -428,14 +430,14 @@ impl Home {
                 }
             }
         }
-        p.rect_stroke(pic, 6, Stroke::new(1.0, theme::DIVIDER), egui::StrokeKind::Inside);
+        p.rect_stroke(pic, 6, Stroke::new(1.0, theme::divider()), egui::StrokeKind::Inside);
         let line = Rect::from_min_max(egui::pos2(r.left() + 8.0, r.top() + ph), r.max - vec2(8.0, 4.0));
         if let Some(img) = crate::icons::icon(kind) {
             img.paint_at(ui, Rect::from_center_size(egui::pos2(line.left() + 10.0, line.top() + 16.0), vec2(18.0, 18.0)));
         }
         if !self.renaming_ui(ui, &item, Rect::from_min_size(egui::pos2(line.left() + 26.0, line.top() + 4.0), vec2(line.width() - 30.0, 26.0))) {
-            let name = one_line(&p, shown_name(&f.name).to_string(), 14.0, theme::TEXT, line.width() - 52.0);
-            p.galley(egui::pos2(line.left() + 28.0, line.top() + 6.0), name, theme::TEXT);
+            let name = one_line(&p, shown_name(&f.name).to_string(), 14.0, theme::text(), line.width() - 52.0);
+            p.galley(egui::pos2(line.left() + 28.0, line.top() + 6.0), name, theme::text());
         }
         if f.starred
             && let Some(img) = crate::icons::icon("star_fill")
@@ -446,8 +448,8 @@ impl Home {
         let has_sub = !sub.is_empty();
         if has_sub {
             // Cut to the card's width: a long snippet must not run past the card.
-            let g = one_line(&p, sub, 12.0, theme::TEXT_DIM, line.width() - 52.0);
-            p.galley(egui::pos2(line.left() + 28.0, line.top() + 36.0 - g.size().y / 2.0), g, theme::TEXT_DIM);
+            let g = one_line(&p, sub, 12.0, theme::text_dim(), line.width() - 52.0);
+            p.galley(egui::pos2(line.left() + 28.0, line.top() + 36.0 - g.size().y / 2.0), g, theme::text_dim());
         }
         if f.shared
             && let Some(img) = crate::icons::icon("group")
@@ -495,7 +497,7 @@ impl Home {
                 Align2::LEFT_CENTER,
                 super::viewopts::col_label(key, storage),
                 FontId::proportional(13.0),
-                theme::TEXT_DIM,
+                theme::text_dim(),
             );
             if key == "name" {
                 continue;
@@ -504,7 +506,7 @@ impl Home {
             let r = ui.interact(edge, egui::Id::unique(("home_col_edge", key)), Sense::drag()).on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
             house::target(ui.ctx(), &format!("List column edge {}", super::viewopts::col_label(key, storage)), edge);
             if r.hovered() || r.dragged() {
-                ui.painter().vline(edge.center().x, h.y_range(), Stroke::new(2.0, theme::DIVIDER));
+                ui.painter().vline(edge.center().x, h.y_range(), Stroke::new(2.0, theme::divider()));
             }
             if r.dragged() {
                 // Left makes this column wider (and Name narrower), never past either's minimum.
@@ -515,7 +517,7 @@ impl Home {
                 self.vo.save(&self.store);
             }
         }
-        ui.painter().hline(h.x_range(), h.bottom(), Stroke::new(1.0, theme::DIVIDER));
+        ui.painter().hline(h.x_range(), h.bottom(), Stroke::new(1.0, theme::divider()));
         let rows: Vec<ListRow> = order
             .iter()
             .filter_map(|item| match item {
@@ -552,7 +554,7 @@ impl Home {
             if self.selected.contains(&item) {
                 p.rect_filled(r, 6, house::SELECTED);
             } else if resp.hovered() {
-                p.rect_filled(r, 6, theme::MENU_HOVER);
+                p.rect_filled(r, 6, theme::menu_hover());
             }
             let icon_rect = Rect::from_center_size(r.left_center() + vec2(20.0, 0.0), vec2(20.0, 20.0));
             match &item {
@@ -568,16 +570,16 @@ impl Home {
                 // Cut short with "…" before the next column (the full name on hover), ★ after it.
                 let room = name_w - 44.0 - house::L - if starred { 24.0 } else { 0.0 };
                 let shown = if matches!(item, Item::File(_)) { shown_name(&name) } else { &name };
-                let galley = one_line(&p, shown.to_string(), 14.0, theme::TEXT, room);
+                let galley = one_line(&p, shown.to_string(), 14.0, theme::text(), room);
                 let at = r.left_center() + vec2(44.0, -galley.size().y / 2.0);
                 let end = at.x + galley.size().x;
                 if galley.elided {
                     resp = resp.on_hover_text(&name);
                 }
-                p.galley(at, galley, theme::TEXT);
+                p.galley(at, galley, theme::text());
                 let star_room = if starred { 24.0 } else { 0.0 };
                 if starred {
-                    p.text(egui::pos2(end + 8.0, r.center().y), Align2::LEFT_CENTER, "★", FontId::proportional(14.0), theme::TEXT);
+                    p.text(egui::pos2(end + 8.0, r.center().y), Align2::LEFT_CENTER, "★", FontId::proportional(14.0), theme::text());
                 }
                 // "@ name": that person mentioned you in a comment (gone once you open the file).
                 if let Item::File(id) = &item
@@ -590,8 +592,8 @@ impl Home {
                     let x = end + if starred { 30.0 } else { 14.0 };
                     let left = r.left() + room + 44.0 - x;
                     if left > 40.0 {
-                        let g = one_line(&p, s, 12.0, theme::TEXT_DIM, left);
-                        p.galley(egui::pos2(x, r.center().y - g.size().y / 2.0), g, theme::TEXT_DIM);
+                        let g = one_line(&p, s, 12.0, theme::text_dim(), left);
+                        p.galley(egui::pos2(x, r.center().y - g.size().y / 2.0), g, theme::text_dim());
                     }
                 }
             }
@@ -604,17 +606,17 @@ impl Home {
                 let place =
                     if self.accounts { place.strip_prefix(self.space.as_str()).unwrap_or(&place).trim_start_matches('/').to_string() } else { place };
                 let place = if place.is_empty() { "My files".to_string() } else { place };
-                let place = one_line(&p, place, 13.0, theme::TEXT_DIM, ow - house::M);
-                p.galley(r.left_center() + vec2(ox, -7.0), place, theme::TEXT_DIM);
+                let place = one_line(&p, place, 13.0, theme::text_dim(), ow - house::M);
+                p.galley(r.left_center() + vec2(ox, -7.0), place, theme::text_dim());
             } else if let Some((ox, ow)) = owner_col {
-                let who = one_line(&p, self.person(&owner), 13.0, theme::TEXT_DIM, ow - house::M);
-                p.galley(r.left_center() + vec2(ox, -who.size().y / 2.0), who, theme::TEXT_DIM);
+                let who = one_line(&p, self.person(&owner), 13.0, theme::text_dim(), ow - house::M);
+                p.galley(r.left_center() + vec2(ox, -who.size().y / 2.0), who, theme::text_dim());
             }
             // Each column cut short before the next one.
             let cell = |key: &str, text: String| {
                 if let Some((x, cw)) = x_of(key) {
-                    let g = one_line(&p, text, 13.0, theme::TEXT_DIM, cw - house::M);
-                    p.galley(r.left_center() + vec2(x, -g.size().y / 2.0), g, theme::TEXT_DIM);
+                    let g = one_line(&p, text, 13.0, theme::text_dim(), cw - house::M);
+                    p.galley(r.left_center() + vec2(x, -g.size().y / 2.0), g, theme::text_dim());
                 }
             };
             if modified > 0 {
@@ -835,7 +837,7 @@ fn empty_folder(ui: &mut Ui, can_add: bool) -> bool {
     ui.vertical_centered(|ui| {
         ui.add_space(64.0);
         let (r, _) = ui.allocate_exact_size(vec2(120.0, 120.0), Sense::hover());
-        ui.painter().circle_filled(r.center(), 60.0, theme::TOOLBAR);
+        ui.painter().circle_filled(r.center(), 60.0, theme::drive_surface());
         if let Some(img) = crate::icons::icon(if can_add { "upload" } else { "folder_open" }) {
             img.fit_to_exact_size(vec2(56.0, 56.0)).paint_at(ui, Rect::from_center_size(r.center(), vec2(56.0, 56.0)));
         }
@@ -845,9 +847,9 @@ fn empty_folder(ui: &mut Ui, can_add: bool) -> bool {
         } else {
             ("This folder is empty", "Files and folders added here will show up here.")
         };
-        ui.label(RichText::new(head).size(house::TITLE).color(theme::TEXT));
+        ui.label(RichText::new(head).size(house::TITLE).color(theme::text()));
         ui.add_space(house::XS);
-        ui.label(RichText::new(sub).size(house::BODY).color(theme::TEXT_DIM));
+        ui.label(RichText::new(sub).size(house::BODY).color(theme::text_dim()));
         can_add && {
             ui.add_space(house::S);
             let r = ui.add(house::link("Start from a template"));
