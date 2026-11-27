@@ -16,8 +16,8 @@ use egui::{Color32, Key, Modifiers, Order, Rect, RichText, Sense, Vec2, pos2, ve
 
 use super::photos::{LARGE, ORIGINAL, PhotoMode, SMALL, date_label};
 use crate::house;
-use serde_json::{Value as Json, json};
 use crate::store::Backend;
+use serde_json::{Value as Json, json};
 
 /// Slideshow intervals offered (seconds).
 pub(super) const EVERY: [f64; 3] = [3.0, 5.0, 10.0];
@@ -666,7 +666,11 @@ fn info_people(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend, id: &st
             let key = format!("face/{}/{}", j["face"], j["pic"].as_str().unwrap_or(""));
             pm.want_id(ctx, store, &key, j["v"].as_str(), SMALL);
             let t = pm.tex.get(&(key, SMALL), pm.frame);
-            let c = super::photos::albums::Card { id: j["id"].as_str().unwrap_or("").to_string(), name: j["name"].as_str().unwrap_or("").to_string(), ..Default::default() };
+            let c = super::photos::albums::Card {
+                id: j["id"].as_str().unwrap_or("").to_string(),
+                name: j["name"].as_str().unwrap_or("").to_string(),
+                ..Default::default()
+            };
             (c, t)
         })
         .collect();
@@ -795,11 +799,14 @@ fn info_panel(
                         Some(t) => {
                             egui::Image::new((t.id(), face.size())).corner_radius(FACE_D / 2.0).paint_at(row, face);
                         }
-                        None => row.painter().circle_filled(face.center(), FACE_D / 2.0, house::VIEW_BAR_FIELD),
+                        None => {
+                            row.painter().circle_filled(face.center(), FACE_D / 2.0, house::VIEW_BAR_FIELD);
+                        }
                     }
                     row.label(RichText::new(&card.name).size(house::BODY).color(house::VIEW_BAR_LINK));
                 });
-                let r = c.interact(r.response.rect, egui::Id::new(("info_person", n)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+                let r =
+                    c.interact(r.response.rect, egui::Id::new(("info_person", n)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
                 house::target(&ctx, &format!("photos:info-person:{n}"), r.rect);
                 if r.hovered() {
                     c.painter().hline(r.rect.x_range(), r.rect.bottom(), egui::Stroke::new(1.0, house::VIEW_BAR_LINK));
