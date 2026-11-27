@@ -329,7 +329,7 @@ impl eframe::App for WebShell {
             return;
         }
         let open = (!self.home.active).then(|| self.app.session.active().map(|d| d.display_title())).flatten();
-        set_tab_title(open.as_deref());
+        set_tab_title(open.as_deref(), self.home.active && self.home.in_photo_mode());
         if self.home.active {
             let ctx = ui.ctx().clone();
             self.home.ui(ui);
@@ -1001,7 +1001,7 @@ fn install_wake(ctx: &egui::Context) {
 /// the StarSheets icon, as Google Sheets' tab shows the file's name; "Starbase Drive" with the
 /// Starbase Drive icon on the home screen. eframe's web runner ignores `ViewportCommand::Title`, so the
 /// page's own `document.title` and icon links (index.html) are set here, and only when they change.
-fn set_tab_title(file: Option<&str>) {
+fn set_tab_title(file: Option<&str>, photos: bool) {
     thread_local!(static SHOWN: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) });
     let title = match file {
         Some(name) => {
@@ -1012,9 +1012,16 @@ fn set_tab_title(file: Option<&str>) {
                 .map_or(name, |e| &name[..name.len() - e.len()]);
             if stem.trim().is_empty() { "Untitled spreadsheet".to_string() } else { stem.to_string() }
         }
+        None if photos => "Starbase Photos".to_string(),
         None => "Starbase Drive".to_string(),
     };
-    let icon = if file.is_some() { "favicon" } else { "stardrive" };
+    let icon = if file.is_some() {
+        "favicon"
+    } else if photos {
+        "starphotos"
+    } else {
+        "stardrive"
+    };
     let shown = format!("{icon}\n{title}");
     SHOWN.with(|s| {
         if *s.borrow() != shown

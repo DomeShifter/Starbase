@@ -203,8 +203,9 @@ impl Home {
                 self.photos.set_on(&self.store, false);
                 self.search.clear();
             }
-            if let Some(img) = crate::icons::icon_in("photo_mode", theme::BLUE) {
-                ui.add(img.fit_to_exact_size(vec2(28.0, 28.0)));
+            if let Some(img) = crate::icons::photos_logo(32.0) {
+                let logo = ui.add(img);
+                house::target(&ctx, "photo-logo", logo.rect);
             }
             if !narrow {
                 ui.label(RichText::new("Photo Mode").size(house::TITLE).color(theme::text()));
