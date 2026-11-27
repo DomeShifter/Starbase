@@ -119,6 +119,7 @@ const ICONS: &[(&str, &[u8])] = &[
     ("spellcheck", include_bytes!("../icons/spellcheck.svg")),
     ("stardocs", include_bytes!("../icons/stardocs.svg")),
     ("stardrive", include_bytes!("../icons/stardrive.svg")),
+    ("starphotos", include_bytes!("../icons/starphotos.svg")),
     ("starsheets", include_bytes!("../icons/starsheets.svg")),
     ("starslides", include_bytes!("../icons/starslides.svg")),
     ("sticky_note_2", include_bytes!("../icons/sticky_note_2.svg")),
@@ -173,6 +174,7 @@ const ICONS: &[(&str, &[u8])] = &[
     ("dark_mode", include_bytes!("../icons/dark_mode.svg")),
     ("light_mode", include_bytes!("../icons/light_mode.svg")),
     ("event", include_bytes!("../icons/event.svg")),
+    ("location_on", include_bytes!("../icons/location_on.svg")),
 ];
 
 /// The icon called `name`, 18 px, or None if it isn't embedded (the test below checks the names
@@ -219,6 +221,15 @@ pub fn drive_logo(size: f32) -> Option<Image<'static>> {
     let (_, bytes) = ICONS.iter().find(|(n, _)| *n == "stardrive")?;
     Some(
         Image::new(ImageSource::Bytes { uri: "bytes://starsheets/stardrive_logo.svg".into(), bytes: (*bytes).into() })
+            .fit_to_exact_size(vec2(size, size)),
+    )
+}
+
+/// The Starbase Photos logo (app/icons/starphotos.svg; app/starphotos.svg is the same, as Photo Mode's tab icon) at `size` px, in colour.
+pub fn photos_logo(size: f32) -> Option<Image<'static>> {
+    let (_, bytes) = ICONS.iter().find(|(n, _)| *n == "starphotos")?;
+    Some(
+        Image::new(ImageSource::Bytes { uri: "bytes://starsheets/starphotos_logo.svg".into(), bytes: (*bytes).into() })
             .fit_to_exact_size(vec2(size, size)),
     )
 }

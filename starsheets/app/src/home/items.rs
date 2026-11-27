@@ -876,7 +876,7 @@ mod tests {
         for n in ["a.html", "a.svg", "a.exe", "README"] {
             assert_eq!((kind_icon(n), opens_as(n)), ("draft", Opens::Download), "{n}");
         }
-        for icon in ["starsheets", "stardocs", "starslides", "image", "picture_as_pdf", "movie", "music_note", "description", "draft"] {
+        for icon in ["starsheets", "stardocs", "starslides", "starphotos", "image", "picture_as_pdf", "movie", "music_note", "description", "draft"] {
             assert!(crate::icons::has(icon), "{icon}");
         }
     }
