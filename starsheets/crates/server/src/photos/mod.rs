@@ -39,8 +39,8 @@ pub mod faces;
 #[cfg(test)]
 mod faces_tests;
 pub mod index;
-pub mod jxl;
 pub mod info;
+pub mod jxl;
 pub mod locked;
 pub mod ml;
 pub mod model;

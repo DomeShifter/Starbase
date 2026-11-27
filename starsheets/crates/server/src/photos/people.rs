@@ -131,6 +131,7 @@ fn state(a: &App, owner: bool) -> Value {
     let Some(s) = service(&a.store) else { return json!({"on": false, "note": "Photos aren't available on this server."}) };
     let model = s.face_model().to_string();
     let (done, all, nfaces) = s.with_db(|ix| faces::progress(ix, &model));
+    let (redone, reall) = s.with_db(|ix| faces::recheck_progress(ix, &model));
     let missing: Vec<Value> = if owner {
         s.missing_models().iter().map(|m| json!({"file": m.file, "what": m.what, "licence": m.licence, "url": m.url})).collect()
     } else {
@@ -148,7 +149,7 @@ fn state(a: &App, owner: bool) -> Value {
         "missing": missing,
         "models": if owner { Value::String(s.models_dir().display().to_string()) } else { Value::Null },
         "model": model,
-        "progress": {"done": done, "all": all, "faces": nfaces},
+        "progress": {"done": done, "all": all, "faces": nfaces, "recheck": {"done": redone, "all": reall}},
     })
 }
 
