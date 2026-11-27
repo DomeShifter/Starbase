@@ -3,7 +3,7 @@
 
 use serde_json::json;
 
-use super::{Home, Item, Json, View, name_of};
+use super::{Home, Item, Json, LOCKED_PHOTOS_VISIBLE, View, name_of};
 
 impl Home {
     /// Where the home screen is and what it lists, in the order shown.
