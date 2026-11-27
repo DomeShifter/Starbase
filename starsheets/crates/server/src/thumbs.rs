@@ -37,6 +37,26 @@ static DRAWING: Mutex<()> = Mutex::new(());
 /// Files waiting to be opened for a picture, and the most that may wait.
 static WAITING: AtomicUsize = AtomicUsize::new(0);
 const MAX_WAITING: usize = 16;
+static VIDEO_DRAWING: Mutex<()> = Mutex::new(());
+static VIDEO_WAITING: AtomicUsize = AtomicUsize::new(0);
+
+struct Waiting(&'static AtomicUsize);
+
+impl Waiting {
+    fn enter(count: &'static AtomicUsize) -> Result<Self, String> {
+        let waiting = Self(count);
+        if count.fetch_add(1, Ordering::Relaxed) >= MAX_WAITING {
+            return Err("too many pictures waiting".into());
+        }
+        Ok(waiting)
+    }
+}
+
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
 
 fn dir(store: &Store) -> PathBuf {
     store.meta().join("thumbs")
@@ -111,17 +131,7 @@ pub fn forget(store: &Store, file: &str) {
 pub fn from_bytes(name: &str, bytes: &[u8]) -> Result<Vec<u8>, String> {
     // Each waiting request holds its file's bytes (up to MAX_READ): past a few, say "not now"
     // (the app shows a plain icon and asks again another time).
-    struct Waiting;
-    impl Drop for Waiting {
-        fn drop(&mut self) {
-            WAITING.fetch_sub(1, Ordering::Relaxed);
-        }
-    }
-    if WAITING.fetch_add(1, Ordering::Relaxed) >= MAX_WAITING {
-        WAITING.fetch_sub(1, Ordering::Relaxed);
-        return Err("too many pictures waiting".into());
-    }
-    let waiting = Waiting;
+    let waiting = Waiting::enter(&WAITING)?;
     let _one = DRAWING.lock().unwrap_or_else(|e| e.into_inner());
     drop(waiting);
     let mut s = gridcraft_engine::Session::new();
@@ -130,6 +140,30 @@ pub fn from_bytes(name: &str, bytes: &[u8]) -> Result<Vec<u8>, String> {
     let wb = s.active().map(|d| d.wb.clone()).ok_or("nothing opened")?;
     drop(s);
     draw_one(&wb)
+}
+
+/// Drive and Photos share a poster for this file version. Only one video decoder runs at a time.
+/// Callers check access before looking up the poster, including when it is already cached.
+pub fn video_poster(store: &Store, id: &str, path: &str, version: &str) -> Result<Vec<u8>, String> {
+    if let Some(png) = cached(store, id, version) {
+        return Ok(png);
+    }
+    let waiting = Waiting::enter(&VIDEO_WAITING)?;
+    let _one = VIDEO_DRAWING.lock().unwrap_or_else(|e| e.into_inner());
+    drop(waiting);
+    if let Some(png) = cached(store, id, version) {
+        return Ok(png);
+    }
+    let file = store.open_safe(path).ok_or("no such video")?;
+    if file.metadata().ok().is_none_or(|m| Store::file_version(&m) != version) {
+        return Err("video changed".into());
+    }
+    let png = crate::photos::video::extract_poster(file)?;
+    if store.safe_file(path).and_then(|p| store.version_of(&p).ok()).as_deref() != Some(version) {
+        return Err("video changed".into());
+    }
+    let _ = keep(store, id, version, &png);
+    Ok(png)
 }
 
 /// Draws the top-left corner of the active sheet as a PNG.

@@ -1680,6 +1680,7 @@ async fn thumb(app: &Shared, me: Option<auth::User>, file: String, headers: &Hea
         Have(Vec<u8>, String),
         Draw(String, Vec<u8>, String),
         Photo(String, String),
+        Video(String, String),
         Pdf(Vec<u8>, String),
     }
     let f2 = file.clone();
@@ -1690,12 +1691,15 @@ async fn thumb(app: &Shared, me: Option<auth::User>, file: String, headers: &Hea
         let path = app.store.path_of(&f2).ok().flatten().ok_or_else(|| error(404, "no such file"))?;
         let full = app.store.full(&path);
         let version = app.store.version_of(&full).map_err(|_| error(404, "no such file"))?;
+        let media = photos::media_of(&path);
+        if media.is_some_and(|(kind, _)| photos::video::is_video(kind)) {
+            return Ok(Got::Video(path, version));
+        }
         if let Some(png) = thumbs::cached(&app.store, &f2, &version) {
             return Ok(Got::Have(png, version));
         }
-        // Photos: their Photos thumbnail as a tile; PDFs: the top of page 1. Other files (videos:
-        // no ffmpeg in the server) have no picture here: the Drive shows their type's icon.
-        if photos::media_of(&path).is_some_and(|(_, thumbs)| thumbs) {
+        // Photos use their thumbnail as a tile. PDFs show the top of page 1.
+        if media.is_some_and(|(_, thumbs)| thumbs) {
             return Ok(Got::Photo(path, version));
         }
         if path.to_ascii_lowercase().ends_with(".pdf") {
@@ -1723,13 +1727,21 @@ async fn thumb(app: &Shared, me: Option<auth::User>, file: String, headers: &Hea
     let (png, version) = match got {
         Err(resp) => return resp,
         Ok(Got::Have(png, v)) => (png, v),
+        Ok(Got::Video(path, v)) => {
+            let app = app.clone();
+            let wanted = v.clone();
+            match tokio::task::spawn_blocking(move || thumbs::video_poster(&app.store, &file, &path, &wanted)).await {
+                Ok(Ok(png)) => (png, v),
+                _ => return error(404, "no poster"),
+            }
+        }
         Ok(got) => {
             let (store_root, f3) = (app.clone(), file.clone());
             let (job, v): (DrawJob, String) = match got {
                 Got::Draw(name, bytes, v) => (Box::new(move |_| thumbs::from_bytes(&name, &bytes)), v),
                 Got::Photo(path, v) => (Box::new(move |a| thumbs::tile(&photos::drive_thumb(&a.store, &path)?)), v),
                 Got::Pdf(bytes, v) => (Box::new(move |_| thumbs::from_pdf(bytes)), v),
-                Got::Have(..) => unreachable!(),
+                Got::Have(..) | Got::Video(..) => unreachable!(),
             };
             let v2 = v.clone();
             let drawn = tokio::task::spawn_blocking(move || {

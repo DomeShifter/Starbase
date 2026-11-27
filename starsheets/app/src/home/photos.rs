@@ -753,7 +753,7 @@ impl PhotoMode {
     /// first calls of a frame are the ones on screen).
     pub fn want(&mut self, ctx: &egui::Context, store: &Backend, i: usize, size: u32) {
         let Some(p) = self.pics.get(i) else { return };
-        if matches!(p.state.as_str(), "failed" | "unsupported") && size != ORIGINAL {
+        if matches!(p.state.as_str(), "failed" | "unsupported") && size != ORIGINAL && !(p.is_video() && size == SMALL) {
             return;
         }
         let (id, v) = (p.id.clone(), p.v.clone());

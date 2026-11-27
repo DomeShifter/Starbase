@@ -740,8 +740,11 @@ impl Store {
     }
 
     pub fn version_of(&self, path: &Path) -> io::Result<String> {
-        let m = fs::metadata(path)?;
-        Ok(format!("{:x}-{:x}", mtime(&m).1, m.len()))
+        Ok(Self::file_version(&fs::metadata(path)?))
+    }
+
+    pub fn file_version(m: &fs::Metadata) -> String {
+        format!("{:x}-{:x}", mtime(m).1, m.len())
     }
 
     /// The name of the newest kept version of a file ("" when none): changes whenever someone's
