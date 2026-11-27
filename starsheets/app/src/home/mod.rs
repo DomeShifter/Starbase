@@ -710,6 +710,12 @@ impl Home {
         self.navigate(v);
     }
 
+    /// Photo Mode is showing (the browser tab then shows the Starbase Photos name and logo).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub fn in_photo_mode(&self) -> bool {
+        self.photo_folder().is_some()
+    }
+
     /// The folder shown as photos, when "View as photos" is on and a folder is shown (not
     /// Recent, Starred, the bin, or search results).
     fn photo_folder(&self) -> Option<String> {
