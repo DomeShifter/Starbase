@@ -81,7 +81,7 @@ impl Home {
             self.node(ui, "Starred", "star", Some(View::Starred), None, "starred");
             self.node(ui, "Bin", "delete", Some(View::Bin), None, "bin");
             // Photos' Locked folder, findable from the Drive too (it lives in Photo Mode).
-            if self.photos_available() {
+            if LOCKED_PHOTOS_VISIBLE && self.photos_available() {
                 let top = ui.cursor().min;
                 if self.row(ui, "Locked", "lock", None, 0, false, false, "locked:", None) {
                     self.open_locked();

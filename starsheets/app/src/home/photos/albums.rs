@@ -98,7 +98,7 @@ pub(super) enum NavRow {
 /// is no "More" menu. Every row is a plain row with an icon.
 pub(super) fn nav_rows() -> Vec<NavRow> {
     use NavRow::*;
-    vec![
+    let mut rows = vec![
         Go(Tab::Photos, "Photos", "photo_library"),
         Go(Tab::Albums, "Albums", "folder"),
         Go(Tab::People, "People", "group"),
@@ -107,8 +107,11 @@ pub(super) fn nav_rows() -> Vec<NavRow> {
         Go(Tab::Events, "Events", "event"),
         Divider,
         Go(Tab::Duplicates, "Duplicates", "content_copy"),
-        Go(Tab::Locked, "Locked", "lock"),
-    ]
+    ];
+    if crate::home::LOCKED_PHOTOS_VISIBLE {
+        rows.push(Go(Tab::Locked, "Locked", "lock"));
+    }
+    rows
 }
 
 pub(super) fn cards(v: &Json, key: &str) -> Vec<Card> {

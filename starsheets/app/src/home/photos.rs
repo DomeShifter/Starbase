@@ -1007,7 +1007,9 @@ impl PhotoMode {
         }
         if self.alb.selected.is_empty() {
             self.bar_ui(ui, store, folder);
-            self.locked_hint_ui(ui, store);
+            if super::LOCKED_PHOTOS_VISIBLE {
+                self.locked_hint_ui(ui, store);
+            }
         } else {
             self.sel_bar_ui(ui, store);
         }
@@ -1162,6 +1164,7 @@ impl PhotoMode {
             pick::targets(&mut self.alb.selected, &mut self.pick.anchor, &ids, i);
         }
         let in_album = self.open_album().is_some();
+        house::target(ui.ctx(), &format!("photos:tile:{i}"), rect);
         let mut chosen = None;
         resp.context_menu(|ui| {
             house::menu(ui, 240.0);
