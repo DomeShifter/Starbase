@@ -67,7 +67,8 @@ def main():
     # open the named person: only their photos
     nm = pe()["named"]; k = [x["name"] for x in nm].index(NAME); named = nm[k]; S.click_text(f"person:{k}"); time.sleep(3)
     its = S.snapshot("home.photos.items") or []; n = len(its); print("PERSON0 ITEMS", json.dumps(its)[:600], flush=True)
-    rec("person page shows only their photos", n == named["count"] and 1 <= n <= 4, f"items={n} count={named['count']}")
+    who = sorted({str(i.get("name", "")).rstrip("0123456789.jpg") for i in its})  # <person><n>.jpg: ground truth
+    rec("person page shows only their photos", n == named["count"] and 1 <= len(who) <= 2, f"items={n} count={named['count']} people in names={who}")
     S.shot(f"{br}-3-person")
     # remove one face
     f0 = S.snapshot("home.photos.people.faces")

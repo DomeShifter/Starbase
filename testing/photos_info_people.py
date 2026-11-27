@@ -31,6 +31,8 @@ def main():
     vw = lambda: S.snapshot("home.photos.viewer") or {}
     req = lambda: (S.snapshot("home.photos.textures") or {}).get("requests", 0)
     S.hook("home:photos:tab", tab="photos")
+    if "--light" in a:  # Photo Mode has its OWN theme (STARBASE_THEME does not switch it): the View menu row
+        S.click_text("photos:view-menu"); time.sleep(1); S.click_text("Light theme"); S.key("Escape"); time.sleep(1.5)
     S.hook("home:photos:open", index=0); time.sleep(4)
     r0 = req(); time.sleep(5); r1 = req()
     rec("one open = no repeated image requests", r1 == r0, f"{r0} -> {r1}")
@@ -39,12 +41,14 @@ def main():
         if (vw().get("people") or {}).get("people"): break
         S.key("Right"); time.sleep(2.5)
     rec("People section shown", "photos:info-people" in tg(), str(vw().get("people")))
-    S.shot(f"{br}-info-people")
+    S.shot(f"{br}-info-people" + ("-light" if "--light" in a else ""))
     ppl = (vw().get("people") or {}).get("people") or []
     if ppl:
         S.click_text("photos:info-person:0"); time.sleep(3)
         st = S.snapshot("home.photos") or {}
-        rec("person link opens their page", not st.get("viewer"), str({k: st.get(k) for k in ("tab", "open")}))
+        its = st.get("items") or []; print("PERSON PAGE", {k: st.get(k) for k in ("tab", "open")}, len(its), flush=True)
+        names = {str(i.get("name", "")).rstrip("0123456789.jpg") for i in its}  # <person><n>.jpg
+        rec("person link opens their page, only their pictures", not st.get("viewer") and len(its) >= 1 and len(names) == 1, f"{st.get('tab')} items={len(its)} names={sorted(names)}")
     else:
         print("SKIP person link: no named face in the first picture", flush=True)
     S.close()
