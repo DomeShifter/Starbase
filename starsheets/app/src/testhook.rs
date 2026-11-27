@@ -405,6 +405,7 @@ fn snapshot(ctx: &egui::Context, p: &Parts) -> Value {
     json!({
         "screen": "sheet",
         "mention": crate::notes::mentions::test_state(),
+        "datePicker": crate::datepicker::test_state(ctx),
         // The Paste standard (crate starbase-clipboard).
         "pastePromptShown": starbase_clipboard::prompt_shown(),
         "ownCopyCurrent": starbase_clipboard::own_copy_current(),
