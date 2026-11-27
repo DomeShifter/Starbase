@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Real-input check: the Photos frame (one toolbar + View menu, left list with More, selection bar, Info).
+"""Real-input check: the Photos frame (one toolbar + View menu, left list of views and tools, selection bar, Info).
   photos_design_frame_input.py http://<host>:<port> --browser chromium|firefox --pics DIR_ON_BOX
 Expects (desktop window, light and dark):
  1. Top bar: Upload (photos:upload), View (photos:view-menu), Scan now (photos:scan-now), Slideshow; no second bar of buttons over the grid.
  2. View opens one menu with SHOW / TYPE / SORT / THEME (photos:view:show|type|sort|theme); "Oldest first" sets newestFirst false.
- 3. Left list: Photos, Albums, People, Places, More, Locked; Timeline is hidden until More (photos:nav:more) is clicked.
+ 3. Left list: views Photos, Albums, People, Places, Timeline, Events; tools Duplicates, Locked; no More row (photos:nav:more is gone).
  4. Ctrl+A: the selection bar shows Add to album, Favourite, Download, Move to bin (photos:sel:*) and More (photos:sel:more).
  5. More > Info opens the viewer with its Info panel (viewer:info-panel), not Drive's Details."""
 import glob, os, sys, time, urllib.parse
@@ -45,9 +45,8 @@ def main():
     S.click_text("Oldest first"); time.sleep(2)
     rec("Oldest first", S.snapshot("home.photos.newestFirst") is False)
     S.key("Escape")
-    rec("Timeline hidden under More", "Timeline" not in tg() and "photos:nav:more" in tg() and "Locked" in tg())
-    S.click_text("photos:nav:more"); time.sleep(1)
-    rec("More shows Timeline/Events/Duplicates", all(k in tg() for k in ["Timeline", "Events", "Duplicates"]))
+    rec("left list: views and tools, no More", all(k in tg() for k in ["Photos", "Albums", "People", "Places", "Timeline", "Events", "Duplicates", "Locked"]) and "photos:nav:more" not in tg())
+    rec("People strip is gone", not any(k.startswith("people:strip") or k in ("people:see-all", "pill-See all") for k in tg()))
     S.shot(f"{tag}-3-nav-more")
     S.click_text("Photos"); time.sleep(1)
     S.click_xy(700, 400); S.key("Control+a"); time.sleep(1)

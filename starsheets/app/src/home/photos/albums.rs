@@ -83,8 +83,6 @@ pub(in crate::home) struct Albums {
     text: String,
     ask: Ask,
     pub ppl: super::people::People,
-    /// The left list's "More" group (Timeline, Events, Duplicates) is open.
-    pub more: bool,
 }
 
 /// One row of the left list.
@@ -92,27 +90,25 @@ pub(in crate::home) struct Albums {
 pub(super) enum NavRow {
     Go(Tab, &'static str, &'static str),
     Divider,
-    /// Opens and closes the rows after it up to the next divider.
-    More,
 }
 
-/// The left list, top to bottom: the four main tabs, then "More" (Timeline, Events, Duplicates;
-/// listed only while it is open), then Locked at the bottom.
-pub(super) fn nav_rows(more: bool) -> Vec<NavRow> {
+/// The left list. THE RULE: above the divider are VIEWS (ways of looking at the pictures:
+/// Photos, Albums, People, Places, Timeline, Events); below it are TOOLS AND SETTINGS (things
+/// that manage the library: Duplicates, Locked). A new item goes in the half that fits it; there
+/// is no "More" menu. Every row is a plain row with an icon.
+pub(super) fn nav_rows() -> Vec<NavRow> {
     use NavRow::*;
-    let mut v = vec![
+    vec![
         Go(Tab::Photos, "Photos", "photo_library"),
         Go(Tab::Albums, "Albums", "collections"),
         Go(Tab::People, "People", "face"),
         Go(Tab::Places, "Places", "location_on"),
+        Go(Tab::Timeline, "Timeline", "schedule"),
+        Go(Tab::Events, "Events", "event"),
         Divider,
-        More,
-    ];
-    if more {
-        v.extend([Go(Tab::Timeline, "Timeline", "schedule"), Go(Tab::Events, "Events", "event"), Go(Tab::Duplicates, "Duplicates", "content_copy")]);
-    }
-    v.extend([Divider, Go(Tab::Locked, "Locked", "lock")]);
-    v
+        Go(Tab::Duplicates, "Duplicates", "content_copy"),
+        Go(Tab::Locked, "Locked", "lock"),
+    ]
 }
 
 pub(super) fn cards(v: &Json, key: &str) -> Vec<Card> {
@@ -231,7 +227,7 @@ impl Albums {
         json!({
             "tab": self.tab.name(), "albums": c(&self.albums), "places": c(&self.places), "events": c(&self.events),
             "open": self.open.as_ref().map(|c| json!({"id": c.id, "name": c.name})),
-            "selecting": !self.selected.is_empty(), "selected": sel, "navMore": self.more,
+            "selecting": !self.selected.is_empty(), "selected": sel,
         })
     }
 }
@@ -258,25 +254,12 @@ impl PhotoMode {
     pub(super) fn nav_ui(&mut self, ui: &mut Ui, _store: &Backend) {
         ui.add_space(house::S);
         ui.spacing_mut().item_spacing.y = house::XS;
-        // A tab under More that is showing keeps More open.
-        let hidden = matches!(self.alb.tab, Tab::Timeline | Tab::Events | Tab::Duplicates);
-        for row in nav_rows(self.alb.more || hidden) {
+        for row in nav_rows() {
             match row {
                 NavRow::Divider => {
                     ui.add_space(house::XS);
                     house::menu_sep(ui);
                     ui.add_space(house::XS);
-                }
-                NavRow::More => {
-                    let open = self.alb.more || hidden;
-                    let r = ui.add(
-                        house::quiet_with(Some(if open { "expand_more" } else { "chevron_right" }), "More", false)
-                            .min_size(vec2(120.0, house::BUTTON_HEIGHT)),
-                    );
-                    house::target(ui.ctx(), "photos:nav:more", r.rect);
-                    if r.clicked() {
-                        self.alb.more = !self.alb.more;
-                    }
                 }
                 NavRow::Go(t, label, icon) => {
                     let r = ui.add(house::quiet_with(Some(icon), label, self.alb.tab == t).min_size(vec2(120.0, house::BUTTON_HEIGHT)));
@@ -650,16 +633,14 @@ impl PhotoMode {
 mod tests {
     use super::*;
 
-    /// The left list: four main tabs, More (its three tabs only while open), Locked last.
+    /// The left list: views above the divider, tools and settings below, no More menu.
     #[test]
-    fn the_left_list_hides_three_tabs_under_more() {
-        let tabs = |more| nav_rows(more).into_iter().filter_map(|r| if let NavRow::Go(_, l, _) = r { Some(l) } else { None }).collect::<Vec<_>>();
-        assert_eq!(tabs(false), ["Photos", "Albums", "People", "Places", "Locked"]);
-        assert_eq!(tabs(true), ["Photos", "Albums", "People", "Places", "Timeline", "Events", "Duplicates", "Locked"]);
-        for more in [false, true] {
-            let rows = nav_rows(more);
-            assert_eq!(rows.iter().filter(|r| **r == NavRow::More).count(), 1);
-            assert_eq!(rows[rows.len() - 2], NavRow::Divider);
-        }
+    fn the_left_list_has_views_then_tools() {
+        let rows = nav_rows();
+        let split = rows.iter().position(|r| *r == NavRow::Divider).unwrap();
+        let names = |s: &[NavRow]| s.iter().filter_map(|r| if let NavRow::Go(_, l, _) = r { Some(*l) } else { None }).collect::<Vec<_>>();
+        assert_eq!(names(&rows[..split]), ["Photos", "Albums", "People", "Places", "Timeline", "Events"]);
+        assert_eq!(names(&rows[split..]), ["Duplicates", "Locked"]);
+        assert_eq!(rows.iter().filter(|r| **r == NavRow::Divider).count(), 1);
     }
 }
