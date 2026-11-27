@@ -8,7 +8,7 @@ Server must run with --features ml (models present or downloadable) and the user
 import json, os, subprocess, sys, time, glob, urllib.parse
 sys.path.insert(0, os.path.expanduser("~/.claude/tools")); sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import starbase_ui as ui
-RD = "/tmp/photos-faces-polish"
+RD = "/tmp/photos-faces-polish-" + str(os.getpid())
 
 def launcher():
     a = sys.argv[1:]; pics = a[a.index("--pics") + 1]; rest = [x for x in a if x not in ("--pics", pics)]
@@ -119,6 +119,16 @@ def main():
             rec("No is remembered", len(srv().get("questions", [])) < len(pe().get("questions", [])) + 2, json.dumps(srv().get("questions")))
     else:
         print("SKIP same-person: no borderline look-alikes in these pictures", flush=True)
+    # 6. Photo Mode's own Light theme (in-app menu row, not STARBASE_THEME), then 200% zoom: no halo circle round faces.
+    S.click_text("Photos"); time.sleep(1); S.click_text("People"); time.sleep(3)
+    S.click_text("photos:view-menu"); time.sleep(1); S.click_text("Light theme"); time.sleep(1.5); S.key("Escape")
+    rec("light theme: People page still on", pe().get("on") is True, "")
+    S.shot(f"{br}-7-light-people")
+    n = 6 if br == "firefox" else 5
+    for _ in range(n): S.key("ctrl+plus", settle=0.4)
+    time.sleep(2); S.shot(f"{br}-8-light-zoom200")
+    for _ in range(n): S.key("ctrl+minus", settle=0.4)
+    time.sleep(1)
     print("RESULT", "ALL PASS" if all(res) else f"{res.count(False)} FAIL", flush=True)
     sys.exit(0 if all(res) else 1)
 
