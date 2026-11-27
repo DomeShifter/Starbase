@@ -553,6 +553,27 @@ impl Home {
     /// Opens Drive's preview of file `id` over the file list (filepreview.rs).
     fn preview(&mut self, ctx: &egui::Context, id: &str) {
         let Some(f) = self.file(id) else { return };
+        if cfg!(target_arch = "wasm32") && self.store.has_photos() && !self.photos.on && items::photo_preview(&f.name) {
+            let pictures: Vec<photos::Pic> = self
+                .contents()
+                .1
+                .into_iter()
+                .filter(|row| items::photo_preview(&row.name))
+                .map(|row| photos::Pic {
+                    id: row.id,
+                    name: row.name,
+                    modified: row.modified,
+                    starred: row.starred,
+                    size: row.size,
+                    ..Default::default()
+                })
+                .collect();
+            if let Some(index) = pictures.iter().position(|p| p.id == id) {
+                self.file_preview = None;
+                self.photos.open_from_drive(pictures, index);
+                return;
+            }
+        }
         let (name, size, modified, owner) = (f.name.clone(), f.size, f.modified, f.owner.clone());
         let owner = self.person(&owner);
         let list = self.previewable();
@@ -1166,7 +1187,14 @@ impl Home {
         self.note_ui(&ctx);
         // The photo viewer covers everything and takes the keys while it's open.
         let dialog = self.photos.pick_busy();
-        if !viewer::ui(&mut self.photos, &ctx, &self.store) && !dialog && !self.file_preview_ui(&ctx) {
+        let viewer_open = viewer::ui(&mut self.photos, &ctx, &self.store);
+        if self.photos.drive_viewer {
+            self.photo_outs(&ctx);
+            if !viewer_open {
+                self.photos.finish_drive_viewer();
+            }
+        }
+        if !viewer_open && !dialog && !self.file_preview_ui(&ctx) {
             self.keys(&ctx);
         }
         // Photos' Add to album, Add photos and its note: over the grid and the viewer.

@@ -54,7 +54,7 @@ pub mod tiles;
 pub mod video;
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::Read;
+use std::io::{Read, Seek};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -343,20 +343,30 @@ pub fn drive_picture(store: &Store, path: &str, size: u32) -> Result<Vec<u8>, St
         return Ok(bytes);
     }
     let memory = svc.as_ref().map_or(decode::CHILD_MEMORY, |s| s.cfg.child_memory);
-    let file = store.open_safe(path).ok_or("no such file")?;
+    let mut file = store.open_safe(path).ok_or("no such file")?;
     if file.metadata().map_err(|e| e.to_string())?.len() > MAX_FILE {
         return Err("too big".into());
     }
     let _one = DRIVE_READING.lock().unwrap_or_else(|e| e.into_inner());
+    let (_, edits) = sidecar_edits_at(store, path, || edits::geo_of(Some(&file)));
+    file.rewind().map_err(|e| e.to_string())?;
     let made = match WORKER_EXE.get() {
-        Some(exe) => decode::run_isolated(exe, file, memory, None)?,
+        Some(exe) => decode::run_isolated(exe, file, memory, edits.as_ref())?,
         None => {
             let mut bytes = Vec::new();
             file.take(MAX_FILE).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-            decode::make_guarded(&bytes, &decode::Limits::for_memory(memory), None)?
+            decode::make_guarded(&bytes, &decode::Limits::for_memory(memory), edits.as_ref())?
         }
     };
     made.thumbs.into_iter().find(|t| t.size == size).map(|t| t.bytes).ok_or_else(|| "no thumbnail".into())
+}
+
+fn sidecar_edits_at(store: &Store, path: &str, geo: impl FnOnce() -> Option<sidecar::Geo>) -> (index::Side, Option<model::Edits>) {
+    let (folder, name) = index::split(path);
+    let Some(dir) = sidecar::Folder::open(store, folder) else { return (index::Side::default(), None) };
+    let Ok(Some(d)) = dir.read(&sidecar::name_for(name)) else { return (index::Side::default(), None) };
+    let edits = sidecar::read_for(&d.bytes, geo().as_ref()).ok().map(|p| p.edits).filter(|e| !e.is_identity());
+    (index::Side { edits: edits.as_ref().and_then(sidecar::edits_hash), stat: Some(d.stat) }, edits)
 }
 
 /// The photo service of `store`, started on first use.
@@ -692,21 +702,14 @@ impl Photos {
     /// The edits in the sidecar of the picture at `path` (none when it has no usable sidecar):
     /// their hash for the index, and the edits themselves (what thumbnails are rendered with).
     fn sidecar_edits(&self, path: &str) -> (index::Side, Option<model::Edits>) {
-        let (folder, name) = index::split(path);
-        let Some(dir) = sidecar::Folder::open(&self.store, folder) else { return (index::Side::default(), None) };
-        match dir.read(&sidecar::name_for(name)) {
-            Ok(Some(d)) => {
-                // Adobe's crop is relative to the stored picture: known once it has been read.
-                let geo = self.db().get(path).ok().flatten().filter(|r| r.meta.width > 0).map(|r| {
-                    let o = r.meta.orientation;
-                    let (w, h) = if (5..=8).contains(&o) { (r.meta.height, r.meta.width) } else { (r.meta.width, r.meta.height) };
-                    sidecar::Geo { width: w, height: h, orientation: o }
-                });
-                let edits = sidecar::read_for(&d.bytes, geo.as_ref()).ok().map(|p| p.edits).filter(|e| !e.is_identity());
-                (index::Side { edits: edits.as_ref().and_then(sidecar::edits_hash), stat: Some(d.stat) }, edits)
-            }
-            _ => (index::Side::default(), None),
-        }
+        sidecar_edits_at(&self.store, path, || {
+            // Adobe's crop is relative to the stored picture: known once it has been read.
+            self.db().get(path).ok().flatten().filter(|r| r.meta.width > 0).map(|r| {
+                let o = r.meta.orientation;
+                let (w, h) = if (5..=8).contains(&o) { (r.meta.height, r.meta.width) } else { (r.meta.width, r.meta.height) };
+                sidecar::Geo { width: w, height: h, orientation: o }
+            })
+        })
     }
 
     /// Edits were saved for the picture at `path` (the edits API): its thumbnails are made

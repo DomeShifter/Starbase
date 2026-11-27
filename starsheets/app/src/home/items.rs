@@ -774,6 +774,12 @@ pub(super) fn file_kind(name: &str) -> &'static str {
     }
 }
 
+/// Pictures supported by the server's unindexed 1024-pixel viewer endpoint.
+pub(super) fn photo_preview(name: &str) -> bool {
+    let ext = name.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase());
+    matches!(ext.as_deref(), Some("png" | "jpg" | "jpeg" | "jfif" | "gif" | "webp" | "bmp" | "ico" | "tif" | "tiff"))
+}
+
 /// The icon of a file's type.
 pub(super) fn kind_icon(name: &str) -> &'static str {
     match file_kind(name) {

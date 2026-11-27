@@ -312,6 +312,8 @@ pub const LOCKED_HINT: &str = "Hide private pictures: right-click a picture and 
 pub(super) struct PhotoMode {
     /// The switch: show folders as photos.
     pub on: bool,
+    /// The shared viewer opened from Drive, independently of the photo library.
+    pub drive_viewer: bool,
     booted: bool,
     /// The one-time "how to hide pictures" note: Got it was pressed (a setting, kept).
     hint_dismissed: bool,
@@ -377,6 +379,7 @@ impl Default for PhotoMode {
     fn default() -> PhotoMode {
         PhotoMode {
             on: false,
+            drive_viewer: false,
             booted: false,
             hint_dismissed: false,
             hint_shown: false,
@@ -419,6 +422,22 @@ impl Default for PhotoMode {
 }
 
 impl PhotoMode {
+    pub fn open_from_drive(&mut self, pictures: Vec<Pic>, index: usize) {
+        self.drive_viewer = true;
+        self.viewer = Some(Viewer::new(index, pictures.len()));
+        self.pics = pictures;
+        self.info_detail = None;
+        self.info_edit = None;
+        self.info_faces = None;
+    }
+
+    pub fn finish_drive_viewer(&mut self) {
+        self.drive_viewer = false;
+        self.pics.clear();
+        self.failed.clear();
+        self.retry_at.clear();
+    }
+
     pub fn boot(&mut self, store: &Backend) {
         if !self.booted {
             self.booted = true;
@@ -758,6 +777,8 @@ impl PhotoMode {
             format!("api/photos/people/{id}?v={}", v.unwrap_or(""))
         } else if size == ORIGINAL {
             format!("api/files/{id}/raw")
+        } else if self.drive_viewer {
+            format!("api/files/{id}/picture")
         } else if size == SCREEN {
             // The best format this browser shows (JPEG XL), else JPEG; asked once it is known.
             let fmt = match best_format() {
