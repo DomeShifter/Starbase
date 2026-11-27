@@ -67,7 +67,7 @@ pub fn ask_sign_in() {
 /// Opens one of the avatar menu's dialogs, as the menu does (the test hook: `account:profile`,
 /// `account:password`, `account:people`).
 pub fn request(ctx: &egui::Context, what: &str) -> Result<(), String> {
-    if !matches!(what, "profile" | "password" | "people" | "storage" | "backups" | "devices") {
+    if !matches!(what, "profile" | "password" | "people" | "storage" | "backups" | "devices" | "settings" | "photos-settings") {
         return Err(format!("no account dialog `{what}`"));
     }
     ctx.data_mut(|m| m.insert_temp(egui::Id::unique(REQUEST), what.to_string()));
@@ -159,6 +159,17 @@ pub fn open_menu(ctx: &egui::Context) -> Result<(), String> {
 }
 
 /// What the avatar menu asked for (in egui memory, picked up by `Account::logic`).
+pub(crate) const FACES_SETTINGS_CHANGED: &str = "starbase_faces_settings_changed";
+const PHOTOS_AVAILABLE: &str = "starbase_photos_available";
+
+fn browser_settings() -> Option<web_sys::Storage> {
+    web_sys::window()?.local_storage().ok()?
+}
+
+pub(crate) fn photos_available() -> bool {
+    browser_settings().and_then(|storage| storage.get_item(PHOTOS_AVAILABLE).ok().flatten()).as_deref() != Some("0")
+}
+
 const REQUEST: &str = "starsheets_account_request";
 
 /// The avatars at the right of the title row: the other people in this file (left of Share),
@@ -167,6 +178,10 @@ pub fn me_ui(ui: &mut Ui) {
     let Some(me) = me() else { return };
     let r = avatar(ui, &me.name, &me.colour, 32.0).on_hover_text(format!("{} ({})", me.name, me.username));
     let ask = |ui: &Ui, what: &str| ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique(REQUEST), what.to_string()));
+    house::target(ui.ctx(), "account:avatar", r.rect);
+    if r.secondary_clicked() {
+        ask(ui, "settings");
+    }
     // Google's account menu: who you are at the top (username, a big avatar, "Hi, name!") with
     // the main account button under it, then the rest, then Sign out. Always the light house
     // colours, whatever the computer's theme.
@@ -204,8 +219,8 @@ pub fn me_ui(ui: &mut Ui) {
         if me.owner && house::menu_row(ui, Some("folder"), "Where files are kept…", "", true) {
             ask(ui, "storage");
         }
-        if me.owner && house::menu_row(ui, Some("history"), "Backups…", "", true) {
-            ask(ui, "backups");
+        if house::menu_row(ui, Some("settings"), "Settings…", "", true) {
+            ask(ui, "settings");
         }
         if me.owner && house::menu_row(ui, Some("group"), "People…", "", true) {
             ask(ui, "people");
@@ -273,6 +288,10 @@ enum Reply {
     Restarting,
     /// Backup settings and how the last one went (GET /api/backup).
     Backup(Json),
+    FaceSettings(Json),
+    FaceSettingsChanged(Json),
+    FaceModels,
+    BackupEnabled(bool),
     /// The backups kept (GET /api/backup/list).
     BackupList(Vec<Json>),
     /// Whose folders the backups hold (GET /api/backup/people).
@@ -451,7 +470,7 @@ enum Dialog {
     Password,
     People,
     Storage,
-    Backups,
+    Settings,
     Devices,
 }
 
@@ -512,6 +531,8 @@ pub struct Account {
     /// Backups (owner): what the server said, the backups kept (None = loading, or not set up),
     /// the form (folder, daily on/off, hour), the recovery key when shown, a key typed to use
     /// backups made before, and the backup a "Restore" was clicked on once.
+    settings_tab: usize,
+    face_settings: Option<Json>,
     backup: Option<Json>,
     backup_list: Option<Vec<Json>>,
     backup_to: String,
@@ -752,6 +773,18 @@ impl Account {
                         }
                     }
                 }
+                Reply::FaceSettings(v) => self.face_settings = Some(v),
+                Reply::FaceSettingsChanged(v) => {
+                    self.face_settings = Some(v);
+                    ctx.data_mut(|data| data.insert_temp(egui::Id::unique(FACES_SETTINGS_CHANGED), true));
+                }
+                Reply::FaceModels => call(&self.inbox, ctx, Method::Get, "api/photos/faces", None, Reply::FaceSettings),
+                Reply::BackupEnabled(enabled) => {
+                    if let Some(v) = &mut self.backup {
+                        v["enabled"] = json!(enabled);
+                    }
+                    self.done = Some(if enabled { "Backups enabled." } else { "Backups turned off." }.into());
+                }
                 Reply::BackupList(l) => self.backup_list = Some(l),
                 Reply::BackupPeople(p) => self.backup_people = p,
                 Reply::BackupKey(k) => self.backup_key = Some(k),
@@ -797,15 +830,25 @@ impl Account {
                     self.open(Dialog::Storage);
                     self.load_storage(ctx);
                 }
-                "backups" => {
-                    self.open(Dialog::Backups);
+                "settings" | "photos-settings" | "backups" => {
+                    self.open(Dialog::Settings);
+                    let owner = me().is_some_and(|m| m.owner);
+                    self.settings_tab = match req.as_str() {
+                        "photos-settings" => 1,
+                        "backups" if owner => 2,
+                        _ => 0,
+                    };
+                    self.face_settings = None;
+                    call(&self.inbox, ctx, Method::Get, "api/photos/faces", None, Reply::FaceSettings);
                     self.backup = None;
                     self.backup_list = None;
                     self.backup_key = None;
                     self.backup_armed = None;
                     self.backup_people.clear();
                     self.backup_whose = 0;
-                    call(&self.inbox, ctx, Method::Get, "api/backup", None, Reply::Backup);
+                    if owner {
+                        call(&self.inbox, ctx, Method::Get, "api/backup", None, Reply::Backup);
+                    }
                 }
                 "devices" => {
                     self.open(Dialog::Devices);
@@ -971,7 +1014,7 @@ impl Account {
             Dialog::Password => self.change_password(ctx),
             Dialog::People => self.people(ctx),
             Dialog::Storage => self.storage_ui(ctx),
-            Dialog::Backups => self.backups_ui(ctx),
+            Dialog::Settings => self.settings_ui(ctx),
             Dialog::Devices => self.devices_ui(ctx),
         }
         self.restarting_ui(ctx);
@@ -1077,15 +1120,99 @@ impl Account {
     /// Backups (owner): where they go, once a day at what hour, the recovery key, how the last
     /// one went, "Back up now", and the backups kept, each with "Restore" (copies your files from
     /// then into a new folder; nothing is overwritten). See the server's backup.rs.
+    fn settings_tabs(&mut self, ui: &mut Ui) -> bool {
+        let labels: &[&str] = if me().is_some_and(|m| m.owner) { &["Appearance", "Photos", "Backups"] } else { &["Appearance", "Photos"] };
+        if self.settings_tab >= labels.len() {
+            self.settings_tab = 0;
+        }
+        let changed = house::tabs(ui, &mut self.settings_tab, labels);
+        house::gap(ui);
+        changed
+    }
+
+    fn settings_ui(&mut self, ctx: &egui::Context) {
+        if self.settings_tab == 2 && me().is_some_and(|m| m.owner) {
+            self.backups_ui(ctx);
+            return;
+        }
+        let mut close = false;
+        house::dialog(ctx, "starsheets_settings", 560.0, "Settings", Some(&mut close), |ui| {
+            if self.settings_tabs(ui) {
+                if self.settings_tab == 1 {
+                    call(&self.inbox, ctx, Method::Get, "api/photos/faces", None, Reply::FaceSettings);
+                }
+                return;
+            }
+            if self.settings_tab == 0 {
+                let mut dark = crate::theme::drive_dark();
+                let r = ui.checkbox(&mut dark, "Dark appearance in Drive");
+                house::target(ctx, "settings:dark", r.rect);
+                if r.changed() {
+                    crate::theme::set_drive_dark(dark);
+                }
+                house::note(ui, "This setting is saved in this browser. Photo Mode always uses the dark appearance.");
+            } else {
+                self.photos_settings_ui(ui, ctx);
+            }
+            self.messages(ui);
+        });
+        if close || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.dialog = Dialog::None;
+        }
+    }
+
+    fn photos_settings_ui(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+        let mut enabled = photos_available();
+        let r = ui.checkbox(&mut enabled, "Show Photo Mode in Drive on this browser");
+        house::target(ctx, "settings:photos-enabled", r.rect);
+        if r.changed() {
+            if let Some(storage) = browser_settings() {
+                let _ = storage.set_item(PHOTOS_AVAILABLE, if enabled { "1" } else { "0" });
+            }
+        }
+        let Some(state) = &self.face_settings else {
+            house::note(ui, "Loading face recognition settings…");
+            return;
+        };
+        let mut on = state["on"].as_bool().unwrap_or(false);
+        let busy = state["download"]["busy"].as_bool() == Some(true);
+        let r = ui.add_enabled(state["can_toggle"].as_bool() == Some(true) && !self.busy && !busy, egui::Checkbox::new(&mut on, "Face recognition"));
+        house::target(ctx, "settings:faces", r.rect);
+        if r.changed() {
+            self.busy = true;
+            self.error = None;
+            call(&self.inbox, ctx, Method::Post, "api/photos/faces", Some(json!({"on": on})), Reply::FaceSettingsChanged);
+        }
+        if state["can_download"].as_bool() == Some(true) {
+            if ui.add_enabled(!self.busy && !busy, house::secondary("Download face models")).clicked() {
+                self.busy = true;
+                call(&self.inbox, ctx, Method::Post, "api/photos/faces/models", Some(json!({})), |_| Reply::FaceModels);
+            }
+        }
+        if busy {
+            house::note(ui, "Downloading face models…");
+            if ctx.input(|i| i.time) - self.backup_polled > 2.0 {
+                self.backup_polled = ctx.input(|i| i.time);
+                call(&self.inbox, ctx, Method::Get, "api/photos/faces", None, Reply::FaceSettings);
+            }
+            ctx.request_repaint_after(std::time::Duration::from_secs(2));
+        }
+        house::note(ui, state["note"].as_str().unwrap_or("Turning off face recognition keeps names and groups."));
+    }
+
     fn backups_ui(&mut self, ctx: &egui::Context) {
         let mut close = false;
         let mut cancel = false;
         let mut save = false;
         let mut now = false;
         let mut restore = None;
+        let mut master = None;
         let mut show_key = false;
         let Some(v) = self.backup.clone() else {
-            house::dialog(ctx, "starsheets_backups", 560.0, "Backups", Some(&mut close), |ui| {
+            house::dialog(ctx, "starsheets_settings", 560.0, "Settings", Some(&mut close), |ui| {
+                if self.settings_tabs(ui) {
+                    return;
+                }
                 ui.label(RichText::new("Loading…").color(theme::TEXT_DIM));
                 self.messages(ui);
             });
@@ -1123,7 +1250,21 @@ impl Account {
             self.backup_whose = 0;
         }
         let when = |iso: &str| format!("{} UTC", iso.replace('T', " ").chars().take(16).collect::<String>());
-        house::dialog(ctx, "starsheets_backups", 560.0, "Backups", Some(&mut close), |ui| {
+        house::dialog(ctx, "starsheets_settings", 560.0, "Settings", Some(&mut close), |ui| {
+            if self.settings_tabs(ui) {
+                return;
+            }
+            let mut mode = u8::from(v["enabled"].as_bool().unwrap_or(true));
+            let label = if mode == 1 { "Backups on" } else { "Backups off" };
+            let r = ui.add_enabled(!self.busy, egui::Slider::new(&mut mode, 0..=1).show_value(false).text(label));
+            let enabled = mode == 1;
+            house::target(ctx, "settings:backups-enabled", r.rect);
+            if r.changed() {
+                master = Some(enabled);
+            }
+            if !enabled {
+                house::note(ui, "Scheduled and manual backups are off. Existing backups can still be restored.");
+            }
             house::note(
                 ui,
                 "A copy of every file, version, bin and account, made once a day into a folder you choose: best a disk or NAS share that isn't the one your files are on. Backups are locked with a recovery key.",
@@ -1238,10 +1379,17 @@ impl Account {
                 }
             }
             self.messages(ui);
-            let labels: &[&str] = if set_up { &["Close", "Back up now", "Save"] } else { &["Cancel", "Set up backups"] };
+            let can_run = set_up && enabled;
+            let labels: &[&str] = if can_run {
+                &["Close", "Back up now", "Save"]
+            } else if set_up {
+                &["Close", "Save"]
+            } else {
+                &["Cancel", "Set up backups"]
+            };
             match house::actions(ui, labels) {
                 Some(0) => cancel = true,
-                Some(1) if set_up => now = true,
+                Some(1) if can_run => now = true,
                 Some(_) => save = true,
                 None => {}
             }
@@ -1251,6 +1399,12 @@ impl Account {
             self.backup_key = None;
         } else if self.busy {
             // One request at a time.
+        } else if let Some(enabled) = master {
+            self.busy = true;
+            self.error = None;
+            call(&self.inbox, ctx, Method::Post, "api/backup", Some(json!({"enabled": enabled})), |v| {
+                Reply::BackupEnabled(v["enabled"].as_bool() == Some(true))
+            });
         } else if save {
             self.busy = true;
             self.error = None;

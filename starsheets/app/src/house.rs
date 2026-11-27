@@ -696,6 +696,7 @@ pub fn tabs(ui: &mut Ui, current: &mut usize, labels: &[&str]) -> bool {
             let text = RichText::new(*label).size(BODY).color(colour);
             let r =
                 ui.add(egui::Button::new(if on { text.strong() } else { text }).frame_when_inactive(false).min_size(vec2(88.0, FIELD_HEIGHT + XS)));
+            target(ui.ctx(), &format!("tab:{label}"), r.rect);
             if on {
                 let bar =
                     egui::Rect::from_min_max(egui::pos2(r.rect.left() + S, r.rect.bottom() - 3.0), egui::pos2(r.rect.right() - S, r.rect.bottom()));

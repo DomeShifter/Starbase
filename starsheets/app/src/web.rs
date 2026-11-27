@@ -255,6 +255,7 @@ impl eframe::App for WebShell {
             crate::house::keep(ctx);
             return;
         }
+        crate::theme::sync_dark(ctx, false);
         self.files.logic(&mut self.app, ctx);
         // External content (IMAGE pictures): blocked in spreadsheets that aren't this person's own.
         if let Some(d) = self.app.session.active() {

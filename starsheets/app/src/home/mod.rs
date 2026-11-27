@@ -716,10 +716,18 @@ impl Home {
         self.photo_folder().is_some()
     }
 
+    fn photos_available(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        if !crate::account::photos_available() {
+            return false;
+        }
+        self.store.has_photos()
+    }
+
     /// The folder shown as photos, when "View as photos" is on and a folder is shown (not
     /// Recent, Starred, the bin, or search results).
     fn photo_folder(&self) -> Option<String> {
-        if !self.photos.on || !self.store.has_photos() {
+        if !self.photos.on || !self.photos_available() {
             return None;
         }
         match self.view.as_ref()? {
@@ -852,7 +860,7 @@ impl Home {
 
     /// The Sort menu: Sort by, Sort direction, Folders at top.
     fn sort_menu(&mut self, ui: &mut Ui) {
-        let label = RichText::new("Sort").size(house::BODY).color(theme::TEXT);
+        let label = RichText::new("Sort").size(house::BODY).color(theme::text());
         let b = match crate::icons::icon("sort") {
             Some(img) => egui::Button::image_and_text(img.fit_to_exact_size(vec2(20.0, 20.0)), label),
             None => egui::Button::new(label),
@@ -972,9 +980,12 @@ impl Home {
         }
         #[cfg(not(target_arch = "wasm32"))]
         ctx.request_repaint_after(std::time::Duration::from_millis(RELIST_MS as u64));
+        if self.photos.on && !self.photos_available() {
+            self.photos.set_on(&self.store, false);
+        }
         let folder = self.photo_folder();
         // Photo Mode: always dark while it is open (no switch, whatever the Drive's look), the search box searches photos.
-        theme::sync_dark(ctx, folder.is_some());
+        theme::sync_dark(ctx, folder.is_some() || theme::drive_dark());
         let query = if folder.is_some() { self.search.clone() } else { String::new() };
         self.photos.shell_query(&query);
         self.photos.logic(ctx, &self.store, folder);
@@ -1134,7 +1145,7 @@ impl Home {
                 .show_separator_line(false)
                 .exact_size(LEFT)
                 .resizable(false)
-                .frame(egui::Frame::NONE.fill(theme::PAGE).inner_margin(egui::Margin { left: 12, right: 12, top: 8, bottom: 8 }))
+                .frame(egui::Frame::NONE.fill(theme::page()).inner_margin(egui::Margin { left: 12, right: 12, top: 8, bottom: 8 }))
                 .show(ui, |ui| self.left_ui(ui));
         }
         egui::CentralPanel::default()
@@ -1171,7 +1182,7 @@ impl Home {
                 ui.add(img);
             }
             ui.add_space(house::S);
-            ui.label(RichText::new("Starbase Drive").size(22.0).color(theme::TEXT));
+            ui.label(RichText::new("Starbase Drive").size(22.0).color(theme::text()));
             // The search box starts where it always has, whatever the name's width.
             let x = ui.cursor().min.x - ui.max_rect().left();
             ui.add_space((LEFT - 28.0 - x - ui.spacing().item_spacing.x).max(house::M));
