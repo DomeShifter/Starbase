@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Last updated: 2026-11-27T07:30:14Z
+# Last updated: 2026-11-27T08:15:36Z
 """Real-input check of PR photos-ignore-faces (People: Ignore / Not a face, every way back).
   photos_ignore_faces_input.py http://<host>:<port> --browser chromium|firefox --pics DIR_WITH_JPGS [--user NAME]
 Pictures as for photos_faces_polish.py (<person><n>.jpg, >= 2 people with >= 2 pictures each). Server runs with
@@ -29,26 +29,41 @@ def main():
         pg.request.post(f"{S.base}/api/photos/faces/models", data="{}"); S.wait_for(lambda: not st().get("missing"), secs=600, every=5)
     pg.request.post(f"{S.base}/api/photos/faces", data=json.dumps({"on": True}), headers={"Content-Type": "application/json"})
     S.open("drive", path=f"/?test&dir={q(folder)}"); time.sleep(2)
-    S.hook("home:photos", on=True); time.sleep(2); S.hook("home:photos:tab", tab="people")
+    S.hook("home:photos", on=True); time.sleep(2); S.hook("home:photos:enable"); time.sleep(8); S.hook("home:photos:tab", tab="people")
     pe = lambda: S.snapshot("home.photos.people") or {}
     tg = lambda: S.snapshot("targets") or {}
-    S.wait_for(lambda: len(pe().get("groups", [])) + len(pe().get("named", [])) >= 2, secs=900, every=5)
-    mid = lambda t: ((t[0] + t[2]) / 2, (t[1] + t[3]) / 2) if isinstance(t, list) else (t["x"] + t["w"] / 2, t["y"] + t["h"] / 2)
+    # People loads its cards only when opened: re-click the tab every ~20 s while waiting for faces.
+    tick = [0]
+    def have():
+        tick[0] += 1
+        if tick[0] % 4 == 0: S.hook("home:photos:tab", tab="people")
+        return len(pe().get("groups", [])) + len(pe().get("named", [])) >= 2
+    S.wait_for(have, secs=300, every=5)
     def click(name, right=False):
-        S.wait_for(lambda: name in tg(), secs=20); x, y = mid(tg()[name])
-        (S.right_click_xy if right else S.click_xy)(x, y)
+        if not S.wait_for(lambda: name in tg(), secs=20): print("NO TARGET", name, sorted(tg())[:40], flush=True)
+        S.click_text(name, button=3 if right else 1)
+    def undo_all(prefix, key):
+        """Every tile of an Ignored / Not faces section has its own button: press them until the section is empty."""
+        for _ in range(30):
+            ts = sorted((k for k in tg() if k.startswith(prefix)), key=lambda k: int(k.rsplit(":", 1)[1]))
+            if not ts: break
+            click(ts[0]); time.sleep(2)
+        S.wait_for(lambda: not pe().get(key), secs=20)
+    cards = lambda: len(pe()["groups"]) + len(pe()["named"])
+    pics = lambda: sorted(c.get("pictures", c.get("count", 0)) for c in pe()["groups"] + pe()["named"])
     n0 = len(pe()["groups"]) + len(pe()["named"])
     # 1. Right-click a group tile -> Ignore group: it leaves the cards, "Ignored (N)" appears.
     click("person:0", right=True); S.shot("1-card-menu"); click("people:ctx-ignore")
     S.wait_for(lambda: pe().get("ignored"), secs=20)
     rec("ignore group", len(pe()["groups"]) + len(pe()["named"]) == n0 - 1 and "people:ignored" in tg(), pe().get("ignored_count")); S.shot("2-ignored")
     # 2. Stop ignoring: back as an unnamed group.
-    click("people:unignore:0"); S.wait_for(lambda: not pe().get("ignored"), secs=20)
-    rec("stop ignoring", len(pe()["groups"]) + len(pe()["named"]) >= n0 - 1 and not pe()["ignored"])
+    p0 = pics(); click("person:0", right=True) if False else None
+    undo_all("people:unignore:", "ignored")
+    rec("stop ignoring: cards back", cards() == n0 and not pe()["ignored"], (cards(), n0))
     # 3. Right-click a group -> Not a face; then "It is a face".
     click("person:0", right=True); click("people:ctx-notface"); S.wait_for(lambda: pe().get("notfaces"), secs=20)
     rec("not a face", "people:notfaces" in tg(), pe().get("notfaces_count")); S.shot("3-notfaces")
-    click("people:isface:0"); S.wait_for(lambda: not pe().get("notfaces"), secs=20); rec("it is a face", not pe()["notfaces"])
+    undo_all("people:isface:", "notfaces"); rec("it is a face: cards back", cards() == n0 and not pe()["notfaces"], (cards(), n0))
     # 4. A face on a group page: right-click -> Ignore face; group page More -> Not a face (closes the page).
     click("person:0"); S.wait_for(lambda: pe().get("faces", 0) > 0, secs=20)
     click("face:0", right=True); S.shot("4-face-menu"); click("people:ctx-ignore"); time.sleep(2)
