@@ -61,6 +61,7 @@ def run(browser, testn):
             assert colour < 105, (browser, "photos", dark, colour)
             s.shot(f"{browser}-photos-after-{'dark' if dark else 'light'}")
             s.hook("home:photos", on=False)
+    print(f"DONE {browser}: appearance checks", flush=True)
 
 
 if __name__ == "__main__":
