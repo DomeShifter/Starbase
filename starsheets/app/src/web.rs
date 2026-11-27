@@ -276,7 +276,15 @@ impl eframe::App for WebShell {
         crate::account::set_typing(self.app.editor.is_some());
         // Leaving the tab (Ctrl+W, close, reload) asks first while a cell is being typed in or the
         // open file has changes not saved yet; never when everything is saved.
-        let dirty = self.app.session.active().is_some_and(|d| d.is_dirty());
+        let dirty = self.app.session.active().is_some_and(|doc| {
+            if let Some(live) = crate::live::status_for(doc.uid) {
+                // Live editing saves on the server without updating the local saved snapshot.
+                // Keep changes made after this frame's live tick protected until it sends them.
+                live.unsaved || self.app.session.sync_log.as_ref().is_some_and(|steps| steps.iter().any(|step| step.doc == doc.uid))
+            } else {
+                doc.is_dirty()
+            }
+        });
         crate::unload_guard::set(crate::unload_guard::should_guard(self.app.editor.is_some(), dirty));
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#1562).
         // Settings change after input (the frame of a click or key and the one after it, as the
