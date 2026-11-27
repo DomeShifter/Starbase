@@ -368,16 +368,21 @@ impl PhotoMode {
         ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(secs));
     }
 
-    /// "Finding faces: 4 of 10" as a bar; true while the scan is running.
+    /// "Finding faces: 4 of 10" as a bar; true while the scan is running. After a face finder
+    /// update, older photos are looked at once more: "Checking older photos again: 4 of 10".
     fn scan_bar(&mut self, ui: &mut Ui, st: &Json, wide: bool) -> bool {
         let pr = &st["progress"];
-        let (done, all) = (pr["done"].as_u64().unwrap_or(0), pr["all"].as_u64().unwrap_or(0));
+        let n = |v: &Json| v.as_u64().unwrap_or(0);
+        let (mut done, mut all, mut what) = (n(&pr["done"]), n(&pr["all"]), "Finding faces");
+        if done >= all {
+            (done, all, what) = (n(&pr["recheck"]["done"]), n(&pr["recheck"]["all"]), "Checking older photos again");
+        }
         if done >= all {
             return false;
         }
         let bar = egui::ProgressBar::new(done as f32 / all.max(1) as f32)
             .desired_width(if wide { 320.0 } else { 220.0 })
-            .text(RichText::new(format!("Finding faces: {done} of {all}")).size(house::NOTE));
+            .text(RichText::new(format!("{what}: {done} of {all}")).size(house::NOTE));
         let r = ui.add(bar);
         house::target(ui.ctx(), "people:progress", r.rect);
         if wide {

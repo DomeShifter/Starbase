@@ -330,10 +330,64 @@ pub fn keep(ix: &Index, thumb: &str, model: &str, faces: &[Found]) -> rusqlite::
                 params![thumb, model, f.x, f.y, f.w, f.h, f.score, f.px, emb_to_blob(&f.emb), hidden],
             )?;
         }
-        c.execute("INSERT OR REPLACE INTO faces_done(thumb, model) VALUES(?1, ?2)", params![thumb, model])?;
+        c.execute("INSERT OR REPLACE INTO faces_done(thumb, model, detect) VALUES(?1, ?2, ?3)", params![thumb, model, DETECT_VERSION])?;
         Ok(())
     })();
     c.execute_batch(if r.is_ok() { "RELEASE keep" } else { "ROLLBACK TO keep; RELEASE keep" })?;
+    r
+}
+
+/// Thumbnails `model` looked at with an older face finder ([`DETECT_VERSION`]): the re-check's
+/// next ones, newest first. Runs after every new picture is done, so it never holds them up.
+pub fn recheck_todo(ix: &Index, model: &str, n: usize) -> rusqlite::Result<Vec<String>> {
+    let mut st = conn(ix).prepare("SELECT thumb FROM faces_done WHERE model = ?1 AND detect < ?2 ORDER BY rowid DESC LIMIT ?3")?;
+    st.query_map(params![model, DETECT_VERSION, n as i64], |r| r.get(0))?.collect()
+}
+
+/// The re-check's progress for `model`: (pictures looked at by this finder, all pictures looked
+/// at). Equal when there is nothing (left) to re-check.
+pub fn recheck_progress(ix: &Index, model: &str) -> (u64, u64) {
+    conn(ix)
+        .query_row(
+            "SELECT COALESCE(SUM(detect >= ?2), 0), COUNT(*) FROM faces_done WHERE model = ?1",
+            params![model, DETECT_VERSION],
+            |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)? as u64)),
+        )
+        .unwrap_or((0, 0))
+}
+
+/// Adds the faces found again in thumbnail `thumb` that are not there yet, and notes the picture
+/// as looked at by this finder. Never deletes or changes a face: one that overlaps any face of
+/// that picture ([`SAME_BOX`]: named, grouped, ignored or "not a face" alike) is the same face
+/// and is left out, so names, "not this person", groups and marks all stay. Returns how many
+/// were added; they are new unnamed faces for [`regroup`] (which may ask "Same person?").
+pub fn add_new(ix: &Index, thumb: &str, model: &str, found: &[Found]) -> rusqlite::Result<usize> {
+    let c = conn(ix);
+    c.execute_batch("SAVEPOINT add_new")?;
+    let r = (|| {
+        let mut st = c.prepare("SELECT x, y, w, h FROM faces WHERE thumb = ?1 AND model = ?2")?;
+        let mut have: Vec<[f32; 4]> =
+            st.query_map(params![thumb, model], |r| Ok([r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?]))?.collect::<rusqlite::Result<_>>()?;
+        let mut n = 0;
+        for f in found {
+            let bx = [f.x, f.y, f.w, f.h];
+            if have.iter().any(|h| overlap(*h, bx) >= SAME_BOX) {
+                continue;
+            }
+            c.execute(
+                "INSERT INTO faces(thumb, model, x, y, w, h, score, px, emb) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![thumb, model, f.x, f.y, f.w, f.h, f.score, f.px, emb_to_blob(&f.emb)],
+            )?;
+            have.push(bx);
+            n += 1;
+        }
+        c.execute(
+            "INSERT INTO faces_done(thumb, model, detect) VALUES(?1, ?2, ?3) ON CONFLICT(thumb, model) DO UPDATE SET detect = excluded.detect",
+            params![thumb, model, DETECT_VERSION],
+        )?;
+        Ok(n)
+    })();
+    c.execute_batch(if r.is_ok() { "RELEASE add_new" } else { "ROLLBACK TO add_new; RELEASE add_new" })?;
     r
 }
 

@@ -501,3 +501,67 @@ fn not_a_face_is_not_found_again_on_a_rescan() {
     assert_eq!(faces::unmark(&ix, &[m[0].id], faces::NOT_FACE, false).unwrap(), 1);
     assert_eq!(faces::faces(&ix, "auraface").unwrap().len(), 2, "It is a face: back");
 }
+
+fn at(x: f32, y: f32, e: Vec<f32>) -> Found {
+    Found { x, y, ..found(e) }
+}
+
+#[test]
+fn recheck_adds_only_missed_faces() {
+    let lock = index();
+    {
+        let ix = lock.lock().unwrap();
+        // Looked at by the old finder: Ann's face and a doll; her friend next to her was missed.
+        faces::keep(&ix, "aa", "auraface", &[at(0.1, 0.1, near(0, 0, 0.1)), at(0.6, 0.6, near(2, 0, 0.1))]).unwrap();
+        faces::keep(&ix, "bb", "auraface", &[at(0.1, 0.1, near(0, 1, 0.1))]).unwrap();
+        ix.conn().execute("UPDATE faces_done SET detect = 1", []).unwrap();
+        assert_eq!(faces::recheck_progress(&ix, "auraface"), (0, 2));
+    }
+    faces::regroup(&lock, "auraface").unwrap();
+    let ix = lock.lock().unwrap();
+    let before = faces::faces(&ix, "auraface").unwrap();
+    let ann_face = before.iter().find(|f| f.thumb == "aa" && f.bx[0] < 0.5).unwrap().clone();
+    let doll = before.iter().find(|f| f.bx[0] > 0.5).unwrap().id;
+    let ann = faces::name(&ix, Who::of(&ann_face).unwrap(), "ada", "Ann").unwrap();
+    assert_eq!(faces::mark(&ix, &[doll], faces::NOT_FACE).unwrap(), 1);
+    ix.conn().execute("INSERT INTO face_not(face, person) VALUES(?1, 99)", [ann_face.id]).unwrap();
+    let todo = faces::recheck_todo(&ix, "auraface", 10).unwrap();
+    assert_eq!(todo.len(), 2);
+    assert!(faces::todo(&ix, "auraface", 10).unwrap().is_empty(), "the re-check is not new work");
+    // The new finder finds Ann (moved a little), the doll, and the friend right next to Ann
+    // (overlap 0.33: a different face).
+    let again = [at(0.11, 0.1, near(0, 0, 0.1)), at(0.6, 0.61, near(2, 0, 0.1)), at(0.2, 0.1, near(1, 0, 0.1))];
+    assert_eq!(faces::add_new(&ix, "aa", "auraface", &again).unwrap(), 1);
+    assert_eq!(faces::add_new(&ix, "bb", "auraface", &[at(0.1, 0.1, near(0, 1, 0.1)), at(0.2, 0.1, near(1, 1, 0.1))]).unwrap(), 1);
+    assert_eq!(faces::recheck_progress(&ix, "auraface"), (2, 2));
+    assert!(faces::recheck_todo(&ix, "auraface", 10).unwrap().is_empty());
+    // Nothing that was there changed: Ann's face, its name, the doll's mark, "not this person".
+    let f = faces::face(&ix, ann_face.id).unwrap().unwrap();
+    assert_eq!((f.person, f.bx), (Some(ann), ann_face.bx));
+    assert_eq!(faces::people(&ix, "ada").unwrap()[&ann], "Ann");
+    assert_eq!(faces::face(&ix, doll).unwrap().unwrap().state, faces::NOT_FACE);
+    let nots: i64 = ix.conn().query_row("SELECT COUNT(*) FROM face_not WHERE face = ?1", [ann_face.id], |r| r.get(0)).unwrap();
+    assert_eq!(nots, 1);
+    let all = faces::faces(&ix, "auraface").unwrap();
+    assert_eq!(all.len(), 4, "Ann and her friend in both (the doll is out of the list)");
+    let friend = all.iter().find(|f| f.thumb == "aa" && f.id != ann_face.id).unwrap();
+    assert_eq!(friend.person, None, "a new face is unnamed until grouped");
+    // A second run adds nothing, even when asked directly.
+    assert_eq!(faces::add_new(&ix, "aa", "auraface", &again).unwrap(), 0);
+    drop(ix);
+    // The friend goes through normal grouping: one new group, not Ann.
+    faces::regroup(&lock, "auraface").unwrap();
+    let ix = lock.lock().unwrap();
+    let friends: Vec<_> = faces::faces(&ix, "auraface").unwrap().into_iter().filter(|f| f.bx[0] > 0.15).collect();
+    assert_eq!(friends.len(), 2);
+    assert!(friends.iter().all(|f| f.person.is_none() && f.grp.is_some() && f.grp == friends[0].grp), "{friends:?}");
+}
+
+#[test]
+fn new_pictures_are_not_rechecked() {
+    let lock = index();
+    let ix = lock.lock().unwrap();
+    faces::keep(&ix, "cc", "auraface", &[found(near(0, 0, 0.1))]).unwrap();
+    assert!(faces::recheck_todo(&ix, "auraface", 10).unwrap().is_empty());
+    assert_eq!(faces::recheck_progress(&ix, "auraface"), (1, 1));
+}

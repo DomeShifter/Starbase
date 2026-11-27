@@ -14,7 +14,10 @@
 //!   faces; 1280 px is a follow-up).
 //! - **Priority**: low CPU and idle I/O priority, one thread, `STARBASE_ML_THREADS` ONNX threads
 //!   (default a quarter of the cores); waits while thumbnails are being made. Resumable: each
-//!   picture looked at is noted in the index (`faces_done`).
+//!   picture looked at is noted in the index (`faces_done`), with the face finder's version.
+//! - **Re-check**: when every new picture is done, pictures an older face finder looked at
+//!   (`faces::DETECT_VERSION`) are looked at once more, and only faces not there yet are added
+//!   (`faces::add_new`): names, marks and groups are never changed.
 //! - The ONNX Runtime is only in builds with the `ml` feature (`cargo build --features ml`);
 //!   other builds say so in the People view.
 
@@ -340,16 +343,26 @@ impl Photos {
                 self.ml.nap(Duration::from_secs(5));
                 continue;
             }
-            let todo = self.with_db(|ix| faces::todo(ix, &model, 16).unwrap_or_default());
+            // New pictures first; then, once, pictures an older face finder looked at
+            // (faces::DETECT_VERSION): only faces it missed are added, nothing is changed.
+            let mut todo = self.with_db(|ix| faces::todo(ix, &model, 16).unwrap_or_default());
+            let recheck = todo.is_empty();
+            if recheck {
+                todo = self.with_db(|ix| faces::recheck_todo(ix, &model, 16).unwrap_or_default());
+            }
             if todo.is_empty() {
                 self.ml.say("Up to date.");
                 self.ml.nap(Duration::from_secs(60));
                 continue;
             }
-            self.ml.say("Looking for faces.");
+            self.ml.say(if recheck { "Checking older photos for faces missed before." } else { "Looking for faces." });
             let Some(eng) = engine.as_mut() else { continue };
             for thumb in todo {
                 if self.stopped() || !self.faces_on() {
+                    break;
+                }
+                // The re-check runs only while nothing new is waiting.
+                if recheck && self.queued() != (0, 0) {
                     break;
                 }
                 let found = match self.thumb_file(&thumb, 1024).and_then(|(p, _)| std::fs::read(p).ok()) {
@@ -365,7 +378,11 @@ impl Photos {
                     // No thumbnail (cleared from the cache): noted as done, it comes back if remade.
                     None => Vec::new(),
                 };
-                self.with_db(|ix| faces::keep(ix, &thumb, &model, &found)).ok();
+                if recheck {
+                    self.with_db(|ix| faces::add_new(ix, &thumb, &model, &found)).ok();
+                } else {
+                    self.with_db(|ix| faces::keep(ix, &thumb, &model, &found)).ok();
+                }
             }
             let _ = faces::regroup(self.db_lock(), &model);
         }

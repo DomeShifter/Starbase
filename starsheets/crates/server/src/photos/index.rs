@@ -13,7 +13,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use super::decode::Meta;
 
 /// The schema version this server writes.
-pub const SCHEMA: i32 = 5;
+pub const SCHEMA: i32 = 6;
 
 /// Where a picture is in the work.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -196,6 +196,11 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             PRAGMA user_version = 5;
             COMMIT;",
         )?;
+    }
+    if v < 6 {
+        // Which face finder looked at each picture (faces.rs `DETECT_VERSION`): older ones are
+        // re-checked once for faces they missed.
+        conn.execute_batch(super::faces::SCHEMA_V6)?;
     }
     Ok(())
 }
