@@ -936,6 +936,7 @@ fn info_heading(c: &mut egui::Ui, heading: &str, icon: &str) {
 /// two-column rows (dim label, value), then the Locked folder button. Returns the album whose name
 /// was clicked, whether "Move to Locked folder" (inside Locked, "Move out") was clicked, and
 /// whether the panel's close button was.
+#[allow(clippy::too_many_arguments)]
 fn info_panel(
     ui: &mut egui::Ui,
     rect: Rect,
