@@ -411,6 +411,12 @@ pub trait Engine: Send {
 /// The lowest detection score kept.
 pub const MIN_SCORE: f32 = 0.7;
 
+/// Boxes overlapping a stronger one by more than this IoU are dropped as duplicates. Measured on a
+/// photo of two close faces: the neighbour's box overlapped the stronger face by 0.377 (a real
+/// second face, wrongly dropped at the old 0.3), while extra boxes on one face overlap their best
+/// box by 0.82 or more. 0.5 sits safely between.
+pub const NMS_IOU: f32 = 0.5;
+
 /// YuNet's raw outputs for one stride: class, objectness, box (4) and landmarks (10) per cell.
 pub struct YuStride<'a> {
     pub stride: usize,
@@ -421,7 +427,7 @@ pub struct YuStride<'a> {
 }
 
 /// Decodes YuNet (2023mar) outputs for an input of `w`×`h` (multiples of 32), as OpenCV's
-/// FaceDetectorYN does, then drops overlapping boxes (IoU > 0.3).
+/// FaceDetectorYN does, then drops duplicate boxes (IoU > `NMS_IOU`).
 pub fn yunet_decode(strides: &[YuStride], w: usize, h: usize, min_score: f32) -> Vec<Det> {
     let mut out = Vec::new();
     for s in strides {
@@ -449,7 +455,7 @@ pub fn yunet_decode(strides: &[YuStride], w: usize, h: usize, min_score: f32) ->
             }
         }
     }
-    nms(out, 0.3)
+    nms(out, NMS_IOU)
 }
 
 fn iou(a: &Det, b: &Det) -> f32 {
@@ -641,5 +647,24 @@ mod onnx {
             let (_, d) = out[0].try_extract_tensor::<f32>().map_err(e)?;
             Ok(d.to_vec())
         }
+    }
+}
+
+#[cfg(test)]
+mod nms_tests {
+    use super::{Det, NMS_IOU, nms};
+
+    fn det(x: f32, w: f32, score: f32) -> Det {
+        Det { x, y: 0.0, w, h: 100.0, score, kps: [[0.0; 2]; 5] }
+    }
+
+    #[test]
+    fn close_faces_kept_duplicates_merged() {
+        // Two 100x100 boxes shifted by 45: IoU = 55/145 = 0.379 -> both kept.
+        assert_eq!(nms(vec![det(0.0, 100.0, 0.9), det(45.0, 100.0, 0.8)], NMS_IOU).len(), 2);
+        // Shifted by 8: IoU = 92/108 = 0.852 -> merged, strongest kept.
+        let m = nms(vec![det(8.0, 100.0, 0.7), det(0.0, 100.0, 0.9)], NMS_IOU);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].score, 0.9);
     }
 }
