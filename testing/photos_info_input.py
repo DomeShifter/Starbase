@@ -83,7 +83,6 @@ def main():
     S = ui.Session(br, base=base); S.sign_in(user)
     S.open("drive"); S.hook("home:folder", path=folder); time.sleep(2); S.hook("home:photos", on=True); time.sleep(2); S.hook("home:photos:enable"); time.sleep(5)
     S.hook("home:photos:tab", tab="photos")
-    if light: S.click_text("photos:view-menu"); time.sleep(1); S.click_text("Light theme"); S.key("Escape"); time.sleep(1.5)
     vw = lambda: S.snapshot("home.photos.viewer") or {}
     tg = lambda: S.snapshot("targets") or {}
     def open_pic(name):

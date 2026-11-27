@@ -119,11 +119,10 @@ def main():
             rec("No is remembered", len(srv().get("questions", [])) < len(pe().get("questions", [])) + 2, json.dumps(srv().get("questions")))
     else:
         print("SKIP same-person: no borderline look-alikes in these pictures", flush=True)
-    # 6. Photo Mode's own Light theme (in-app menu row, not STARBASE_THEME), then 200% zoom: no halo circle round faces.
+    # 6. 200% zoom: no halo circle round faces.
     S.click_text("Photos"); time.sleep(1); S.click_text("People"); time.sleep(3)
-    S.click_text("photos:view-menu"); time.sleep(1); S.click_text("Light theme"); time.sleep(1.5); S.key("Escape")
-    rec("light theme: People page still on", pe().get("on") is True, "")
-    S.shot(f"{br}-7-light-people")
+    rec("People page still on", pe().get("on") is True, "")
+    S.shot(f"{br}-7-people")
     n = 6 if br == "firefox" else 5
     for _ in range(n): S.key("ctrl+plus", settle=0.4)
     time.sleep(2); S.shot(f"{br}-8-light-zoom200")

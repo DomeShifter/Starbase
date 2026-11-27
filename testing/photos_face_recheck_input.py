@@ -109,8 +109,6 @@ def main():
             rec("after: bar shown", S.wait_for(lambda: "people:progress" in (S.snapshot("targets") or {}), secs=20))
             S.wait_text("Checking older photos again", secs=20); S.shot("recheck-bar")
             rec("after: bar text", True)
-            if br == "chromium":
-                S.click_text("photos:view-menu"); time.sleep(1); S.click_text("Light theme"); S.key("Escape"); time.sleep(1.5); S.shot("recheck-bar-light")
         rec("after: re-check finished", S.wait_for(lambda: rp().get("all", 0) > 0 and rp().get("done") == rp().get("all"), secs=900, every=5), json.dumps(rp()))
         B = json.load(open("recheck-before.json")); b, now = B["people"], people()
         ann = lambda p: [c for c in p.get("people", []) if c.get("name") == "Recheck Ann"]

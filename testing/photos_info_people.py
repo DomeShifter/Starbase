@@ -31,8 +31,6 @@ def main():
     vw = lambda: S.snapshot("home.photos.viewer") or {}
     req = lambda: (S.snapshot("home.photos.textures") or {}).get("requests", 0)
     S.hook("home:photos:tab", tab="photos")
-    if "--light" in a:  # Photo Mode has its OWN theme (STARBASE_THEME does not switch it): the View menu row
-        S.click_text("photos:view-menu"); time.sleep(1); S.click_text("Light theme"); S.key("Escape"); time.sleep(1.5)
     S.hook("home:photos:open", index=0); time.sleep(4)
     r0 = req(); time.sleep(5); r1 = req()
     rec("one open = no repeated image requests", r1 == r0, f"{r0} -> {r1}")

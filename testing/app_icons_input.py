@@ -29,9 +29,6 @@ def main():
     S.shot(f"{br}-icons-0-drive")
     S.hook("home:photos", on=True); time.sleep(2.5)
     S.shot(f"{br}-icons-1-photos")
-    if br == "chromium":
-        S.click_text("photos:view-menu"); time.sleep(1); S.click_text("Light theme"); S.key("Escape"); time.sleep(1.5)
-        S.shot(f"{br}-icons-2-photos-light")
     for app in ("sheets", "docs", "slides"):
         S.open(app); time.sleep(3)
         links = S.pg.evaluate("[...document.querySelectorAll('link[rel*=icon]')].map(l => l.getAttribute('href'))")

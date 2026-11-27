@@ -973,8 +973,8 @@ impl Home {
         #[cfg(not(target_arch = "wasm32"))]
         ctx.request_repaint_after(std::time::Duration::from_millis(RELIST_MS as u64));
         let folder = self.photo_folder();
-        // Photo Mode: dark while it is open, the search box searches photos.
-        theme::sync_dark(ctx, folder.is_some() && self.photos.shell.dark);
+        // Photo Mode: always dark while it is open (no switch, whatever the Drive's look), the search box searches photos.
+        theme::sync_dark(ctx, folder.is_some());
         let query = if folder.is_some() { self.search.clone() } else { String::new() };
         self.photos.shell_query(&query);
         self.photos.logic(ctx, &self.store, folder);

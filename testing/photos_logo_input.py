@@ -5,8 +5,8 @@ Seed first: python3 -I testing/seed.py --url <URL> --set gps   (into ada/seed-gp
 Run:  photos_logo_input.py http://<host>:<port> --browser chromium|firefox [--user NAME]
 Expects: in the Drive the tab is "Starbase Drive" with stardrive.svg; Photo Mode (home:photos on) shows the rose-pink
 Starbase Photos logo (target photo-logo, 32 x 32) before the "Photo Mode" title, and the tab becomes "Starbase Photos"
-with starphotos.svg; the View menu "Light theme" row switches the theme (logo stays), "Back to Drive" restores the
-Drive title and icon. Screenshots: <browser>-logo-0-drive, -1-dark, -2-light (look at the logo: rose square, white card, star)."""
+with starphotos.svg; "Back to Drive" restores the
+Drive title and icon. Screenshots: <browser>-logo-0-drive, -1-dark (look at the logo: rose square, white card, star)."""
 import os, sys, time
 sys.path.insert(0, os.path.expanduser("~/.claude/tools"))
 import starbase_ui as ui
@@ -30,8 +30,6 @@ def main():
     rec("logo target in Photo Mode", "photo-logo" in tg(), str(tg().get("photo-logo")))
     rec("tab says Starbase Photos with its icon", tab() == ["Starbase Photos", "starphotos.svg"], str(tab()))
     S.shot(f"{br}-logo-1-dark")
-    S.click_text("photos:view-menu"); time.sleep(1); S.click_text("Light theme"); S.key("Escape"); time.sleep(1.5)
-    S.shot(f"{br}-logo-2-light")
     S.click_text("photo-exit"); time.sleep(2)
     rec("back to Drive tab", tab() == ["Starbase Drive", "stardrive.svg"], str(tab()))
     print("RESULT", "PASS" if all(res) else "FAIL"); sys.exit(0 if all(res) else 1)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Looks + toolbar actions for the Photos frame. Run on the branch server (NEW) and on main's server (--base: shots only).
   photos_design_frame_shots.py http://<host>:<port> --browser chromium|firefox --pics DIR_ON_BOX [--base]
-Shots: toolbar, nav, selection, selection+More, Albums (empty), light theme toolbar + selection. NEW also clicks Upload (file chooser) and Scan now."""
+Shots: toolbar, nav, selection, selection+More, Albums (empty), view menu. NEW also clicks Upload (file chooser) and Scan now."""
 import glob, os, sys, time, urllib.parse
 sys.path.insert(0, os.path.expanduser("~/.claude/tools")); sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import starbase_ui as ui
@@ -42,9 +42,7 @@ def main():
         S.click_text("photos:scan-now"); time.sleep(3)
         S.wait_for(lambda: len(S.snapshot("home.photos.items") or []) >= n0 + 1, secs=60, every=2)
         rec("Upload (toolbar chooser) then Scan now: the picture is in Photos", len(S.snapshot("home.photos.items") or []) >= n0 + 1)
-        S.click_text("photos:view-menu"); time.sleep(1); S.click_text("Light theme"); time.sleep(1.5); S.key("Escape")
-        S.shot(f"{tag}-e-light-toolbar")
-        S.click_text("photos:view-menu"); time.sleep(1); S.shot(f"{tag}-f-light-view-menu"); S.key("Escape")
+        S.click_text("photos:view-menu"); time.sleep(1); S.shot(f"{tag}-f-view-menu"); S.key("Escape")
         S.click_xy(1000, 650); S.key("Control+a"); time.sleep(1); S.click_text("photos:sel:more"); time.sleep(1)
         S.shot(f"{tag}-g-light-selection-more")
     sys.exit(0 if all(res) else 1)

@@ -1,7 +1,7 @@
 //! Photo Mode's own room: while it is open the window is dark, the left Drive list and the
 //! Drive's New/list/grid controls are gone, and the top bar holds only photo things: back to the
 //! Drive, "Search photos", the SET switch (this folder / with subfolders / everything), the
-//! Type filter and the sun/moon. Leaving puts the Drive back as it was (theme::sync_dark).
+//! Type filter. It is always dark, whatever the Drive's look. Leaving puts the Drive back as it was (theme::sync_dark).
 
 use egui::{RichText, Ui, vec2};
 
@@ -61,8 +61,6 @@ pub(in crate::home) fn kind_of(p: &Pic) -> Option<usize> {
 }
 
 pub(in crate::home) struct Shell {
-    /// The dark look (the default in Photo Mode; the sun/moon switches it for this session).
-    pub dark: bool,
     pub scope: Scope,
     /// The Type filter: which of `KINDS` are shown (none ticked = all).
     pub types: [bool; 7],
@@ -74,7 +72,7 @@ pub(in crate::home) struct Shell {
 
 impl Default for Shell {
     fn default() -> Shell {
-        Shell { dark: true, scope: Scope::Folder, types: [false; 7], query: String::new(), full: Vec::new() }
+        Shell { scope: Scope::Folder, types: [false; 7], query: String::new(), full: Vec::new() }
     }
 }
 
@@ -155,15 +153,13 @@ pub(super) enum ViewItem {
     Types,
     /// Newest first / Oldest first.
     Sort,
-    /// Dark theme / Light theme.
-    Theme,
     /// Narrow window only: the toolbar's buttons that no longer fit.
     Upload,
     Slideshow,
     Scan,
 }
 
-/// The View menu, top to bottom: Show (set), Type, Sort, Theme. In a narrow window the toolbar's
+/// The View menu, top to bottom: Show (set), Type, Sort. In a narrow window the toolbar's
 /// Upload, Slideshow and Scan now join it (when they apply), as one overflow menu.
 pub(super) fn view_items(narrow: bool, grid: bool, slideshow: bool) -> Vec<ViewItem> {
     use ViewItem::*;
@@ -171,7 +167,6 @@ pub(super) fn view_items(narrow: bool, grid: bool, slideshow: bool) -> Vec<ViewI
     if grid {
         v.extend([Sep, Head("Sort"), Sort]);
     }
-    v.extend([Sep, Head("Theme"), Theme]);
     if narrow {
         v.push(Sep);
         if grid {
@@ -295,7 +290,6 @@ impl Home {
                         }
                     }
                 }
-                ViewItem::Theme => self.theme_row(ui),
                 ViewItem::Upload => {
                     if house::menu_row(ui, Some("upload"), "Upload", "", true) {
                         self.photos.upload_pick(ctx, &self.store);
@@ -336,13 +330,6 @@ impl Home {
         }
     }
 
-    fn theme_row(&mut self, ui: &mut Ui) {
-        let dark = self.photos.shell.dark;
-        if house::menu_row(ui, Some(if dark { "light_mode" } else { "dark_mode" }), if dark { "Light theme" } else { "Dark theme" }, "", true) {
-            self.photos.shell.dark = !dark;
-        }
-    }
-
     /// The middle of the window in Photo Mode: only the pictures.
     pub(in crate::home) fn photo_main_ui(&mut self, ui: &mut Ui, folder: &str) {
         if let Some(e) = self.error.clone() {
@@ -368,13 +355,13 @@ impl Shell {
 mod tests {
     use super::*;
 
-    /// The View menu: Show, Type, Sort, Theme in that order; Sort only with a picture grid; the
+    /// The View menu: Show, Type, Sort in that order (no Theme: Photo Mode is always dark); Sort only with a picture grid; the
     /// narrow overflow menu adds Upload, Slideshow and Scan now (Scan now always).
     #[test]
-    fn the_view_menu_has_show_type_sort_theme() {
+    fn the_view_menu_has_show_type_sort() {
         let heads = |v: Vec<ViewItem>| v.into_iter().filter_map(|i| if let ViewItem::Head(h) = i { Some(h) } else { None }).collect::<Vec<_>>();
-        assert_eq!(heads(view_items(false, true, true)), ["Show", "Type", "Sort", "Theme"]);
-        assert_eq!(heads(view_items(false, false, false)), ["Show", "Type", "Theme"]);
+        assert_eq!(heads(view_items(false, true, true)), ["Show", "Type", "Sort"]);
+        assert_eq!(heads(view_items(false, false, false)), ["Show", "Type"]);
         let wide = view_items(false, true, true);
         assert!(!wide.contains(&ViewItem::Scan) && !wide.contains(&ViewItem::Upload));
         let narrow = view_items(true, true, true);
