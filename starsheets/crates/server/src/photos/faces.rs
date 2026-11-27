@@ -348,11 +348,9 @@ pub fn recheck_todo(ix: &Index, model: &str, n: usize) -> rusqlite::Result<Vec<S
 /// at). Equal when there is nothing (left) to re-check.
 pub fn recheck_progress(ix: &Index, model: &str) -> (u64, u64) {
     conn(ix)
-        .query_row(
-            "SELECT COALESCE(SUM(detect >= ?2), 0), COUNT(*) FROM faces_done WHERE model = ?1",
-            params![model, DETECT_VERSION],
-            |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)? as u64)),
-        )
+        .query_row("SELECT COALESCE(SUM(detect >= ?2), 0), COUNT(*) FROM faces_done WHERE model = ?1", params![model, DETECT_VERSION], |r| {
+            Ok((r.get::<_, i64>(0)? as u64, r.get::<_, i64>(1)? as u64))
+        })
         .unwrap_or((0, 0))
 }
 
