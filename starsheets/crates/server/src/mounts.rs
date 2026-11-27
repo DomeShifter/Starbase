@@ -24,7 +24,7 @@ use crate::spaces;
 use crate::store::{self, Store};
 
 /// This namespace stays private even if an assignment is removed or its mount disappears.
-const DIRECTORY: &str = "starbase-mounts";
+pub(crate) const DIRECTORY: &str = "starbase-mounts";
 
 pub fn private_path(path: &str) -> bool {
     path.split('/').nth(1) == Some(DIRECTORY)

@@ -1362,8 +1362,20 @@ impl Store {
                     return Err(Bad::new(409, "That isn't in the bin any more."));
                 }
                 let mut folder = parent_of(&original);
+                let private = crate::mounts::private_path(&original);
+                if private {
+                    let grant = self.spaces
+                        && space_of(&original) == space
+                        && crate::auth::users(self)
+                            .iter()
+                            .find(|u| u.username == space)
+                            .is_some_and(|u| crate::mounts::choices(self, u).values().any(|root| crate::mounts::within(&folder, root)));
+                    if !grant {
+                        return Err(Bad::new(409, "The original account mount is unavailable."));
+                    }
+                }
                 if !self.full(&folder).is_dir() || !self.no_links(&folder) || (self.spaces && space_of(&folder) != space) {
-                    if exact {
+                    if exact || private {
                         return Err(Bad::new(409, format!("The folder \u{201c}{}\u{201d} was in isn't there any more.", base_of(&original))));
                     }
                     folder = space.clone();
@@ -1673,6 +1685,23 @@ mod tests {
         assert_eq!((code, v["used"].as_u64(), v["bin"].as_u64(), v["files"].as_u64()), (200, Some(150), Some(7), Some(2)), "{v}");
         assert!(v["free"].as_u64().is_some());
         assert_eq!(call(&store, "GET", "usage").0, 400, "no space named");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn private_bin_restore_waits_for_the_original_mount() {
+        let dir = std::env::temp_dir().join(format!("starsheets-private-bin-{}", random_hex(6)));
+        let store = Store { root: dir.clone(), keep: 3, spaces: true };
+        let library = dir.join("ann").join(crate::mounts::DIRECTORY).join("Library");
+        fs::create_dir_all(&library).unwrap();
+        fs::write(library.join("Photo.jpg"), b"fixture").unwrap();
+        let file = format!("ann/{}/Library/Photo.jpg", crate::mounts::DIRECTORY);
+        let name = store.to_bin(&file, &mut store.synced_index().unwrap()).unwrap();
+        fs::remove_dir(&library).unwrap();
+
+        assert_eq!(call(&store, "POST", &format!("bin/restore?space=ann&name={name}")).0, 409);
+        assert!(store.bin("ann").join(&name).is_file());
+        assert!(!dir.join("ann/Photo.jpg").exists());
         let _ = fs::remove_dir_all(&dir);
     }
 

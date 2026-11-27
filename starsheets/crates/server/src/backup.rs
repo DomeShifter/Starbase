@@ -385,7 +385,8 @@ pub fn restore_into(label: &str, whose: &str, asker: Option<&str>, exists: impl 
 /// Copies a folder out of backup `id` into `dest` (a new folder), without touching anything else.
 /// `inside` is the folder within the files folder ("" = all of it, e.g. "james" = James's own).
 /// All of it leaves out the server's own folders at the top (`.starsheets`: accounts, versions);
-/// restic itself brings those back. Returns how many files came back.
+/// Private mounts are also left in the repository: restoring them under a new parent would
+/// lose their account access boundary. Restic can recover both directly. Returns the file count.
 pub fn restore(base: &Path, id: &str, inside: &str, dest: &Path) -> Result<u64, String> {
     let s = load(base);
     let to = s.get("to").and_then(Value::as_str).filter(|t| !t.is_empty()).ok_or("Backups aren't set up yet.")?;
@@ -408,11 +409,14 @@ pub fn restore(base: &Path, id: &str, inside: &str, dest: &Path) -> Result<u64, 
         repo.node_from_path(tree, Path::new(inside)).map_err(|e| unreadable(inside, e))?
     };
     let all = inside.is_empty();
-    let hidden = |p: &Path| p.components().next().is_some_and(|c| c.as_os_str().to_string_lossy().starts_with('.'));
-    let ls = repo
-        .ls(&node, &LsOptions::default())
-        .map_err(|e| unreadable("list", e))?
-        .filter(move |r| !all || r.as_ref().map_or(true, |(p, _)| !hidden(p)));
+    let visible = move |p: &Path| {
+        let mut parts = p.components();
+        if all && parts.next().is_some_and(|c| c.as_os_str().to_string_lossy().starts_with('.')) {
+            return false;
+        }
+        !parts.next().is_some_and(|c| c.as_os_str() == crate::mounts::DIRECTORY)
+    };
+    let ls = repo.ls(&node, &LsOptions::default()).map_err(|e| unreadable("list", e))?.filter(move |r| r.as_ref().map_or(true, |(p, _)| visible(p)));
     let dest_s = dest.to_string_lossy().into_owned();
     let target = LocalDestination::new(&dest_s, true, !node.is_dir()).map_err(|e| format!("Can't make the folder for the restored files: {e}"))?;
     let opts = RestoreOptions::default();
@@ -470,6 +474,9 @@ mod tests {
         let base = tmp("base");
         let root = base.join("files");
         std::fs::create_dir_all(root.join("james/Budget")).unwrap();
+        let private = root.join("james").join(crate::mounts::DIRECTORY).join("Photos");
+        std::fs::create_dir_all(&private).unwrap();
+        std::fs::write(private.join("original.jpg"), b"private fixture").unwrap();
         std::fs::create_dir_all(root.join(".starsheets")).unwrap();
         std::fs::write(root.join("james/Budget/2026.xlsx"), b"spreadsheet bytes").unwrap();
         std::fs::write(root.join("james/half.tmp"), b"half a save").unwrap();
@@ -488,7 +495,7 @@ mod tests {
         })
         .unwrap();
         let said = run_one(&base, &root).unwrap();
-        assert!(said.starts_with("Backed up 2 files"), "{said}");
+        assert!(said.starts_with("Backed up 3 files"), "{said}");
         // The file changes after the backup; the backup still has the old one.
         std::fs::write(root.join("james/Budget/2026.xlsx"), b"changed").unwrap();
         update(&base, |s| {
@@ -505,9 +512,11 @@ mod tests {
         assert_eq!(n, 1);
         assert_eq!(std::fs::read(dest.join("Budget/2026.xlsx")).unwrap(), b"spreadsheet bytes");
         assert!(!dest.join("half.tmp").exists(), "half-written saves are skipped");
+        assert!(!dest.join(crate::mounts::DIRECTORY).exists());
         let all = base.join("everything");
         restore(&base, id, "", &all).unwrap();
         assert!(all.join("james/Budget/2026.xlsx").is_file());
+        assert!(!all.join("james").join(crate::mounts::DIRECTORY).exists());
         assert!(!all.join(".starsheets").exists(), "accounts stay out of a folder people can open");
         assert!(!all.join(".starsheets-backup.json").exists(), "the key never goes into a backup");
         assert!(load(&base)["last"]["ok"].as_bool().unwrap());
