@@ -4,7 +4,7 @@
   photos_ignore_faces_input.py http://<host>:<port> --browser chromium|firefox --pics DIR_WITH_JPGS [--user NAME]
 Pictures as for photos_faces_polish.py (<person><n>.jpg, >= 2 people with >= 2 pictures each). Server runs with
 --features ml, the user owns it. Everything is clicked with the mouse (right-click menus, buttons); the API is used
-only to upload, turn faces on and read the result. Shots in ./shots (light theme)."""
+only to upload, turn faces on and read the result. Shots in ./shots."""
 import json, os, sys, time, glob, urllib.parse
 sys.path.insert(0, os.path.expanduser("~/.claude/tools")); sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import starbase_ui as ui
@@ -93,9 +93,6 @@ def main():
     info = pg.request.get(f"{S.base}/api/photos/faces/{pic}").json()
     rec("ignored face not in the photo's People", info.get("people") == [], (pic, info))
     n_in = len(info.get("people", [])) + info.get("unnamed", 0); rec("info counts exclude ignored", n_in == 0, info)
-    # Light theme: Photo Mode menu -> Light theme; the sections stay readable.
-    click("photos:view-menu"); click("Light theme"); time.sleep(2); S.shot("9-light-sections")
-    click("photos:view-menu"); click("Dark theme") if "Dark theme" in tg() else None
     print("RESULT", "PASS" if all(res) else "FAIL", f"{sum(res)}/{len(res)}"); sys.exit(0 if all(res) else 1)
 
 if __name__ == "__main__":

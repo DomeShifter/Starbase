@@ -3,3 +3,5 @@ dist/
 */upstream/
 *.cj
 __pycache__/
+shots/
+*.tar
