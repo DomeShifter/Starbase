@@ -751,12 +751,19 @@ impl Store {
         version_names(&self.versions().join(fid)).pop().unwrap_or_default()
     }
 
-    /// Writes a file atomically (temp file in .starsheets, then rename).
+    /// Stages the write beside its destination so replacing it also works on bind mounts.
     pub fn write_file(&self, path: &Path, data: &[u8]) -> io::Result<()> {
-        fs::create_dir_all(self.meta())?;
-        let tmp = self.meta().join(format!(".{}.tmp", random_hex(6)));
-        fs::write(&tmp, data)?;
-        fs::rename(&tmp, path)
+        use std::io::Write as _;
+
+        let tmp = path.with_file_name(format!(".{}.tmp", random_hex(6)));
+        let mut out = fs::File::options().write(true).create_new(true).open(&tmp)?;
+        let written = out.write_all(data);
+        drop(out);
+        let result = written.and_then(|()| fs::rename(&tmp, path));
+        if result.is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
+        result
     }
 
     /// Copies the file as it is now into its versions folder ([`thin`] says which are kept). The
@@ -1686,6 +1693,31 @@ mod tests {
         assert!(v["free"].as_u64().is_some());
         assert_eq!(call(&store, "GET", "usage").0, 400, "no space named");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn atomic_file_write_uses_the_destination_filesystem() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let root = std::env::temp_dir();
+        let other = Path::new("/dev/shm");
+        let base = match (fs::metadata(&root), fs::metadata(other)) {
+            (Ok(root_meta), Ok(other_meta)) if root_meta.dev() != other_meta.dev() => other,
+            _ => root.as_path(),
+        };
+        let dir = base.join(format!("starsheets-write-{}", random_hex(6)));
+        fs::create_dir(&dir).unwrap();
+        let store = Store { root, keep: 3, spaces: true };
+        let path = dir.join("Photo.jpg");
+        fs::write(&path, b"original").unwrap();
+        store.write_file(&path, b"replacement").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"replacement");
+
+        let occupied = dir.join("folder");
+        fs::create_dir(&occupied).unwrap();
+        assert!(store.write_file(&occupied, b"fails to replace a directory").is_err());
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 2);
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
