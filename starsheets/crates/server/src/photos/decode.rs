@@ -164,6 +164,9 @@ pub struct Job {
     pub screen: Option<ScreenForm>,
 }
 
+/// A screen copy: (bytes, "ppm"/"png"/"jpg", the decoded source's width × height).
+pub type Screen = (Vec<u8>, &'static str, (u32, u32));
+
 /// How the child hands over the screen copy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ScreenForm {
@@ -289,7 +292,7 @@ pub fn make_guarded(bytes: &[u8], limits: &Limits, edits: Option<&Edits>) -> Res
 /// The screen copy of `bytes`: [`SCREEN`] px on the longest side at most (never enlarged),
 /// upright, `edits` applied, as `form` says. Returns (bytes, "ppm"/"png"/"jpg") and the size of
 /// the decoded source (tests: a big JPEG is decoded scaled down).
-pub fn make_screen(bytes: &[u8], limits: &Limits, edits: Option<&Edits>, form: ScreenForm) -> Result<(Vec<u8>, &'static str, (u32, u32)), String> {
+pub fn make_screen(bytes: &[u8], limits: &Limits, edits: Option<&Edits>, form: ScreenForm) -> Result<Screen, String> {
     let Source { img, kind, alpha, o, .. } = source(bytes, limits, edits, SCREEN)?;
     let decoded = (img.width(), img.height());
     let img = fit(img, SCREEN, kind)?;

@@ -516,7 +516,7 @@ async fn thumb(
         }
         Err((code, body)) => return send_json(&body, code),
     };
-    let etag = format!("\"{vtag}-{size}-{ext}\"");
+    let etag = if size == decode::SCREEN { format!("\"{vtag}-{size}-{ext}\"") } else { format!("\"{vtag}-{size}\"") };
     let cache = if v == Some(vtag.as_str()) { "private, max-age=31536000, immutable" } else { "private, no-cache" };
     let b = Response::builder()
         .header(header::ETAG, &etag)
