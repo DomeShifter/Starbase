@@ -17,12 +17,16 @@ def run(browser, testn):
         s.click_text("item:Photo 1.jpg")
         s.click_text("drive:locked")
         assert s.wait_for(lambda: s.snapshot("home.photos.albums.tab") == "locked", secs=12)
+        assert s.wait_for(lambda: s.snapshot("home.photos.locked.checked"), secs=12)
+        if s.snapshot("home.photos.locked.unlocked"):
+            s.hook("home:photos:locked:lock")
         s.click_text("photos:locked:password")
         subprocess.run(["xdotool", "type", USERS["ada"]], check=True)
         s.key("Return")
         assert s.wait_for(lambda: s.snapshot("home.photos.locked.unlocked"), secs=12)
         assert s.snapshot("home.photos.albums.tab") == "locked"
         assert s.snapshot("home.preview") is None and s.snapshot("home.photos.viewer") is None
+        s.hook("home:photos:locked:lock")
         print(f"PASS {browser}: Enter unlocked the folder without opening the Drive selection", flush=True)
 
 
