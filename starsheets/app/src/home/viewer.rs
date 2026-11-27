@@ -16,6 +16,7 @@ use egui::{Color32, Key, Modifiers, Order, Rect, RichText, Sense, Vec2, pos2, ve
 
 use super::photos::{LARGE, ORIGINAL, PhotoMode, SMALL, date_label};
 use crate::house;
+use serde_json::{Value as Json, json};
 use crate::store::Backend;
 
 /// Slideshow intervals offered (seconds).
@@ -191,6 +192,8 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
     let mut menu_at: Option<Rect> = None;
     // An album clicked in the Info panel: opened once the viewer is closed.
     let mut goto: Option<super::photos::albums::Card> = None;
+    // A person clicked in the Info panel (Some(None): "unnamed faces", the People page).
+    let mut person: Option<Option<super::photos::albums::Card>> = None;
     // What the person asked for on this picture (keys or buttons): L add to album, Shift-L out of
     // the open album, F favourite, Delete move to bin. Run after drawing, on the picture shown.
     let mut acts: Vec<super::photos::Act> = Vec::new();
@@ -522,8 +525,13 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
             && let Some(p) = pm.pics.get(v.index())
         {
             let in_locked = pm.locked_tab();
-            let (g, lock, shut) = info_panel(ui, rect, p, &pm.alb.albums_of(&p.id), in_locked);
+            let p = p.clone();
+            let people = info_people(pm, ctx, store, &p.id);
+            let (g, lock, shut, who) = info_panel(ui, rect, &p, &pm.alb.albums_of(&p.id), in_locked, &people);
             goto = g;
+            if who.is_some() {
+                person = who;
+            }
             if shut {
                 v.info = false;
             }
@@ -566,6 +574,15 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
         }
     } else {
         super::video::hide();
+    }
+    if let Some(c) = person {
+        pm.viewer = None;
+        pm.info_faces = None;
+        pm.go(super::photos::albums::Tab::People);
+        if let Some(c) = c {
+            pm.people_open(ctx, store, c);
+        }
+        return false;
     }
     if let Some(c) = goto {
         pm.viewer = None;
@@ -626,6 +643,58 @@ fn human(b: u64) -> String {
     }
 }
 
+/// The Info panel's "People" section, asked of the server once per picture shown.
+enum InfoPeople {
+    Asking,
+    Off,
+    /// Named people (card for their page, their face picture if here yet) and how many unnamed.
+    Found(Vec<(super::photos::albums::Card, Option<egui::TextureHandle>)>, u64),
+}
+
+/// The faces in picture `id` for the Info panel: asks the server (once), then the face pictures.
+fn info_people(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend, id: &str) -> InfoPeople {
+    pm.ask_faces_in(ctx, store, id);
+    let v = pm.info_faces.as_ref().map_or(Json::Null, |f| f.1.clone());
+    if v.is_null() {
+        return InfoPeople::Asking;
+    }
+    let people: Vec<(super::photos::albums::Card, Option<egui::TextureHandle>)> = v["people"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|j| {
+            let key = format!("face/{}/{}", j["face"], j["pic"].as_str().unwrap_or(""));
+            pm.want_id(ctx, store, &key, j["v"].as_str(), SMALL);
+            let t = pm.tex.get(&(key, SMALL), pm.frame);
+            let c = super::photos::albums::Card { id: j["id"].as_str().unwrap_or("").to_string(), name: j["name"].as_str().unwrap_or("").to_string(), ..Default::default() };
+            (c, t)
+        })
+        .collect();
+    let unnamed = v["unnamed"].as_u64().unwrap_or(0);
+    if v["on"] == json!(false) && people.is_empty() && unnamed == 0 {
+        return InfoPeople::Off;
+    }
+    InfoPeople::Found(people, unnamed)
+}
+
+/// The quiet line under "People" when there is nothing to link to.
+fn people_note(p: &InfoPeople) -> Option<&'static str> {
+    match p {
+        InfoPeople::Asking => Some("Looking for faces…"),
+        InfoPeople::Off => Some("Face recognition is off."),
+        InfoPeople::Found(v, 0) if v.is_empty() => Some("No faces found"),
+        InfoPeople::Found(..) => None,
+    }
+}
+
+/// "1 unnamed face", "3 unnamed faces".
+fn unnamed_label(n: u64) -> String {
+    format!("{n} unnamed face{}", if n == 1 { "" } else { "s" })
+}
+
+/// The faces' size in the Info panel's People section.
+const FACE_D: f32 = 28.0;
+
 /// How wide the labels' column is in the Info panel.
 const INFO_LABEL_W: f32 = 88.0;
 
@@ -639,7 +708,8 @@ fn info_panel(
     p: &super::photos::Pic,
     albums: &[&super::photos::albums::Card],
     in_locked: bool,
-) -> (Option<super::photos::albums::Card>, bool, bool) {
+    people: &InfoPeople,
+) -> (Option<super::photos::albums::Card>, bool, bool, Option<Option<super::photos::albums::Card>>) {
     let ctx = ui.ctx().clone();
     let panel = Rect::from_min_max(pos2(rect.right() - INFO_W, rect.top() + house::VIEW_BAR_HEIGHT), pos2(rect.right(), rect.bottom()));
     ui.painter().rect_filled(panel, 0, house::VIEW_BAR);
@@ -661,6 +731,7 @@ fn info_panel(
         });
     });
     let mut go = None;
+    let mut who = None;
     let mut lock = false;
     egui::ScrollArea::vertical().auto_shrink([false, true]).show(&mut c, |c| {
         for (heading, rows) in info_groups(p, albums) {
@@ -706,6 +777,48 @@ fn info_panel(
                 });
             }
         }
+        // PEOPLE: each named person (round face + name, opens their page), then the unnamed faces.
+        c.add_space(house::L);
+        let top = c.cursor().top();
+        c.label(RichText::new("PEOPLE").size(house::CAPS).strong().color(house::VIEW_BAR_DIM));
+        c.add_space(house::M);
+        c.spacing_mut().item_spacing.y = house::XS;
+        if let Some(note) = people_note(people) {
+            c.label(RichText::new(note).size(house::NOTE).color(house::VIEW_BAR_DIM));
+        }
+        if let InfoPeople::Found(named, unnamed) = people {
+            for (n, (card, tex)) in named.iter().enumerate() {
+                let r = c.horizontal(|row| {
+                    row.spacing_mut().item_spacing.x = house::S;
+                    let (face, _) = row.allocate_exact_size(vec2(FACE_D, FACE_D), Sense::hover());
+                    match tex {
+                        Some(t) => {
+                            egui::Image::new((t.id(), face.size())).corner_radius(FACE_D / 2.0).paint_at(row, face);
+                        }
+                        None => row.painter().circle_filled(face.center(), FACE_D / 2.0, house::VIEW_BAR_FIELD),
+                    }
+                    row.label(RichText::new(&card.name).size(house::BODY).color(house::VIEW_BAR_LINK));
+                });
+                let r = c.interact(r.response.rect, egui::Id::new(("info_person", n)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
+                house::target(&ctx, &format!("photos:info-person:{n}"), r.rect);
+                if r.hovered() {
+                    c.painter().hline(r.rect.x_range(), r.rect.bottom(), egui::Stroke::new(1.0, house::VIEW_BAR_LINK));
+                }
+                if r.clicked() {
+                    who = Some(Some(card.clone()));
+                }
+            }
+            if *unnamed > 0 {
+                let r = c
+                    .add(egui::Label::new(RichText::new(unnamed_label(*unnamed)).size(house::BODY).color(house::VIEW_BAR_LINK)).sense(Sense::click()))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                house::target(&ctx, "photos:info-people-unnamed", r.rect);
+                if r.clicked() {
+                    who = Some(None);
+                }
+            }
+        }
+        house::target(&ctx, "photos:info-people", Rect::from_min_max(pos2(c.max_rect().left(), top), pos2(c.max_rect().right(), c.cursor().top())));
         c.add_space(house::L);
         c.painter().hline(c.max_rect().x_range(), c.cursor().top(), egui::Stroke::new(1.0, house::VIEW_BAR_FIELD));
         c.add_space(house::L);
@@ -714,7 +827,7 @@ fn info_panel(
         house::target(&ctx, "viewer:info:lock", r.rect);
         lock = r.clicked();
     });
-    (go, lock, close)
+    (go, lock, close, who)
 }
 
 /// A white icon button on the dark bar (its hook target is `viewer:<icon>`).
@@ -776,6 +889,16 @@ mod tests {
         // The flat list (the test hook's info_rows) is the groups in order.
         let keys = info_lines(&p, &[]).iter().map(|(k, _)| *k).collect::<Vec<_>>();
         assert_eq!(keys, ["File name", "Size", "Date taken", "Place", "Camera"]);
+    }
+
+    #[test]
+    fn info_people_says_what_it_found() {
+        assert_eq!(people_note(&InfoPeople::Asking), Some("Looking for faces…"));
+        assert_eq!(people_note(&InfoPeople::Off), Some("Face recognition is off."));
+        assert_eq!(people_note(&InfoPeople::Found(Vec::new(), 0)), Some("No faces found"));
+        assert_eq!(people_note(&InfoPeople::Found(Vec::new(), 2)), None);
+        assert_eq!(unnamed_label(1), "1 unnamed face");
+        assert_eq!(unnamed_label(3), "3 unnamed faces");
     }
 
     #[test]

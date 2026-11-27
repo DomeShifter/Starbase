@@ -12,6 +12,9 @@
 //! - `POST /api/photos/people/ID/name` `{"name"}`; `/merge` `{"into": ID}`; `/remove` `{"face"}`.
 //! - `GET|POST /api/photos/faces` `{"on": bool}`: face recognition on or off (the server's owner;
 //!   `STARBASE_PHOTOS_FACES` overrides).
+//! - `GET /api/photos/faces/FILE`: the faces in picture FILE (the viewer's Info panel), only when
+//!   the caller may see FILE (404 otherwise): `{"on", "people": [{"id", "name", "face", "pic",
+//!   "v", "box"}], "unnamed": n}`: named people (by name, one face each), and how many other faces.
 //! - `POST /api/photos/faces/models` (owner, `ml` builds): download the missing model files from
 //!   their pinned URLs (SHA-256 checked) into the models folder; progress in `"download"`
 //!   `{"busy", "file", "got", "total", "error"}`, `"can_download"` says whether the button applies.
@@ -68,6 +71,10 @@ pub async fn route(app: &Shared, m: &str, p: &[String], me: Option<auth::User>, 
         ("faces", "GET", 2) => blocking(app, move |a| Ok(state(a, owner))).await,
         ("faces", "POST", 2) => blocking(app, move |a| toggle(a, owner, &b)).await,
         ("faces", "POST", 3) if p[2] == "models" => blocking(app, move |a| fetch(a, owner)).await,
+        ("faces", "GET", 3) => {
+            let id = p[2].clone();
+            blocking(app, move |a| in_photo(a, me, &id)).await
+        }
         ("people", "GET", 2) => blocking(app, move |a| list(a, me, owner)).await,
         ("people", "GET", 3) => {
             let id = p[2].clone();
@@ -184,6 +191,39 @@ fn list(a: &App, me: Option<auth::User>, owner: bool) -> Answer {
     v["people"] = Value::Array(named);
     v["groups"] = Value::Array(unnamed);
     Ok(v)
+}
+
+/// The faces in picture `id` (the viewer's Info panel): named people once each (by name), and
+/// how many faces are unnamed. 404 when the caller may not see the picture.
+fn in_photo(a: &App, me: Option<auth::User>, id: &str) -> Answer {
+    let s = svc(a)?;
+    let acc = sharing::Access::new(&a.store, a.auth, me.as_ref());
+    let Some(v) = seen(a, &acc, id) else { return Err(error(404, "No such picture.")) };
+    let model = s.face_model().to_string();
+    let (paths, all, names) = s
+        .with_db(|ix| Ok::<_, rusqlite::Error>((faces::thumb_paths(ix)?, faces::faces(ix, &model)?, faces::people(ix, user(&me))?)))
+        .map_err(|_| error(500, "couldn't read the faces"))?;
+    let thumbs: BTreeSet<String> = paths.into_iter().filter(|(_, p)| *p == v.1).map(|(t, _)| t).collect();
+    let vis: Vis = thumbs.iter().map(|t| (t.clone(), vec![v.clone()])).collect();
+    let mut people: Vec<Value> = Vec::new();
+    let mut unnamed = 0;
+    let mut done = BTreeSet::new();
+    for f in all.iter().filter(|f| thumbs.contains(&f.thumb)) {
+        let named = f.person.and_then(|p| names.get(&p).map(|n| (p, n)));
+        match (named, face_json(f, &vis)) {
+            (Some((p, n)), Some(mut j)) => {
+                if done.insert(p) {
+                    j["pic"] = j["id"].take();
+                    j["id"] = Value::String(Who::Person(p).key());
+                    j["name"] = Value::String(n.clone());
+                    people.push(j);
+                }
+            }
+            _ => unnamed += 1,
+        }
+    }
+    people.sort_by_key(|c| c["name"].as_str().unwrap_or("").to_lowercase());
+    Ok(json!({"on": s.faces_on(), "people": people, "unnamed": unnamed}))
 }
 
 /// The faces of `who` I may see (and all of them), or 404.

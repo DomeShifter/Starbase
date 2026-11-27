@@ -397,7 +397,7 @@ impl PhotoMode {
     }
 
     /// Open a person's page (from the list or the strip).
-    fn people_open(&mut self, ctx: &egui::Context, store: &Backend, c: Card) {
+    pub(in crate::home) fn people_open(&mut self, ctx: &egui::Context, store: &Backend, c: Card) {
         self.pics.clear();
         self.viewer = None;
         self.alb.ppl.faces.clear();
