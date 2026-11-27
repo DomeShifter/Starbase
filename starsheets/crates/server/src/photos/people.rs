@@ -14,6 +14,16 @@
 //! - `POST /api/photos/people/ID/name` `{"name"}`; `/merge` `{"into": ID}`; `/remove` `{"face"}`
 //!   or `{"faces": [..]}` (out of a person: back to the unnamed groups, never that person again);
 //!   `/same` `{"face", "yes": bool}` (the answer to a question about person ID).
+//! - `POST /api/photos/people/ID/ignore` or `/notface` `{"faces": [..]}` (none: the whole
+//!   group): out of People into the "Ignored" or "Not faces" lists (`GET /api/photos/people`
+//!   `"ignored"`, `"notfaces"`: faces as in a group, newest first, at most [`MAX_MARKED`]; the
+//!   counts in `"ignored_count"`, `"notfaces_count"`). Nothing is deleted.
+//! - `POST /api/photos/people/faces/ignore` or `/notface` `{"faces": [..]}`: the same by face
+//!   ids, wherever those faces are now (a group page uses it: its group may be gone already).
+//! - `POST /api/photos/people/marked/ACT` `{"faces": [..]}` on those lists: `unignore` (back to
+//!   the unnamed groups), `isface` (likewise, for "not a face"), `regroup` (ignored faces lose
+//!   their old group and are grouped again), `assign` `{"faces", "into": ID}` (to a person or a
+//!   group, which becomes a person).
 //! - `GET|POST /api/photos/faces` `{"on": bool}`: face recognition on or off (the server's owner;
 //!   `STARBASE_PHOTOS_FACES` overrides).
 //! - `GET /api/photos/faces/FILE`: the faces in picture FILE (the viewer's Info panel), only when
@@ -47,6 +57,8 @@ const MAX_GROUPS: usize = 300;
 const MAX_QUESTIONS: usize = 20;
 /// The most faces taken out in one go.
 const MAX_REMOVE: usize = 500;
+/// The most faces listed in each of "Ignored" and "Not faces".
+const MAX_MARKED: usize = 500;
 
 /// The owner's "Download face models": fetches the missing pinned model files in the background.
 fn fetch(a: &App, owner: bool) -> Answer {
@@ -87,6 +99,14 @@ pub async fn route(app: &Shared, m: &str, p: &[String], me: Option<auth::User>, 
         ("people", "GET", 3) => {
             let id = p[2].clone();
             blocking(app, move |a| open(a, me, &id)).await
+        }
+        ("people", "POST", 4) if p[2] == "faces" => {
+            let act = p[3].clone();
+            blocking(app, move |a| mark_faces(a, me, &act, &b)).await
+        }
+        ("people", "POST", 4) if p[2] == "marked" => {
+            let act = p[3].clone();
+            blocking(app, move |a| marked(a, me, &act, &b)).await
         }
         ("people", "POST", 4) => {
             let (id, act) = (p[2].clone(), p[3].clone());
@@ -163,7 +183,7 @@ fn visible(a: &App, s: &super::Photos, me: &Option<auth::User>) -> Vis {
 
 fn face_json(f: &Face, vis: &Vis) -> Option<Value> {
     let (id, _, _) = vis.get(&f.thumb)?.first()?;
-    Some(json!({"face": f.id, "id": id, "v": tag(&f.thumb), "box": f.bx, "suggest": f.suggest.map(|p| Who::Person(p).key())}))
+    Some(json!({"face": f.id, "id": id, "v": tag(&f.thumb), "box": f.bx, "suggest": f.suggest.map(|p| Who::Person(p).key()), "grp": f.grp}))
 }
 
 fn list(a: &App, me: Option<auth::User>, owner: bool) -> Answer {
@@ -206,7 +226,18 @@ fn list(a: &App, me: Option<auth::User>, owner: bool) -> Answer {
     named.sort_by_key(|c| c["name"].as_str().unwrap_or("").to_lowercase());
     unnamed.sort_by_key(|c| std::cmp::Reverse(c["count"].as_u64().unwrap_or(0)));
     unnamed.truncate(MAX_GROUPS);
+    let mut v_marks = Vec::new();
+    let marks = s.with_db(|ix| faces::marked(ix, &model)).map_err(|_| error(500, "couldn't read the faces"))?;
+    for (key, st) in [("ignored", faces::IGNORED), ("notfaces", faces::NOT_FACE)] {
+        let list: Vec<Value> = marks.iter().filter(|f| f.state == st).filter_map(|f| face_json(f, &vis)).collect();
+        v_marks.push((key, list));
+    }
     let mut v = state(a, owner);
+    for (key, mut list) in v_marks {
+        v[format!("{key}_count")] = json!(list.len());
+        list.truncate(MAX_MARKED);
+        v[key] = Value::Array(list);
+    }
     v["people"] = Value::Array(named);
     v["groups"] = Value::Array(unnamed);
     v["questions"] = Value::Array(questions);
@@ -288,6 +319,87 @@ fn open(a: &App, me: Option<auth::User>, id: &str) -> Answer {
     Ok(json!({"id": who.key(), "name": name, "faces": fj, "photos": photos, "waiting": 0}))
 }
 
+/// Face ids in `b` (`"faces"` or `"face"`), at most [`MAX_REMOVE`].
+fn face_ids(b: &Value) -> Vec<i64> {
+    match b["faces"].as_array() {
+        Some(a) => a.iter().filter_map(Value::as_i64).take(MAX_REMOVE).collect(),
+        None => b["face"].as_i64().into_iter().collect(),
+    }
+}
+
+/// `POST people/faces/ignore|notface {"faces"}`: marks faces by id, wherever they are now (a
+/// group page's faces after one of them left: its group may already be gone). Each face must be
+/// shown in People and in a picture I may see.
+fn mark_faces(a: &App, me: Option<auth::User>, act: &str, b: &Value) -> Answer {
+    let s = svc(a)?;
+    let st = match act {
+        "ignore" => faces::IGNORED,
+        "notface" => faces::NOT_FACE,
+        _ => return Err(error(404, "not found")),
+    };
+    let ids = face_ids(b);
+    if ids.is_empty() {
+        return Err(error(400, "Which face?"));
+    }
+    let vis = visible(a, &s, &me);
+    let model = s.face_model().to_string();
+    let shown = s.with_db(|ix| faces::faces(ix, &model)).map_err(|_| error(500, "couldn't read the faces"))?;
+    if !ids.iter().all(|id| shown.iter().any(|f| f.id == *id && vis.contains_key(&f.thumb))) {
+        return Err(error(404, "That face isn't in People."));
+    }
+    let n = s.with_db(|ix| faces::mark(ix, &ids, st)).map_err(|_| error(500, "couldn't save"))?;
+    s.ml.dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+    s.ml.poke();
+    Ok(json!({"changed": n}))
+}
+
+/// The "Ignored" and "Not faces" lists: undo, group again, or give to a person. Every face must
+/// be on the list and in a picture I may see.
+fn marked(a: &App, me: Option<auth::User>, act: &str, b: &Value) -> Answer {
+    let s = svc(a)?;
+    let want = match act {
+        "unignore" | "regroup" => faces::IGNORED,
+        "isface" => faces::NOT_FACE,
+        "assign" => 0,
+        _ => return Err(error(404, "not found")),
+    };
+    let ids = face_ids(b);
+    if ids.is_empty() {
+        return Err(error(400, "Which face?"));
+    }
+    let vis = visible(a, &s, &me);
+    let model = s.face_model().to_string();
+    let marks = s.with_db(|ix| faces::marked(ix, &model)).map_err(|_| error(500, "couldn't read the faces"))?;
+    let ok = |id: &i64| marks.iter().any(|f| f.id == *id && (want == 0 || f.state == want) && vis.contains_key(&f.thumb));
+    if !ids.iter().all(ok) {
+        return Err(error(404, "That face isn't on this list."));
+    }
+    let db_err = |_| error(500, "couldn't save");
+    let out = match act {
+        "assign" => {
+            let into = who_of(b["into"].as_str().unwrap_or(""))?;
+            faces_of(a, &s, &me, into)?;
+            let p = s
+                .with_db(|ix| {
+                    let p = match into {
+                        Who::Person(p) => p,
+                        Who::Group(_) => faces::name(ix, into, "", "")?,
+                    };
+                    faces::assign(ix, &ids, p).map(|_| p)
+                })
+                .map_err(db_err)?;
+            json!({"id": Who::Person(p).key()})
+        }
+        _ => {
+            let n = s.with_db(|ix| faces::unmark(ix, &ids, want, act == "regroup")).map_err(db_err)?;
+            json!({"changed": n})
+        }
+    };
+    s.ml.dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+    s.ml.poke();
+    Ok(out)
+}
+
 fn change(a: &App, me: Option<auth::User>, id: &str, act: &str, b: &Value) -> Answer {
     let s = svc(a)?;
     let who = who_of(id)?;
@@ -311,11 +423,21 @@ fn change(a: &App, me: Option<auth::User>, id: &str, act: &str, b: &Value) -> An
             let p = s.with_db(|ix| faces::merge(ix, who, into)).map_err(db_err)?;
             json!({"id": Who::Person(p).key()})
         }
+        "ignore" | "notface" => {
+            // No faces named: the whole group (only the faces I may see).
+            let mut list = face_ids(b);
+            if list.is_empty() {
+                list = mine.iter().map(|f| f.id).take(MAX_REMOVE).collect();
+            }
+            if !list.iter().all(|id| mine.iter().any(|f| f.id == *id)) {
+                return Err(error(404, "That face isn't in this group."));
+            }
+            let st = if act == "ignore" { faces::IGNORED } else { faces::NOT_FACE };
+            let n = s.with_db(|ix| faces::mark(ix, &list, st)).map_err(db_err)?;
+            json!({"id": who.key(), "changed": n})
+        }
         "remove" => {
-            let list: Vec<i64> = match b["faces"].as_array() {
-                Some(a) => a.iter().filter_map(Value::as_i64).take(MAX_REMOVE).collect(),
-                None => b["face"].as_i64().into_iter().collect(),
-            };
+            let list = face_ids(b);
             if list.is_empty() {
                 return Err(error(400, "Which face?"));
             }

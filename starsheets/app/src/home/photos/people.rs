@@ -1,7 +1,9 @@
 //! People beside the photo grid: faces grouped by the server (crates/server/src/photos/faces.rs)
 //! as round crops; name a person, merge two, take wrong faces out (select, or right-click "Not
 //! X", always confirmed), open a person's pictures. "Same person?" questions first (borderline
-//! matches the server didn't join on its own), then named people, unnamed groups below.
+//! matches the server didn't join on its own), then named people, unnamed groups below, and at
+//! the bottom "Ignored" (strangers) and "Not faces" (dolls): right-click a group or a face for
+//! "Ignore" / "Not a face"; every one can be undone, grouped again or given to a person there.
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -21,6 +23,8 @@ pub(in crate::home) struct FaceCard {
     pub id: String,
     pub v: String,
     pub bx: [f32; 4],
+    /// The group it is (or, ignored / not a face, was) in.
+    pub grp: Option<i64>,
 }
 
 /// "Same person?": face `a` (alone or in a group) looks somewhat like person `person` (face `b`).
@@ -36,7 +40,13 @@ pub(in crate::home) struct Question {
 fn face_card(f: &Json) -> Option<FaceCard> {
     let b = f["box"].as_array()?;
     let n = |i: usize| b.get(i).and_then(Json::as_f64).unwrap_or(0.0) as f32;
-    Some(FaceCard { face: f["face"].as_i64()?, id: f["id"].as_str()?.to_string(), v: f["v"].as_str()?.to_string(), bx: [n(0), n(1), n(2), n(3)] })
+    Some(FaceCard {
+        face: f["face"].as_i64()?,
+        id: f["id"].as_str()?.to_string(),
+        v: f["v"].as_str()?.to_string(),
+        bx: [n(0), n(1), n(2), n(3)],
+        grp: f["grp"].as_i64(),
+    })
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -70,6 +80,13 @@ pub(in crate::home) struct People {
     /// The faces ticked on a person's page, and the ones the "Remove …?" question is about.
     pub selected: BTreeSet<i64>,
     confirm: Option<Vec<i64>>,
+    /// "Ignored" and "Not faces" at the bottom of the list (at most the server's 500 each).
+    pub ignored: Vec<FaceCard>,
+    pub notfaces: Vec<FaceCard>,
+    /// The ignored or "not a face" tile (its faces) whose "Assign to" picker is open, and the
+    /// tile opened to show its faces.
+    assign: Option<Vec<i64>>,
+    marked_open: Option<Vec<i64>>,
 }
 
 impl People {
@@ -90,6 +107,18 @@ impl People {
                 })
             })
             .collect();
+        let marks = |k: &str| v[k].as_array().into_iter().flatten().filter_map(face_card).collect::<Vec<_>>();
+        self.ignored = marks("ignored");
+        self.notfaces = marks("notfaces");
+        // A tile changed (undone, assigned, grouped again): its picker and its open faces close.
+        let tiles: Vec<Vec<i64>> =
+            mark_groups(&self.ignored).into_iter().chain(mark_groups(&self.notfaces)).map(|g| g.iter().map(|f| f.face).collect()).collect();
+        if self.assign.as_ref().is_some_and(|a| !tiles.contains(a)) {
+            self.assign = None;
+        }
+        if self.marked_open.as_ref().is_some_and(|a| !tiles.contains(a)) {
+            self.marked_open = None;
+        }
         self.state = v.clone();
     }
 
@@ -106,7 +135,7 @@ impl People {
                 .map(|c| json!({"id": c.id, "name": c.name, "count": c.count, "face": c.face, "cover": c.cover.as_ref().map(|x| &x.0)}))
                 .collect::<Vec<_>>()
         };
-        json!({"named": c(&self.named), "groups": c(&self.groups), "on": self.state["on"], "faces": self.faces.len(), "can_download": self.state["can_download"], "download": self.state["download"], "missing": self.state["missing"].as_array().map_or(0, Vec::len), "progress": self.state["progress"], "editing": self.editing, "merging": self.ask == Ask::Merge, "scan": self.scan.test_state(), "questions": self.asking().len(), "skipped": self.skipped.len(), "selected": self.selected.iter().collect::<Vec<_>>(), "confirm": self.confirm.as_ref().map(Vec::len)})
+        json!({"named": c(&self.named), "groups": c(&self.groups), "on": self.state["on"], "faces": self.faces.len(), "can_download": self.state["can_download"], "download": self.state["download"], "missing": self.state["missing"].as_array().map_or(0, Vec::len), "progress": self.state["progress"], "editing": self.editing, "merging": self.ask == Ask::Merge, "scan": self.scan.test_state(), "questions": self.asking().len(), "skipped": self.skipped.len(), "selected": self.selected.iter().collect::<Vec<_>>(), "confirm": self.confirm.as_ref().map(Vec::len), "ignored": self.ignored.iter().map(|f| f.face).collect::<Vec<_>>(), "notfaces": self.notfaces.iter().map(|f| f.face).collect::<Vec<_>>(), "ignored_count": self.state["ignored_count"], "notfaces_count": self.state["notfaces_count"], "assigning": self.assign, "marked_open": self.marked_open, "ignored_tiles": mark_groups(&self.ignored).iter().map(Vec::len).collect::<Vec<_>>(), "notface_tiles": mark_groups(&self.notfaces).iter().map(Vec::len).collect::<Vec<_>>()})
     }
 
     /// The questions not skipped, at most [`QUESTIONS`].
@@ -265,6 +294,15 @@ impl PhotoMode {
         self.card_name(ui, ctx, store, c, n, Rect::from_min_size(rect.min + vec2(house::M, top), vec2(CARD_FACE, NAME_H)));
         let count = Rect::from_min_size(rect.min + vec2(house::M, top + NAME_H + house::XS), vec2(CARD_FACE, 14.0));
         one_line(&p, count.center_top(), &pictures(c.count), CARD_FACE, house::NOTE, theme::text_dim());
+        let mut mark = None;
+        resp.context_menu(|ui| {
+            house::menu(ui, 220.0);
+            mark = mark_rows(ui, ctx, "Ignore group");
+            house::target(ctx, "people:card-menu", ui.min_rect());
+        });
+        if let Some(act) = mark {
+            self.people_post(ctx, store, &format!("api/photos/people/{}/{act}", c.id), json!({}));
+        }
         resp.clicked()
     }
 
@@ -527,7 +565,8 @@ impl PhotoMode {
             return;
         }
         let (named, groups) = (self.alb.ppl.named.clone(), self.alb.ppl.groups.clone());
-        if named.is_empty() && groups.is_empty() {
+        let marked = !self.alb.ppl.ignored.is_empty() || !self.alb.ppl.notfaces.is_empty();
+        if named.is_empty() && groups.is_empty() && !marked {
             let scanning = st["progress"]["done"].as_u64() < st["progress"]["all"].as_u64();
             let (title, hint) = if scanning {
                 ("Still looking", "People appear here as they are found.")
@@ -561,9 +600,137 @@ impl PhotoMode {
                     }
                 });
             }
+            self.marked_ui(ui, &ctx, store);
         });
         if let Some(c) = open {
             self.people_open(&ctx, store, c);
+        }
+    }
+
+    /// "Ignored" and "Not faces" at the bottom of the list: one tile per group that was marked
+    /// (its cover face and how many faces), a loose face on its own tile. A tile's buttons act on
+    /// the whole group: the way back ("Stop ignoring" / "It is a face"), "Group again" (ignored
+    /// only) and "Assign to…" a person. Clicking the face opens its faces, each undone alone.
+    fn marked_ui(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend) {
+        let st = self.alb.ppl.state.clone();
+        let lists = [
+            (true, "Ignored", "people:ignored", "ignored_count", mark_groups(&self.alb.ppl.ignored)),
+            (false, "Not faces", "people:notfaces", "notfaces_count", mark_groups(&self.alb.ppl.notfaces)),
+        ];
+        let mut post: Option<(&str, Json)> = None;
+        for (ignored, title, target, key, tiles) in lists {
+            if tiles.is_empty() {
+                continue;
+            }
+            let all: usize = tiles.iter().map(Vec::len).sum();
+            ui.add_space(house::XL);
+            let n_faces = st[key].as_u64().unwrap_or(all as u64);
+            let h = ui.label(RichText::new(format!("{title} ({n_faces})")).size(house::BODY).strong().color(theme::text()));
+            house::target(ctx, target, h.rect);
+            let hint = if ignored {
+                "Strangers: not shown in People, never grouped or asked about. Click a face to see its group."
+            } else {
+                "Not faces (dolls, posters): never found again in the same picture. Click a face to see its group."
+            };
+            ui.label(RichText::new(hint).size(house::NOTE).color(theme::text_dim()));
+            ui.add_space(house::M);
+            let (tile, back, back_act, assign) = if ignored {
+                ("people:ignored-tile", "people:unignore", "unignore", "people:assign")
+            } else {
+                ("people:notface-tile", "people:isface", "isface", "people:nf-assign")
+            };
+            let back_label = if ignored { "Stop ignoring" } else { "It is a face" };
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(house::L, house::L);
+                for (n, g) in tiles.iter().enumerate() {
+                    let ids: Vec<i64> = g.iter().map(|f| f.face).collect();
+                    let f = &g[0];
+                    let rows = if ignored { 3.0 } else { 2.0 };
+                    // Fixed-size tiles, top-down and centred: every tile's buttons line up.
+                    let size = vec2(MARK_W, MARK_FACE + NAME_H + rows * MARK_BTN + (rows + 1.0) * house::XS);
+                    ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Center), |ui| {
+                        ui.set_min_size(size);
+                        ui.spacing_mut().item_spacing.y = house::XS;
+                        let (rect, resp) = ui.allocate_exact_size(vec2(MARK_FACE, MARK_FACE), Sense::click());
+                        house::target(ctx, &format!("{tile}:{n}"), rect);
+                        let p = ui.painter_at(rect);
+                        self.face_ui(ctx, store, &p, (&f.id, &f.v, f.bx), Some(f.face), rect.center(), MARK_FACE / 2.0);
+                        let open = self.alb.ppl.marked_open.as_ref() == Some(&ids);
+                        if resp.hovered() || open {
+                            p.circle_stroke(rect.center(), MARK_FACE / 2.0 - 1.0, egui::Stroke::new(3.0, theme::SHARE));
+                        }
+                        if resp.on_hover_text("Show the faces in this group").clicked() {
+                            self.alb.ppl.marked_open = if open { None } else { Some(ids.clone()) };
+                        }
+                        let count = if g.len() == 1 { "1 face".to_string() } else { format!("{} faces", g.len()) };
+                        ui.add_sized(vec2(MARK_W, NAME_H), egui::Label::new(RichText::new(count).size(house::NOTE).color(theme::text_dim())));
+                        let button = |ui: &mut Ui, label: &str, name: String| {
+                            let r = ui.add_sized(vec2(MARK_W, MARK_BTN), house::quiet(label));
+                            house::target(ctx, &name, r.rect);
+                            r.clicked()
+                        };
+                        if button(ui, back_label, format!("{back}:{n}")) {
+                            post = Some((back_act, json!({"faces": ids})));
+                        }
+                        if ignored && button(ui, "Group again", format!("people:regroup:{n}")) {
+                            post = Some(("regroup", json!({"faces": ids})));
+                        }
+                        if button(ui, "Assign to…", format!("{assign}:{n}")) {
+                            self.alb.ppl.assign = if self.alb.ppl.assign.as_ref() == Some(&ids) { None } else { Some(ids.clone()) };
+                        }
+                    });
+                }
+            });
+            // The faces of the opened tile, each with its own way back.
+            let opened =
+                self.alb.ppl.marked_open.clone().and_then(|o| tiles.iter().find(|g| g.iter().map(|f| f.face).eq(o.iter().copied())).cloned());
+            if let Some(faces) = opened {
+                ui.add_space(house::S);
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(house::M, house::M);
+                    for (i, f) in faces.iter().enumerate() {
+                        let size = vec2(MARK_W, 48.0 + MARK_BTN + house::XS);
+                        ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Center), |ui| {
+                            ui.set_min_size(size);
+                            ui.spacing_mut().item_spacing.y = house::XS;
+                            let (rect, _) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::hover());
+                            house::target(ctx, &format!("people:marked-face:{i}"), rect);
+                            let p = ui.painter_at(rect);
+                            self.face_ui(ctx, store, &p, (&f.id, &f.v, f.bx), Some(f.face), rect.center(), 24.0);
+                            let r = ui.add_sized(vec2(MARK_W, MARK_BTN), house::quiet(back_label));
+                            house::target(ctx, &format!("people:marked-undo:{i}"), r.rect);
+                            if r.clicked() {
+                                post = Some((back_act, json!({"faces": [f.face]})));
+                            }
+                        });
+                    }
+                });
+            }
+            if let Some(ids) = self.alb.ppl.assign.clone().filter(|a| tiles.iter().flatten().any(|f| a.contains(&f.face))) {
+                ui.add_space(house::S);
+                ui.label(RichText::new("Assign to:").size(house::NOTE).color(theme::text_dim()));
+                let others: Vec<Card> = self.alb.ppl.named.iter().chain(&self.alb.ppl.groups).cloned().collect();
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(house::S, house::S);
+                    for (i, o) in others.iter().take(60).enumerate() {
+                        let label = if o.name.is_empty() { format!("Unnamed ({})", o.count) } else { o.name.clone() };
+                        let r = ui.add(house::secondary_in(&label, theme::BLUE));
+                        house::target(ctx, &format!("people:assign-to:{i}"), r.rect);
+                        if r.clicked() {
+                            post = Some(("assign", json!({"faces": ids, "into": o.id})));
+                        }
+                    }
+                    let x = ui.add(house::quiet("Cancel"));
+                    house::target(ctx, "people:assign-cancel", x.rect);
+                    if x.clicked() {
+                        self.alb.ppl.assign = None;
+                    }
+                });
+            }
+        }
+        if let Some((act, body)) = post {
+            self.alb.ppl.assign = None;
+            self.people_post(ctx, store, &format!("api/photos/people/marked/{act}"), body);
         }
     }
 
@@ -693,7 +860,7 @@ impl PhotoMode {
             ui.add_space(house::S);
         }
         let faces = self.alb.ppl.faces.clone();
-        let (mut open, mut toggle, mut ask) = (None, None, None);
+        let (mut open, mut toggle, mut ask, mut mark) = (None, None, None, None);
         let any = n > 0;
         ui.horizontal_wrapped(|ui| {
             for (i, f) in faces.iter().take(200).enumerate() {
@@ -727,6 +894,9 @@ impl PhotoMode {
                     if house::menu_row(ui, Some("close"), &format!("Not {label}"), "", true) {
                         ask = Some(vec![f.face]);
                     }
+                    if let Some(act) = mark_rows(ui, ctx, "Ignore face") {
+                        mark = Some((act, f.face));
+                    }
                     house::target(ctx, "people:face-menu", ui.min_rect());
                 });
             }
@@ -738,6 +908,13 @@ impl PhotoMode {
         }
         if let Some(ids) = ask {
             self.alb.ppl.confirm = Some(ids);
+        }
+        if let Some((act, face)) = mark {
+            self.alb.ppl.selected.remove(&face);
+            // The page must not keep offering a face that has left People (a later "Not a face"
+            // for the page's faces would be refused as "not in People").
+            self.alb.ppl.faces.retain(|f| f.face != face);
+            self.people_post(ctx, store, &format!("api/photos/people/faces/{act}"), json!({"faces": [face]}));
         }
         if let Some(id) = open
             && let Some(i) = self.pics.iter().position(|p| p.id == id)
@@ -758,6 +935,7 @@ impl PhotoMode {
             return;
         }
         ui.add_space(house::S);
+        let mut gone = None;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = house::M;
             if self.alb.ppl.editing.as_deref() == Some(c.id.as_str()) {
@@ -784,8 +962,23 @@ impl PhotoMode {
                 if house::menu_row(ui, Some("call_split"), "Merge with…", "", true) {
                     self.alb.ppl.ask = Ask::Merge;
                 }
+                ui.separator();
+                gone = mark_rows(ui, ctx, "Ignore group");
             });
         });
+        if let Some(act) = gone {
+            // The group leaves People: back to the list, then mark it.
+            self.person_close();
+            // By the page's faces: after one face left, the group itself may already be gone
+            // (regrouped), so its id would no longer be found (verify of #183).
+            let ids: Vec<i64> = self.alb.ppl.faces.iter().map(|f| f.face).collect();
+            if ids.is_empty() {
+                self.people_post(ctx, store, &format!("{url}/{act}"), json!({}));
+            } else {
+                self.people_post(ctx, store, &format!("api/photos/people/faces/{act}"), json!({"faces": ids}));
+            }
+            return;
+        }
         if self.alb.ppl.ask == Ask::Merge {
             ui.add_space(house::S);
             ui.horizontal(|ui| {
@@ -836,8 +1029,48 @@ const NAME_H: f32 = 18.0;
 const SAME_FACE: f32 = 64.0;
 /// The most "Same person?" questions shown at once.
 const QUESTIONS: usize = 5;
+/// A face in "Ignored" / "Not faces", and the room for its buttons.
+const MARK_FACE: f32 = 64.0;
+const MARK_W: f32 = 128.0;
+/// A tile button's height.
+const MARK_BTN: f32 = 28.0;
 /// Said wherever face recognition is offered.
 const PRIVACY: &str = "It runs on this server only; nothing is sent anywhere.";
+
+/// "Ignore …" and "Not a face" in a right-click or More menu: the server action picked.
+/// Ignored or "not a face" faces as tiles: one per group they were in (in list order), a face
+/// without a group alone.
+fn mark_groups(list: &[FaceCard]) -> Vec<Vec<FaceCard>> {
+    let mut out: Vec<Vec<FaceCard>> = Vec::new();
+    let mut at: std::collections::HashMap<i64, usize> = std::collections::HashMap::new();
+    for f in list {
+        match f.grp.and_then(|g| at.get(&g).copied()) {
+            Some(i) => out[i].push(f.clone()),
+            None => {
+                if let Some(g) = f.grp {
+                    at.insert(g, out.len());
+                }
+                out.push(vec![f.clone()]);
+            }
+        }
+    }
+    out
+}
+
+fn mark_rows(ui: &mut Ui, ctx: &egui::Context, ignore: &str) -> Option<&'static str> {
+    let mut out = None;
+    for (icon, label, act, target) in
+        [("visibility_off", ignore, "ignore", "people:ctx-ignore"), ("close", "Not a face", "notface", "people:ctx-notface")]
+    {
+        let y = ui.cursor().min.y;
+        if house::menu_row(ui, Some(icon), label, "", true) {
+            out = Some(act);
+        }
+        let row = Rect::from_min_max(pos2(ui.max_rect().min.x, y), pos2(ui.max_rect().max.x, ui.cursor().min.y.max(y + 32.0)));
+        house::target(ctx, target, row);
+    }
+    out
+}
 
 /// How a person without a name is shown, everywhere (cards, person page).
 fn shown_name(name: &str) -> &str {
@@ -937,5 +1170,28 @@ mod tests {
         assert!(off_view(&guest).1.contains("owner"));
         assert_eq!(fr_label(&json!({"on": true})), "Face recognition: On");
         assert!(off_view(&ready).1.contains(PRIVACY));
+    }
+
+    #[test]
+    fn ignored_and_not_faces_are_read_from_the_list() {
+        let face = |n: i64, g: Option<i64>| json!({"face": n, "id": "f1", "v": "t", "box": [0.1, 0.1, 0.2, 0.2], "grp": g});
+        let mut p = People { assign: Some(vec![7, 8]), marked_open: Some(vec![7, 8]), ..Default::default() };
+        p.take(&json!({"ignored": [face(7, Some(3)), face(8, Some(3))], "notfaces": [face(9, None)], "ignored_count": 2, "notfaces_count": 1}));
+        assert_eq!(p.ignored.iter().map(|f| f.face).collect::<Vec<_>>(), [7, 8]);
+        assert_eq!(p.notfaces[0].face, 9);
+        assert_eq!(p.assign, Some(vec![7, 8]), "still listed: the picker stays open");
+        p.take(&json!({"ignored": [face(7, Some(3))], "notfaces": [face(9, None)]}));
+        assert_eq!((p.assign.clone(), p.marked_open.clone()), (None, None), "the tile changed: picker and faces close");
+    }
+
+    /// Verify of #183: an ignored group of 7 is one tile, not 7; loose faces are a tile each.
+    #[test]
+    fn marked_faces_are_one_tile_per_group() {
+        let f = |face: i64, grp: Option<i64>| FaceCard { face, id: "x".into(), v: "v".into(), bx: [0.0; 4], grp };
+        let list: Vec<FaceCard> = (1..=7).map(|i| f(i, Some(1))).chain([f(20, None), f(21, Some(21)), f(30, None)]).chain([f(8, Some(1))]).collect();
+        let tiles = mark_groups(&list);
+        assert_eq!(tiles.iter().map(Vec::len).collect::<Vec<_>>(), [8, 1, 1, 1]);
+        assert_eq!(tiles[0].iter().map(|x| x.face).collect::<Vec<_>>(), [1, 2, 3, 4, 5, 6, 7, 8]);
+        assert!(mark_groups(&[]).is_empty());
     }
 }

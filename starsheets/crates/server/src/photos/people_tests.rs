@@ -108,5 +108,47 @@ async fn a_name_is_seen_only_by_the_account_that_gave_it() {
     }
     assert_eq!(get(&app, "/api/photos/faces/nope", Some("ada"), &[]).await.status, 404);
     assert_eq!(get(&app, &format!("/api/photos/faces/{ada_pic}"), None, &[]).await.status, 401);
+    // Ignore (a stranger), then every way back. Nothing is ever deleted.
+    let list = |who: &'static str| {
+        let app = app.clone();
+        async move { get(&app, "/api/photos/people", Some(who), &[]).await.json }
+    };
+    assert_eq!(post(&app, &format!("/api/photos/people/{p}/ignore"), "ada", json!({})).await.status, 200);
+    let v = list("ada").await;
+    assert_eq!((v["people"].clone(), v["groups"].clone(), v["ignored_count"].clone()), (json!([]), json!([]), json!(2)), "{v}");
+    let ig: Vec<i64> = v["ignored"].as_array().unwrap().iter().map(|f| f["face"].as_i64().unwrap()).collect();
+    assert_eq!(post(&app, "/api/photos/people/marked/isface", "ada", json!({"faces": [ig[0]]})).await.status, 404, "not on that list");
+    assert_eq!(post(&app, "/api/photos/people/marked/unignore", "ada", json!({"faces": [999_999]})).await.status, 404);
+    assert_eq!(post(&app, "/api/photos/people/marked/unignore", "ada", json!({"faces": ig})).await.status, 200);
+    let v = list("ada").await;
+    assert_eq!((v["ignored_count"].clone(), v["groups"].as_array().unwrap().len()), (json!(0), 1), "back as one unnamed group: {v}");
+    // Not a face, from a group; then "It is a face"; then assign one to a person.
+    let g = v["groups"][0]["id"].as_str().unwrap().to_string();
+    let one = get(&app, &format!("/api/photos/people/{g}"), Some("ada"), &[]).await.json;
+    let f0 = one["faces"][0]["face"].as_i64().unwrap();
+    assert_eq!(post(&app, &format!("/api/photos/people/{g}/notface"), "ada", json!({"faces": [f0]})).await.status, 200);
+    let v = list("ada").await;
+    assert_eq!(v["notfaces"][0]["face"], f0);
+    assert_eq!(post(&app, "/api/photos/people/marked/isface", "ada", json!({"faces": [f0]})).await.status, 200);
+    assert_eq!(list("ada").await["notfaces_count"], 0);
+    assert_eq!(post(&app, &format!("/api/photos/people/{g}/ignore"), "ada", json!({"faces": [f0]})).await.status, 200);
+    let named = post(&app, &format!("/api/photos/people/{g}/name"), "ada", json!({"name": "Kim"})).await.json["id"].as_str().unwrap().to_string();
+    assert_eq!(post(&app, "/api/photos/people/marked/assign", "ada", json!({"faces": [f0], "into": named})).await.status, 200);
+    let v = list("ada").await;
+    assert_eq!((v["ignored_count"].clone(), v["people"][0]["count"].clone()), (json!(0), json!(2)), "{v}");
+    // The group page path (verify of #183): ignore one face of a two-face group, then "Not a face"
+    // for the faces still on the page, by id (the group itself may be gone after the regroup).
+    let v = list("ada").await;
+    let pid = v["people"][0]["id"].as_str().unwrap().to_string();
+    let page = get(&app, &format!("/api/photos/people/{pid}"), Some("ada"), &[]).await.json;
+    let ids: Vec<i64> = page["faces"].as_array().unwrap().iter().map(|f| f["face"].as_i64().unwrap()).collect();
+    assert_eq!(ids.len(), 2);
+    assert_eq!(post(&app, "/api/photos/people/faces/ignore", "ada", json!({"faces": [ids[0]]})).await.status, 200);
+    faces::regroup(ph.db_lock(), &model).unwrap();
+    assert_eq!(post(&app, "/api/photos/people/faces/notface", "ada", json!({"faces": [ids[1]]})).await.status, 200);
+    assert_eq!(post(&app, "/api/photos/people/faces/notface", "ada", json!({"faces": [ids[1]]})).await.status, 404, "already marked");
+    let v = list("ada").await;
+    assert_eq!((v["ignored_count"].clone(), v["notfaces_count"].clone()), (json!(1), json!(1)), "{v}");
+    assert!(v["ignored"][0]["grp"].as_i64().is_some(), "marked faces say their group: {v}");
     let _ = std::fs::remove_dir_all(root);
 }
