@@ -33,7 +33,10 @@ def main():
     pe = lambda: S.snapshot("home.photos.people") or {}
     print("people state", json.dumps(pe())[:300], flush=True)
     if pe().get("can_download"):
-        S.click_text("Download face models")
+        for _ in range(30):  # status loads when People opens: re-click the tab until the button shows
+            if "empty:Download face models and turn on" in (S.snapshot("targets") or {}): break
+            S.hook("home:photos:tab", tab="photos"); time.sleep(1); S.hook("home:photos:tab", tab="people"); time.sleep(3)
+        S.click_text("empty:Download face models and turn on")
         rec("models downloaded", S.wait_for(lambda: not pe().get("missing") and not (pe().get("download") or {}).get("busy"), secs=400), json.dumps(pe().get("download")))
     tg = lambda: S.snapshot("targets") or {}
     back = lambda: S.click_text("people:back")
@@ -64,7 +67,8 @@ def main():
     # open the named person: only their photos
     nm = pe()["named"]; k = [x["name"] for x in nm].index(NAME); named = nm[k]; S.click_text(f"person:{k}"); time.sleep(3)
     its = S.snapshot("home.photos.items") or []; n = len(its); print("PERSON0 ITEMS", json.dumps(its)[:600], flush=True)
-    rec("person page shows only their photos", n == named["count"] and 1 <= n <= 4, f"items={n} count={named['count']}")
+    who = sorted({str(i.get("name", "")).rstrip("0123456789.jpg") for i in its})  # <person><n>.jpg: ground truth
+    rec("person page shows only their photos", n == named["count"] and 1 <= len(who) <= 2, f"items={n} count={named['count']} people in names={who}")
     S.shot(f"{br}-3-person")
     # remove one face
     f0 = S.snapshot("home.photos.people.faces")
