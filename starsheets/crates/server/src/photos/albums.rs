@@ -105,7 +105,8 @@ pub(super) type Pic = (String, Row, bool);
 
 pub(super) fn seen(a: &App, acc: &sharing::Access, id: &str) -> Option<Seen> {
     let path = acc.file_paths.get(id)?;
-    if media_of(path).is_none() || acc.file_role(id) < sharing::Role::View || a.store.safe_file(path).is_none() {
+    if !acc.photo_allowed(&a.store, path) || media_of(path).is_none() || acc.file_role(id) < sharing::Role::View || a.store.safe_file(path).is_none()
+    {
         return None;
     }
     let gps = acc.file_role(id) >= sharing::Role::Edit && acc.folder_listed(&crate::store::parent_of(path));

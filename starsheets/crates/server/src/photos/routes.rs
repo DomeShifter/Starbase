@@ -99,10 +99,14 @@ pub async fn route(
 fn folder_of(a: &crate::App, acc: &sharing::Access, q: &HashMap<String, String>) -> Result<(String, sharing::Role, bool), Response<Body>> {
     let folder = match (q.get("folder_id"), q.get("folder")) {
         (Some(id), _) => acc.folder_ids.iter().find(|(_, v)| *v == id).map(|(p, _)| p.clone()).ok_or_else(|| error(404, "no such folder"))?,
-        (None, f) => store::rel(f.map(String::as_str)).map_err(|b| error(b.code, &b.msg))?,
+        (None, None) => match acc.photo_root(&a.store) {
+            Some(crate::mounts::Root::Available(root)) => root.clone(),
+            _ => String::new(),
+        },
+        (None, Some(f)) => store::rel(Some(f)).map_err(|b| error(b.code, &b.msg))?,
     };
     let role = acc.folder_role(&folder);
-    if role < sharing::Role::View {
+    if role < sharing::Role::View || !acc.photo_allowed(&a.store, &folder) {
         return Err(error(403, "You don't have access to that."));
     }
     if !a.store.no_links(&folder) || !std::fs::symlink_metadata(a.store.full(&folder)).is_ok_and(|m| m.is_dir()) {
@@ -446,6 +450,9 @@ async fn thumb(
             return Err(error(403, "You don't have access to that."));
         }
         let path = acc.file_paths.get(&id).cloned().ok_or_else(|| error(404, "no such file"))?;
+        if !acc.photo_allowed(&a.store, &path) {
+            return Err(error(404, "no such picture"));
+        }
         a.store.safe_file(&path).ok_or_else(|| error(404, "no such file"))?;
         Ok(path)
     })

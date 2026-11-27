@@ -111,7 +111,7 @@ pub fn choices(store: &Store, user: &User) -> BTreeMap<String, String> {
         return BTreeMap::new();
     }
     let prefs = spaces::prefs(store, &user.username);
-    choices_with(store, user, prefs.get(KEY), &mount_table())
+    prefs.get(KEY).map_or_else(BTreeMap::new, |key| choices_with(store, user, Some(key), &mount_table()))
 }
 
 /// Read current roots. With no preference, keep the legacy My Files space and use it for Photos.
@@ -128,6 +128,17 @@ pub fn roots(store: &Store, user: &User) -> Roots {
     };
     let table = if prefs.contains_key(KEY) { mount_table() } else { MountTable::new() };
     resolve_saved(store, user, selection, &choices_with(store, user, prefs.get(KEY), &table))
+}
+
+/// Existing accounts retain their Photos view until roots are explicitly selected.
+pub fn configured_photos(store: &Store, user: &User) -> Option<Root> {
+    if !store.spaces || !valid_account_name(store, user) {
+        return None;
+    }
+    let prefs = spaces::prefs(store, &user.username);
+    let selection = prefs.get(SELECTION)?;
+    let choices = prefs.get(KEY).map_or_else(BTreeMap::new, |key| choices_with(store, user, Some(key), &mount_table()));
+    Some(resolve_saved(store, user, selection, &choices).photos)
 }
 
 fn resolve_saved(store: &Store, user: &User, selection: &Value, choices: &BTreeMap<String, String>) -> Roots {
@@ -369,6 +380,30 @@ mod tests {
         assert!(no_auth.path_of(&id).unwrap().is_none());
         assert!(!no_auth.no_links(folder));
         assert_eq!(crate::publiclink::serve(&no_auth, token, "download", "").code, 404);
+    }
+
+    #[test]
+    fn explicit_photo_scope_does_not_restrict_drive_and_fails_closed_when_lost() {
+        use crate::sharing::{Access, Role};
+
+        let f = Fixture::new();
+        f.directory("ann/Library");
+        fs::write(f.store.full("ann/Outside.png"), b"fixture").unwrap();
+        let id = f.store.synced_index().unwrap().into_iter().find(|(_, p)| p == "ann/Outside.png").unwrap().0;
+        let default = Access::new(&f.store, true, Some(&f.ann));
+        assert!(default.photo_allowed(&f.store, "ann/Outside.png"));
+
+        set_with(&f.store, &f.ann, None, Some(PhotosChoice::Folder("Library".into())), &MountTable::new()).unwrap();
+        let scoped = Access::new(&f.store, true, Some(&f.ann));
+        assert!(scoped.photo_allowed(&f.store, "ann/Library/Inside.png"));
+        assert!(!scoped.photo_allowed(&f.store, "ann/Library Other/Outside.png"));
+        assert!(!scoped.photo_allowed(&f.store, "ann/Outside.png"));
+        assert_eq!(scoped.file_role(&id), Role::Owner);
+
+        fs::remove_dir(f.store.full("ann/Library")).unwrap();
+        let lost = Access::new(&f.store, true, Some(&f.ann));
+        assert!(!lost.photo_allowed(&f.store, "ann/Outside.png"));
+        assert_eq!(lost.file_role(&id), Role::Owner);
     }
 
     #[test]

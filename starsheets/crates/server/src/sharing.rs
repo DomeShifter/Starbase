@@ -167,6 +167,7 @@ pub struct Access {
     pub file_paths: HashMap<String, String>,
     hidden: std::collections::HashSet<String>,
     private_roots: Vec<String>,
+    photo_root: std::sync::OnceLock<Option<crate::mounts::Root>>,
 }
 
 impl Access {
@@ -203,7 +204,29 @@ impl Access {
                 !hidden.contains(id)
             })
             .collect();
-        Access { auth, user: user.cloned(), files: group("files"), folders, folder_ids, file_paths, hidden, private_roots }
+        Access {
+            auth,
+            user: user.cloned(),
+            files: group("files"),
+            folders,
+            folder_ids,
+            file_paths,
+            hidden,
+            private_roots,
+            photo_root: std::sync::OnceLock::new(),
+        }
+    }
+
+    pub fn photo_root(&self, store: &Store) -> Option<&crate::mounts::Root> {
+        self.photo_root.get_or_init(|| self.user.as_ref().and_then(|u| crate::mounts::configured_photos(store, u))).as_ref()
+    }
+
+    pub fn photo_allowed(&self, store: &Store, path: &str) -> bool {
+        match self.photo_root(store) {
+            None => true,
+            Some(crate::mounts::Root::Available(root)) => crate::mounts::within(path, root),
+            Some(crate::mounts::Root::Unavailable) => false,
+        }
     }
 
     fn me(&self) -> &str {
