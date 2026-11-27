@@ -187,6 +187,8 @@ pub struct Home {
     /// My own folder ("" without accounts), whether I'm the server's owner, the tops of "Shared
     /// with me", and everyone's names.
     space: String,
+    /// Absent before configuration; a configured but missing library has no path.
+    photo_library: Option<Option<String>>,
     admin: bool,
     accounts: bool,
     shared_folders: Vec<String>,
@@ -466,6 +468,7 @@ impl Home {
         let s = |x: &Json, k: &str| x[k].as_str().unwrap_or("").to_string();
         self.accounts = v.get("space").is_some();
         self.space = s(&v, "space");
+        self.photo_library = v.get("photo_library").map(|path| path.as_str().map(str::to_string));
         self.admin = v["admin"].as_bool().unwrap_or(!self.accounts);
         self.files = v["files"]
             .as_array()
@@ -754,6 +757,13 @@ impl Home {
         if !self.photos.on || !self.photos_available() {
             return None;
         }
+        if let Some(root) = &self.photo_library {
+            let root = root.as_ref()?;
+            return match self.view.as_ref() {
+                Some(View::Mine(p) | View::Shared(Some(p)) | View::Everyone(p)) if under(p, root) => Some(p.clone()),
+                _ => Some(root.clone()),
+            };
+        }
         match self.view.as_ref()? {
             View::Mine(p) | View::Shared(Some(p)) => Some(p.clone()),
             View::Everyone(p) if !p.is_empty() => Some(p.clone()),
@@ -993,6 +1003,10 @@ impl Home {
                 templates::open(ctx, &folder);
             }
             self.photos.boot(&self.store);
+            self.refresh(ctx);
+        }
+        #[cfg(target_arch = "wasm32")]
+        if ctx.data_mut(|data| data.remove_temp::<bool>(egui::Id::unique(crate::account::LIBRARY_SETTINGS_CHANGED))).unwrap_or(false) {
             self.refresh(ctx);
         }
         self.store.poll();

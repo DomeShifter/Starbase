@@ -160,6 +160,7 @@ pub fn open_menu(ctx: &egui::Context) -> Result<(), String> {
 
 /// What the avatar menu asked for (in egui memory, picked up by `Account::logic`).
 pub(crate) const FACES_SETTINGS_CHANGED: &str = "starbase_faces_settings_changed";
+pub(crate) const LIBRARY_SETTINGS_CHANGED: &str = "starbase_library_settings_changed";
 const PHOTOS_AVAILABLE: &str = "starbase_photos_available";
 
 fn browser_settings() -> Option<web_sys::Storage> {
@@ -812,6 +813,7 @@ impl Account {
                     self.library_settings = Some(LibrarySettings::from_reply(&value));
                     if saved {
                         self.done = Some("Library locations saved.".to_string());
+                        ctx.data_mut(|data| data.insert_temp(egui::Id::unique(LIBRARY_SETTINGS_CHANGED), true));
                     }
                 }
                 Reply::FaceSettingsChanged(v) => {
@@ -1318,15 +1320,18 @@ impl Account {
             PhotoSource::Folder => "Folder in My Files",
             PhotoSource::Mount(id) => mounts.get(id).map_or("Unavailable mount", String::as_str),
         };
-        egui::ComboBox::from_id_salt("photos_location").selected_text(current).show_ui(ui, |ui| {
+        let location = egui::ComboBox::from_id_salt("photos_location").selected_text(current).show_ui(ui, |ui| {
             ui.selectable_value(&mut form.photos, PhotoSource::SameAsMyFiles, "Same as My Files");
-            ui.selectable_value(&mut form.photos, PhotoSource::Folder, "Folder in My Files");
+            let folder = ui.selectable_value(&mut form.photos, PhotoSource::Folder, "Folder in My Files");
+            house::target(ctx, "settings:photos-folder-choice", folder.rect);
             for (id, path) in mounts {
                 ui.selectable_value(&mut form.photos, PhotoSource::Mount(id.clone()), path);
             }
         });
+        house::target(ctx, "settings:photos-location", location.response.rect);
         if form.photos == PhotoSource::Folder {
-            Self::field(ui, &mut form.folder, "Folder path within My Files", false);
+            let field = Self::field(ui, &mut form.folder, "Folder path within My Files", false);
+            house::target(ctx, "settings:photos-folder", field.rect);
         }
 
         let valid = form.photos != PhotoSource::Folder || !form.folder.trim().is_empty();

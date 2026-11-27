@@ -1911,13 +1911,17 @@ fn after_files(app: &App, me: &auth::User, m: &str, p: &[String], r: Result<Repl
         .collect();
     let (shared_folders, shared_files) = a.shared_roots();
     let people: Vec<Value> = auth::users(&app.store).iter().map(|u| json!({ "username": u.username, "name": u.name, "colour": u.colour })).collect();
-    Ok(Reply::Json(
-        json!({
-            "files": files, "folders": folders, "folder_info": info, "space": me.username, "admin": me.owner,
-            "shared": { "folders": shared_folders, "files": shared_files }, "people": people,
-        }),
-        code,
-    ))
+    let mut result = json!({
+        "files": files, "folders": folders, "folder_info": info, "space": me.username, "admin": me.owner,
+        "shared": { "folders": shared_folders, "files": shared_files }, "people": people,
+    });
+    if let Some(root) = a.photo_root(&app.store) {
+        result["photo_library"] = match root {
+            mounts::Root::Available(path) => json!(path),
+            mounts::Root::Unavailable => Value::Null,
+        };
+    }
+    Ok(Reply::Json(result, code))
 }
 
 // ---------------------------------------------------------------- the web app's files
