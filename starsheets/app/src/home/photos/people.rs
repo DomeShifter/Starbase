@@ -1,6 +1,9 @@
 //! People beside the photo grid: faces grouped by the server (crates/server/src/photos/faces.rs)
-//! as round crops; name a person, merge two, take a wrong face out, open a person's pictures.
-//! Named people first, unnamed groups below.
+//! as round crops; name a person, merge two, take wrong faces out (select, or right-click "Not
+//! X", always confirmed), open a person's pictures. "Same person?" questions first (borderline
+//! matches the server didn't join on its own), then named people, unnamed groups below.
+
+use std::collections::{BTreeSet, HashSet};
 
 use egui::{Color32, Pos2, Rect, RichText, Sense, TextureId, Ui, pos2, vec2};
 use serde_json::{Value as Json, json};
@@ -18,6 +21,22 @@ pub(in crate::home) struct FaceCard {
     pub id: String,
     pub v: String,
     pub bx: [f32; 4],
+}
+
+/// "Same person?": face `a` (alone or in a group) looks somewhat like person `person` (face `b`).
+#[derive(Clone, Debug)]
+pub(in crate::home) struct Question {
+    pub face: i64,
+    pub person: String,
+    pub name: String,
+    pub a: FaceCard,
+    pub b: FaceCard,
+}
+
+fn face_card(f: &Json) -> Option<FaceCard> {
+    let b = f["box"].as_array()?;
+    let n = |i: usize| b.get(i).and_then(Json::as_f64).unwrap_or(0.0) as f32;
+    Some(FaceCard { face: f["face"].as_i64()?, id: f["id"].as_str()?.to_string(), v: f["v"].as_str()?.to_string(), bx: [n(0), n(1), n(2), n(3)] })
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -45,31 +64,39 @@ pub(in crate::home) struct People {
     /// the box still needs the keyboard.
     pub editing: Option<String>,
     focus: bool,
+    /// "Same person?" questions from the list, and the ones skipped this time (by face).
+    pub questions: Vec<Question>,
+    skipped: HashSet<i64>,
+    /// The faces ticked on a person's page, and the ones the "Remove …?" question is about.
+    pub selected: BTreeSet<i64>,
+    confirm: Option<Vec<i64>>,
 }
 
 impl People {
     pub fn take(&mut self, v: &Json) {
         self.named = super::albums::cards(v, "people");
         self.groups = super::albums::cards(v, "groups");
+        self.questions = v["questions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|q| {
+                Some(Question {
+                    face: q["face"].as_i64()?,
+                    person: q["person"].as_str()?.to_string(),
+                    name: q["name"].as_str().unwrap_or("").to_string(),
+                    a: face_card(&q["a"])?,
+                    b: face_card(&q["b"])?,
+                })
+            })
+            .collect();
         self.state = v.clone();
     }
 
     pub fn take_faces(&mut self, v: &Json) {
-        self.faces = v["faces"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|f| {
-                let b = f["box"].as_array()?;
-                let n = |i: usize| b.get(i).and_then(Json::as_f64).unwrap_or(0.0) as f32;
-                Some(FaceCard {
-                    face: f["face"].as_i64()?,
-                    id: f["id"].as_str()?.to_string(),
-                    v: f["v"].as_str()?.to_string(),
-                    bx: [n(0), n(1), n(2), n(3)],
-                })
-            })
-            .collect();
+        self.faces = v["faces"].as_array().into_iter().flatten().filter_map(face_card).collect();
+        let have: HashSet<i64> = self.faces.iter().map(|f| f.face).collect();
+        self.selected.retain(|f| have.contains(f));
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -79,7 +106,12 @@ impl People {
                 .map(|c| json!({"id": c.id, "name": c.name, "count": c.count, "face": c.face, "cover": c.cover.as_ref().map(|x| &x.0)}))
                 .collect::<Vec<_>>()
         };
-        json!({"named": c(&self.named), "groups": c(&self.groups), "on": self.state["on"], "faces": self.faces.len(), "can_download": self.state["can_download"], "download": self.state["download"], "missing": self.state["missing"].as_array().map_or(0, Vec::len), "progress": self.state["progress"], "editing": self.editing, "merging": self.ask == Ask::Merge, "scan": self.scan.test_state()})
+        json!({"named": c(&self.named), "groups": c(&self.groups), "on": self.state["on"], "faces": self.faces.len(), "can_download": self.state["can_download"], "download": self.state["download"], "missing": self.state["missing"].as_array().map_or(0, Vec::len), "progress": self.state["progress"], "editing": self.editing, "merging": self.ask == Ask::Merge, "scan": self.scan.test_state(), "questions": self.asking().len(), "skipped": self.skipped.len(), "selected": self.selected.iter().collect::<Vec<_>>(), "confirm": self.confirm.as_ref().map(Vec::len)})
+    }
+
+    /// The questions not skipped, at most [`QUESTIONS`].
+    fn asking(&self) -> Vec<Question> {
+        self.questions.iter().filter(|q| !self.skipped.contains(&q.face)).take(QUESTIONS).cloned().collect()
     }
 }
 
@@ -167,28 +199,50 @@ impl PhotoMode {
         c: Pos2,
         r: f32,
     ) {
-        p.circle_filled(c, r, Color32::from_rgb(0xE8, 0xEA, 0xED));
+        // No backing circle under the picture: its anti-aliased edge showed as a light ring
+        // around every face (the picture's own edge isn't feathered). A placeholder only while
+        // nothing is drawn, in the theme's colour.
+        if !self.face_drawn(ctx, store, p, (id, v, bx), face, c, r) {
+            p.circle_filled(c, r, theme::hover());
+        }
+    }
+
+    /// Draws the face; false when there is nothing to draw yet.
+    #[allow(clippy::too_many_arguments)]
+    fn face_drawn(
+        &mut self,
+        ctx: &egui::Context,
+        store: &Backend,
+        p: &egui::Painter,
+        (id, v, bx): (&str, &str, [f32; 4]),
+        face: Option<i64>,
+        c: Pos2,
+        r: f32,
+    ) -> bool {
         let frame = self.frame;
         if let Some(f) = face {
             let key = format!("face/{f}/{id}");
             self.want_id(ctx, store, &key, Some(v), SMALL);
             if let Some(t) = self.tex.get(&(key.clone(), SMALL), frame) {
                 round(p, t.id(), c, r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)));
-                return;
+                return true;
             }
             if !self.failed.contains(&(key, SMALL)) {
                 if let Some(t) = self.tex.get(&(id.to_string(), SMALL), frame) {
                     let [w, h] = t.size();
                     round(p, t.id(), c, r, face_uv(bx, w as f32, h as f32));
+                    return true;
                 }
-                return;
+                return false;
             }
         }
         self.want_id(ctx, store, id, Some(v), SMALL);
         if let Some(t) = self.tex.get(&(id.to_string(), SMALL), frame) {
             let [w, h] = t.size();
             round(p, t.id(), c, r, face_uv(bx, w as f32, h as f32));
+            return true;
         }
+        false
     }
 
     /// One card on the People page (144 × 184): a 120 px round face, padding [`house::M`], the
@@ -398,6 +452,8 @@ impl PhotoMode {
 
     /// Open a person's page (from the list or the strip).
     pub(in crate::home) fn people_open(&mut self, ctx: &egui::Context, store: &Backend, c: Card) {
+        self.alb.ppl.selected.clear();
+        self.alb.ppl.confirm = None;
         self.pics.clear();
         self.viewer = None;
         self.alb.ppl.faces.clear();
@@ -483,6 +539,7 @@ impl PhotoMode {
         }
         let (mut open, mut n) = (None, 0);
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            self.same_ui(ui, &ctx, store);
             for (title, list) in [("", &named), ("Unnamed groups", &groups)] {
                 if list.is_empty() {
                     continue;
@@ -510,6 +567,186 @@ impl PhotoMode {
         }
     }
 
+    /// Back from a person's page to the list.
+    fn person_close(&mut self) {
+        self.alb.open = None;
+        self.alb.ppl.ask = Ask::None;
+        self.alb.ppl.editing = None;
+        self.alb.ppl.selected.clear();
+        self.alb.ppl.confirm = None;
+        self.pics.clear();
+        self.viewer = None;
+    }
+
+    /// "Same person?" on the People list: the borderline face beside the person's, Yes / No /
+    /// Skip. Yes joins them, No is remembered (never asked again), Skip hides it until reload.
+    fn same_ui(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend) {
+        let qs = self.alb.ppl.asking();
+        if qs.is_empty() {
+            return;
+        }
+        let h = ui.label(RichText::new("Same person?").size(house::BODY).strong().color(theme::text()));
+        house::target(ctx, "people:same-heading", h.rect);
+        ui.label(RichText::new("These look alike, but not enough to be sure.").size(house::NOTE).color(theme::text_dim()));
+        ui.add_space(house::M);
+        let mut answer = None;
+        for (k, q) in qs.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = house::M;
+                let (r, _) = ui.allocate_exact_size(vec2(2.0 * SAME_FACE + house::S, SAME_FACE), Sense::hover());
+                house::target(ctx, &format!("people:same-faces:{k}"), r);
+                let p = ui.painter_at(r);
+                let rad = SAME_FACE / 2.0;
+                self.face_ui(ctx, store, &p, (&q.a.id, &q.a.v, q.a.bx), Some(q.a.face), r.left_center() + vec2(rad, 0.0), rad);
+                self.face_ui(ctx, store, &p, (&q.b.id, &q.b.v, q.b.bx), Some(q.b.face), r.right_center() - vec2(rad, 0.0), rad);
+                ui.label(RichText::new(format!("Is this {}?", who_label(&q.name))).size(house::BODY).color(theme::text()));
+                for (label, act, button) in
+                    [("Yes", Some(true), house::primary("Yes")), ("No", Some(false), house::secondary("No")), ("Skip", None, house::quiet("Skip"))]
+                {
+                    let b = ui.add(button);
+                    let name = format!("people:same-{}", label.to_lowercase());
+                    house::target(ctx, &format!("{name}:{k}"), b.rect);
+                    if k == 0 {
+                        house::target(ctx, &name, b.rect);
+                    }
+                    if b.clicked() {
+                        answer = Some((q.clone(), act));
+                    }
+                }
+            });
+            ui.add_space(house::S);
+        }
+        match answer {
+            Some((q, Some(yes))) => {
+                self.alb.ppl.questions.retain(|o| o.face != q.face);
+                self.people_post(ctx, store, &format!("api/photos/people/{}/same", q.person), json!({"face": q.face, "yes": yes}));
+            }
+            Some((q, None)) => {
+                self.alb.ppl.skipped.insert(q.face);
+            }
+            None => {}
+        }
+        ui.add_space(house::L);
+    }
+
+    /// The "Remove N faces from X?" question; Remove sends them back to the unnamed groups.
+    fn remove_dialog(&mut self, ctx: &egui::Context, store: &Backend, c: &Card) {
+        let Some(ids) = self.alb.ppl.confirm.clone() else { return };
+        let n = ids.len();
+        let title = format!("Remove {n} {} from {}?", if n == 1 { "face" } else { "faces" }, who_label(&c.name));
+        let (mut close, mut yes, mut cancel) = (false, false, false);
+        house::dialog(ctx, "people_remove_confirm", 380.0, &title, Some(&mut close), |ui| {
+            let body = if c.id.starts_with('p') {
+                if n == 1 { "It will go back to Unnamed." } else { "They will go back to Unnamed." }
+            } else {
+                "They will be taken out of this group."
+            };
+            house::note(ui, body);
+            ui.add_space(house::L);
+            ui.horizontal(|ui| {
+                let y = ui.add(house::primary("Remove"));
+                house::target(ctx, "people:remove-yes", y.rect);
+                yes = y.clicked();
+                let no = ui.add(house::secondary("Cancel"));
+                house::target(ctx, "people:remove-cancel", no.rect);
+                cancel = no.clicked();
+            });
+        });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            close = true;
+        }
+        if yes {
+            self.alb.ppl.confirm = None;
+            self.alb.ppl.selected.clear();
+            self.alb.ppl.faces.retain(|f| !ids.contains(&f.face));
+            self.people_post(ctx, store, &format!("api/photos/people/{}/remove", c.id), json!({"faces": ids}));
+            if self.alb.ppl.faces.is_empty() {
+                self.person_close();
+                self.alb.ppl.asked = false;
+            }
+        } else if close || cancel {
+            self.alb.ppl.confirm = None;
+        }
+    }
+
+    /// A person's faces: click opens the picture, the circle at the top left selects, right-click
+    /// offers "Not X". Every removal is asked first ([`Self::remove_dialog`]).
+    fn faces_grid(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend, c: &Card) {
+        let label = who_label(&c.name).to_string();
+        let n = self.alb.ppl.selected.len();
+        if n > 0 {
+            ui.horizontal(|ui| {
+                ui.set_min_height(36.0);
+                ui.spacing_mut().item_spacing.x = house::M;
+                ui.label(RichText::new(format!("{n} selected")).size(house::BODY).strong().color(theme::text()));
+                let r = ui.add(house::primary(&format!("Remove {n} from {label}")));
+                house::target(ctx, "people:remove-selected", r.rect);
+                if r.clicked() {
+                    self.alb.ppl.confirm = Some(self.alb.ppl.selected.iter().copied().collect());
+                }
+                let x = ui.add(house::quiet("Cancel"));
+                house::target(ctx, "people:select-cancel", x.rect);
+                if x.clicked() {
+                    self.alb.ppl.selected.clear();
+                }
+            });
+            ui.add_space(house::S);
+        }
+        let faces = self.alb.ppl.faces.clone();
+        let (mut open, mut toggle, mut ask) = (None, None, None);
+        let any = n > 0;
+        ui.horizontal_wrapped(|ui| {
+            for (i, f) in faces.iter().take(200).enumerate() {
+                let (rect, resp) = ui.allocate_exact_size(vec2(56.0, 56.0), Sense::click());
+                house::target(ctx, &format!("face:{i}"), rect);
+                let dot = Rect::from_center_size(rect.left_top() + vec2(10.0, 10.0), vec2(20.0, 20.0));
+                house::target(ctx, &format!("people:face-select:{i}"), dot);
+                let p = ui.painter_at(rect);
+                self.face_ui(ctx, store, &p, (&f.id, &f.v, f.bx), Some(f.face), rect.center(), 26.0);
+                let on = self.alb.ppl.selected.contains(&f.face);
+                if on {
+                    p.circle_stroke(rect.center(), 26.0, egui::Stroke::new(3.0, super::super::ACCENT));
+                }
+                if on || any || resp.hovered() {
+                    let fill = if on { super::super::ACCENT } else { Color32::from_black_alpha(90) };
+                    p.circle(dot.center(), 8.0, fill, egui::Stroke::new(1.5, Color32::WHITE));
+                    if on {
+                        p.text(dot.center(), egui::Align2::CENTER_CENTER, "✓", egui::FontId::proportional(11.0), Color32::WHITE);
+                    }
+                }
+                let resp = resp.on_hover_text("Click to open; the circle selects; right-click for more");
+                if resp.clicked() {
+                    if resp.interact_pointer_pos().is_some_and(|q| dot.contains(q)) {
+                        toggle = Some(f.face);
+                    } else {
+                        open = Some(f.id.clone());
+                    }
+                }
+                resp.context_menu(|ui| {
+                    house::menu(ui, 220.0);
+                    if house::menu_row(ui, Some("close"), &format!("Not {label}"), "", true) {
+                        ask = Some(vec![f.face]);
+                    }
+                    house::target(ctx, "people:face-menu", ui.min_rect());
+                });
+            }
+        });
+        if let Some(f) = toggle
+            && !self.alb.ppl.selected.remove(&f)
+        {
+            self.alb.ppl.selected.insert(f);
+        }
+        if let Some(ids) = ask {
+            self.alb.ppl.confirm = Some(ids);
+        }
+        if let Some(id) = open
+            && let Some(i) = self.pics.iter().position(|p| p.id == id)
+        {
+            self.viewer = Some(super::Viewer::new(i, self.pics.len()));
+        }
+        self.remove_dialog(ctx, store, c);
+    }
+
     /// A person's page: "‹ People", the name as a title you click to rename, the count, a More
     /// menu (Rename, Merge with…), the faces and then the same grid as Photos.
     fn person_ui(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend, c: &Card) {
@@ -517,11 +754,7 @@ impl PhotoMode {
         let back = ui.add(house::quiet_with(Some("chevron_left"), "People", false));
         house::target(ctx, "people:back", back.rect);
         if back.clicked() {
-            self.alb.open = None;
-            self.alb.ppl.ask = Ask::None;
-            self.alb.ppl.editing = None;
-            self.pics.clear();
-            self.viewer = None;
+            self.person_close();
             return;
         }
         ui.add_space(house::S);
@@ -578,35 +811,8 @@ impl PhotoMode {
                 }
             });
         }
-        // The faces: × takes a wrong one out.
         ui.add_space(house::M);
-        let faces = self.alb.ppl.faces.clone();
-        let mut out = None;
-        ui.horizontal_wrapped(|ui| {
-            for (i, f) in faces.iter().take(200).enumerate() {
-                let (rect, resp) = ui.allocate_exact_size(vec2(56.0, 56.0), Sense::click());
-                house::target(ctx, &format!("face:{i}"), rect);
-                let p = ui.painter_at(rect);
-                self.face_ui(ctx, store, &p, (&f.id, &f.v, f.bx), Some(f.face), rect.center(), 26.0);
-                if resp.hovered() {
-                    p.circle_filled(rect.right_top() + vec2(-9.0, 9.0), 8.0, theme::text());
-                    p.text(
-                        rect.right_top() + vec2(-9.0, 9.0),
-                        egui::Align2::CENTER_CENTER,
-                        "×",
-                        egui::FontId::proportional(house::NOTE),
-                        Color32::WHITE,
-                    );
-                }
-                if resp.on_hover_text("Not this person: take this face out").clicked() {
-                    out = Some(f.face);
-                }
-            }
-        });
-        if let Some(face) = out {
-            self.alb.ppl.faces.retain(|f| f.face != face);
-            self.people_post(ctx, store, &format!("{url}/remove"), json!({"face": face}));
-        }
+        self.faces_grid(ui, ctx, store, c);
         ui.add_space(house::L);
         if self.pics.is_empty() {
             if self.loading {
@@ -626,12 +832,21 @@ const CARD_H: f32 = 184.0;
 const CARD_FACE: f32 = 120.0;
 /// The name line's height under a card's face.
 const NAME_H: f32 = 18.0;
+/// A face in a "Same person?" question.
+const SAME_FACE: f32 = 64.0;
+/// The most "Same person?" questions shown at once.
+const QUESTIONS: usize = 5;
 /// Said wherever face recognition is offered.
 const PRIVACY: &str = "It runs on this server only; nothing is sent anywhere.";
 
 /// How a person without a name is shown, everywhere (cards, person page).
 fn shown_name(name: &str) -> &str {
     if name.trim().is_empty() { "Add a name" } else { name }
+}
+
+/// A person or group in a sentence ("Remove 2 from Ann", "Is this Ann?").
+fn who_label(name: &str) -> &str {
+    if name.trim().is_empty() { "Unnamed" } else { name }
 }
 
 /// "1 picture", "5 pictures".
