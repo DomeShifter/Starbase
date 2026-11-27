@@ -3,18 +3,17 @@
 
 import argparse
 import io
-import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import quote
-
-from PIL import Image
 
 sys.path.insert(0, str(Path.home() / ".claude/tools"))
 from starbase_ui import Session, ship_and_run
 
 
 def run(browser, testn):
+    from PIL import Image
+
     with Session(browser, testn=testn, outdir="shots") as s:
         s.sign_in("ada")
         base = s.base
