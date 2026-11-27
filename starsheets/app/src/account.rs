@@ -1235,7 +1235,7 @@ impl Account {
                 if r.changed() {
                     crate::theme::set_drive_dark(dark);
                 }
-                house::note(ui, "This setting is saved in this browser. Photo Mode always uses the dark appearance.");
+                house::note(ui, "This setting is saved in this browser. Photos always uses the dark appearance.");
             } else {
                 self.photos_settings_ui(ui, ctx);
             }
@@ -1248,7 +1248,7 @@ impl Account {
 
     fn photos_settings_ui(&mut self, ui: &mut Ui, ctx: &egui::Context) {
         let mut enabled = photos_available();
-        let r = ui.checkbox(&mut enabled, "Show Photo Mode in Drive on this browser");
+        let r = ui.checkbox(&mut enabled, "Show Photos in Drive on this browser");
         house::target(ctx, "settings:photos-enabled", r.rect);
         if r.changed()
             && let Some(storage) = browser_settings()

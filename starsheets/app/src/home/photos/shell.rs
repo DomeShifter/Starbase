@@ -203,7 +203,7 @@ impl Home {
                 house::target(&ctx, "photo-logo", logo.rect);
             }
             if !narrow {
-                ui.label(RichText::new("Photo Mode").size(house::TITLE).color(theme::text()));
+                ui.label(RichText::new("Photos").size(house::TITLE).color(theme::text()));
                 ui.add_space(house::M);
             }
             let reserve = if narrow { 130.0 } else { 640.0 };

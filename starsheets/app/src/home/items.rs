@@ -99,7 +99,7 @@ impl Home {
                     self.store.set_setting("starsheets_home_list", "1");
                     self.photos.set_on(&self.store, false);
                 }
-                if self.photos_available() && toggle(ui, "photo_mode", photos, "Photo Mode") {
+                if self.photos_available() && toggle(ui, "photo_mode", photos, "Photos") {
                     self.photos.set_on(&self.store, true);
                     self.search.clear();
                 }

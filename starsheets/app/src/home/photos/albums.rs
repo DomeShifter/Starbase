@@ -104,7 +104,7 @@ pub(super) fn nav_rows() -> Vec<NavRow> {
         Go(Tab::People, "People", "group"),
         Go(Tab::Places, "Places", "location_on"),
         Go(Tab::Timeline, "Timeline", "schedule"),
-        Go(Tab::Events, "Events", "event"),
+        Go(Tab::Events, "Moments", "event"),
         Divider,
         Go(Tab::Duplicates, "Duplicates", "content_copy"),
     ];
@@ -326,7 +326,7 @@ impl PhotoMode {
                     if ui
                         .add(link(match t {
                             Tab::Albums => "‹ Albums",
-                            Tab::Events => "‹ Events",
+                            Tab::Events => "‹ Moments",
                             _ => "‹ Places",
                         }))
                         .clicked()
@@ -407,7 +407,7 @@ impl PhotoMode {
             });
             self.pick_ui(ui, store);
         } else {
-            ui.label(RichText::new(if t == Tab::Events { "Events" } else { "Places" }).size(house::TITLE).color(theme::text()));
+            ui.label(RichText::new(if t == Tab::Events { "Moments" } else { "Places" }).size(house::TITLE).color(theme::text()));
             self.alb.boot_cards(&ctx, store, &self.inbox);
         }
         ui.add_space(house::S);
@@ -642,7 +642,7 @@ mod tests {
         let rows = nav_rows();
         let split = rows.iter().position(|r| *r == NavRow::Divider).unwrap();
         let names = |s: &[NavRow]| s.iter().filter_map(|r| if let NavRow::Go(_, l, _) = r { Some(*l) } else { None }).collect::<Vec<_>>();
-        assert_eq!(names(&rows[..split]), ["Photos", "Albums", "People", "Places", "Timeline", "Events"]);
+        assert_eq!(names(&rows[..split]), ["Photos", "Albums", "People", "Places", "Timeline", "Moments"]);
         assert_eq!(names(&rows[split..]), ["Duplicates", "Locked"]);
         assert_eq!(rows.iter().filter(|r| **r == NavRow::Divider).count(), 1);
     }
