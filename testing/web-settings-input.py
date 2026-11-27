@@ -69,14 +69,12 @@ def check(browser, testn):
         s.click_text("tab:Backups")
         before = backup()
         assert before["enabled"] is True
-        x, y = s._locate("settings:backups-enabled")
-        s.click_xy(x - 40, y)
+        s.click_text("settings:backups-enabled")
         assert s.wait_for(lambda: backup()["enabled"] is False, secs=8), "Master Off was not saved"
         disabled_run = s.pg.request.post(s.base + "/api/backup/run")
         assert disabled_run.status == 400 and "turned off" in disabled_run.text()
         assert all(before[k] == backup()[k] for k in ("on", "hour", "to", "set_up"))
-        x, y = s._locate("settings:backups-enabled")
-        s.click_xy(x + 35, y)
+        s.click_text("settings:backups-enabled")
         assert s.wait_for(lambda: backup()["enabled"] is True, secs=8), "Master On was not saved"
 
         with Session(browser, testn=testn, outdir="shots") as member:

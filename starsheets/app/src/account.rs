@@ -1254,14 +1254,25 @@ impl Account {
             if self.settings_tabs(ui) {
                 return;
             }
-            let mut mode = u8::from(v["enabled"].as_bool().unwrap_or(true));
-            let label = if mode == 1 { "Backups on" } else { "Backups off" };
-            let r = ui.add_enabled(!self.busy, egui::Slider::new(&mut mode, 0..=1).show_value(false).text(label));
-            let enabled = mode == 1;
-            house::target(ctx, "settings:backups-enabled", r.rect);
-            if r.changed() {
-                master = Some(enabled);
-            }
+            let enabled = v["enabled"].as_bool().unwrap_or(true);
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(!self.busy, |ui| {
+                    let (track, response) = ui.allocate_exact_size(vec2(42.0, 24.0), Sense::click());
+                    let fill = if enabled { theme::BLUE } else { theme::text_dim() };
+                    ui.painter().rect_filled(track, 12.0, fill);
+                    let x = if enabled { track.right() - 12.0 } else { track.left() + 12.0 };
+                    ui.painter().circle_filled(egui::pos2(x, track.center().y), 8.0, Color32::WHITE);
+                    if response.has_focus() || response.hovered() {
+                        ui.painter().rect_stroke(track.expand(2.0), 14.0, egui::Stroke::new(1.0, fill), egui::StrokeKind::Outside);
+                    }
+                    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), enabled, "Enable backups"));
+                    house::target(ctx, "settings:backups-enabled", track);
+                    if response.clicked() {
+                        master = Some(!enabled);
+                    }
+                });
+                house::text(ui, if enabled { "Backups on" } else { "Backups off" });
+            });
             if !enabled {
                 house::note(ui, "Scheduled and manual backups are off. Existing backups can still be restored.");
             }
