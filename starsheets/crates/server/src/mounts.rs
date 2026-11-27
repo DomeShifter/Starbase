@@ -1,7 +1,7 @@
 //! Resolve My Files and Photos settings against administrator-provisioned bind mounts.
 //!
 //! The deployment administrator mounts a directory under `Store::root`, inside the
-//! target user's space, and records it in `.starsheets/mounts.json`. For example:
+//! target user's space in a dedicated subdirectory without nested mounts, and records it in `.starsheets/mounts.json`. For example:
 //! `{"<account key>": {"library": "ann/Photo Library"}}`. The account key is stored in
 //! the user's preferences and changes if the account is removed and recreated.
 //!
@@ -14,7 +14,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::io;
 use std::os::unix::ffi::OsStringExt as _;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -225,10 +225,14 @@ fn choices_with(store: &Store, user: &User, key: Option<&Value>, table: &MountTa
     mine.iter()
         .filter_map(|(id, path)| {
             let path = path.as_str()?;
-            if !valid_id(id) || !is_relative(path) || store::space_of(path) != user.username || !safe_folder(store, path) {
+            if !valid_id(id) || !is_relative(path) || path == user.username || store::space_of(path) != user.username || !safe_folder(store, path) {
                 return None;
             }
-            let mount = mount_at(path)?;
+            let target = root.join(path);
+            let mount = table.get(&target)?.as_ref()?;
+            if table.keys().any(|other| other != &target && other.starts_with(&target)) {
+                return None;
+            }
             let overlaps =
                 |other: &&Mount| other.device == mount.device && (other.source.starts_with(&mount.source) || mount.source.starts_with(&other.source));
             (!elsewhere.iter().any(overlaps)).then(|| (id.clone(), path.to_string()))
@@ -330,17 +334,24 @@ mod tests {
             (ann): {
                 "valid": "ann/Media", "wrong-account": "bob/BobFiles", "missing": "ann/Unplugged",
                 "traversal": "ann/../bob", "absolute": "/ann/Media", "symbolic": "ann/Alias",
-                "duplicate": "ann/Overlap", "prefix": "ann-other/Files"
+                "duplicate": "ann/Overlap", "prefix": "ann-other/Files",
+                "account-root": "ann", "nested": "ann/Nested"
             },
             (bob): {"files": "bob/BobFiles"}
         }));
-        for path in ["ann/Media", "ann/Unplugged", "ann/Overlap", "bob/BobFiles", "ann-other/Files"] {
+        for path in ["ann/Media", "ann/Unplugged", "ann/Overlap", "bob/BobFiles", "ann-other/Files", "ann/Nested"] {
             f.directory(path);
         }
         symlink(f.store.full("ann/Media"), f.store.full("ann/Alias")).unwrap();
         let table = f.table(&[
-            ("ann/Media", "/sources/media"), ("ann/Alias", "/sources/alias"), ("ann/Overlap", "/sources/bob/sub"),
-            ("bob/BobFiles", "/sources/bob"), ("ann-other/Files", "/sources/other")
+            ("ann/Media", "/sources/media"),
+            ("ann/Alias", "/sources/alias"),
+            ("ann/Overlap", "/sources/bob/sub"),
+            ("bob/BobFiles", "/sources/bob"),
+            ("ann-other/Files", "/sources/other"),
+            ("ann", "/sources/account"),
+            ("ann/Nested", "/sources/nested"),
+            ("ann/Nested/Child", "/sources/bob"),
         ]);
         let prefs = spaces::prefs(&f.store, "ann");
         assert_eq!(choices_with(&f.store, &f.ann, prefs.get(KEY), &table), BTreeMap::from([("valid".into(), "ann/Media".into())]));
