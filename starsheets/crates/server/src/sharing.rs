@@ -223,7 +223,7 @@ impl Access {
 
     pub fn photo_allowed(&self, store: &Store, path: &str) -> bool {
         match self.photo_root(store) {
-            None => true,
+            None => !crate::mounts::private_path(path),
             Some(crate::mounts::Root::Available(root)) => crate::mounts::within(path, root),
             Some(crate::mounts::Root::Unavailable) => false,
         }

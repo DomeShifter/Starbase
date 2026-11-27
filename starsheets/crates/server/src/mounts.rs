@@ -392,6 +392,7 @@ mod tests {
         let id = f.store.synced_index().unwrap().into_iter().find(|(_, p)| p == "ann/Outside.png").unwrap().0;
         let default = Access::new(&f.store, true, Some(&f.ann));
         assert!(default.photo_allowed(&f.store, "ann/Outside.png"));
+        assert!(!default.photo_allowed(&f.store, "ann/starbase-mounts/Old Library/Photo.png"));
 
         set_with(&f.store, &f.ann, None, Some(PhotosChoice::Folder("Library".into())), &MountTable::new()).unwrap();
         let scoped = Access::new(&f.store, true, Some(&f.ann));
