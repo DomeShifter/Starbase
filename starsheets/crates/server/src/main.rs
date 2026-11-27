@@ -1502,6 +1502,7 @@ async fn storage(app: &Shared, m: &str, me: Option<auth::User>, body: &[u8], q: 
 /// GET backup: settings and how the last one went. GET backup/key: the recovery key.
 /// GET backup/list: the backups kept. POST backup {to, on, hour, key?}: choose the folder (an empty
 /// one is set up; one with backups in it opens with the key given, or this server's key).
+/// POST backup {enabled}: turn all new backups on or off, keeping settings and restore access.
 /// POST backup/run: one now. GET backup/people: whose folders the backups hold. POST
 /// backup/restore {id, whose?}: copies a folder out of backup ID into a new folder "Restored from
 /// backup <when>" (backup::whose_folder, restore_into): the asker's own, or (the owner) anyone's
@@ -1525,6 +1526,7 @@ async fn backup_api(app: &Shared, m: &str, p: &[String], me: Option<auth::User>,
                     let suggest = ["/backups", "/backup"].into_iter().find(|d| Path::new(d).is_dir()).unwrap_or("");
                     Ok(json!({
                         "set_up": s.get("to").and_then(Value::as_str).is_some_and(|t| !t.is_empty()),
+                        "enabled": backup::enabled(&s),
                         "on": s.get("on").and_then(Value::as_bool).unwrap_or(false),
                         "to": s.get("to").cloned().unwrap_or(json!("")),
                         "hour": s.get("hour").and_then(Value::as_i64).unwrap_or(3),
@@ -1537,6 +1539,14 @@ async fn backup_api(app: &Shared, m: &str, p: &[String], me: Option<auth::User>,
                 }
                 ("GET", "key") => Ok(json!({ "key": backup::load(&base).get("key").cloned().unwrap_or(Value::Null) })),
                 ("GET", "list") => backup::list(&base).map(|l| json!(l)).map_err(bad),
+                ("POST", "") if json.get("enabled").is_some() => {
+                    let enabled = json["enabled"].as_bool().ok_or_else(|| bad("Expected a boolean backup setting.".into()))?;
+                    backup::update(&base, |s| {
+                        s.insert("enabled".into(), json!(enabled));
+                    })
+                    .map_err(|e| (500, e.to_string()))?;
+                    Ok(json!({ "ok": true, "enabled": enabled }))
+                }
                 ("POST", "") => {
                     let to = json.get("to").and_then(Value::as_str).unwrap_or("").trim().trim_end_matches('/').to_string();
                     let s = backup::load(&base);
@@ -1566,12 +1576,10 @@ async fn backup_api(app: &Shared, m: &str, p: &[String], me: Option<auth::User>,
                     Ok(json!({ "ok": true, "result": said }))
                 }
                 ("POST", "run") => {
-                    if backup::running() {
-                        return Err(bad("A backup is running already.".into()));
-                    }
+                    let run = backup::start(&base).map_err(bad)?;
                     let app2 = app.clone();
                     std::thread::spawn(move || {
-                        let r = backup::run(&app2.base, &app2.store.root, "now");
+                        let r = run.run(&app2.base, &app2.store.root, "now");
                         log::note(&app2.store, &format!("backup (asked for): {}", r.unwrap_or_else(|e| format!("FAILED: {e}"))));
                     });
                     Ok(json!({ "ok": true, "running": true }))
@@ -1619,7 +1627,8 @@ async fn backup_schedule(app: Shared) {
             if backup::running() || !backup::due(&backup::load(&app2.base), &jiff::Zoned::now()) {
                 return;
             }
-            let r = backup::run(&app2.base, &app2.store.root, "daily");
+            let Ok(run) = backup::start(&app2.base) else { return };
+            let r = run.run(&app2.base, &app2.store.root, "daily");
             log::note(&app2.store, &format!("backup (daily): {}", r.unwrap_or_else(|e| format!("FAILED: {e}"))));
         })
         .await;
@@ -2597,6 +2606,41 @@ mod tests {
         let g = post(&app, &ip, "/api/setup", "", json!({"code": code, "username": "boss", "name": "Boss", "password": "bosspassword"})).await;
         assert_eq!(g.status, 200, "{:?}", g.json);
         (app, ip, cookie_of(&g))
+    }
+
+    #[tokio::test]
+    async fn backup_master_switch_preserves_configuration_and_guards_runs() {
+        let (app, ip, boss) = owned().await;
+        backup::update(&app.base, |s| {
+            s.extend(json!({ "to": "/existing", "key": "fixture", "on": true, "hour": 5 }).as_object().unwrap().clone());
+        })
+        .unwrap();
+        let read = send(&app, &ip, "GET", "/api/backup", &boss, &[], vec![]).await;
+        assert_eq!(read.json["enabled"], true);
+
+        let member = post(&app, &ip, "/api/users", &boss, json!({ "username": "vic", "name": "Vic", "password": "vicpassword" })).await;
+        assert_eq!(member.status, 200);
+        let login = post(&app, &ip, "/api/login", "", json!({ "username": "vic", "password": "vicpassword" })).await;
+        assert_eq!(login.status, 200);
+        let member = cookie_of(&login);
+        assert_eq!(post(&app, &ip, "/api/backup", &member, json!({ "enabled": false })).await.status, 403);
+        assert_eq!(post(&app, &ip, "/api/backup", &boss, json!({ "enabled": null })).await.status, 400);
+
+        let before = backup::load(&app.base);
+        let off = post(&app, &ip, "/api/backup", &boss, json!({ "enabled": false })).await;
+        assert_eq!((off.status, off.json["enabled"].as_bool()), (200, Some(false)));
+        let blocked = post(&app, &ip, "/api/backup/run", &boss, json!({})).await;
+        assert_eq!((blocked.status, blocked.json["error"].as_str()), (400, Some(backup::DISABLED)));
+        let mut after = backup::load(&app.base);
+        assert_eq!(after.remove("enabled"), Some(json!(false)));
+        assert_eq!(after, before);
+
+        let on = post(&app, &ip, "/api/backup", &boss, json!({ "enabled": true })).await;
+        assert_eq!((on.status, on.json["enabled"].as_bool()), (200, Some(true)));
+        let read = send(&app, &ip, "GET", "/api/backup", &boss, &[], vec![]).await;
+        assert_eq!(read.json["enabled"], true);
+        assert_eq!(read.json["on"], true);
+        assert_eq!(read.json["hour"], 5);
     }
 
     #[tokio::test]

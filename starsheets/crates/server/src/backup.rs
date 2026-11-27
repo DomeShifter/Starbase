@@ -41,6 +41,8 @@ static RUNNING: AtomicBool = AtomicBool::new(false);
 /// Settings file reads and writes, one at a time.
 static FILE: Mutex<()> = Mutex::new(());
 
+pub const DISABLED: &str = "Backups are turned off.";
+
 pub fn settings_path(base: &Path) -> PathBuf {
     base.join(".starsheets-backup.json")
 }
@@ -51,6 +53,15 @@ pub fn running() -> bool {
 
 pub fn load(base: &Path) -> Map<String, Value> {
     let _g = FILE.lock().unwrap_or_else(|e| e.into_inner());
+    read_settings(base)
+}
+
+pub fn enabled(settings: &Map<String, Value>) -> bool {
+    settings.get("enabled").and_then(Value::as_bool).unwrap_or(true)
+}
+
+/// Caller holds FILE.
+fn read_settings(base: &Path) -> Map<String, Value> {
     std::fs::read(settings_path(base))
         .ok()
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
@@ -63,8 +74,7 @@ pub fn load(base: &Path) -> Map<String, Value> {
 pub fn update(base: &Path, change: impl FnOnce(&mut Map<String, Value>)) -> std::io::Result<()> {
     let _g = FILE.lock().unwrap_or_else(|e| e.into_inner());
     let path = settings_path(base);
-    let mut s =
-        std::fs::read(&path).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()).and_then(|v| v.as_object().cloned()).unwrap_or_default();
+    let mut s = read_settings(base);
     change(&mut s);
     let tmp = base.join(".starsheets-backup.json.tmp");
     std::fs::write(&tmp, serde_json::to_vec_pretty(&Value::Object(s)).unwrap_or_default())?;
@@ -151,12 +161,38 @@ pub fn prepare(to: &str, key: &str) -> Result<&'static str, String> {
     Ok("made")
 }
 
-/// Makes one backup of `root` now, then thins out old ones. Returns a short summary for the log.
-/// Only one runs at a time; a second call while one runs returns an error at once.
-pub fn run(base: &Path, root: &Path, why: &str) -> Result<String, String> {
+/// Reserves the one backup slot before starting work, including work handed to a thread.
+pub struct Run {
+    _reserved: (),
+}
+
+impl Drop for Run {
+    fn drop(&mut self) {
+        RUNNING.store(false, Ordering::SeqCst);
+    }
+}
+
+pub fn start(base: &Path) -> Result<Run, String> {
+    // Changing the master switch and admitting new work cannot race. Turning backups off
+    // leaves already admitted work to finish.
+    let _g = FILE.lock().unwrap_or_else(|e| e.into_inner());
+    if !enabled(&read_settings(base)) {
+        return Err(DISABLED.into());
+    }
     if RUNNING.swap(true, Ordering::SeqCst) {
         return Err("A backup is running already.".into());
     }
+    Ok(Run { _reserved: () })
+}
+
+impl Run {
+    /// Makes one backup of `root`, then thins out old ones.
+    pub fn run(self, base: &Path, root: &Path, why: &str) -> Result<String, String> {
+        run_reserved(base, root, why)
+    }
+}
+
+fn run_reserved(base: &Path, root: &Path, why: &str) -> Result<String, String> {
     let started = jiff::Timestamp::now();
     update(base, |s| {
         s.insert("started".into(), json!(started.to_string()));
@@ -176,7 +212,6 @@ pub fn run(base: &Path, root: &Path, why: &str) -> Result<String, String> {
         s.insert("last".into(), last);
     })
     .ok();
-    RUNNING.store(false, Ordering::SeqCst);
     r
 }
 
@@ -390,7 +425,7 @@ pub fn restore(base: &Path, id: &str, inside: &str, dest: &Path) -> Result<u64, 
 /// Is a backup due? Once a day at the hour chosen (server time), and straight away if the last
 /// good one is more than a day and a bit old (the server was off at that hour).
 pub fn due(s: &Map<String, Value>, now: &jiff::Zoned) -> bool {
-    if !s.get("on").and_then(Value::as_bool).unwrap_or(false) || s.get("to").and_then(Value::as_str).unwrap_or("").is_empty() {
+    if !enabled(s) || !s.get("on").and_then(Value::as_bool).unwrap_or(false) || s.get("to").and_then(Value::as_str).unwrap_or("").is_empty() {
         return false;
     }
     let hour = num(s, "hour", 3);
@@ -419,7 +454,7 @@ mod tests {
     fn run_one(base: &Path, root: &Path) -> Result<String, String> {
         static TURN: Mutex<()> = Mutex::new(());
         let _t = TURN.lock().unwrap_or_else(|e| e.into_inner());
-        run(base, root, "test")
+        start(base)?.run(base, root, "test")
     }
 
     #[test]
@@ -456,6 +491,12 @@ mod tests {
         assert!(said.starts_with("Backed up 2 files"), "{said}");
         // The file changes after the backup; the backup still has the old one.
         std::fs::write(root.join("james/Budget/2026.xlsx"), b"changed").unwrap();
+        update(&base, |s| {
+            s.insert("enabled".into(), json!(false));
+        })
+        .unwrap();
+        assert_eq!(start(&base).err().as_deref(), Some(DISABLED));
+        assert!(load(&base).get("last").is_some_and(|v| v["ok"] == true));
         let snaps = list(&base).unwrap();
         assert_eq!(snaps.len(), 1);
         let id = snaps[0]["id"].as_str().unwrap();
@@ -586,7 +627,10 @@ mod tests {
         s.insert("on".into(), json!(true));
         s.insert("to".into(), json!("/backups"));
         s.insert("hour".into(), json!(3));
-        assert!(due(&s, &at("2026-11-24T10:00:00+00:00[UTC]")), "never backed up: now");
+        assert!(due(&s, &at("2026-11-24T10:00:00+00:00[UTC]")), "legacy settings still run when due");
+        s.insert("enabled".into(), json!(false));
+        assert!(!due(&s, &at("2026-11-24T10:00:00+00:00[UTC]")), "the master switch stops scheduled runs");
+        s.insert("enabled".into(), json!(true));
         s.insert("last_ok".into(), json!("2026-11-24T03:01:00Z"));
         assert!(!due(&s, &at("2026-11-24T10:00:00+00:00[UTC]")));
         assert!(!due(&s, &at("2026-11-24T03:30:00+00:00[UTC]")), "already done this hour");
