@@ -29,7 +29,7 @@ def main():
     up(first)
     S.open("drive", path=f"/?test&dir={q(folder)}"); time.sleep(2)
     S.hook("home:photos", on=True); time.sleep(2); S.hook("home:photos:enable"); time.sleep(8)
-    S.hook("home:photos:tab", tab="people"); time.sleep(2)
+    S.click_text("People"); time.sleep(2)
     pe = lambda: S.snapshot("home.photos.people") or {}
     tg = lambda: S.snapshot("targets") or {}
     # Models and on/off aren't what this checks: through the API (the button is "Download face models and turn on").
@@ -38,7 +38,7 @@ def main():
         pg.request.post(f"{S.base}/api/photos/faces/models", data="{}")
         S.wait_for(lambda: not st0().get("missing"), secs=600, every=5)
     pg.request.post(f"{S.base}/api/photos/faces", data=json.dumps({"on": True}), headers={"Content-Type": "application/json"})
-    S.hook("home:photos:tab", tab="people"); time.sleep(2)
+    S.click_text("People"); time.sleep(2)
     S.wait_for(lambda: pe().get("on") is True, secs=30)
     n_people = len({who(f) for f in first})
     S.wait_for(lambda: len(pe().get("named", [])) + len(pe().get("groups", [])) >= n_people, secs=900, every=5)
@@ -73,11 +73,11 @@ def main():
     new = lambda: [c for c in srv().get("groups", []) if c["id"] not in before and c["count"] >= 2]
     rec(f"new person '{late}' found as a new group", S.wait_for(lambda: new(), secs=600, every=5), json.dumps(srv().get("groups")))
     grew = {c["id"]: c["count"] for c in srv().get("people", []) if c["count"] != named_counts.get(c["id"], c["count"])}
-    S.hook("home:photos:tab", tab="photos"); time.sleep(1); S.hook("home:photos:tab", tab="people"); time.sleep(3)
+    S.click_text("Photos"); time.sleep(1); S.click_text("People"); time.sleep(3)
     rec("named people did not swallow them", not grew, json.dumps(grew))
     S.shot(f"{br}-3-new-person")
     # 4. Safer remove (photos-faces-ux): open the first named person with >= 2 faces.
-    S.hook("home:photos:tab", tab="photos"); time.sleep(1); S.hook("home:photos:tab", tab="people"); time.sleep(3)
+    S.click_text("Photos"); time.sleep(1); S.click_text("People"); time.sleep(3)
     named = pe().get("named", []); k = next((i for i, c in enumerate(named) if c["count"] >= 2), 0); person = named[k]
     S.click_text(f"person:{k}"); S.wait_for(lambda: pe().get("faces", 0) >= 2, secs=20)
     n0 = pe()["faces"]
@@ -104,7 +104,7 @@ def main():
     rec("it never rejoins the person", back and back[0]["count"] <= person["count"], json.dumps(back))
     # 5. "Same person?": only when these pictures hold a borderline look-alike.
     if srv().get("questions"):
-        S.hook("home:photos:tab", tab="photos"); time.sleep(1); S.hook("home:photos:tab", tab="people"); time.sleep(3)
+        S.click_text("Photos"); time.sleep(1); S.click_text("People"); time.sleep(3)
         S.shot(f"{br}-6-same-person")
         S.click_text("people:same-skip"); time.sleep(1)
         rec("Skip hides the question", pe().get("skipped") == 1, json.dumps(pe().get("skipped")))
