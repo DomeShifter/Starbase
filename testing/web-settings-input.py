@@ -77,13 +77,13 @@ def check(browser, testn):
         s.click_text("settings:backups-enabled")
         assert s.wait_for(lambda: backup()["enabled"] is True, secs=8), "Master On was not saved"
 
-        with Session(browser, testn=testn, outdir="shots") as member:
-            member.sign_in("bob")
-            member.open("drive")
-            member.click_text("account:avatar", button=3)
-            assert member.wait_for(lambda: (member.snapshot("targets") or {}).get("settings:dark"), secs=6)
-            assert "tab:Backups" not in member.snapshot("targets")
-        print(f"PASS {browser}: settings, persistent appearance and Photos visibility, owner backup switch", flush=True)
+    with Session(browser, testn=testn, outdir="shots") as member:
+        member.sign_in("bob")
+        member.open("drive")
+        member.click_text("account:avatar", button=3)
+        assert member.wait_for(lambda: (member.snapshot("targets") or {}).get("settings:dark"), secs=6)
+        assert "tab:Backups" not in member.snapshot("targets")
+    print(f"PASS {browser}: settings, persistent appearance and Photos visibility, owner backup switch", flush=True)
 
 
 if __name__ == "__main__":
