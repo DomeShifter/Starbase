@@ -8,7 +8,7 @@ Server must run with --features ml (models present or downloadable) and the user
 import json, os, subprocess, sys, time, glob, urllib.parse
 sys.path.insert(0, os.path.expanduser("~/.claude/tools")); sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import starbase_ui as ui
-RD = "/tmp/photos-faces-polish"
+RD = "/tmp/photos-faces-polish-" + str(os.getpid())
 
 def launcher():
     a = sys.argv[1:]; pics = a[a.index("--pics") + 1]; rest = [x for x in a if x not in ("--pics", pics)]
@@ -29,7 +29,7 @@ def main():
     up(first)
     S.open("drive", path=f"/?test&dir={q(folder)}"); time.sleep(2)
     S.hook("home:photos", on=True); time.sleep(2); S.hook("home:photos:enable"); time.sleep(8)
-    S.click_text("People"); time.sleep(2)
+    pass  # People is opened only after faces are on (the open page is not asked again)
     pe = lambda: S.snapshot("home.photos.people") or {}
     tg = lambda: S.snapshot("targets") or {}
     # Models and on/off aren't what this checks: through the API (the button is "Download face models and turn on").
@@ -41,7 +41,13 @@ def main():
     S.click_text("People"); time.sleep(2)
     S.wait_for(lambda: pe().get("on") is True, secs=30)
     n_people = len({who(f) for f in first})
-    S.wait_for(lambda: len(pe().get("named", [])) + len(pe().get("groups", [])) >= n_people, secs=900, every=5)
+    def _people_up():
+        S.click_text("Photos"); time.sleep(1); S.click_text("People"); time.sleep(2)
+        return len(pe().get("named", [])) + len(pe().get("groups", [])) >= n_people
+    srv_n = lambda: len(pg.request.get(f"{S.base}/api/photos/people").json().get("groups", []))
+    S.wait_for(lambda: srv_n() >= n_people, secs=300, every=5)
+    S.wait_for(_people_up, secs=300, every=15)
+    print("people state", json.dumps({k: v for k, v in pe().items() if k in ("on", "progress", "scan")}), "keys", sorted((S.snapshot("home.photos") or {}).keys())[:12], flush=True)
     time.sleep(5); st = pe(); S.shot(f"{br}-1-people")
     # 1. Sharp faces: every card has a face id, and its picture is a 256 px square.
     cards = st.get("named", []) + st.get("groups", [])
@@ -113,6 +119,16 @@ def main():
             rec("No is remembered", len(srv().get("questions", [])) < len(pe().get("questions", [])) + 2, json.dumps(srv().get("questions")))
     else:
         print("SKIP same-person: no borderline look-alikes in these pictures", flush=True)
+    # 6. Photo Mode's own Light theme (in-app menu row, not STARBASE_THEME), then 200% zoom: no halo circle round faces.
+    S.click_text("Photos"); time.sleep(1); S.click_text("People"); time.sleep(3)
+    S.click_text("photos:view-menu"); time.sleep(1); S.click_text("Light theme"); time.sleep(1.5); S.key("Escape")
+    rec("light theme: People page still on", pe().get("on") is True, "")
+    S.shot(f"{br}-7-light-people")
+    n = 6 if br == "firefox" else 5
+    for _ in range(n): S.key("ctrl+plus", settle=0.4)
+    time.sleep(2); S.shot(f"{br}-8-light-zoom200")
+    for _ in range(n): S.key("ctrl+minus", settle=0.4)
+    time.sleep(1)
     print("RESULT", "ALL PASS" if all(res) else f"{res.count(False)} FAIL", flush=True)
     sys.exit(0 if all(res) else 1)
 
