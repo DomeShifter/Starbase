@@ -294,22 +294,17 @@ impl Live {
             .cloned()
             .collect();
         OTHERS.with(|o| *o.borrow_mut() = others);
+        let unsaved = !self.pending.is_empty() || self.held.is_some();
         let (state, text) = if self.joined && !self.can_edit {
             (SaveState::ViewOnly, "View only")
         } else if !self.open || !self.joined {
-            if self.pending.is_empty() { (SaveState::Connecting, "Connecting…") } else { (SaveState::Offline, "Offline: changes will sync") }
-        } else if !self.pending.is_empty() || self.server_dirty {
+            if !unsaved { (SaveState::Connecting, "Connecting…") } else { (SaveState::Offline, "Offline: changes will sync") }
+        } else if unsaved || self.server_dirty {
             (SaveState::Saving, "Saving…")
         } else {
             (SaveState::Saved, "Saved")
         };
-        let status = LiveStatus {
-            doc,
-            status: SaveStatus::new(state, text),
-            unsaved: !self.pending.is_empty(),
-            saved_at: self.saved_at,
-            last_edit: self.last_edit.clone(),
-        };
+        let status = LiveStatus { doc, status: SaveStatus::new(state, text), unsaved, saved_at: self.saved_at, last_edit: self.last_edit.clone() };
         STATUS.with(|s| *s.borrow_mut() = Some(status));
         if !self.open {
             ctx.request_repaint_after(std::time::Duration::from_millis(500));
