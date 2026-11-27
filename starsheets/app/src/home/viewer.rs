@@ -14,7 +14,7 @@
 
 use egui::{Color32, Key, Modifiers, Order, Rect, RichText, Sense, Vec2, pos2, vec2};
 
-use super::photos::{LARGE, ORIGINAL, PhotoMode, SMALL, date_label};
+use super::photos::{LARGE, ORIGINAL, PhotoMode, SCREEN, SMALL, date_label};
 use crate::house;
 use crate::store::Backend;
 use serde_json::{Value as Json, json};
@@ -346,14 +346,15 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
         let mut area = rect.shrink2(vec2(0.0, 56.0));
         area.max.x -= side;
         let is_video = p.is_video();
-        let want_original = !is_video && !v.raw && {
+        // Bigger on screen than the 1024 copy: the 2560 screen copy (never the original).
+        let want_screen = !is_video && !v.raw && {
             let fit = (area.width() / pw).min(area.height() / ph);
             pw * fit * v.zoom * ctx.pixels_per_point() > LARGE as f32 + 1.0 && pw.max(ph) > LARGE as f32
         };
-        if want_original {
-            pm.want(ctx, store, v.index(), ORIGINAL);
+        if want_screen {
+            pm.want(ctx, store, v.index(), SCREEN);
         }
-        let want = if want_original { ORIGINAL } else { LARGE };
+        let want = if want_screen { SCREEN } else { LARGE };
         let best = match (&raw_file, v.raw) {
             (Some(f), true) => pm.best_id(&f.id, LARGE),
             _ if is_video => None,
@@ -368,6 +369,7 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
         }
         v.showing = match best.as_ref().map(|b| b.1) {
             Some(ORIGINAL) => "original",
+            Some(SCREEN) => "2560",
             Some(LARGE) => "1024",
             Some(SMALL) => "256",
             _ => "none",

@@ -31,6 +31,14 @@ use super::export;
 
 /// The thumbnail sizes made for every picture (longest side, pixels): the grid and the viewer.
 pub const SIZES: [u32; 2] = [256, 1024];
+/// The viewer's screen copy (longest side, never enlarged): big enough for a 1440p screen, about
+/// 1/10 of a 50 MP original's decoded size. Made after the thumbnails (mod.rs), kept in the
+/// best format the server can make (jxl.rs), a JPEG one only when a browser asks for it.
+pub const SCREEN: u32 = 2560;
+/// JPEG quality of the screen copy (looked at full screen, so a little higher than thumbnails).
+const SCREEN_QUALITY: u8 = 85;
+/// The most a screen copy's uncompressed hand-over (PPM/PNG) may be.
+pub const MAX_SCREEN_OUTPUT: u64 = 64 * 1024 * 1024;
 /// Goes up whenever thumbnails would come out differently (sizes, quality, orientation rules),
 /// so the ones already made are made again.
 pub const RENDER: &str = "r1";
@@ -151,6 +159,29 @@ pub struct Job {
     /// Export the picture (one new file) instead of making thumbnails.
     #[serde(default)]
     pub export: Option<export::Options>,
+    /// Make the screen copy ([`SCREEN`]) in this form instead of thumbnails.
+    #[serde(default)]
+    pub screen: Option<ScreenForm>,
+}
+
+/// How the child hands over the screen copy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ScreenForm {
+    /// Uncompressed (PPM, or PNG when it has transparency): the server encodes it (jxl.rs).
+    Raw,
+    /// A JPEG (PNG when it has transparency), served as it is.
+    Jpeg,
+}
+
+/// A picture decoded (scaled down while decoding when it is a JPEG), its edits applied, ready
+/// to be fitted: the shared first half of [`make_with`] and [`make_screen`].
+pub struct Source {
+    pub meta: Meta,
+    pub img: fr::images::Image<'static>,
+    pub kind: fr::PixelType,
+    pub alpha: bool,
+    /// EXIF orientation still to apply.
+    pub o: u16,
 }
 
 /// The largest JPEG decoded for edited thumbnails (longest side), however small the crop.
@@ -163,8 +194,8 @@ pub fn make(bytes: &[u8], limits: &Limits) -> Result<Made, String> {
     make_with(bytes, limits, None)
 }
 
-/// [`make`], the thumbnails showing `edits`.
-pub fn make_with(bytes: &[u8], limits: &Limits, edits: Option<&Edits>) -> Result<Made, String> {
+/// Decodes `bytes` for copies at most `largest` px on the longest side (see [`Source`]).
+pub fn source(bytes: &[u8], limits: &Limits, edits: Option<&Edits>, largest: u32) -> Result<Source, String> {
     let edits = edits.filter(|e| !e.is_identity());
     // A camera RAW file: the JPEG preview inside it is shown; date, camera and orientation
     // come from the RAW's own EXIF.
@@ -192,7 +223,6 @@ pub fn make_with(bytes: &[u8], limits: &Limits, edits: Option<&Edits>) -> Result
     }
     let mut o = meta.orientation;
     (meta.width, meta.height) = if (5..=8).contains(&o) { (h, w) } else { (w, h) };
-    let largest = SIZES.iter().copied().max().unwrap_or(1024);
     // A crop keeps part of the picture: decode it bigger, so the crop still fills the thumbnail.
     let want = edits.map_or(largest, |e| {
         let part = (e.crop.r - e.crop.l).min(e.crop.b - e.crop.t).clamp(0.01, 1.0);
@@ -220,7 +250,7 @@ pub fn make_with(bytes: &[u8], limits: &Limits, edits: Option<&Edits>) -> Result
             if alpha { DynamicImage::ImageRgba8(out) } else { DynamicImage::ImageRgb8(DynamicImage::ImageRgba8(out).into_rgb8()) }
         }
     };
-    let (mut src, kind) = if alpha {
+    let (src, kind) = if alpha {
         let i = img.into_rgba8();
         let (w, h) = i.dimensions();
         (fr::images::Image::from_vec_u8(w, h, i.into_raw(), fr::PixelType::U8x4).map_err(|e| e.to_string())?, fr::PixelType::U8x4)
@@ -229,6 +259,13 @@ pub fn make_with(bytes: &[u8], limits: &Limits, edits: Option<&Edits>) -> Result
         let (w, h) = i.dimensions();
         (fr::images::Image::from_vec_u8(w, h, i.into_raw(), fr::PixelType::U8x3).map_err(|e| e.to_string())?, fr::PixelType::U8x3)
     };
+    Ok(Source { meta, img: src, kind, alpha, o })
+}
+
+/// [`make`], the thumbnails showing `edits`.
+pub fn make_with(bytes: &[u8], limits: &Limits, edits: Option<&Edits>) -> Result<Made, String> {
+    let largest = SIZES.iter().copied().max().unwrap_or(1024);
+    let Source { meta, img: mut src, kind, alpha, o } = source(bytes, limits, edits, largest)?;
     // Largest first, each smaller one from the one before (less work, same look).
     let mut sizes = SIZES.to_vec();
     sizes.sort_unstable_by(|a, b| b.cmp(a));
@@ -247,6 +284,26 @@ pub fn make_with(bytes: &[u8], limits: &Limits, edits: Option<&Edits>) -> Result
 pub fn make_guarded(bytes: &[u8], limits: &Limits, edits: Option<&Edits>) -> Result<Made, String> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| make_with(bytes, limits, edits)))
         .unwrap_or_else(|_| Err("the decoder failed (panic)".into()))
+}
+
+/// The screen copy of `bytes`: [`SCREEN`] px on the longest side at most (never enlarged),
+/// upright, `edits` applied, as `form` says. Returns (bytes, "ppm"/"png"/"jpg") and the size of
+/// the decoded source (tests: a big JPEG is decoded scaled down).
+pub fn make_screen(bytes: &[u8], limits: &Limits, edits: Option<&Edits>, form: ScreenForm) -> Result<(Vec<u8>, &'static str, (u32, u32)), String> {
+    let Source { img, kind, alpha, o, .. } = source(bytes, limits, edits, SCREEN)?;
+    let decoded = (img.width(), img.height());
+    let img = fit(img, SCREEN, kind)?;
+    let (buf, w, h) = orient(img.buffer(), img.width(), img.height(), if alpha { 4 } else { 3 }, o);
+    let out = match (alpha, form) {
+        (true, _) => (encode_png(&buf, w, h)?, "png"),
+        (false, ScreenForm::Raw) => {
+            let mut v = format!("P6\n{w} {h}\n255\n").into_bytes();
+            v.extend_from_slice(&buf);
+            (v, "ppm")
+        }
+        (false, ScreenForm::Jpeg) => (encode_jpeg_q(&buf, w, h, SCREEN_QUALITY)?, "jpg"),
+    };
+    Ok((out.0, out.1, decoded))
 }
 
 /// The picture as it is shown (EXIF orientation `o` applied), four bytes a pixel.
@@ -344,8 +401,12 @@ pub fn orient(buf: &[u8], w: u32, h: u32, c: usize, o: u16) -> (Vec<u8>, u32, u3
 }
 
 fn encode_jpeg(rgb: &[u8], w: u32, h: u32) -> Result<Vec<u8>, String> {
+    encode_jpeg_q(rgb, w, h, QUALITY)
+}
+
+fn encode_jpeg_q(rgb: &[u8], w: u32, h: u32, quality: u8) -> Result<Vec<u8>, String> {
     let mut out = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, QUALITY)
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality)
         .encode(rgb, w, h, image::ExtendedColorType::Rgb8)
         .map_err(|e| e.to_string())?;
     Ok(out)
@@ -475,6 +536,20 @@ pub fn child_main() -> ! {
         let ok = out.write_all(&line).is_ok() && out.write_all(&data).is_ok() && out.flush().is_ok();
         std::process::exit(if ok { 0 } else { 3 })
     }
+    if let Some(form) = job.screen {
+        let r = make_screen(&bytes, &limits, job.edits.as_ref(), form);
+        drop(bytes);
+        let (answer, data) = match r {
+            Ok((file, ext, _)) => {
+                (Answer { ok: true, error: String::new(), meta: Meta::default(), thumbs: vec![(SCREEN, ext.into(), file.len() as u64)] }, file)
+            }
+            Err(e) => (Answer { ok: false, error: e, meta: Meta::default(), thumbs: vec![] }, vec![]),
+        };
+        let mut line = serde_json::to_vec(&answer).unwrap_or_default();
+        line.push(b'\n');
+        let ok = out.write_all(&line).is_ok() && out.write_all(&data).is_ok() && out.flush().is_ok();
+        std::process::exit(if ok { 0 } else { 3 })
+    }
     let r = make_with(&bytes, &limits, job.edits.as_ref());
     drop(bytes);
     let (answer, data) = match r {
@@ -536,7 +611,7 @@ pub fn run_isolated(exe: &Path, file: std::fs::File, memory: u64, edits: Option<
     let mut cmd = std::process::Command::new(exe);
     cmd.arg("photo-worker").arg(memory.to_string());
     if let Some(e) = edits.filter(|e| !e.is_identity()) {
-        let job = Job { edits: Some(e.clone()), export: None };
+        let job = Job { edits: Some(e.clone()), export: None, screen: None };
         cmd.arg(serde_json::to_string(&job).map_err(|e| e.to_string())?);
     }
     run_child(cmd, Input::File(file), CHILD_TIMEOUT)
@@ -553,6 +628,20 @@ pub fn run_export(exe: &Path, file: std::fs::File, memory: u64, job: &Job) -> Re
     }
     rest.shrink_to_fit();
     Ok(rest)
+}
+
+/// Makes the screen copy of the picture in `file` in a child process: (bytes, extension).
+pub fn run_screen(exe: &Path, file: std::fs::File, memory: u64, edits: Option<&Edits>, form: ScreenForm) -> Result<(Vec<u8>, String), String> {
+    let job = Job { edits: edits.filter(|e| !e.is_identity()).cloned(), export: None, screen: Some(form) };
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("photo-worker").arg(memory.to_string()).arg(serde_json::to_string(&job).map_err(|e| e.to_string())?);
+    let (head, mut rest) = run_raw(cmd, Input::File(file), CHILD_TIMEOUT, MAX_SCREEN_OUTPUT)?;
+    let Some((SCREEN, ext, len)) = head.thumbs.first().cloned() else { return Err("the picture reader gave no screen copy".into()) };
+    if head.thumbs.len() != 1 || rest.len() as u64 != len || !matches!(ext.as_str(), "ppm" | "png" | "jpg") {
+        return Err("the picture reader's answer was cut short".into());
+    }
+    rest.shrink_to_fit();
+    Ok((rest, ext))
 }
 
 /// Gives the child `cmd` its input and reads its answer, killing it after `timeout`.

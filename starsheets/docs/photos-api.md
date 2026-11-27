@@ -64,7 +64,15 @@ minute), so new pictures show up without waiting for the regular rescan.
 
 ## Get a thumbnail
 
-`GET /api/photos/thumb/ID/SIZE?v=V`
+`GET /api/photos/thumb/ID/SIZE?v=V[&fmt=best|jpeg]`
+
+SIZE 2560 is the viewer's screen copy (never enlarged, upright, edits applied). `fmt=best` asks for
+the best format the browser said it shows (JPEG XL), anything else gets JPEG. JPEG XL copies are made
+in the background after the thumbnails by the external `cjxl` program (install `libjxl-tools` on
+Debian/Ubuntu, `libjxl` elsewhere; without it the server serves JPEG only and says so once in its
+log). JPEG copies are made only when asked for and kept under 2 GB (least recently shown go first).
+While a copy is being made the answer is 202 with `Retry-After` (the viewer shows the 1024 one).
+
 
 - `SIZE` is `256` (the grid) or `1024` (the viewer). The longest side is at most that; small pictures are never enlarged.
 - JPEG (`image/jpeg`), or PNG when the picture has transparency.
@@ -192,6 +200,7 @@ its thumbnails stay sharp.
 | `STARBASE_PHOTOS_CHILD_MB` | 1536 (at least 512) | The memory limit of each child process that decodes a picture. |
 | `STARBASE_PHOTOS_RESCAN` | 600 on a network share, 3600 on a local disk | Seconds between full rescans (at least 30). |
 | `STARBASE_PHOTOS_CACHE` | `/cache/photos` when a volume is mounted at `/cache`; else, if the storage folder is on a network share, a local per-user folder (`$XDG_CACHE_HOME` or `~/.cache`, else `/var/cache`, then `starbase/photos/<id>`); else `<storage>/.starsheets/photos-cache` (the log says which and why) | Where the index (`index.sqlite`) and thumbnails go. Always a local disk: SQLite's locking does not work on NAS shares. |
+| `STARBASE_PHOTOS_NO_JXL` | unset | Set: never make JPEG XL screen copies (JPEG only). |
 | `STARBASE_PHOTOS_CACHE_MB` | 20480 | The most the thumbnails may take. Past it, the least recently shown ones go first. |
 
 Workers × child memory is kept within half of the server's memory limit (the container's

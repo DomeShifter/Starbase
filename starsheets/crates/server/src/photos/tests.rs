@@ -9,24 +9,24 @@ use super::decode::{self, LIMITS, Meta};
 use super::index::State;
 use super::*;
 
-fn tmp(what: &str) -> PathBuf {
+pub(super) fn tmp(what: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("starbase-photos-{what}-{}", crate::store::random_hex(6)));
     std::fs::create_dir_all(&d).unwrap();
     d
 }
 
 /// A picture `w` × `h`: the left half red, the right half blue.
-fn halves(w: u32, h: u32) -> image::RgbImage {
+pub(super) fn halves(w: u32, h: u32) -> image::RgbImage {
     image::RgbImage::from_fn(w, h, |x, _| if x < w / 2 { image::Rgb([255, 0, 0]) } else { image::Rgb([0, 0, 255]) })
 }
 
-fn jpeg(img: &image::RgbImage) -> Vec<u8> {
+pub(super) fn jpeg(img: &image::RgbImage) -> Vec<u8> {
     let mut out = Vec::new();
     image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 95).encode_image(img).unwrap();
     out
 }
 
-fn encoded(img: &image::DynamicImage, f: image::ImageFormat) -> Vec<u8> {
+pub(super) fn encoded(img: &image::DynamicImage, f: image::ImageFormat) -> Vec<u8> {
     let mut out = Cursor::new(Vec::new());
     img.write_to(&mut out, f).unwrap();
     out.into_inner()
@@ -34,9 +34,9 @@ fn encoded(img: &image::DynamicImage, f: image::ImageFormat) -> Vec<u8> {
 
 /// A big-endian TIFF/EXIF block with orientation, camera, date (in the EXIF sub-IFD) and GPS.
 /// Degrees, minutes, seconds.
-type Dms = (u32, u32, u32);
+pub(super) type Dms = (u32, u32, u32);
 
-fn exif_block(orientation: u16, date: &str, gps: Option<(Dms, char, Dms, char)>) -> Vec<u8> {
+pub(super) fn exif_block(orientation: u16, date: &str, gps: Option<(Dms, char, Dms, char)>) -> Vec<u8> {
     // Entries: (tag, type, count, value bytes); values over 4 bytes go after the IFDs.
     type Entry = (u16, u16, u32, Vec<u8>);
     fn ifd(entries: &[Entry], start: u32, data: &mut Vec<u8>, data_at: u32) -> Vec<u8> {
@@ -104,7 +104,7 @@ fn exif_block(orientation: u16, date: &str, gps: Option<(Dms, char, Dms, char)>)
 }
 
 /// `jpeg` with an EXIF (APP1) segment put right after its start marker.
-fn with_exif(jpeg: &[u8], tiff: &[u8]) -> Vec<u8> {
+pub(super) fn with_exif(jpeg: &[u8], tiff: &[u8]) -> Vec<u8> {
     let mut seg = b"Exif\x00\x00".to_vec();
     seg.extend(tiff);
     let mut out = jpeg[..2].to_vec();
@@ -240,13 +240,13 @@ fn config(workers: usize, watch: bool) -> Config {
 }
 
 /// A scan of everything Photos is on for, through the scanner thread, waited for.
-fn rescan(svc: &Photos) {
+pub(super) fn rescan(svc: &Photos) {
     let t = svc.request_scan("", true, true);
     assert!(svc.wait_scan(t, Duration::from_secs(30)), "scan didn't finish");
 }
 
 /// A store with pictures, Photos on for ann/Trip and bob: (store, service).
-fn with_pictures() -> (Store, Arc<Photos>) {
+pub(super) fn with_pictures() -> (Store, Arc<Photos>) {
     let root = tmp("store");
     let s = Store { root: root.clone(), keep: 3, spaces: true };
     let put = |p: &str, b: &[u8]| {
@@ -271,7 +271,7 @@ fn with_pictures() -> (Store, Arc<Photos>) {
     (s, svc)
 }
 
-fn settle(svc: &Photos) {
+pub(super) fn settle(svc: &Photos) {
     let t = Instant::now();
     while svc.queued() != (0, 0) || svc.db().counts().unwrap()[0] > 0 {
         assert!(t.elapsed() < Duration::from_secs(60), "still working: {:?}", svc.status());
