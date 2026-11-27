@@ -3,7 +3,7 @@
 
 use serde_json::json;
 
-use super::{Home, Item, Json, View, name_of};
+use super::{Home, Item, Json, LOCKED_PHOTOS_VISIBLE, View, name_of};
 
 impl Home {
     /// Where the home screen is and what it lists, in the order shown.
@@ -25,7 +25,7 @@ impl Home {
             "menu": self.menu_rects.iter().map(|(l, r)| json!({ "label": l, "rect": [r.min.x, r.min.y, r.max.x, r.max.y] })).collect::<Vec<_>>(),
             "photos": self.photos.test_state(self.photo_folder().is_some()),
             // Drive's left list has the "Locked" entry (target "drive:locked").
-            "lockedEntry": self.photos_available(),
+            "lockedEntry": LOCKED_PHOTOS_VISIBLE && self.photos_available(),
             "view": view,
             "list": self.list,
             "view_opts": json!({ "cols": self.vo.cols_str(), "grid": self.vo.grid_str() }),

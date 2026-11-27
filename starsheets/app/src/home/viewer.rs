@@ -1086,13 +1086,15 @@ fn info_panel(
                 info_row(c, &ctx, k, v, albums, &mut go);
             }
         }
-        c.add_space(house::L);
-        c.painter().hline(c.max_rect().x_range(), c.cursor().top(), egui::Stroke::new(1.0, house::VIEW_BAR_FIELD));
-        c.add_space(house::L);
-        let label = if in_locked { "Move out of Locked folder" } else { "Move to Locked folder" };
-        let r = c.add(house::secondary_dark(label));
-        house::target(&ctx, "viewer:info:lock", r.rect);
-        lock = r.clicked();
+        if crate::home::LOCKED_PHOTOS_VISIBLE {
+            c.add_space(house::L);
+            c.painter().hline(c.max_rect().x_range(), c.cursor().top(), egui::Stroke::new(1.0, house::VIEW_BAR_FIELD));
+            c.add_space(house::L);
+            let label = if in_locked { "Move out of Locked folder" } else { "Move to Locked folder" };
+            let r = c.add(house::secondary_dark(label));
+            house::target(&ctx, "viewer:info:lock", r.rect);
+            lock = r.clicked();
+        }
     });
     InfoOut { go, lock, close, who, save, map }
 }

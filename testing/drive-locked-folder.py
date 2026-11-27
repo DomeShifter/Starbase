@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Real-input check: Drive's "Locked" entry and Photo Mode's one-time Locked folder note.
 
+For builds with the Locked browser controls enabled. The regular browser build is covered by photos-locked-hidden-input.py.
+
 Seed first (pictures in a folder with Photos on):
     python3 -I testing/seed.py --url <ready: URL> --set gps        # prints the folder, e.g. 'ada/seed-gps'
 Run from a workstation:

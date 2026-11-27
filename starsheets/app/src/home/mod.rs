@@ -53,6 +53,9 @@ const SUB_H: f32 = 16.0;
 const CHIP_H: f32 = 48.0;
 const ROW: f32 = 40.0;
 /// Starbase Drive's accent: Google Drive's blue (drop targets, dialog buttons), not Sheets' green.
+/// Keep the Locked implementation and stored data while its browser controls are retired.
+pub(crate) const LOCKED_PHOTOS_VISIBLE: bool = !cfg!(target_arch = "wasm32");
+
 const ACCENT: Color32 = house::BLUE;
 /// Preview pictures fetched at once.
 const THUMBS_AT_ONCE: usize = 4;

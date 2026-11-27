@@ -108,7 +108,9 @@ pub(super) fn menu_rows(in_album: bool, in_locked: bool) -> Vec<(Act, &'static s
     if in_album {
         v.push((Act::Remove, "remove", "Remove from album"));
     }
-    v.push((Act::Lock, "lock", "Move to Locked folder…"));
+    if crate::home::LOCKED_PHOTOS_VISIBLE {
+        v.push((Act::Lock, "lock", "Move to Locked folder…"));
+    }
     v.push((Act::Delete, "delete", "Move to bin"));
     v
 }
