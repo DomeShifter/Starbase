@@ -190,7 +190,7 @@ fn face_json(f: &Face, vis: &Vis) -> Option<Value> {
 fn list(a: &App, me: Option<auth::User>, owner: bool) -> Answer {
     let s = svc(a)?;
     let vis = visible(a, &s, &me);
-    let model = s.face_model().to_string();
+    let model = crate::mounts::face_model(&a.store, me.as_ref(), s.face_model());
     let (all, names) = s
         .with_db(|ix| Ok::<_, rusqlite::Error>((faces::faces(ix, &model)?, faces::people(ix, user(&me))?)))
         .map_err(|_| error(500, "couldn't read the faces"))?;
@@ -234,6 +234,12 @@ fn list(a: &App, me: Option<auth::User>, owner: bool) -> Answer {
         v_marks.push((key, list));
     }
     let mut v = state(a, owner);
+    if model.contains(':') {
+        let thumbs = vis.keys().cloned().collect();
+        let (done, all, found, rechecked) =
+            s.with_db(|ix| faces::progress_in(ix, &model, &thumbs)).map_err(|_| error(500, "couldn't count the faces"))?;
+        v["progress"] = json!({"done": done, "all": all, "faces": found, "recheck": {"done": rechecked, "all": done}});
+    }
     for (key, mut list) in v_marks {
         v[format!("{key}_count")] = json!(list.len());
         list.truncate(MAX_MARKED);
@@ -251,7 +257,7 @@ fn in_photo(a: &App, me: Option<auth::User>, id: &str) -> Answer {
     let s = svc(a)?;
     let acc = sharing::Access::new(&a.store, a.auth, me.as_ref());
     let Some(v) = seen(a, &acc, id) else { return Err(error(404, "No such picture.")) };
-    let model = s.face_model().to_string();
+    let model = crate::mounts::face_model(&a.store, me.as_ref(), s.face_model());
     let (paths, all, names) = s
         .with_db(|ix| Ok::<_, rusqlite::Error>((faces::thumb_paths(ix)?, faces::faces(ix, &model)?, faces::people(ix, user(&me))?)))
         .map_err(|_| error(500, "couldn't read the faces"))?;
@@ -281,7 +287,7 @@ fn in_photo(a: &App, me: Option<auth::User>, id: &str) -> Answer {
 /// The faces of `who` I may see (and all of them), or 404.
 fn faces_of(a: &App, s: &super::Photos, me: &Option<auth::User>, who: Who) -> Result<(Vec<Face>, Vis), Response<Body>> {
     let vis = visible(a, s, me);
-    let model = s.face_model().to_string();
+    let model = crate::mounts::face_model(&a.store, me.as_ref(), s.face_model());
     let all = s.with_db(|ix| faces::faces(ix, &model)).map_err(|_| error(500, "couldn't read the faces"))?;
     let mine: Vec<Face> = all.into_iter().filter(|f| Who::of(f) == Some(who) && vis.contains_key(&f.thumb)).collect();
     if mine.is_empty() {
@@ -343,7 +349,7 @@ fn mark_faces(a: &App, me: Option<auth::User>, act: &str, b: &Value) -> Answer {
         return Err(error(400, "Which face?"));
     }
     let vis = visible(a, &s, &me);
-    let model = s.face_model().to_string();
+    let model = crate::mounts::face_model(&a.store, me.as_ref(), s.face_model());
     let shown = s.with_db(|ix| faces::faces(ix, &model)).map_err(|_| error(500, "couldn't read the faces"))?;
     if !ids.iter().all(|id| shown.iter().any(|f| f.id == *id && vis.contains_key(&f.thumb))) {
         return Err(error(404, "That face isn't in People."));
@@ -369,7 +375,7 @@ fn marked(a: &App, me: Option<auth::User>, act: &str, b: &Value) -> Answer {
         return Err(error(400, "Which face?"));
     }
     let vis = visible(a, &s, &me);
-    let model = s.face_model().to_string();
+    let model = crate::mounts::face_model(&a.store, me.as_ref(), s.face_model());
     let marks = s.with_db(|ix| faces::marked(ix, &model)).map_err(|_| error(500, "couldn't read the faces"))?;
     let ok = |id: &i64| marks.iter().any(|f| f.id == *id && (want == 0 || f.state == want) && vis.contains_key(&f.thumb));
     if !ids.iter().all(ok) {
@@ -453,7 +459,8 @@ fn change(a: &App, me: Option<auth::User>, id: &str, act: &str, b: &Value) -> An
             let face = b["face"].as_i64().ok_or_else(|| error(400, "Which face?"))?;
             let yes = b["yes"].as_bool().ok_or_else(|| error(400, "Yes or no?"))?;
             let vis = visible(a, &s, &me);
-            let f = s.with_db(|ix| faces::face(ix, face)).map_err(db_err)?;
+            let model = crate::mounts::face_model(&a.store, me.as_ref(), s.face_model());
+            let f = s.with_db(|ix| faces::face_in_model(ix, face, &model)).map_err(db_err)?;
             if !f.is_some_and(|f| vis.contains_key(&f.thumb)) || !s.with_db(|ix| faces::answer(ix, face, p, yes)).map_err(db_err)? {
                 return Err(error(404, "That question was already answered."));
             }
@@ -488,7 +495,13 @@ pub async fn face_image(app: &Shared, me: Option<auth::User>, face: &str, id: St
         }
         let key =
             s.row(&path).filter(|_| s.covers(&path)).and_then(|r| r.thumb_key().map(str::to_string)).ok_or_else(|| error(404, "no such file"))?;
-        let f = s.with_db(|ix| faces::face(ix, face)).ok().flatten().filter(|f| f.thumb == key).ok_or_else(|| error(404, "No such face."))?;
+        let model = crate::mounts::face_model(&a.store, me.as_ref(), s.face_model());
+        let f = s
+            .with_db(|ix| faces::face_in_model(ix, face, &model))
+            .ok()
+            .flatten()
+            .filter(|f| f.thumb == key)
+            .ok_or_else(|| error(404, "No such face."))?;
         let bytes = s.face_file(&f, FACE_PX).ok_or_else(|| error(404, "No thumbnail yet."))?;
         Ok((bytes, tag(&key).to_string()))
     })

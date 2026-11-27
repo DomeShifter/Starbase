@@ -114,6 +114,26 @@ pub fn choices(store: &Store, user: &User) -> BTreeMap<String, String> {
     prefs.get(KEY).map_or_else(BTreeMap::new, |key| choices_with(store, user, Some(key), &mount_table()))
 }
 
+/// Report the caller's choices and effective paths, including an unavailable saved selection.
+pub fn settings(store: &Store, user: &User) -> Value {
+    let prefs = spaces::prefs(store, &user.username);
+    let selected = prefs.get(SELECTION).and_then(|v| serde_json::from_value::<SavedRoots>(v.clone()).ok()).unwrap_or_default();
+    let photos = selected.photos.map(|choice| match choice {
+        SavedPhotos::Folder(path) => PhotosChoice::Folder(path),
+        SavedPhotos::Mount(assignment) => PhotosChoice::Mount(assignment.id),
+    });
+    let path = |root| match root {
+        Root::Available(path) => Some(path),
+        Root::Unavailable => None,
+    };
+    let current = roots(store, user);
+    json!({
+        "mounts": choices(store, user),
+        "selected": {"my_files": selected.my_files.map(|a| a.id), "photos": photos},
+        "roots": {"my_files": path(current.my_files), "photos": path(current.photos)},
+    })
+}
+
 /// Read current roots. With no preference, keep the legacy My Files space and use it for Photos.
 pub fn roots(store: &Store, user: &User) -> Roots {
     if !store.spaces {
@@ -139,6 +159,21 @@ pub fn configured_photos(store: &Store, user: &User) -> Option<Root> {
     let selection = prefs.get(SELECTION)?;
     let choices = prefs.get(KEY).map_or_else(BTreeMap::new, |key| choices_with(store, user, Some(key), &mount_table()));
     Some(resolve_saved(store, user, selection, &choices).photos)
+}
+
+/// Face metadata has its own identity even when rendered thumbnail bytes are shared.
+pub fn face_model(store: &Store, user: Option<&User>, model: &str) -> String {
+    use sha2::{Digest as _, Sha256};
+
+    let Some(user) = user else { return model.to_string() };
+    let Some(root) = configured_photos(store, user) else { return model.to_string() };
+    let prefs = spaces::prefs(store, &user.username);
+    let Some(key) = prefs.get(KEY).and_then(Value::as_str).filter(|key| valid_key(key)) else {
+        return format!("{model}:unavailable");
+    };
+    let Root::Available(root) = root else { return format!("{model}:unavailable") };
+    let scope = Sha256::digest(format!("{key}\0{}\0{root}", user.username));
+    format!("{model}:{}", hex::encode(scope))
 }
 
 fn resolve_saved(store: &Store, user: &User, selection: &Value, choices: &BTreeMap<String, String>) -> Roots {
@@ -178,6 +213,9 @@ fn set_with(store: &Store, user: &User, my_files: Option<&str>, photos: Option<P
     if saved.my_files.is_none() && saved.photos.is_none() {
         prefs.remove(SELECTION);
     } else {
+        if !prefs.get(KEY).and_then(Value::as_str).is_some_and(valid_key) {
+            prefs.insert(KEY.to_string(), json!(store::random_hex(16)));
+        }
         prefs.insert(SELECTION.to_string(), json!(saved));
     }
     spaces::save_prefs(store, &user.username, &prefs)?;

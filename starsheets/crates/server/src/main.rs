@@ -354,6 +354,35 @@ async fn accounts(
     let on = app.auth;
     let secure = ask.secure;
     Some(match (path.as_slice(), m) {
+        (["library-roots"], "GET" | "PUT") => {
+            let Some(user) = me else { return Some(error(401, "Sign in first.")) };
+            let update = if m == "PUT" {
+                let parsed = json.get("my_files").zip(json.get("photos")).and_then(|(files, photos)| {
+                    Some((
+                        serde_json::from_value::<Option<String>>(files.clone()).ok()?,
+                        serde_json::from_value::<Option<mounts::PhotosChoice>>(photos.clone()).ok()?,
+                    ))
+                });
+                let Some(parsed) = parsed else { return Some(error(400, "Choose both My Files and Photos.")) };
+                Some(parsed)
+            } else {
+                None
+            };
+            blocking(app, move |a| {
+                if let Some((files, photos)) = update {
+                    if let Err(why) = mounts::set_roots(&a.store, &user, files.as_deref(), photos) {
+                        let status = if why.kind() == std::io::ErrorKind::InvalidInput { 400 } else { 500 };
+                        return error(status, &why.to_string());
+                    }
+                    if let Some(service) = photos::service(&a.store) {
+                        service.request_scan(&user.username, true, true);
+                    }
+                }
+                send_json(&mounts::settings(&a.store, &user), 200)
+            })
+            .await
+            .unwrap_or_else(|| error(500, "server error"))
+        }
         (["info"], "GET") => {
             let setup = on && !auth::any_users(&app.store);
             let s = auth::signup(&app.store);
@@ -2626,6 +2655,27 @@ mod tests {
         let g = post(&app, &ip, "/api/setup", "", json!({"code": code, "username": "boss", "name": "Boss", "password": "bosspassword"})).await;
         assert_eq!(g.status, 200, "{:?}", g.json);
         (app, ip, cookie_of(&g))
+    }
+
+    #[tokio::test]
+    async fn library_roots_belong_to_the_signed_in_account() {
+        let (app, ip, boss) = owned().await;
+        let uri = "/api/library-roots";
+        let add = post(&app, &ip, "/api/users", &boss, json!({"username":"vic", "name":"Vic", "password":"vicpassword"})).await;
+        assert_eq!(add.status, 200);
+        let vic = cookie_of(&post(&app, &ip, "/api/login", "", json!({"username":"vic", "password":"vicpassword"})).await);
+        std::fs::create_dir_all(app.store.full("vic/Library")).unwrap();
+        assert_eq!(send(&app, &ip, "GET", uri, "", &[], vec![]).await.status, 401);
+        let put = |value: Value| send(&app, &ip, "PUT", uri, &vic, &[("Content-Type", "application/json")], value.to_string().into_bytes());
+        let invalid = put(json!({"my_files": null, "photos": {"folder": "../boss"}})).await;
+        assert_eq!(invalid.status, 400);
+        let selected = put(json!({"my_files": null, "photos": {"folder": "Library"}})).await;
+        assert_eq!(selected.status, 200);
+        assert_eq!(selected.json["roots"]["photos"], "vic/Library");
+        assert_eq!(send(&app, &ip, "GET", uri, &boss, &[], vec![]).await.json["roots"]["photos"], "boss");
+        assert_eq!(put(json!({"my_files": null})).await.status, 400);
+        let cleared = put(json!({"my_files": null, "photos": null})).await;
+        assert_eq!(cleared.json["roots"]["photos"], "vic");
     }
 
     #[tokio::test]

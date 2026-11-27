@@ -83,13 +83,12 @@ fn face_counts(ph: &Photos) -> (u64, u64) {
 }
 
 /// Faces found in the pictures at `paths` (mine only: never other people's).
-fn faces_in(ph: &Photos, paths: &[String]) -> u64 {
+fn faces_in(ph: &Photos, paths: &[String], model: &str) -> u64 {
     let mine: HashSet<&String> = paths.iter().collect();
-    let model = ph.face_model().to_string();
     ph.with_db(|ix| {
         let thumbs: HashSet<String> =
             faces::thumb_paths(ix).unwrap_or_default().into_iter().filter(|(_, p)| mine.contains(p)).map(|(t, _)| t).collect();
-        faces::faces(ix, &model).unwrap_or_default().iter().filter(|f| thumbs.contains(&f.thumb)).count() as u64
+        faces::faces(ix, model).unwrap_or_default().iter().filter(|f| thumbs.contains(&f.thumb)).count() as u64
     })
 }
 
@@ -148,7 +147,14 @@ fn how_far(a: &crate::App, me: Option<&auth::User>, who: &str, ph: &Photos) -> R
         new.retain(|path| acc.photo_allowed(&a.store, path));
     }
     let busy = tickets.iter().any(|t| !ph.wait_scan(*t, Duration::ZERO));
-    let (done, all) = face_counts(ph);
+    let model = crate::mounts::face_model(&a.store, me, ph.face_model());
+    let (done, all) = if model.contains(':') {
+        let thumbs = ph.active_face_libraries(ph.face_model()).and_then(|mut active| active.remove(&model)).unwrap_or_default();
+        let (done, all, _, _) = ph.with_db(|ix| faces::progress_in(ix, &model, &thumbs)).unwrap_or_default();
+        (done, all)
+    } else {
+        face_counts(ph)
+    };
     let (queued, working) = ph.queued();
     send_json(
         &json!({
@@ -158,7 +164,7 @@ fn how_far(a: &crate::App, me: Option<&auth::User>, who: &str, ph: &Photos) -> R
             "faces_on": ph.faces_on(),
             "thumbs_waiting": queued + working,
             "faces": { "done": done, "all": all },
-            "faces_new": faces_in(ph, &new),
+            "faces_new": faces_in(ph, &new, &model),
         }),
         200,
     )

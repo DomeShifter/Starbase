@@ -107,6 +107,7 @@ async fn a_name_is_seen_only_by_the_account_that_gave_it() {
         assert!(!r.json.to_string().contains("Mae") && !r.json.to_string().contains("Sally"));
     }
     assert_eq!(get(&app, "/api/photos/faces/nope", Some("ada"), &[]).await.status, 404);
+
     assert_eq!(get(&app, &format!("/api/photos/faces/{ada_pic}"), None, &[]).await.status, 401);
     // Ignore (a stranger), then every way back. Nothing is ever deleted.
     let list = |who: &'static str| {
@@ -150,5 +151,36 @@ async fn a_name_is_seen_only_by_the_account_that_gave_it() {
     let v = list("ada").await;
     assert_eq!((v["ignored_count"].clone(), v["notfaces_count"].clone()), (json!(1), json!(1)), "{v}");
     assert!(v["ignored"][0]["grp"].as_i64().is_some(), "marked faces say their group: {v}");
+
+    // Explicit libraries isolate metadata for byte-identical copies while keeping cached bytes.
+    for (name, folder) in [("ada", "Pics"), ("bob", "Mine")] {
+        let account = auth::users(&app.store).into_iter().find(|u| u.username == name).unwrap();
+        crate::mounts::set_roots(&app.store, &account, None, Some(crate::mounts::PhotosChoice::Folder(folder.into()))).unwrap();
+        let scoped = crate::mounts::face_model(&app.store, Some(&account), &model);
+        assert_ne!(scoped, model);
+        let active = std::collections::HashMap::from([(scoped.clone(), thumbs.iter().cloned().collect())]);
+        let (recheck, jobs) = ph.with_db(|ix| faces::scoped_jobs(ix, &active, 16)).unwrap();
+        assert!(!recheck);
+        assert_eq!(jobs.len(), 2);
+        assert!(jobs.iter().all(|(_, partition)| partition == &scoped));
+        assert!(get(&app, "/api/photos/people", Some(name), &[]).await.json["groups"].as_array().unwrap().is_empty());
+        for t in &thumbs {
+            ph.with_db(|ix| faces::keep(ix, t, &scoped, &[face([1.0, 0.0, 0.0, 0.0])])).unwrap();
+        }
+        faces::regroup(ph.db_lock(), &scoped).unwrap();
+    }
+    let ada = get(&app, "/api/photos/people", Some("ada"), &[]).await.json;
+    let bob = get(&app, "/api/photos/people", Some("bob"), &[]).await.json;
+    assert_ne!(ada["groups"][0]["id"], bob["groups"][0]["id"]);
+    let ada_group = ada["groups"][0]["id"].as_str().unwrap();
+    let ada_face = &ada["groups"][0]["cover"]["face"];
+    let bob_files = get(&app, &format!("/api/photos/people/{}", bob["groups"][0]["id"].as_str().unwrap()), Some("bob"), &[]).await.json;
+    for photo in bob_files["photos"].as_array().unwrap() {
+        let id = photo["id"].as_str().unwrap();
+        let url = format!("/api/photos/people/face/{ada_face}/{id}");
+        assert_eq!(get(&app, &url, Some("bob"), &[]).await.status, 404);
+    }
+    assert_eq!(post(&app, &format!("/api/photos/people/{ada_group}/name"), "ada", json!({"name": "Private Ada"})).await.status, 200);
+    assert!(!get(&app, "/api/photos/people", Some("bob"), &[]).await.json.to_string().contains("Private Ada"));
     let _ = std::fs::remove_dir_all(root);
 }

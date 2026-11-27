@@ -99,7 +99,7 @@ pub struct Thresholds {
 /// still join on their own while the borderline band is asked about. The trial's old offer
 /// line (0.35 / 0.43) is dropped: too many wrong questions.
 pub fn thresholds(model: &str) -> Thresholds {
-    match model {
+    match model.split_once(':').map_or(model, |(engine, _)| engine) {
         "sface" => Thresholds { group_cut: 0.67, suggest: 0.54, auto: 0.64 },
         _ => Thresholds { group_cut: 0.75, suggest: 0.45, auto: 0.55 },
     }
@@ -305,6 +305,28 @@ pub fn todo(ix: &Index, model: &str, n: usize) -> rusqlite::Result<Vec<String>> 
     st.query_map(params![model, n as i64], |r| r.get(0))?.collect()
 }
 
+/// Candidate thumbnails for the active libraries, with unfinished detection ahead of rechecks.
+pub fn scoped_jobs(ix: &Index, active: &HashMap<String, HashSet<String>>, limit: usize) -> rusqlite::Result<(bool, Vec<(String, String)>)> {
+    let mut state = conn(ix).prepare_cached("SELECT detect FROM faces_done WHERE thumb = ?1 AND model = ?2")?;
+    let mut fresh = Vec::new();
+    let mut older = Vec::new();
+    for (model, thumbs) in active {
+        for thumb in thumbs {
+            match state.query_row(params![thumb, model], |r| r.get::<_, i64>(0)).optional()? {
+                None => {
+                    fresh.push((thumb.clone(), model.clone()));
+                    if fresh.len() == limit {
+                        return Ok((false, fresh));
+                    }
+                }
+                Some(detect) if detect < DETECT_VERSION && older.len() < limit => older.push((thumb.clone(), model.clone())),
+                _ => {}
+            }
+        }
+    }
+    Ok(if fresh.is_empty() { (true, older) } else { (false, fresh) })
+}
+
 /// Every ready picture: (thumbnail key, path).
 pub fn thumb_paths(ix: &Index) -> rusqlite::Result<Vec<(String, String)>> {
     let mut st = conn(ix).prepare("SELECT COALESCE(thumb, hash), path FROM photos WHERE state = 1 AND COALESCE(thumb, hash) IS NOT NULL")?;
@@ -319,6 +341,27 @@ pub fn progress(ix: &Index, model: &str) -> (u64, u64, u64) {
     let all = c.query_row("SELECT COUNT(DISTINCT COALESCE(thumb, hash)) FROM photos WHERE state = 1", [], |r| r.get::<_, i64>(0)).unwrap_or(0) as u64;
     let faces = q("SELECT COUNT(*) FROM faces WHERE model = ?1");
     (done.min(all), all, faces)
+}
+
+/// Detection and recheck counts for the thumbnails currently visible in a library.
+pub fn progress_in(ix: &Index, model: &str, thumbs: &HashSet<String>) -> rusqlite::Result<(u64, u64, u64, u64)> {
+    let c = conn(ix);
+    let mut scans = c.prepare("SELECT thumb, detect FROM faces_done WHERE model = ?1")?;
+    let mut done = 0;
+    let mut rechecked = 0;
+    for row in scans.query_map([model], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
+        let (thumb, detect) = row?;
+        if thumbs.contains(&thumb) {
+            done += 1;
+            rechecked += u64::from(detect >= DETECT_VERSION);
+        }
+    }
+    let mut rows = c.prepare("SELECT thumb FROM faces WHERE model = ?1")?;
+    let mut found = 0;
+    for row in rows.query_map([model], |r| r.get::<_, String>(0))? {
+        found += u64::from(thumbs.contains(&row?));
+    }
+    Ok((done, thumbs.len() as u64, found, rechecked))
 }
 
 /// Keeps the faces found in thumbnail `thumb` (replacing any earlier ones of that model).
@@ -433,6 +476,12 @@ pub fn marked(ix: &Index, model: &str) -> rusqlite::Result<Vec<Face>> {
 pub fn face(ix: &Index, id: i64) -> rusqlite::Result<Option<Face>> {
     let mut st = conn(ix).prepare(&format!("SELECT {FACE_COLS} FROM faces WHERE id = ?1"))?;
     st.query_map([id], face_row)?.next().transpose()
+}
+
+/// Read a direct face ID only within the caller's face model and library.
+pub fn face_in_model(ix: &Index, id: i64, model: &str) -> rusqlite::Result<Option<Face>> {
+    let mut st = conn(ix).prepare(&format!("SELECT {FACE_COLS} FROM faces WHERE id = ?1 AND model = ?2"))?;
+    st.query_map(params![id, model], face_row)?.next().transpose()
 }
 
 /// The square People shows around face box `bx` (0..1 of `img`): 1.5 times the face's longer
@@ -685,24 +734,32 @@ pub struct Snapshot {
 /// The most automatically matched faces looked at again in one pass (newest first).
 pub const RECHECK: usize = 1000;
 
-pub fn snapshot(ix: &Index, model: &str) -> rusqlite::Result<Snapshot> {
+fn snapshot_in(ix: &Index, model: &str, active: Option<&HashSet<String>>) -> rusqlite::Result<Snapshot> {
     let c = conn(ix);
+    let allowed = |thumb: &str| active.is_none_or(|thumbs| thumbs.contains(thumb));
     let mut st = c.prepare(
-        "SELECT id, emb, score, px, hidden FROM faces WHERE model = ?1 AND person IS NULL AND hidden IN (0, 2)
-         UNION ALL SELECT * FROM (SELECT id, emb, score, px, hidden FROM faces
+        "SELECT id, emb, score, px, hidden, thumb FROM faces WHERE model = ?1 AND person IS NULL AND hidden IN (0, 2)
+         UNION ALL SELECT * FROM (SELECT id, emb, score, px, hidden, thumb FROM faces
            WHERE model = ?1 AND person IS NOT NULL AND auto = 1 AND hidden IN (0, 2) ORDER BY id DESC LIMIT ?2)
          ORDER BY id DESC",
     )?;
-    let loose = st
-        .query_map(params![model, RECHECK as i64], |r| {
-            let (score, px, hidden): (f32, f32, i64) = (r.get(2)?, r.get(3)?, r.get(4)?);
-            Ok((r.get(0)?, blob_to_emb(&r.get::<_, Vec<u8>>(1)?), hidden == 0 && good(score, px)))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut loose = Vec::new();
+    for row in st.query_map(params![model, RECHECK as i64], |r| {
+        let (score, px, hidden): (f32, f32, i64) = (r.get(2)?, r.get(3)?, r.get(4)?);
+        Ok((r.get::<_, String>(5)?, (r.get(0)?, blob_to_emb(&r.get::<_, Vec<u8>>(1)?), hidden == 0 && good(score, px))))
+    })? {
+        let (thumb, entry) = row?;
+        if allowed(&thumb) {
+            loose.push(entry);
+        }
+    }
     let mut people: HashMap<i64, Vec<Vec<f32>>> = HashMap::new();
-    let mut st = c.prepare("SELECT person, emb FROM faces WHERE model = ?1 AND person IS NOT NULL AND auto = 0 ORDER BY id DESC")?;
-    for r in st.query_map([model], |r| Ok((r.get::<_, i64>(0)?, blob_to_emb(&r.get::<_, Vec<u8>>(1)?))))? {
-        let (p, e) = r?;
+    let mut st = c.prepare("SELECT person, emb, thumb FROM faces WHERE model = ?1 AND person IS NOT NULL AND auto = 0 ORDER BY id DESC")?;
+    for r in st.query_map([model], |r| Ok((r.get::<_, i64>(0)?, blob_to_emb(&r.get::<_, Vec<u8>>(1)?), r.get::<_, String>(2)?)))? {
+        let (p, e, thumb) = r?;
+        if !allowed(&thumb) {
+            continue;
+        }
         let v = people.entry(p).or_default();
         if v.len() < PROTOTYPES {
             v.push(e);
@@ -810,9 +867,13 @@ pub fn apply(ix: &Index, plan: &Plan) -> rusqlite::Result<()> {
 
 /// Groups all loose faces of `model` again (holding `lock` only to read and to write).
 pub fn regroup(lock: &std::sync::Mutex<Index>, model: &str) -> rusqlite::Result<usize> {
+    regroup_in(lock, model, None)
+}
+
+pub fn regroup_in(lock: &std::sync::Mutex<Index>, model: &str, active: Option<&HashSet<String>>) -> rusqlite::Result<usize> {
     let snap = {
         let ix = lock.lock().unwrap_or_else(|e| e.into_inner());
-        snapshot(&ix, model)?
+        snapshot_in(&ix, model, active)?
     };
     let p = plan(&snap, thresholds(model));
     let ix = lock.lock().unwrap_or_else(|e| e.into_inner());
