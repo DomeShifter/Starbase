@@ -30,7 +30,10 @@ impl Home {
         house::target(ui.ctx(), "New", new.rect);
         egui::Popup::menu(&new).show(|ui| {
             house::menu(ui, 260.0);
-            let folder = here.clone().unwrap_or_else(|| self.space.clone());
+            let Some(folder) = here.clone().or_else(|| self.mine_root().map(str::to_string)) else {
+                ui.label("My Files is unavailable.");
+                return;
+            };
             if house::menu_row(ui, Some("note_add"), "New spreadsheet", "", true) {
                 self.new_file(&folder, false);
             }
@@ -52,7 +55,7 @@ impl Home {
                     Reply::NewFolder(v["path"].as_str().unwrap_or("").to_string())
                 });
                 if here.is_none() {
-                    self.navigate(View::Mine(self.space.clone()));
+                    self.navigate(View::Mine(folder.clone()));
                 }
             }
             house::menu_sep(ui);
@@ -66,9 +69,10 @@ impl Home {
         });
         ui.add_space(house::M);
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            let space = self.space.clone();
-            let mine_label = if self.accounts { "My files" } else { "All files" };
-            self.node(ui, mine_label, "home_storage", Some(View::Mine(space.clone())), Some(&space), "mine");
+            if let Some(root) = self.mine_root().map(str::to_string) {
+                let mine_label = if self.accounts { "My files" } else { "All files" };
+                self.node(ui, mine_label, "home_storage", Some(View::Mine(root.clone())), Some(&root), "mine");
+            }
             if self.accounts {
                 self.node(ui, "Shared with me", "folder_shared", Some(View::Shared(None)), None, "shared");
                 if self.expanded.contains("shared:") {
@@ -158,8 +162,12 @@ impl Home {
     }
 
     pub(super) fn children(&self, path: &str) -> Vec<String> {
-        let mut c: Vec<String> =
-            self.folders.iter().filter(|f| parent_of(&f.path) == path && f.path != path && !f.path.is_empty()).map(|f| f.path.clone()).collect();
+        let mut c: Vec<String> = self
+            .folders
+            .iter()
+            .filter(|f| parent_of(&f.path) == path && f.path != path && !f.path.is_empty() && self.drive_path(&f.path))
+            .map(|f| f.path.clone())
+            .collect();
         c.sort_by_key(|p| name_of(p).to_lowercase());
         c
     }

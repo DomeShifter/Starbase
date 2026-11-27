@@ -1915,11 +1915,13 @@ fn after_files(app: &App, me: &auth::User, m: &str, p: &[String], r: Result<Repl
         "files": files, "folders": folders, "folder_info": info, "space": me.username, "admin": me.owner,
         "shared": { "folders": shared_folders, "files": shared_files }, "people": people,
     });
-    if let Some(root) = a.photo_root(&app.store) {
-        result["photo_library"] = match root {
+    if let Some(roots) = mounts::configured_roots(&app.store, me) {
+        let path = |root| match root {
             mounts::Root::Available(path) => json!(path),
             mounts::Root::Unavailable => Value::Null,
         };
+        result["my_files_library"] = path(roots.my_files);
+        result["photo_library"] = path(roots.photos);
     }
     Ok(Reply::Json(result, code))
 }

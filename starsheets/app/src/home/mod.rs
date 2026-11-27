@@ -189,6 +189,7 @@ pub struct Home {
     space: String,
     /// Absent before configuration; a configured but missing library has no path.
     photo_library: Option<Option<String>>,
+    my_files_library: Option<Option<String>>,
     admin: bool,
     accounts: bool,
     shared_folders: Vec<String>,
@@ -468,7 +469,9 @@ impl Home {
         let s = |x: &Json, k: &str| x[k].as_str().unwrap_or("").to_string();
         self.accounts = v.get("space").is_some();
         self.space = s(&v, "space");
-        self.photo_library = v.get("photo_library").map(|path| path.as_str().map(str::to_string));
+        let library = |key| v.get(key).map(|path| path.as_str().map(str::to_string));
+        self.photo_library = library("photo_library");
+        self.my_files_library = library("my_files_library");
         self.admin = v["admin"].as_bool().unwrap_or(!self.accounts);
         self.files = v["files"]
             .as_array()
@@ -512,9 +515,13 @@ impl Home {
         self.shared_folders = list("folders");
         self.shared_files = list("files");
         self.people = v["people"].as_array().into_iter().flatten().map(|p| (s(p, "username"), Person { name: s(p, "name") })).collect();
-        if self.view.is_none() {
-            self.view = Some(View::Mine(self.space.clone()));
-            self.expanded.insert(format!("mine:{}", self.space));
+        if self.view.is_none() || matches!(&self.view, Some(View::Mine(path)) if !self.drive_path(path)) {
+            if let Some(root) = self.mine_root().map(str::to_string) {
+                self.expanded.insert(format!("mine:{root}"));
+                self.view = Some(View::Mine(root));
+            } else {
+                self.view = Some(View::Shared(None));
+            }
         }
         if let Some(dir) = self.open_dir.take() {
             self.go_folder(&dir);
@@ -706,10 +713,23 @@ impl Home {
         }
     }
 
+    fn mine_root(&self) -> Option<&str> {
+        self.my_files_library.as_ref().map_or(Some(self.space.as_str()), |root| root.as_deref())
+    }
+
+    fn drive_path(&self, path: &str) -> bool {
+        if !self.accounts || space_of(path) != self.space {
+            return true;
+        }
+        self.mine_root().is_some_and(|root| {
+            under(path, root) && (path.split('/').nth(1) != Some("starbase-mounts") || root.split('/').nth(1) == Some("starbase-mounts"))
+        })
+    }
+
     /// The folder above this one, if there is one to go up to.
     fn up_view(&self) -> Option<View> {
         match self.view.clone()? {
-            View::Mine(p) if p != self.space => Some(View::Mine(parent_of(&p).to_string())),
+            View::Mine(p) if self.mine_root() != Some(p.as_str()) => Some(View::Mine(parent_of(&p).to_string())),
             View::Shared(Some(p)) if self.shared_folders.contains(&p) => Some(View::Shared(None)),
             View::Shared(Some(p)) => Some(View::Shared(Some(parent_of(&p).to_string()))),
             View::Everyone(p) if !p.is_empty() => Some(View::Everyone(parent_of(&p).to_string())),
@@ -725,7 +745,7 @@ impl Home {
 
     /// Shows a folder in the right place: mine, shared with me, or (the server's owner) anyone's.
     fn go_folder(&mut self, path: &str) {
-        let v = if !self.accounts || under(path, &self.space) {
+        let v = if !self.accounts || (self.mine_root().is_some_and(|root| under(path, root)) && self.drive_path(path)) {
             View::Mine(path.to_string())
         } else if self.shared_folders.iter().any(|top| under(path, top)) {
             View::Shared(Some(path.to_string()))
@@ -785,20 +805,18 @@ impl Home {
 
     /// The folders and files of the current place (or the search results).
     fn contents(&self) -> (Vec<FolderRow>, Vec<FileRow>) {
+        let drive_folders = || self.folders.iter().filter(|f| self.drive_path(&f.path));
+        let drive_files = || self.files.iter().filter(|f| self.drive_path(&f.folder));
         let q = self.search.trim().to_lowercase();
         if !q.is_empty() {
             let fl = &self.filters;
-            let folders = self
-                .folders
-                .iter()
-                .filter(|f| name_of(&f.path).to_lowercase().contains(&q) && f.path != self.space && f.path.contains('/'))
+            let folders = drive_folders()
+                .filter(|f| name_of(&f.path).to_lowercase().contains(&q) && Some(f.path.as_str()) != self.mine_root() && f.path.contains('/'))
                 .filter(|f| !fl.any() || fl.folder_ok(f, &self.space, self.folder_stats(&f.path).0))
                 .cloned()
                 .collect();
             let text = self.found_for.to_lowercase() == q;
-            let files = self
-                .files
-                .iter()
+            let files = drive_files()
                 .filter(|f| (f.name.to_lowercase().contains(&q) || (text && self.found.contains_key(&f.id))) && fl.file_ok(f, &self.space))
                 .cloned()
                 .collect();
@@ -806,24 +824,22 @@ impl Home {
         }
         let (folders, files): (Vec<FolderRow>, Vec<FileRow>) = match self.view.clone() {
             Some(View::Mine(p) | View::Shared(Some(p)) | View::Everyone(p)) => (
-                self.folders.iter().filter(|f| parent_of(&f.path) == p && !f.path.is_empty() && f.path != p).cloned().collect(),
-                self.files.iter().filter(|f| f.folder == p).cloned().collect(),
+                drive_folders().filter(|f| parent_of(&f.path) == p && !f.path.is_empty() && f.path != p).cloned().collect(),
+                drive_files().filter(|f| f.folder == p).cloned().collect(),
             ),
             Some(View::Shared(None)) => (
-                self.folders.iter().filter(|f| self.shared_folders.contains(&f.path)).cloned().collect(),
-                self.files.iter().filter(|f| self.shared_files.contains(&f.id)).cloned().collect(),
+                drive_folders().filter(|f| self.shared_folders.contains(&f.path)).cloned().collect(),
+                drive_files().filter(|f| self.shared_files.contains(&f.id)).cloned().collect(),
             ),
-            Some(View::Starred) => {
-                (self.folders.iter().filter(|f| f.starred).cloned().collect(), self.files.iter().filter(|f| f.starred).cloned().collect())
-            }
+            Some(View::Starred) => (drive_folders().filter(|f| f.starred).cloned().collect(), drive_files().filter(|f| f.starred).cloned().collect()),
             Some(View::Recent) => {
-                let mut files: Vec<FileRow> = self.files.iter().filter(|f| f.opened.is_some()).cloned().collect();
+                let mut files: Vec<FileRow> = drive_files().filter(|f| f.opened.is_some()).cloned().collect();
                 files.sort_by_key(|f| std::cmp::Reverse(f.opened));
                 files.truncate(60);
                 return (Vec::new(), files);
             }
             Some(View::Storage) => {
-                let mut files: Vec<FileRow> = self.files.iter().filter(|f| !self.accounts || f.owner == self.space).cloned().collect();
+                let mut files: Vec<FileRow> = drive_files().filter(|f| !self.accounts || f.owner == self.space).cloned().collect();
                 files.sort_by(|a, b| b.size.cmp(&a.size).then_with(|| a.name.cmp(&b.name)));
                 files.truncate(200);
                 return (Vec::new(), files);
@@ -835,7 +851,7 @@ impl Home {
 
     /// Newest change and total size of everything in a folder (for sorting folders by date/size).
     fn folder_stats(&self, path: &str) -> (i64, u64) {
-        let inside = self.files.iter().filter(|f| under(&f.folder, path));
+        let inside = self.files.iter().filter(|f| under(&f.folder, path) && self.drive_path(&f.folder));
         inside.fold((0, 0), |(t, s), f| (t.max(f.modified), s + f.size))
     }
 
@@ -957,9 +973,13 @@ impl Home {
             }
         }
         match self.view.clone() {
-            Some(View::Mine(p)) => {
-                walk(&mut parts, &self.space.clone(), if self.accounts { "My files".into() } else { "All files".into() }, &p, &View::Mine)
-            }
+            Some(View::Mine(p)) => walk(
+                &mut parts,
+                self.mine_root().unwrap_or(&self.space),
+                if self.accounts { "My files".into() } else { "All files".into() },
+                &p,
+                &View::Mine,
+            ),
             Some(View::Shared(None)) => parts.push(("Shared with me".into(), Some(View::Shared(None)))),
             Some(View::Shared(Some(p))) => {
                 parts.push(("Shared with me".into(), Some(View::Shared(None))));
@@ -1117,7 +1137,10 @@ impl Home {
     /// Files dropped on the page or picked with Upload: saved into the folder shown, any type,
     /// under their own name (`as_is`: photo.jpg stays photo.jpg).
     pub fn upload(&mut self, ctx: &egui::Context, name: String, bytes: Vec<u8>) {
-        let folder = self.here().unwrap_or_else(|| self.space.clone());
+        let Some(folder) = self.here().or_else(|| self.mine_root().map(str::to_string)) else {
+            self.error = Some("My Files is unavailable.".into());
+            return;
+        };
         call(
             &self.store,
             &self.inbox,

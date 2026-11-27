@@ -142,23 +142,22 @@ pub fn roots(store: &Store, user: &User) -> Roots {
     if !valid_account_name(store, user) {
         return Roots { my_files: Root::Unavailable, photos: Root::Unavailable };
     }
-    let prefs = spaces::prefs(store, &user.username);
-    let Some(selection) = prefs.get(SELECTION) else {
-        return resolve(store, user, &SavedRoots::default(), &BTreeMap::new());
-    };
-    let table = if prefs.contains_key(KEY) { mount_table() } else { MountTable::new() };
-    resolve_saved(store, user, selection, &choices_with(store, user, prefs.get(KEY), &table))
+    configured_roots(store, user).unwrap_or_else(|| resolve(store, user, &SavedRoots::default(), &BTreeMap::new()))
 }
 
-/// Existing accounts retain their Photos view until roots are explicitly selected.
-pub fn configured_photos(store: &Store, user: &User) -> Option<Root> {
+/// Existing accounts retain their default views until a library is explicitly selected.
+pub fn configured_roots(store: &Store, user: &User) -> Option<Roots> {
     if !store.spaces || !valid_account_name(store, user) {
         return None;
     }
     let prefs = spaces::prefs(store, &user.username);
     let selection = prefs.get(SELECTION)?;
     let choices = prefs.get(KEY).map_or_else(BTreeMap::new, |key| choices_with(store, user, Some(key), &mount_table()));
-    Some(resolve_saved(store, user, selection, &choices).photos)
+    Some(resolve_saved(store, user, selection, &choices))
+}
+
+pub fn configured_photos(store: &Store, user: &User) -> Option<Root> {
+    configured_roots(store, user).map(|roots| roots.photos)
 }
 
 /// Face metadata has its own identity even when rendered thumbnail bytes are shared.
