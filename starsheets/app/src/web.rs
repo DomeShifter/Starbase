@@ -1015,7 +1015,13 @@ fn set_tab_title(file: Option<&str>, photos: bool) {
         None if photos => "Starbase Photos".to_string(),
         None => "Starbase Drive".to_string(),
     };
-    let icon = if file.is_some() { "favicon" } else if photos { "starphotos" } else { "stardrive" };
+    let icon = if file.is_some() {
+        "favicon"
+    } else if photos {
+        "starphotos"
+    } else {
+        "stardrive"
+    };
     let shown = format!("{icon}\n{title}");
     SHOWN.with(|s| {
         if *s.borrow() != shown
