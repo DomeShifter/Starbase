@@ -129,6 +129,7 @@ impl PhotoMode {
         self.lk.reset();
         self.lk.lock_req = false;
         self.lk.checked = true;
+        self.loading = false;
         self.pics.clear();
         self.viewer = None;
         self.clear_selection();
@@ -226,7 +227,10 @@ impl PhotoMode {
             house::note(ui, "Type your password to see the pictures you locked.");
             ui.add_space(house::L);
             let r = ui.add(house::field(&mut self.lk.pw, house::BODY).password(true).hint_text("Password").desired_width(f32::INFINITY));
-            let enter = r.lost_focus() && ctx.input(|i| i.key_pressed(egui::Key::Enter));
+            house::target(&ctx, "photos:locked:password", r.rect);
+            // The password field drops focus on Enter. Consume that press before Drive's
+            // keyboard handler can open its previously selected file in the background.
+            let enter = r.lost_focus() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
             if let Some(e) = &self.lk.error {
                 ui.add_space(house::S);
                 ui.label(RichText::new(e).size(house::NOTE).color(house::ERROR));
