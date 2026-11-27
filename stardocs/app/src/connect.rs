@@ -9,7 +9,8 @@ use std::time::Duration;
 use egui::{Button, Color32, RichText};
 use starbase_connect::{Server, Step};
 
-use crate::shell::{BLUE, TEXT, TEXT_DIM};
+use crate::shell::BLUE;
+use crate::theme::palette;
 
 /// The app's name on the server's "Your devices" list.
 const APP: &str = "Starbase Docs";
@@ -108,14 +109,16 @@ impl ConnectDialog {
     fn dialog(&mut self, ctx: &egui::Context) {
         let (mut close, mut start) = (false, false);
         let modal = egui::Modal::new(egui::Id::unique("stardocs_connect"))
-            .frame(egui::Frame::popup(&ctx.global_style()).fill(Color32::WHITE).corner_radius(8.0).inner_margin(20.0));
+            .frame(egui::Frame::popup(&ctx.global_style()).fill(palette().card).corner_radius(8.0).inner_margin(20.0));
         let shown = modal.show(ctx, |ui| {
             ui.set_width(380.0);
-            ui.label(RichText::new("Connect to a server").size(18.0).color(TEXT));
+            ui.label(RichText::new("Connect to a server").size(18.0).color(palette().text));
             ui.add_space(8.0);
             match &self.stage {
                 Some(Stage::Address(why)) => {
-                    ui.label(RichText::new("The address of your Starbase server, as you open it in the browser.").size(14.0).color(TEXT_DIM));
+                    ui.label(
+                        RichText::new("The address of your Starbase server, as you open it in the browser.").size(14.0).color(palette().text_dim),
+                    );
                     ui.add_space(6.0);
                     let r = ui.add(egui::TextEdit::singleline(&mut self.address).hint_text("https://files.example.org").desired_width(f32::INFINITY));
                     r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Server address"));
@@ -130,7 +133,7 @@ impl ConnectDialog {
                         ui.label(
                             RichText::new("http:// isn't encrypted: it works only for a server on your own network, never one on the internet.")
                                 .size(13.0)
-                                .color(TEXT_DIM),
+                                .color(palette().text_dim),
                         );
                     }
                     if let Some(why) = why {
@@ -150,7 +153,7 @@ impl ConnectDialog {
                     start = go && !self.address.trim().is_empty();
                 }
                 Some(Stage::Starting) => {
-                    ui.label(RichText::new("Asking the server…").size(14.0).color(TEXT_DIM));
+                    ui.label(RichText::new("Asking the server…").size(14.0).color(palette().text_dim));
                     ui.add_space(10.0);
                     if ui.button("Cancel").clicked() {
                         close = true;
@@ -161,15 +164,15 @@ impl ConnectDialog {
                         None => "We opened your browser. Sign in there if it asks, type this code, and allow Starbase Docs.",
                         Some(_) => "Open this address in your browser, sign in if it asks, type this code, and allow Starbase Docs.",
                     };
-                    ui.label(RichText::new(text).size(14.0).color(TEXT_DIM));
+                    ui.label(RichText::new(text).size(14.0).color(palette().text_dim));
                     ui.add_space(10.0);
-                    ui.vertical_centered(|ui| ui.label(RichText::new(code.as_str()).size(30.0).monospace().color(TEXT)));
+                    ui.vertical_centered(|ui| ui.label(RichText::new(code.as_str()).size(30.0).monospace().color(palette().text)));
                     if opened.is_some() {
                         ui.add_space(6.0);
                         ui.add(egui::Label::new(RichText::new(url.as_str()).size(13.0).color(BLUE)).selectable(true));
                     }
                     ui.add_space(10.0);
-                    ui.label(RichText::new("Waiting for you to allow it…").size(13.0).color(TEXT_DIM));
+                    ui.label(RichText::new("Waiting for you to allow it…").size(13.0).color(palette().text_dim));
                     ui.add_space(10.0);
                     if ui.button("Cancel").clicked() {
                         close = true;
@@ -177,7 +180,9 @@ impl ConnectDialog {
                 }
                 Some(Stage::Done(name)) => {
                     ui.label(
-                        RichText::new(format!("Connected as {name}. Documents from the server's Drive now open here.")).size(14.0).color(TEXT_DIM),
+                        RichText::new(format!("Connected as {name}. Documents from the server's Drive now open here."))
+                            .size(14.0)
+                            .color(palette().text_dim),
                     );
                     ui.add_space(10.0);
                     if ui.add(Button::new(RichText::new("Done").color(Color32::WHITE)).fill(BLUE)).clicked() {

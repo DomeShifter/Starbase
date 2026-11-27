@@ -83,7 +83,10 @@ pub fn light() -> Tokens {
 
 /// Installs the palette (dark keeps GridCraft's for now) and re-applies egui's visuals.
 pub fn install(ctx: &egui::Context) {
-    Tokens::install(ctx, light(), Tokens::dark());
+    let mut dark = Tokens::dark();
+    dark.sheets_marks = true;
+    dark.sheets_formula_bar = true;
+    Tokens::install(ctx, light(), dark);
     theme::apply(ctx, false);
     // Padding, corners and shadows for every window, menu and dialog (house.rs).
     crate::house::install(ctx);

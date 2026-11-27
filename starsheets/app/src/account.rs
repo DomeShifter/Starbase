@@ -1144,7 +1144,7 @@ impl Account {
             }
             if self.settings_tab == 0 {
                 let mut dark = crate::theme::drive_dark();
-                let r = ui.checkbox(&mut dark, "Dark appearance in Drive");
+                let r = ui.checkbox(&mut dark, "Dark appearance");
                 house::target(ctx, "settings:dark", r.rect);
                 if r.changed() {
                     crate::theme::set_drive_dark(dark);

@@ -17,9 +17,8 @@ use serde_json::{Value as Json, json};
 use wordcraft_ui_egui::WordApp;
 
 use crate::server::{Link, api, fetch};
-use crate::shell::{BLUE, SHARE, TEXT, TEXT_DIM};
-
-const ERROR: Color32 = Color32::from_rgb(0xB3, 0x26, 0x1E);
+use crate::shell::BLUE;
+use crate::theme::palette;
 
 #[derive(Clone)]
 struct Person {
@@ -122,24 +121,24 @@ pub(crate) fn avatar(ui: &mut Ui, name: &str, colour: &str, size: f32) -> egui::
 }
 
 fn pick(ui: &mut Ui, id: &str, width: f32, current: &mut usize, labels: &[&str]) {
-    egui::ComboBox::from_id_salt(id).width(width).selected_text(RichText::new(labels[(*current).min(labels.len() - 1)]).color(TEXT)).show_ui(
-        ui,
-        |ui| {
+    egui::ComboBox::from_id_salt(id)
+        .width(width)
+        .selected_text(RichText::new(labels[(*current).min(labels.len() - 1)]).color(palette().text))
+        .show_ui(ui, |ui| {
             for (i, l) in labels.iter().enumerate() {
                 ui.selectable_value(current, i, *l);
             }
-        },
-    );
+        });
 }
 
 fn heading(ui: &mut Ui, text: &str) {
     ui.add_space(12.0);
-    ui.label(RichText::new(text).size(14.0).strong().color(TEXT));
+    ui.label(RichText::new(text).size(14.0).strong().color(palette().text));
     ui.add_space(4.0);
 }
 
 fn note(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text).size(12.0).color(TEXT_DIM));
+    ui.label(RichText::new(text).size(12.0).color(palette().text_dim));
 }
 
 fn button(text: &str, fill: Color32, colour: Color32) -> egui::Button<'static> {
@@ -252,18 +251,18 @@ impl Share {
         let top = (ctx.content_rect().height() * 0.12).clamp(24.0, 120.0);
         let modal = egui::Modal::new(id)
             .area(egui::Modal::default_area(id).anchor(egui::Align2::CENTER_TOP, vec2(0.0, top)))
-            .frame(egui::Frame::popup(&ctx.global_style()).fill(Color32::WHITE).corner_radius(8.0).inner_margin(24.0));
+            .frame(egui::Frame::popup(&ctx.global_style()).fill(palette().card).corner_radius(8.0).inner_margin(24.0));
         let shown = modal.show(ctx, |ui| {
             ui.set_width(520.0);
-            ui.label(RichText::new(format!("Share \"{}\"", self.name)).size(22.0).color(TEXT));
+            ui.label(RichText::new(format!("Share \"{}\"", self.name)).size(22.0).color(palette().text));
             if !self.loaded {
                 ui.add_space(12.0);
                 note(ui, "Loading…");
                 if let Some(e) = &self.error {
-                    ui.label(RichText::new(e).size(12.0).color(ERROR));
+                    ui.label(RichText::new(e).size(12.0).color(palette().error));
                 }
                 ui.add_space(12.0);
-                if ui.add(button("Close", Color32::WHITE, BLUE)).clicked() {
+                if ui.add(button("Close", palette().card, palette().accent)).clicked() {
                     close = true;
                 }
                 return;
@@ -284,8 +283,8 @@ impl Share {
                     pick(ui, "stardocs_share_add", 250.0, &mut self.add, &refs);
                     pick(ui, "stardocs_share_add_role", 100.0, &mut self.add_role, &ROLES[..3]);
                     let h = ui.spacing().interact_size.y;
-                    let add = egui::Button::new(RichText::new("Add").size(14.0).color(BLUE))
-                        .fill(Color32::WHITE)
+                    let add = egui::Button::new(RichText::new("Add").size(14.0).color(palette().accent))
+                        .fill(palette().card)
                         .corner_radius(h / 2.0)
                         .min_size(vec2(64.0, h));
                     if ui.add(add).clicked()
@@ -303,7 +302,7 @@ impl Share {
                     ui.add_space(8.0);
                     ui.vertical(|ui| {
                         ui.spacing_mut().item_spacing.y = 0.0;
-                        ui.label(RichText::new(&p.name).size(14.0).color(TEXT));
+                        ui.label(RichText::new(&p.name).size(14.0).color(palette().text));
                         note(ui, &p.username);
                     });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -324,7 +323,7 @@ impl Share {
             if owner {
                 pick(ui, "stardocs_share_link", 380.0, &mut self.link, &LINKS);
             } else {
-                ui.label(RichText::new(LINKS[self.link]).size(14.0).color(TEXT));
+                ui.label(RichText::new(LINKS[self.link]).size(14.0).color(palette().text));
                 note(ui, "Only the owner can change who has access.");
             }
             ui.add_space(12.0);
@@ -333,8 +332,9 @@ impl Share {
                 let width = ui.available_width() - 110.0;
                 // The button takes the text box's height, so the two line up.
                 let h = ui.add(egui::TextEdit::singleline(&mut url).desired_width(width).margin(vec2(8.0, 6.0))).rect.height();
-                let copy =
-                    button(if self.copied { "Copied" } else { "Copy link" }, Color32::WHITE, BLUE).corner_radius(h / 2.0).min_size(vec2(84.0, h));
+                let copy = button(if self.copied { "Copied" } else { "Copy link" }, palette().card, palette().accent)
+                    .corner_radius(h / 2.0)
+                    .min_size(vec2(84.0, h));
                 if ui.add(copy).clicked() {
                     self.copied = copy_text(&url);
                     self.copy_failed = !self.copied;
@@ -347,7 +347,7 @@ impl Share {
             }
             if let Some(e) = &self.error {
                 ui.add_space(6.0);
-                ui.label(RichText::new(e).size(12.0).color(ERROR));
+                ui.label(RichText::new(e).size(12.0).color(palette().error));
             }
             ui.add_space(16.0);
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -355,10 +355,10 @@ impl Share {
                     if ui.add(button("Done", BLUE, Color32::WHITE)).clicked() {
                         save = true;
                     }
-                    if ui.add(button("Cancel", Color32::WHITE, BLUE)).clicked() {
+                    if ui.add(button("Cancel", palette().card, palette().accent)).clicked() {
                         close = true;
                     }
-                } else if ui.add(button("Done", SHARE, TEXT)).clicked() {
+                } else if ui.add(button("Done", palette().share, palette().text)).clicked() {
                     close = true;
                 }
             });
