@@ -6,5 +6,4 @@ the app can tint it for the light or the dark theme (`src/icons.rs`). To add one
 `symbols/web/<name>/materialsymbolsoutlined/<name>_24px.svg`, set the same fill, and list it in
 `slides/app/src/icons.rs`.
 
-`starslides_logo.svg` is Starbase Slides' own logo (an amber rounded square with a white slide and a
-star, the same design as Starbase Sheets' `starslides.svg`), not a Material Symbol.
+`starslides_logo.svg` is Starbase Slides' own logo (the space-card design: a dark rounded square with an amber planet glow, a star and a white play symbol, the same design as Starbase Sheets' `starslides.svg`), not a Material Symbol.

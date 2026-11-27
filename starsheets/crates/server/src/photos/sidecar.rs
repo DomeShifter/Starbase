@@ -821,3 +821,164 @@ pub fn name_for(picture: &str) -> String {
 #[cfg(test)]
 #[path = "sidecar_tests.rs"]
 mod tests;
+
+// ---------------------------------------------------------------- the Info panel's fields
+
+/// The namespace of the Info panel's fields (title, caption, labels, rights), kept in their own
+/// `rdf:Description` so the edits code above never touches them and they never touch the edits.
+pub const INFO: &str = "https://github.com/DomeShifter/Starbase/ns/photo-info/1.0/";
+
+/// The longest text field and label, and the most labels.
+pub const MAX_INFO_TEXT: usize = 2000;
+pub const MAX_LABEL: usize = 60;
+pub const MAX_LABELS: usize = 50;
+
+/// What people type in the Info panel about a picture, saved in its sidecar, never in the
+/// picture itself. Empty strings and lists = not set.
+#[derive(Debug, Default, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Info {
+    pub title: String,
+    pub caption: String,
+    pub labels: Vec<String>,
+    pub subject: String,
+    pub copyright: String,
+    pub artist: String,
+    pub licence: String,
+}
+
+impl Info {
+    pub fn is_empty(&self) -> bool {
+        *self == Info::default()
+    }
+
+    /// Trimmed, labels without blanks or repeats; an error says what is too long.
+    pub fn cleaned(mut self) -> Result<Info, String> {
+        for (name, v) in [
+            ("title", &mut self.title),
+            ("caption", &mut self.caption),
+            ("subject", &mut self.subject),
+            ("copyright", &mut self.copyright),
+            ("artist", &mut self.artist),
+            ("licence", &mut self.licence),
+        ] {
+            *v = v.trim().to_string();
+            if v.chars().count() > MAX_INFO_TEXT {
+                return Err(format!("The {name} is too long ({MAX_INFO_TEXT} characters at most)."));
+            }
+        }
+        let mut labels: Vec<String> = Vec::new();
+        for l in self.labels.iter().map(|l| l.trim()).filter(|l| !l.is_empty()) {
+            if l.chars().count() > MAX_LABEL {
+                return Err(format!("A label is too long ({MAX_LABEL} characters at most)."));
+            }
+            if !labels.iter().any(|k| k.eq_ignore_ascii_case(l)) {
+                labels.push(l.to_string());
+            }
+        }
+        if labels.len() > MAX_LABELS {
+            return Err(format!("Too many labels ({MAX_LABELS} at most)."));
+        }
+        self.labels = labels;
+        Ok(self)
+    }
+}
+
+/// The Info fields in a sidecar (none = nothing set, or not readable).
+pub fn read_info(bytes: &[u8]) -> Info {
+    let Ok((_, text)) = text_of(bytes) else { return Info::default() };
+    let Ok(doc) = parse(text) else { return Info::default() };
+    let Some(rdf) = rdf_root(&doc) else { return Info::default() };
+    descriptions(rdf)
+        .flat_map(props)
+        .find(|p| p.ns == Some(INFO) && p.name == "Info")
+        .and_then(|p| p.value)
+        .filter(|j| j.len() <= MAX_SIDECAR as usize)
+        .and_then(|j| serde_json::from_str::<Info>(&j).ok())
+        .and_then(|i| i.cleaned().ok())
+        .unwrap_or_default()
+}
+
+fn info_description(i: &Info) -> String {
+    format!(
+        "\n  <rdf:Description rdf:about=\"\"\n    xmlns:rdf=\"{RDF}\"\n    xmlns:starbaseinfo=\"{INFO}\"\n   starbaseinfo:InfoVersion=\"1\"\n   starbaseinfo:Info=\"{}\"/>",
+        escape(&serde_json::to_string(i).unwrap_or_default())
+    )
+}
+
+/// Merges the Info fields `info` (empty = take them out) into the sidecar `existing` (None =
+/// none yet). Everything else, the edits included, is kept byte for byte.
+pub fn merge_info(existing: Option<&[u8]>, info: &Info) -> Result<Merged, String> {
+    let fresh_one = || {
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"Starbase\">\n <rdf:RDF xmlns:rdf=\"{RDF}\">{}\n </rdf:RDF>\n</x:xmpmeta>\n",
+            info_description(info)
+        )
+    };
+    let Some(existing) = existing else {
+        return Ok(if info.is_empty() { Merged::Same } else { Merged::Write(checked_info(fresh_one().into_bytes(), info)?) });
+    };
+    let (bom, text) = text_of(existing)?;
+    let doc = parse(text)?;
+    let rdf = rdf_root(&doc).ok_or("it has no rdf:RDF")?;
+    let mut cuts: Vec<(usize, usize, String)> = Vec::new();
+    for d in descriptions(rdf) {
+        let ps = props(d);
+        let owned: Vec<&Prop> = ps.iter().filter(|p| p.ns == Some(INFO)).collect();
+        if owned.is_empty() {
+            continue;
+        }
+        if owned.len() == ps.len() {
+            let r = d.range();
+            cuts.push((back_over_space(text, r.start), r.end, String::new()));
+        } else {
+            for p in owned {
+                cuts.push((back_over_space(text, p.range.start), p.range.end, String::new()));
+            }
+        }
+    }
+    if info.is_empty() && cuts.is_empty() {
+        return Ok(Merged::Same);
+    }
+    if !info.is_empty() {
+        let r = rdf.range();
+        if text[r.clone()].ends_with("/>") {
+            let qname: String = text[r.start + 1..].chars().take_while(|c| !c.is_whitespace() && *c != '/' && *c != '>').collect();
+            cuts.push((r.end - 2, r.end, format!(">{}\n </{qname}>", info_description(info))));
+        } else {
+            let close = text[..r.end].rfind("</").ok_or("its rdf:RDF has no end")?;
+            let at = back_over_space(text, close).max(r.start);
+            cuts.push((at, at, info_description(info)));
+        }
+    }
+    cuts.sort_by_key(|c| (c.0, c.1));
+    let mut out = String::with_capacity(text.len() + 1024);
+    out.push_str(bom);
+    let mut at = 0;
+    for (start, end, with) in &cuts {
+        if *start < at {
+            return Err("overlapping changes".into());
+        }
+        out.push_str(&text[at..*start]);
+        out.push_str(with);
+        at = *end;
+    }
+    out.push_str(&text[at..]);
+    if info.is_empty() && empty(&out)? {
+        return Ok(Merged::Delete);
+    }
+    Ok(Merged::Write(checked_info(out.into_bytes(), info)?))
+}
+
+/// The merged sidecar must parse and read back as exactly the Info written.
+fn checked_info(bytes: Vec<u8>, info: &Info) -> Result<Vec<u8>, String> {
+    if bytes.len() as u64 > MAX_SIDECAR {
+        return Err("the sidecar would be too big".into());
+    }
+    let (_, text) = text_of(&bytes)?;
+    parse(text)?;
+    if read_info(&bytes) != *info {
+        return Err("the merged sidecar didn't read back as written".into());
+    }
+    Ok(bytes)
+}

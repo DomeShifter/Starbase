@@ -5,4 +5,4 @@ licensed under the Apache License 2.0. Unchanged except for `fill="#444746"` add
 To add one: download `symbols/web/<name>/materialsymbolsoutlined/<name>_24px.svg`, add the same
 fill, and list it in `stardocs/app/src/icons.rs`.
 - `folder_fill.svg` has `fill="#FFFFFF"` instead, so it can be tinted (folder colours).
-- `stardocs_logo.svg` is Starbase Docs' own logo (a blue rounded square with a white page and a star, the same design as Starbase Sheets' `stardocs.svg`), not a Material Symbol.
+- `stardocs_logo.svg` is Starbase Docs' own logo (the space-card design: a dark rounded square with a blue planet glow, a star and white text lines, the same design as Starbase Sheets' `stardocs.svg`), not a Material Symbol.

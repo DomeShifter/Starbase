@@ -7,12 +7,21 @@
 //!   detector's score, its size in pixels, the model that made its embedding and the embedding.
 //! - **Grouping** ([`regroup`]): faces are first matched against named people (the most similar
 //!   of a person's faces; a face someone removed from a person is never matched to them again):
-//!   at or above the model's `auto` similarity they join the person, at or above `suggest` the
-//!   person is offered. The rest are grouped by **average linkage** (not DBSCAN: the face trial of
+//!   at or above the model's `auto` ("sure") similarity they join the person; at or above
+//!   `suggest` ("maybe") they don't join: People asks "Same person?" ([`answer`]), and a "No"
+//!   is kept as "not this person" like a removed face. The rest are grouped by **average linkage** (not DBSCAN: the face trial of
 //!   2026-11 found DBSCAN chains people together) and cut at the model's `group_cut` distance.
 //!   Only good faces (score and size, see [`good`]) start or join a group.
-//! - **Thresholds** ([`thresholds`]) are the ones measured in the trial: AuraFace group 0.75,
-//!   suggest 0.35, auto 0.45; SFace group 0.67, suggest 0.43, auto 0.54.
+//! - **Thresholds** ([`thresholds`]): the trial's (2026-11) group cuts, AuraFace 0.75 and SFace
+//!   0.67. Its join line (AuraFace 0.45, SFace 0.54) blended two friends into one person
+//!   (James 2026-11-27), so that line is now only "maybe" (ask), and "sure" is 0.10 above it.
+//! - **Removing a face from a person** makes it a new face again: its own unnamed group (it can
+//!   be named, merged or grouped with others), and never that person again (`face_not`).
+//! - **Ignored and "not a face"** ([`mark`], `hidden` [`IGNORED`] / [`NOT_FACE`]): strangers and
+//!   dolls leave People, suggestions, questions and grouping, but nothing is deleted: [`unmark`]
+//!   puts them back (with the group they were in), [`assign`] gives them to a person, and
+//!   [`keep`] carries the mark over to the same box when a picture is looked at again, so a
+//!   re-scan never brings a doll back.
 
 use std::collections::{HashMap, HashSet};
 
@@ -34,7 +43,8 @@ pub const SCHEMA_V3: &str = "BEGIN;
         -- the person offered, and the group of unnamed faces (the smallest face id in it).
         person INTEGER, auto INTEGER NOT NULL DEFAULT 0, suggest INTEGER, grp INTEGER,
         -- 0: normal; 2: taken out of its group by someone (never grouped again, may still be
-        -- matched to a named person).
+        -- matched to a named person); 3: ignored (a stranger); 4: not a face. 3 and 4 keep `grp`
+        -- (their old group, so undoing brings the group back) and are in no list but their own.
         hidden INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS faces_thumb ON faces(thumb);
@@ -62,19 +72,43 @@ pub const SCHEMA_V4: &str = "BEGIN;
 pub struct Thresholds {
     /// Average-linkage cut: faces closer than this (1 − similarity) form a group.
     pub group_cut: f32,
-    /// Offer "Is this X?" at or above this similarity to a person.
+    /// "Maybe": at or above this similarity (and below `auto`) People asks "Same person?".
     pub suggest: f32,
-    /// Put the face with the person without asking at or above this similarity.
+    /// "Sure": put the face with the person without asking at or above this similarity.
     pub auto: f32,
 }
 
-/// The measured thresholds of a model (face trial 2026-11, RESULTS.md).
+/// The thresholds of a model. The group cuts are the face trial's (2026-11, RESULTS.md). Its
+/// join line (AuraFace 0.45, SFace 0.54) still joined look-alike friends on real pictures
+/// (2026-11-27), so it became the "maybe" line (ask first), and "sure" is 0.10 above it: in the
+/// trial nearly all same-person matches of good faces scored well above that, so sure matches
+/// still join on their own while the borderline band is asked about. The trial's old offer
+/// line (0.35 / 0.43) is dropped: too many wrong questions.
 pub fn thresholds(model: &str) -> Thresholds {
     match model {
-        "sface" => Thresholds { group_cut: 0.67, suggest: 0.43, auto: 0.54 },
-        _ => Thresholds { group_cut: 0.75, suggest: 0.35, auto: 0.45 },
+        "sface" => Thresholds { group_cut: 0.67, suggest: 0.54, auto: 0.64 },
+        _ => Thresholds { group_cut: 0.75, suggest: 0.45, auto: 0.55 },
     }
 }
+
+/// `faces.hidden`: ignored by someone (a stranger): out of People until they undo it.
+pub const IGNORED: i64 = 3;
+/// `faces.hidden`: "not a face" (a doll, a poster): out of People until someone says it is one.
+pub const NOT_FACE: i64 = 4;
+/// SQL: a face People shows and groups (not ignored, not "not a face").
+const SHOWN: &str = "hidden IN (0, 2)";
+
+/// How much two boxes (x, y, w, h) overlap: intersection over union, 0..1.
+pub fn overlap(a: [f32; 4], b: [f32; 4]) -> f32 {
+    let iw = ((a[0] + a[2]).min(b[0] + b[2]) - a[0].max(b[0])).max(0.0);
+    let ih = ((a[1] + a[3]).min(b[1] + b[3]) - a[1].max(b[1])).max(0.0);
+    let i = iw * ih;
+    let u = a[2] * a[3] + b[2] * b[3] - i;
+    if u <= 0.0 { 0.0 } else { i / u }
+}
+
+/// Boxes at least this alike ([`overlap`]) are the same face when a picture is looked at again.
+pub const SAME_BOX: f32 = 0.5;
 
 /// The most unnamed faces grouped in one pass (average linkage needs n² memory: 3,000 faces
 /// is 36 MB). The newest faces go first; the rest wait for a later pass.
@@ -224,6 +258,8 @@ pub struct Face {
     pub person: Option<i64>,
     pub grp: Option<i64>,
     pub suggest: Option<i64>,
+    /// `faces.hidden` (0 or 2 shown, [`IGNORED`], [`NOT_FACE`]).
+    pub state: i64,
 }
 
 fn conn(ix: &Index) -> &Connection {
@@ -276,11 +312,22 @@ pub fn keep(ix: &Index, thumb: &str, model: &str, faces: &[Found]) -> rusqlite::
     let c = conn(ix);
     c.execute_batch("SAVEPOINT keep")?;
     let r = (|| {
+        // Ignored and "not a face" boxes are remembered: the same box found again keeps its mark.
+        let mut st = c.prepare("SELECT x, y, w, h, hidden FROM faces WHERE thumb = ?1 AND model = ?2 AND hidden IN (3, 4)")?;
+        let marked: Vec<([f32; 4], i64)> = st
+            .query_map(params![thumb, model], |r| Ok(([r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?], r.get(4)?)))?
+            .collect::<rusqlite::Result<_>>()?;
         c.execute("DELETE FROM faces WHERE thumb = ?1 AND model = ?2", params![thumb, model])?;
         for f in faces {
+            let bx = [f.x, f.y, f.w, f.h];
+            let hidden = marked
+                .iter()
+                .filter(|(m, _)| overlap(*m, bx) >= SAME_BOX)
+                .max_by(|a, b| overlap(a.0, bx).total_cmp(&overlap(b.0, bx)))
+                .map_or(0, |m| m.1);
             c.execute(
-                "INSERT INTO faces(thumb, model, x, y, w, h, score, px, emb) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![thumb, model, f.x, f.y, f.w, f.h, f.score, f.px, emb_to_blob(&f.emb)],
+                "INSERT INTO faces(thumb, model, x, y, w, h, score, px, emb, hidden) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![thumb, model, f.x, f.y, f.w, f.h, f.score, f.px, emb_to_blob(&f.emb), hidden],
             )?;
         }
         c.execute("INSERT OR REPLACE INTO faces_done(thumb, model) VALUES(?1, ?2)", params![thumb, model])?;
@@ -290,36 +337,36 @@ pub fn keep(ix: &Index, thumb: &str, model: &str, faces: &[Found]) -> rusqlite::
     r
 }
 
-/// Every face of `model` (without embeddings).
-pub fn faces(ix: &Index, model: &str) -> rusqlite::Result<Vec<Face>> {
-    let mut st = conn(ix).prepare("SELECT id, thumb, x, y, w, h, person, grp, suggest FROM faces WHERE model = ?1 AND hidden != 1")?;
-    st.query_map([model], |r| {
-        Ok(Face {
-            id: r.get(0)?,
-            thumb: r.get(1)?,
-            bx: [r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?],
-            person: r.get(6)?,
-            grp: r.get(7)?,
-            suggest: r.get(8)?,
-        })
-    })?
-    .collect()
+const FACE_COLS: &str = "id, thumb, x, y, w, h, person, grp, suggest, hidden";
+
+fn face_row(r: &rusqlite::Row) -> rusqlite::Result<Face> {
+    Ok(Face {
+        id: r.get(0)?,
+        thumb: r.get(1)?,
+        bx: [r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?],
+        person: r.get(6)?,
+        grp: r.get(7)?,
+        suggest: r.get(8)?,
+        state: r.get(9)?,
+    })
 }
 
-/// Face `id` (not one hidden by the worker), or none.
+/// Every face of `model` People shows (without embeddings): not ignored, not "not a face".
+pub fn faces(ix: &Index, model: &str) -> rusqlite::Result<Vec<Face>> {
+    let mut st = conn(ix).prepare(&format!("SELECT {FACE_COLS} FROM faces WHERE model = ?1 AND {SHOWN}"))?;
+    st.query_map([model], face_row)?.collect()
+}
+
+/// The ignored ([`IGNORED`]) and "not a face" ([`NOT_FACE`]) faces of `model`, newest first.
+pub fn marked(ix: &Index, model: &str) -> rusqlite::Result<Vec<Face>> {
+    let mut st = conn(ix).prepare(&format!("SELECT {FACE_COLS} FROM faces WHERE model = ?1 AND hidden IN (3, 4) ORDER BY id DESC"))?;
+    st.query_map([model], face_row)?.collect()
+}
+
+/// Face `id` in any state (ignored and "not a face" too: their pictures still show), or none.
 pub fn face(ix: &Index, id: i64) -> rusqlite::Result<Option<Face>> {
-    let mut st = conn(ix).prepare("SELECT id, thumb, x, y, w, h, person, grp, suggest FROM faces WHERE id = ?1 AND hidden != 1")?;
-    let mut rows = st.query_map([id], |r| {
-        Ok(Face {
-            id: r.get(0)?,
-            thumb: r.get(1)?,
-            bx: [r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?],
-            person: r.get(6)?,
-            grp: r.get(7)?,
-            suggest: r.get(8)?,
-        })
-    })?;
-    rows.next().transpose()
+    let mut st = conn(ix).prepare(&format!("SELECT {FACE_COLS} FROM faces WHERE id = ?1"))?;
+    st.query_map([id], face_row)?.next().transpose()
 }
 
 /// The square People shows around face box `bx` (0..1 of `img`): 1.5 times the face's longer
@@ -375,8 +422,8 @@ impl Who {
 /// The faces in `who`.
 fn ids_of(c: &Connection, who: Who) -> rusqlite::Result<Vec<i64>> {
     let (sql, n) = match who {
-        Who::Person(n) => ("SELECT id FROM faces WHERE person = ?1", n),
-        Who::Group(n) => ("SELECT id FROM faces WHERE grp = ?1 AND person IS NULL", n),
+        Who::Person(n) => ("SELECT id FROM faces WHERE person = ?1 AND hidden IN (0, 2)", n),
+        Who::Group(n) => ("SELECT id FROM faces WHERE grp = ?1 AND person IS NULL AND hidden IN (0, 2)", n),
     };
     let mut st = c.prepare(sql)?;
     st.query_map([n], |r| r.get(0))?.collect()
@@ -436,8 +483,9 @@ pub fn merge(ix: &Index, from: Who, into: Who) -> rusqlite::Result<i64> {
     Ok(p)
 }
 
-/// Takes face `face` out of `who`: never matched to that person again; out of a group, it is
-/// never grouped again. False if the face isn't in `who`.
+/// Takes face `face` out of `who`. Out of a person it is a new face again: its own unnamed
+/// group (until a regroup finds it others), never matched to that person again. Out of a group,
+/// it is never grouped again. False if the face isn't in `who`.
 pub fn remove(ix: &Index, who: Who, face: i64) -> rusqlite::Result<bool> {
     let c = conn(ix);
     if !ids_of(c, who)?.contains(&face) {
@@ -446,13 +494,112 @@ pub fn remove(ix: &Index, who: Who, face: i64) -> rusqlite::Result<bool> {
     match who {
         Who::Person(p) => {
             c.execute("INSERT OR IGNORE INTO face_not(face, person) VALUES(?1, ?2)", params![face, p])?;
-            c.execute("UPDATE faces SET person = NULL, auto = 0, suggest = NULL, grp = NULL, hidden = 2 WHERE id = ?1", [face])?;
+            c.execute("UPDATE faces SET person = NULL, auto = 0, suggest = NULL, grp = ?1, hidden = 0 WHERE id = ?1", [face])?;
         }
         Who::Group(_) => {
             c.execute("UPDATE faces SET grp = NULL, hidden = 2 WHERE id = ?1", [face])?;
         }
     }
     Ok(true)
+}
+
+/// The answer to "Same person?" for face `face` (with its group, when it is in one) and person
+/// `p`. Yes: they join `p`. No: "not this person", never asked or joined again. False when the
+/// face is already someone's or `p` is gone.
+pub fn answer(ix: &Index, face: i64, p: i64, yes: bool) -> rusqlite::Result<bool> {
+    let c = conn(ix);
+    let Some(f) = self::face(ix, face)?.filter(|f| f.state != IGNORED && f.state != NOT_FACE) else { return Ok(false) };
+    let known: Option<i64> = c.query_row("SELECT id FROM people WHERE id = ?1", [p], |r| r.get(0)).optional()?;
+    if f.person.is_some() || known.is_none() {
+        return Ok(false);
+    }
+    let ids = match f.grp {
+        Some(g) => ids_of(c, Who::Group(g))?,
+        None => vec![face],
+    };
+    for id in ids {
+        let not: Option<i64> = c.query_row("SELECT face FROM face_not WHERE face = ?1 AND person = ?2", params![id, p], |r| r.get(0)).optional()?;
+        if yes && not.is_some() {
+            // Someone said this face isn't `p`: the rest of its group joins, it doesn't.
+            continue;
+        }
+        if yes {
+            c.execute("UPDATE faces SET person = ?1, auto = 0, grp = NULL, suggest = NULL, hidden = 0 WHERE id = ?2", params![p, id])?;
+        } else {
+            c.execute("INSERT OR IGNORE INTO face_not(face, person) VALUES(?1, ?2)", params![id, p])?;
+            c.execute("UPDATE faces SET suggest = NULL WHERE id = ?1 AND suggest = ?2", params![id, p])?;
+        }
+    }
+    Ok(true)
+}
+
+/// Marks faces `ids` as [`IGNORED`] or [`NOT_FACE`]: out of their person or group (a face that
+/// was someone's is never matched to them again, like a removed one), out of every question.
+/// They keep `grp` (the group they came from, or their own id when they were someone's), so
+/// [`unmark`] brings a group back together. Nothing is deleted.
+pub fn mark(ix: &Index, ids: &[i64], state: i64) -> rusqlite::Result<usize> {
+    let c = conn(ix);
+    let found: Vec<Face> = ids.iter().filter_map(|&id| self::face(ix, id).ok().flatten()).filter(|f| f.state == 0 || f.state == 2).collect();
+    // A person's marked faces stay together as one group (named by its smallest face id); only
+    // faces taken from a person who keeps others are "not this person".
+    let mut of_person: HashMap<i64, Vec<i64>> = HashMap::new();
+    for f in &found {
+        if let Some(p) = f.person {
+            of_person.entry(p).or_default().push(f.id);
+        }
+    }
+    let mut whole = HashSet::new();
+    for (p, mine) in &of_person {
+        if ids_of(c, Who::Person(*p))?.iter().all(|i| mine.contains(i)) {
+            whole.insert(*p);
+        }
+    }
+    let mut n = 0;
+    for f in &found {
+        let id = f.id;
+        if let Some(p) = f.person
+            && !whole.contains(&p)
+        {
+            c.execute("INSERT OR IGNORE INTO face_not(face, person) VALUES(?1, ?2)", params![id, p])?;
+        }
+        let grp = match f.person {
+            Some(p) => of_person.get(&p).and_then(|v| v.iter().min().copied()),
+            None => f.grp,
+        };
+        n += c.execute("UPDATE faces SET hidden = ?2, person = NULL, auto = 0, suggest = NULL, grp = ?3 WHERE id = ?1", params![id, state, grp])?;
+    }
+    Ok(n)
+}
+
+/// Undoes [`mark`] for faces `ids` that are in `state`: back to the unnamed faces, in the group
+/// they were in. `fresh`: without that group, so the next regroup finds them a group ("Group
+/// again").
+pub fn unmark(ix: &Index, ids: &[i64], state: i64, fresh: bool) -> rusqlite::Result<usize> {
+    let c = conn(ix);
+    let sql = if fresh {
+        "UPDATE faces SET hidden = 0, grp = NULL WHERE id = ?1 AND hidden = ?2"
+    } else {
+        "UPDATE faces SET hidden = 0 WHERE id = ?1 AND hidden = ?2"
+    };
+    let mut n = 0;
+    for &id in ids {
+        n += c.execute(sql, params![id, state])?;
+    }
+    Ok(n)
+}
+
+/// Gives ignored or "not a face" faces `ids` to person `p` (confirmed, like naming them).
+pub fn assign(ix: &Index, ids: &[i64], p: i64) -> rusqlite::Result<usize> {
+    let c = conn(ix);
+    let mut n = 0;
+    for &id in ids {
+        c.execute("DELETE FROM face_not WHERE face = ?1 AND person = ?2", params![id, p])?;
+        n += c.execute(
+            "UPDATE faces SET person = ?2, auto = 0, grp = NULL, suggest = NULL, hidden = 0 WHERE id = ?1 AND hidden IN (3, 4)",
+            params![id, p],
+        )?;
+    }
+    Ok(n)
 }
 
 /// What [`regroup`] needs, read under the index lock in one go.
@@ -475,9 +622,9 @@ pub const RECHECK: usize = 1000;
 pub fn snapshot(ix: &Index, model: &str) -> rusqlite::Result<Snapshot> {
     let c = conn(ix);
     let mut st = c.prepare(
-        "SELECT id, emb, score, px, hidden FROM faces WHERE model = ?1 AND person IS NULL AND hidden != 1
+        "SELECT id, emb, score, px, hidden FROM faces WHERE model = ?1 AND person IS NULL AND hidden IN (0, 2)
          UNION ALL SELECT * FROM (SELECT id, emb, score, px, hidden FROM faces
-           WHERE model = ?1 AND person IS NOT NULL AND auto = 1 AND hidden != 1 ORDER BY id DESC LIMIT ?2)
+           WHERE model = ?1 AND person IS NOT NULL AND auto = 1 AND hidden IN (0, 2) ORDER BY id DESC LIMIT ?2)
          ORDER BY id DESC",
     )?;
     let loose = st
@@ -567,7 +714,11 @@ pub fn plan(s: &Snapshot, t: Thresholds) -> Plan {
             let id = s.loose[i].0;
             match joins[i] {
                 Some(p) => (id, Some(p), None, None),
-                None => (id, None, best[i].filter(|(_, sim)| *sim >= t.suggest).map(|(p, _)| p), grp_of.get(&id).copied()),
+                // A face taken out of a person stays its own group when nothing else is like it.
+                None => {
+                    let own = s.not.contains_key(&id).then_some(id);
+                    (id, None, best[i].filter(|(_, sim)| *sim >= t.suggest).map(|(p, _)| p), grp_of.get(&id).copied().or(own))
+                }
             }
         })
         .collect()
@@ -579,7 +730,9 @@ pub fn apply(ix: &Index, plan: &Plan) -> rusqlite::Result<()> {
     let c = conn(ix);
     c.execute_batch("SAVEPOINT regroup")?;
     let r = (|| {
-        let mut st = c.prepare("UPDATE faces SET person = ?2, auto = ?3, suggest = ?4, grp = ?5 WHERE id = ?1 AND (person IS NULL OR auto = 1)")?;
+        let mut st = c.prepare(
+            "UPDATE faces SET person = ?2, auto = ?3, suggest = ?4, grp = ?5 WHERE id = ?1 AND (person IS NULL OR auto = 1) AND hidden IN (0, 2)",
+        )?;
         for (id, person, sug, grp) in plan {
             st.execute(params![id, person, person.is_some() as i64, sug, grp])?;
         }

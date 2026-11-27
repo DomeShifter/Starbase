@@ -20,9 +20,9 @@ fn near(base: usize, k: usize, amount: f32) -> Vec<f32> {
 #[test]
 fn thresholds_are_the_measured_ones() {
     let a = thresholds("auraface");
-    assert_eq!((a.group_cut, a.suggest, a.auto), (0.75, 0.35, 0.45));
+    assert_eq!((a.group_cut, a.suggest, a.auto), (0.75, 0.45, 0.55));
     let s = thresholds("sface");
-    assert_eq!((s.group_cut, s.suggest, s.auto), (0.67, 0.43, 0.54));
+    assert_eq!((s.group_cut, s.suggest, s.auto), (0.67, 0.54, 0.64));
     assert!(a.suggest < a.auto && s.suggest < s.auto);
 }
 
@@ -332,4 +332,172 @@ fn face_crop_is_square_and_sharp() {
     assert_eq!(faces::face_crop(&img, [0.95, 0.0, 0.05, 0.05], 256).dimensions(), (256, 256));
     assert_eq!(faces::face_crop(&img, [0.0, 0.0, 1.0, 1.0], 64).dimensions(), (64, 64));
     assert_eq!(faces::face_crop(&image::RgbImage::new(0, 0), [0.1, 0.1, 0.1, 0.1], 32).dimensions(), (32, 32));
+}
+
+/// Ann, named from two faces (near 0), in a fresh index.
+fn with_ann() -> (std::sync::Mutex<Index>, i64) {
+    let lock = index();
+    lock.lock().map(|ix| faces::keep(&ix, "a1", "auraface", &[found(near(0, 0, 0.1)), found(near(0, 1, 0.1))]).unwrap()).unwrap();
+    faces::regroup(&lock, "auraface").unwrap();
+    let ann = {
+        let ix = lock.lock().unwrap();
+        let g = faces::faces(&ix, "auraface").unwrap().iter().find_map(Who::of).unwrap();
+        faces::name(&ix, g, "ada", "Ann").unwrap()
+    };
+    (lock, ann)
+}
+
+fn by_thumb(lock: &std::sync::Mutex<Index>, thumb: &str) -> faces::Face {
+    let ix = lock.lock().unwrap();
+    faces::faces(&ix, "auraface").unwrap().into_iter().find(|f| f.thumb == thumb).unwrap()
+}
+
+/// James 2026-11-27: a face removed from a person comes back as its own unnamed group (it can be
+/// named or merged) and is never put back with that person, however like them it is.
+#[test]
+fn a_removed_face_is_a_new_face_and_never_rejoins() {
+    let (lock, ann) = with_ann();
+    lock.lock().map(|ix| faces::keep(&ix, "a2", "auraface", &[found(near(0, 2, 0.1))]).unwrap()).unwrap();
+    faces::regroup(&lock, "auraface").unwrap();
+    let f = by_thumb(&lock, "a2");
+    assert_eq!(f.person, Some(ann), "a sure match joins on its own");
+    assert!(lock.lock().map(|ix| faces::remove(&ix, Who::Person(ann), f.id).unwrap()).unwrap());
+    for _ in 0..2 {
+        let g = by_thumb(&lock, "a2");
+        assert_eq!((g.person, g.grp), (None, Some(f.id)), "its own unnamed group");
+        faces::regroup(&lock, "auraface").unwrap();
+    }
+    let ix = lock.lock().unwrap();
+    // Nameable: it becomes a person of its own.
+    let p = faces::name(&ix, Who::Group(f.id), "ada", "Bea").unwrap();
+    assert_ne!(p, ann);
+    drop(ix);
+    faces::regroup(&lock, "auraface").unwrap();
+    assert_eq!(by_thumb(&lock, "a2").person, Some(p));
+}
+
+/// A face only somewhat like Ann (between "maybe" and "sure") isn't joined: it is asked about.
+#[test]
+fn a_borderline_match_is_asked_not_joined() {
+    let t = thresholds("auraface");
+    let (lock, ann) = with_ann();
+    let e = mix(0.5, 0.866, 3, 0.0);
+    let sim = similarity(&e, &near(0, 0, 0.1)).max(similarity(&e, &near(0, 1, 0.1)));
+    assert!(sim >= t.suggest && sim < t.auto, "borderline: {sim}");
+    lock.lock().map(|ix| faces::keep(&ix, "b1", "auraface", &[found(e)]).unwrap()).unwrap();
+    faces::regroup(&lock, "auraface").unwrap();
+    let f = by_thumb(&lock, "b1");
+    assert_eq!((f.person, f.suggest), (None, Some(ann)));
+    // Yes: it joins Ann, and stays there.
+    assert!(lock.lock().map(|ix| faces::answer(&ix, f.id, ann, true).unwrap()).unwrap());
+    faces::regroup(&lock, "auraface").unwrap();
+    assert_eq!(by_thumb(&lock, "b1").person, Some(ann));
+}
+
+/// "No" is kept: never asked again, never joined, even after the person gets more faces.
+#[test]
+fn no_is_remembered() {
+    let (lock, ann) = with_ann();
+    lock.lock().map(|ix| faces::keep(&ix, "b1", "auraface", &[found(mix(0.5, 0.866, 3, 0.0))]).unwrap()).unwrap();
+    faces::regroup(&lock, "auraface").unwrap();
+    let f = by_thumb(&lock, "b1");
+    assert_eq!(f.suggest, Some(ann));
+    assert!(lock.lock().map(|ix| faces::answer(&ix, f.id, ann, false).unwrap()).unwrap());
+    // Ann gets a face very like this one (it lands in b1's group; "Yes" to it): b1 is still
+    // never joined or asked about.
+    lock.lock().map(|ix| faces::keep(&ix, "a3", "auraface", &[found(mix(0.5, 0.866, 4, 0.05))]).unwrap()).unwrap();
+    faces::regroup(&lock, "auraface").unwrap();
+    let a3 = by_thumb(&lock, "a3");
+    assert_eq!(a3.suggest, Some(ann));
+    assert!(lock.lock().map(|ix| faces::answer(&ix, a3.id, ann, true).unwrap()).unwrap());
+    assert_eq!(by_thumb(&lock, "a3").person, Some(ann));
+    faces::regroup(&lock, "auraface").unwrap();
+    let g = by_thumb(&lock, "b1");
+    assert_eq!((g.person, g.suggest), (None, None), "{g:?}");
+    assert!(!lock.lock().map(|ix| faces::answer(&ix, 999_999, ann, true).unwrap()).unwrap(), "no such face");
+}
+
+fn found_at(e: Vec<f32>, x: f32) -> Found {
+    Found { x, y: 0.1, w: 0.2, h: 0.2, score: 0.95, px: 80.0, emb: e }
+}
+
+/// James 2026-11-27: ignoring a group takes it out of People and grouping; undoing brings the
+/// same group back. Nothing is deleted.
+#[test]
+fn ignore_a_group_and_undo() {
+    let lock = index();
+    lock.lock().map(|ix| faces::keep(&ix, "s1", "auraface", &[found(near(2, 0, 0.1)), found(near(2, 1, 0.1))]).unwrap()).unwrap();
+    faces::regroup(&lock, "auraface").unwrap();
+    let g = by_thumb(&lock, "s1").grp.expect("a group");
+    let ids: Vec<i64> =
+        lock.lock().map(|ix| faces::faces(&ix, "auraface").unwrap().iter().filter(|f| f.grp == Some(g)).map(|f| f.id).collect()).unwrap();
+    assert_eq!(ids.len(), 2);
+    assert_eq!(lock.lock().map(|ix| faces::mark(&ix, &ids, faces::IGNORED).unwrap()).unwrap(), 2);
+    faces::regroup(&lock, "auraface").unwrap();
+    {
+        let ix = lock.lock().unwrap();
+        assert!(faces::faces(&ix, "auraface").unwrap().is_empty(), "out of People and grouping");
+        let m = faces::marked(&ix, "auraface").unwrap();
+        assert_eq!(m.len(), 2);
+        assert!(m.iter().all(|f| f.state == faces::IGNORED && f.grp == Some(g)));
+        // Not on the "not a face" list: undoing that does nothing.
+        assert_eq!(faces::unmark(&ix, &ids, faces::NOT_FACE, false).unwrap(), 0);
+        assert_eq!(faces::unmark(&ix, &ids, faces::IGNORED, false).unwrap(), 2);
+    }
+    faces::regroup(&lock, "auraface").unwrap();
+    let ix = lock.lock().unwrap();
+    let all = faces::faces(&ix, "auraface").unwrap();
+    assert!(all.len() == 2 && all.iter().all(|f| f.grp == Some(g)), "the same group again: {all:?}");
+}
+
+/// An ignored face of a person: never that person again, never asked about; "Assign to…" gives
+/// it to someone; "Group again" lets grouping decide afresh.
+#[test]
+fn an_ignored_face_leaves_its_person_and_can_be_assigned_or_grouped_again() {
+    let (lock, ann) = with_ann();
+    let f = by_thumb(&lock, "a1");
+    assert_eq!(f.person, Some(ann));
+    lock.lock().map(|ix| faces::mark(&ix, &[f.id], faces::IGNORED).unwrap()).unwrap();
+    faces::regroup(&lock, "auraface").unwrap();
+    {
+        let ix = lock.lock().unwrap();
+        assert!(faces::faces(&ix, "auraface").unwrap().iter().all(|g| g.id != f.id));
+        assert!(!faces::answer(&ix, f.id, ann, true).unwrap(), "no questions about an ignored face");
+        // Group again: back without a group; regrouping never puts it with Ann (taken from her).
+        assert_eq!(faces::unmark(&ix, &[f.id], faces::IGNORED, true).unwrap(), 1);
+    }
+    faces::regroup(&lock, "auraface").unwrap();
+    let g = lock.lock().unwrap();
+    let back = faces::face(&g, f.id).unwrap().unwrap();
+    assert_eq!((back.person, back.state), (None, 0));
+    // Ignore again, then assign it to Ann after all.
+    faces::mark(&g, &[f.id], faces::IGNORED).unwrap();
+    assert_eq!(faces::assign(&g, &[f.id], ann).unwrap(), 1);
+    let back = faces::face(&g, f.id).unwrap().unwrap();
+    assert_eq!((back.person, back.state), (Some(ann), 0));
+    assert_eq!(faces::assign(&g, &[f.id], ann).unwrap(), 0, "only marked faces are assigned here");
+}
+
+/// "Not a face" survives the picture being looked at again (same box, a little off); a face
+/// somewhere else in the picture is new. "It is a face" undoes it.
+#[test]
+fn not_a_face_is_not_found_again_on_a_rescan() {
+    let lock = index();
+    lock.lock().map(|ix| faces::keep(&ix, "d1", "auraface", &[found_at(near(3, 0, 0.1), 0.1), found_at(near(4, 0, 0.1), 0.6)]).unwrap()).unwrap();
+    let doll = by_thumb(&lock, "d1")
+        .id
+        .min(lock.lock().map(|ix| faces::faces(&ix, "auraface").unwrap().iter().find(|f| f.bx[0] < 0.3).unwrap().id).unwrap());
+    lock.lock().map(|ix| faces::mark(&ix, &[doll], faces::NOT_FACE).unwrap()).unwrap();
+    // Looked at again: the doll's box a little moved, the other face still there.
+    lock.lock().map(|ix| faces::keep(&ix, "d1", "auraface", &[found_at(near(3, 1, 0.1), 0.12), found_at(near(4, 1, 0.1), 0.6)]).unwrap()).unwrap();
+    faces::regroup(&lock, "auraface").unwrap();
+    let ix = lock.lock().unwrap();
+    let shown = faces::faces(&ix, "auraface").unwrap();
+    assert_eq!(shown.len(), 1, "{shown:?}");
+    assert!((shown[0].bx[0] - 0.6).abs() < 1e-6);
+    let m = faces::marked(&ix, "auraface").unwrap();
+    assert_eq!((m.len(), m[0].state), (1, faces::NOT_FACE));
+    assert!(faces::overlap([0.1, 0.1, 0.2, 0.2], [0.6, 0.1, 0.2, 0.2]) < faces::SAME_BOX);
+    assert_eq!(faces::unmark(&ix, &[m[0].id], faces::NOT_FACE, false).unwrap(), 1);
+    assert_eq!(faces::faces(&ix, "auraface").unwrap().len(), 2, "It is a face: back");
 }
