@@ -89,7 +89,7 @@ pub async fn route(
         2 if post => switch(app, q, me, p[1] == "enable").await,
         2 if p[1] == "status" => status(app, me).await,
         2 if p[1] == "duplicates" => duplicates(app, q, me).await,
-        4 if p[1] == "thumb" => thumb(app, me, p[2].clone(), &p[3], q.get("v").map(String::as_str), headers).await,
+        4 if p[1] == "thumb" => thumb(app, me, p[2].clone(), &p[3], q.get("v").map(String::as_str), q.get("fmt").map(String::as_str), headers).await,
         _ => error(404, "not found"),
     })
 }
@@ -422,10 +422,24 @@ pub(super) fn iso(secs: i64) -> String {
 /// A thumbnail found: its bytes, "jpg"/"png", the picture's `v` and its file name.
 type Found = (Vec<u8>, &'static str, String, String);
 
-async fn thumb(app: &Shared, me: Option<auth::User>, id: String, size: &str, v: Option<&str>, headers: &HeaderMap) -> Response<Body> {
-    let Some(size) = size.parse::<u32>().ok().filter(|s| decode::SIZES.contains(s)) else {
-        return error(400, "size is 256 or 1024");
+/// `GET thumb/ID/SIZE[?v=TAG][&fmt=best|jpeg]`: a thumbnail (256, 1024) or the viewer's screen
+/// copy (2560). The screen copy comes in the best format the browser said it can show
+/// (`fmt=best`; JPEG otherwise); while it is being made the answer is 202 (the viewer shows the
+/// 1024 one meanwhile). The original is never needed just to look at a picture.
+#[allow(clippy::too_many_arguments)] // the route's own parts, each used once
+async fn thumb(
+    app: &Shared,
+    me: Option<auth::User>,
+    id: String,
+    size: &str,
+    v: Option<&str>,
+    fmt: Option<&str>,
+    headers: &HeaderMap,
+) -> Response<Body> {
+    let Some(size) = size.parse::<u32>().ok().filter(|s| decode::SIZES.contains(s) || *s == decode::SCREEN) else {
+        return error(400, "size is 256, 1024 or 2560");
     };
+    let screen = (size == decode::SCREEN).then(|| super::jxl::best(fmt == Some("best")));
     let path = blocking(app, move |a| -> Result<String, Response<Body>> {
         let acc = sharing::Access::with_locked(&a.store, a.auth, me.as_ref());
         if acc.file_role(&id) < sharing::Role::View {
@@ -457,6 +471,18 @@ async fn thumb(app: &Shared, me: Option<auth::User>, id: String, size: &str, v: 
                         return Err((404, json!({"error": "No thumbnails of this kind of picture yet.", "state": "unsupported"})));
                     }
                     State::Failed => return Err((404, json!({"error": r.error, "state": "failed"}))),
+                    State::Ready if screen.is_some() => {
+                        let f = screen.unwrap_or(super::jxl::Format::Jpeg);
+                        let Some(hash) = r.thumb_key() else { break };
+                        if let Some((file, ext)) = svc.screen_file(hash, f)
+                            && let Ok(bytes) = std::fs::read(&file)
+                        {
+                            svc.used(&file);
+                            return Ok((bytes, ext, tag(hash).to_string(), r.name));
+                        }
+                        svc.want_screen(&path, f);
+                        break;
+                    }
                     State::Ready => {
                         if let Some(hash) = r.thumb_key()
                             && let Some((file, ext)) = svc.thumb_file(hash, size)
@@ -493,7 +519,7 @@ async fn thumb(app: &Shared, me: Option<auth::User>, id: String, size: &str, v: 
         }
         Err((code, body)) => return send_json(&body, code),
     };
-    let etag = format!("\"{vtag}-{size}\"");
+    let etag = if size == decode::SCREEN { format!("\"{vtag}-{size}-{ext}\"") } else { format!("\"{vtag}-{size}\"") };
     let cache = if v == Some(vtag.as_str()) { "private, max-age=31536000, immutable" } else { "private, no-cache" };
     let b = Response::builder()
         .header(header::ETAG, &etag)
@@ -505,7 +531,14 @@ async fn thumb(app: &Shared, me: Option<auth::User>, id: String, size: &str, v: 
     }
     let stem = name.rsplit_once('.').map_or(name.as_str(), |(s, _)| s);
     b.status(200)
-        .header(header::CONTENT_TYPE, if ext == "png" { "image/png" } else { "image/jpeg" })
+        .header(
+            header::CONTENT_TYPE,
+            match ext {
+                "png" => "image/png",
+                "jxl" => "image/jxl",
+                _ => "image/jpeg",
+            },
+        )
         .header(header::CONTENT_DISPOSITION, crate::preview::disposition("inline", &format!("{stem}-{size}.{ext}")))
         .body(Body::from(bytes))
         .unwrap()

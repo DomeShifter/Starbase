@@ -382,7 +382,7 @@ pub async fn route(app: &Shared, m: &str, id: String, me: Option<auth::User>, bo
         let mut file = file;
         file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
         match WORKER_EXE.get() {
-            Some(exe) => decode::run_export(exe, file, memory, &Job { edits: Some(edits), export: Some(opts2) }),
+            Some(exe) => decode::run_export(exe, file, memory, &Job { edits: Some(edits), export: Some(opts2), screen: None }),
             None => {
                 let mut bytes = Vec::new();
                 (&file).take(MAX_FILE).read_to_end(&mut bytes).map_err(|e| e.to_string())?;

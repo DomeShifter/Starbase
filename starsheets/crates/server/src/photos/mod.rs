@@ -39,6 +39,7 @@ pub mod faces;
 #[cfg(test)]
 mod faces_tests;
 pub mod index;
+pub mod jxl;
 pub mod info;
 pub mod locked;
 pub mod ml;
@@ -255,7 +256,13 @@ struct Queue {
     order: VecDeque<String>,
     set: HashSet<String>,
     working: usize,
+    /// Screen copies to make (picture path, format), done when `order` is empty.
+    screen: VecDeque<(String, jxl::Format)>,
 }
+
+/// The most the JPEG screen copies (made only when a browser can't show the best format) may
+/// take on disk; the least recently shown go first.
+const SCREEN_JPEG_CAP: u64 = 2 * 1024 * 1024 * 1024;
 
 /// What [`Photos::list`] found: pictures (path → size, modified ns) and their sidecars'
 /// stats (picture path → stat).
@@ -297,6 +304,7 @@ pub struct Photos {
     scanning: AtomicBool,
     made: AtomicU64,
     cache_bytes: AtomicU64,
+    screen_jpeg_bytes: AtomicU64,
     stop: AtomicBool,
     /// The face worker's state (ml.rs).
     pub ml: ml::State,
@@ -409,6 +417,7 @@ impl Photos {
             scanning: AtomicBool::new(false),
             made: AtomicU64::new(0),
             cache_bytes: AtomicU64::new(0),
+            screen_jpeg_bytes: AtomicU64::new(0),
             stop: AtomicBool::new(false),
             ml: ml::State::new(ml::MlConfig::from_env()),
         });
@@ -533,13 +542,19 @@ impl Photos {
                     if let Some(p) = q.order.pop_front() {
                         q.set.remove(&p);
                         q.working += 1;
-                        break p;
+                        break (p, None);
+                    }
+                    if let Some((p, f)) = q.screen.pop_front() {
+                        q.working += 1;
+                        break (p, Some(f));
                     }
                     q = self.wake.wait(q).unwrap_or_else(|e| e.into_inner());
                 }
             };
-            if self.covers(&path) {
-                self.process(&path);
+            match path {
+                (path, None) if self.covers(&path) => self.process(&path),
+                (path, Some(f)) if self.covers(&path) => self.make_screen_copy(&path, f),
+                _ => {}
             }
             self.queue.lock().unwrap_or_else(|e| e.into_inner()).working -= 1;
         }
@@ -581,6 +596,79 @@ impl Photos {
             let _ = std::fs::remove_file(&tmp);
         }
         Some(out)
+    }
+
+    /// Asks for the screen copy of the picture at `path` in format `f`: made next, before
+    /// thumbnails still waiting for the background (someone is looking at it).
+    pub fn want_screen(&self, path: &str, f: jxl::Format) {
+        let mut q = self.queue.lock().unwrap_or_else(|e| e.into_inner());
+        let item = (path.to_string(), f);
+        q.screen.retain(|x| *x != item);
+        q.screen.push_front(item);
+        drop(q);
+        self.wake.notify_all();
+    }
+
+    /// Where the screen copy of content `key` in format `f` is kept (without the extension).
+    /// JPEG XL ones live with the thumbnails; JPEG ones (made only on request) have their own
+    /// folder and size cap ([`SCREEN_JPEG_CAP`]).
+    fn screen_base(&self, key: &str, f: jxl::Format) -> PathBuf {
+        let dir = if f == jxl::Format::Jxl { "thumbs" } else { "screen" };
+        self.cache.join(dir).join(&key[..2]).join(format!("{key}-{}-{}", decode::RENDER, decode::SCREEN))
+    }
+
+    /// The kept screen copy of content `key` in format `f`: (file, "jxl"/"jpg"/"png").
+    pub fn screen_file(&self, key: &str, f: jxl::Format) -> Option<(PathBuf, &'static str)> {
+        if key.len() < 2 || !key.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return None;
+        }
+        let base = self.screen_base(key, f);
+        let exts: &[&'static str] = if f == jxl::Format::Jxl { &["jxl"] } else { &["jpg", "png"] };
+        exts.iter().map(|ext| (base.with_extension(ext), *ext)).find(|(p, _)| p.is_file())
+    }
+
+    /// Makes the screen copy of the picture at `path` in format `f` (worker thread, low
+    /// priority), unless it is there already.
+    fn make_screen_copy(&self, path: &str, f: jxl::Format) {
+        let Some(row) = self.db().get(path).ok().flatten().filter(|r| r.state == index::State::Ready) else { return };
+        let Some(key) = row.thumb_key().map(str::to_string) else { return };
+        if self.screen_file(&key, f).is_some() || (f == jxl::Format::Jxl && !jxl::available()) {
+            return;
+        }
+        let (_, edits) = self.sidecar_edits(path);
+        let Some(file) = self.store.open_safe(path) else { return };
+        let form = if f == jxl::Format::Jxl { decode::ScreenForm::Raw } else { decode::ScreenForm::Jpeg };
+        let made = match WORKER_EXE.get() {
+            Some(exe) => decode::run_screen(exe, file, self.cfg.child_memory, edits.as_ref(), form),
+            None => {
+                let mut bytes = Vec::new();
+                if file.take(MAX_FILE).read_to_end(&mut bytes).is_err() {
+                    return;
+                }
+                let limits = decode::Limits::for_memory(self.cfg.child_memory);
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| decode::make_screen(&bytes, &limits, edits.as_ref(), form)))
+                    .unwrap_or_else(|_| Err("the decoder failed (panic)".into()))
+                    .map(|(b, e, _)| (b, e.to_string()))
+            }
+        };
+        let (bytes, ext) = match made {
+            Ok((b, e)) if f == jxl::Format::Jxl => match jxl::encode(&b, &e, &self.cache.join("tmp")) {
+                Ok(j) => (j, "jxl".to_string()),
+                Err(why) => return eprintln!("photos: screen copy of {key}: {why}"),
+            },
+            Ok(x) => x,
+            Err(why) => return eprintln!("photos: screen copy of {key}: {why}"),
+        };
+        let to = self.screen_base(&key, f).with_extension(&ext);
+        let ok = std::fs::create_dir_all(to.parent().unwrap_or(&self.cache)).and_then(|()| {
+            let tmp = to.with_extension(format!("{ext}.{}.tmp", crate::store::random_hex(4)));
+            std::fs::write(&tmp, &bytes)?;
+            std::fs::rename(&tmp, &to)
+        });
+        if ok.is_ok() {
+            let n = bytes.len() as u64;
+            if f == jxl::Format::Jxl { &self.cache_bytes } else { &self.screen_jpeg_bytes }.fetch_add(n, Ordering::Relaxed);
+        }
     }
 
     /// A thumbnail was shown: it counts as recently used (its modified time, at most daily).
@@ -722,6 +810,10 @@ impl Photos {
                 }
                 let _ = self.db().done(path, size, mtime, &hash, &made.meta, render, &side);
                 self.made.fetch_add(1, Ordering::Relaxed);
+                // Then, after every waiting thumbnail, its screen copy in the best format.
+                if jxl::available() {
+                    self.queue.lock().unwrap_or_else(|e| e.into_inner()).screen.push_back((path.to_string(), jxl::Format::Jxl));
+                }
             }
             Err(why) => {
                 let _ = self.db().failed(path, size, mtime, Some(&hash), &why, render);
@@ -1106,7 +1198,18 @@ impl Photos {
     /// the cache is over its size, the least recently shown. Counts the cache's size.
     fn clear_unused(&self) {
         let Ok(used) = self.db().thumb_keys() else { return };
-        let Ok(dirs) = std::fs::read_dir(self.cache.join("thumbs")) else { return };
+        if let Some(n) = self.clear_dir(&used, "thumbs", self.cfg.cache_cap) {
+            self.cache_bytes.store(n, Ordering::Relaxed);
+        }
+        // The JPEG screen copies: their own folder and cap, so they never push thumbnails out.
+        if let Some(n) = self.clear_dir(&used, "screen", SCREEN_JPEG_CAP) {
+            self.screen_jpeg_bytes.store(n, Ordering::Relaxed);
+        }
+    }
+
+    /// [`Self::clear_unused`] for one folder of the cache, kept under `cap`: its size after.
+    fn clear_dir(&self, used: &HashSet<String>, dir: &str, cap: u64) -> Option<u64> {
+        let dirs = std::fs::read_dir(self.cache.join(dir)).ok()?;
         let mut kept: Vec<(SystemTime, u64, PathBuf)> = Vec::new();
         for d in dirs.flatten() {
             let Ok(files) = std::fs::read_dir(d.path()) else { continue };
@@ -1125,11 +1228,11 @@ impl Photos {
             }
         }
         let mut total: u64 = kept.iter().map(|k| k.1).sum();
-        if total > self.cfg.cache_cap {
+        if total > cap {
             // Down to 90%, so it isn't done again for every new thumbnail.
             kept.sort();
             for (_, n, p) in kept {
-                if total <= self.cfg.cache_cap / 10 * 9 {
+                if total <= cap / 10 * 9 {
                     break;
                 }
                 if std::fs::remove_file(p).is_ok() {
@@ -1137,7 +1240,7 @@ impl Photos {
                 }
             }
         }
-        self.cache_bytes.store(total, Ordering::Relaxed);
+        Some(total)
     }
 
     /// For GET /api/photos/status (the server's owner).
@@ -1159,6 +1262,7 @@ impl Photos {
             "network_storage": self.network,
             "rescan_seconds": self.rescan_every().as_secs(),
             "cache": { "folder": self.cache.display().to_string(), "bytes": self.cache_bytes.load(Ordering::Relaxed), "cap": self.cfg.cache_cap },
+            "screen": { "best": if jxl::available() { "jxl" } else { "jpeg" }, "jpeg_bytes": self.screen_jpeg_bytes.load(Ordering::Relaxed), "jpeg_cap": SCREEN_JPEG_CAP },
             "last_rescan": match last {
                 Some((at, secs, files)) => json!({ "started": at, "seconds": (secs * 10.0).round() / 10.0, "files": files }),
                 None => Value::Null,
@@ -1183,5 +1287,7 @@ impl Photos {
     }
 }
 
+#[cfg(test)]
+mod screen_tests;
 #[cfg(test)]
 mod tests;

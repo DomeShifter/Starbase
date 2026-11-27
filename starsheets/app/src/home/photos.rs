@@ -39,6 +39,9 @@ use crate::theme;
 /// Thumbnail sizes the server makes; 0 = the original file.
 pub(super) const SMALL: u32 = 256;
 pub(super) const LARGE: u32 = 1024;
+/// The viewer's screen copy (the server's 2560 px one): what a big picture is shown from; the
+/// original is only downloaded, never fetched just to look at it.
+pub(super) const SCREEN: u32 = 2560;
 pub(super) const ORIGINAL: u32 = 0;
 /// Pictures asked for at once.
 const AT_ONCE: usize = 6;
@@ -752,6 +755,14 @@ impl PhotoMode {
             format!("api/photos/people/{id}?v={}", v.unwrap_or(""))
         } else if size == ORIGINAL {
             format!("api/files/{id}/raw")
+        } else if size == SCREEN {
+            // The best format this browser shows (JPEG XL), else JPEG; asked once it is known.
+            let fmt = match best_format() {
+                None => return ctx.request_repaint_after(std::time::Duration::from_millis(50)),
+                Some(true) => "best",
+                Some(false) => "jpeg",
+            };
+            format!("api/photos/thumb/{id}/{size}?v={}&fmt={fmt}", v.unwrap_or(""))
         } else {
             match v {
                 Some(v) => format!("api/photos/thumb/{id}/{size}?v={v}"),
@@ -925,9 +936,10 @@ impl PhotoMode {
     pub fn best_id(&mut self, id: &str, prefer: u32) -> Option<(egui::TextureHandle, u32)> {
         let id = id.to_string();
         let order: &[u32] = match prefer {
-            ORIGINAL => &[ORIGINAL, LARGE, SMALL],
-            LARGE => &[LARGE, ORIGINAL, SMALL],
-            _ => &[SMALL, LARGE, ORIGINAL],
+            ORIGINAL => &[ORIGINAL, SCREEN, LARGE, SMALL],
+            SCREEN => &[SCREEN, ORIGINAL, LARGE, SMALL],
+            LARGE => &[LARGE, SCREEN, ORIGINAL, SMALL],
+            _ => &[SMALL, LARGE, SCREEN, ORIGINAL],
         };
         let frame = self.frame;
         order.iter().find_map(|&s| self.tex.get(&(id.clone(), s), frame).map(|t| (t, s)))
@@ -938,6 +950,8 @@ impl PhotoMode {
     /// Left nav (Photos, Albums, Places) and what it shows.
     pub fn ui(&mut self, ui: &mut Ui, store: &Backend, folder: &str) {
         let ctx = ui.ctx().clone();
+        // Find out early which screen-copy format this browser shows.
+        let _ = best_format();
         self.hint_shown = false;
         self.alb.boot_cards(&ctx, store, &self.inbox);
         // On a phone the nav is a wrapped row above the pictures, not a column beside them.
@@ -1272,10 +1286,11 @@ impl PhotoMode {
             "locked": self.locked_state(),
             "lockedHint": { "shown": self.hint_shown, "dismissed": self.hint_dismissed },
             "upload": self.up.test_state(),
+            "bestFormat": match best_format() { Some(true) => "jxl", Some(false) => "jpeg", None => "unknown" },
             "textures": { "count": self.tex.len(), "bytes": self.tex.total, "budget": self.tex.budget, "asking": self.asking.len(), "requests": self.image_requests },
             "items": self.pics.iter().take(60).map(|p| json!({
                 "id": p.id, "name": p.name, "taken": p.taken, "state": p.state, "v": p.v, "media": p.media, "duration": p.duration, "stack": p.stack.iter().map(|f| &f.name).collect::<Vec<_>>(),
-                "thumb": has(&p.id, SMALL), "large": has(&p.id, LARGE), "original": has(&p.id, ORIGINAL),
+                "thumb": has(&p.id, SMALL), "large": has(&p.id, LARGE), "screen": has(&p.id, SCREEN), "original": has(&p.id, ORIGINAL),
             })).collect::<Vec<_>>(),
             "photo_edit": self.editor.as_ref().map_or_else(|| json!({ "open": false }), |e| e.test_state()),
             "viewer": self.viewer.as_ref().map(|v| {
@@ -1330,6 +1345,36 @@ pub(super) fn decode_native(bytes: &[u8], max: u32) -> Option<egui::ColorImage> 
     }
     let rgba = img.into_rgba8();
     Some(egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw()))
+}
+
+/// A 1 × 1 JPEG XL picture (made with libjxl's cjxl): whether the browser decodes it says
+/// whether it can show the best screen-copy format.
+#[cfg(target_arch = "wasm32")]
+const JXL_SAMPLE: [u8; 40] = [
+    0xff, 0x0a, 0x00, 0x10, 0x90, 0x50, 0x5c, 0x08, 0x00, 0x13, 0x88, 0x02, 0x00, 0x64, 0x00, 0xb5, 0x9f, 0xe0, 0x25, 0x8c, 0xcd, 0xf6, 0xc2, 0x20,
+    0x21, 0xe1, 0x08, 0x36, 0x2e, 0xda, 0x76, 0x73, 0x9a, 0x43, 0xf6, 0x0d, 0x48, 0x48, 0x25, 0x09,
+];
+
+/// Whether this browser shows the best screen-copy format (JPEG XL): None until known. Found
+/// once, at the first call, by decoding [`JXL_SAMPLE`]; native builds decode JPEG only.
+pub(super) fn best_format() -> Option<bool> {
+    use std::sync::atomic::{AtomicU8, Ordering};
+    // 0 = not asked, 1 = finding out, 2 = no, 3 = yes.
+    static STATE: AtomicU8 = AtomicU8::new(0);
+    #[cfg(target_arch = "wasm32")]
+    if STATE.compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
+        wasm_bindgen_futures::spawn_local(async {
+            let ok = decode_web(JXL_SAMPLE.to_vec(), 8).await.is_some_and(|i| i.size == [1, 1]);
+            STATE.store(if ok { 3 } else { 2 }, Ordering::Relaxed);
+        });
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = STATE.compare_exchange(0, 2, Ordering::Relaxed, Ordering::Relaxed);
+    match STATE.load(Ordering::Relaxed) {
+        2 => Some(false),
+        3 => Some(true),
+        _ => None,
+    }
 }
 
 /// The browser decodes (createImageBitmap: off the main thread, EXIF orientation applied), then
