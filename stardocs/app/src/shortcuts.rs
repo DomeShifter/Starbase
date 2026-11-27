@@ -4,7 +4,8 @@
 
 use egui::{Align, Layout, RichText, Ui, vec2};
 
-use crate::shell::{Item, TEXT, TEXT_DIM};
+use crate::shell::Item;
+use crate::theme::palette;
 
 /// Keys that work while typing but have no menu entry.
 const TEXT_EDITING: &[(&str, &str)] = &[
@@ -75,9 +76,9 @@ fn spaced(keys: &str) -> String {
 fn row(ui: &mut Ui, label: &str, keys: &str) {
     ui.horizontal(|ui| {
         ui.set_min_height(36.0);
-        ui.label(RichText::new(label).size(14.0).color(TEXT));
+        ui.label(RichText::new(label).size(14.0).color(palette().text));
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.label(RichText::new(spaced(keys)).size(14.0).color(TEXT_DIM));
+            ui.label(RichText::new(spaced(keys)).size(14.0).color(palette().text_dim));
         });
     });
 }
@@ -126,7 +127,7 @@ impl Shortcuts {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                     let x = match crate::icons::icon_px("close", 24.0) {
                         Some(img) => egui::Button::image(img),
-                        None => egui::Button::new(RichText::new("×").size(20.0).color(TEXT_DIM)),
+                        None => egui::Button::new(RichText::new("×").size(20.0).color(palette().text_dim)),
                     };
                     let r = ui.add(x.frame(false).min_size(vec2(40.0, 40.0)));
                     r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, "Close"));
@@ -139,7 +140,12 @@ impl Shortcuts {
             let search = ui
                 .scope(|ui| {
                     crate::looks::field_style(ui);
-                    ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("Search shortcuts").desired_width(f32::INFINITY).text_color(TEXT))
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.filter)
+                            .hint_text("Search shortcuts")
+                            .desired_width(f32::INFINITY)
+                            .text_color(palette().text),
+                    )
                 })
                 .inner;
             if opening {
@@ -155,7 +161,7 @@ impl Shortcuts {
                     }
                     ui.add_space(if any { 16.0 } else { 4.0 });
                     any = true;
-                    ui.label(RichText::new(*menu).font(wordcraft_ui_egui::theme::medium(16.0)).color(TEXT));
+                    ui.label(RichText::new(*menu).font(wordcraft_ui_egui::theme::medium(16.0)).color(palette().text));
                     ui.add_space(4.0);
                     for (label, keys) in list {
                         row(ui, label, keys);
@@ -163,7 +169,7 @@ impl Shortcuts {
                 }
                 if !any {
                     ui.add_space(12.0);
-                    ui.label(RichText::new("No shortcuts match your search.").size(14.0).color(TEXT_DIM));
+                    ui.label(RichText::new("No shortcuts match your search.").size(14.0).color(palette().text_dim));
                 }
             });
         });

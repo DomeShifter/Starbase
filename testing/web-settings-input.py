@@ -77,12 +77,27 @@ def check(browser, testn):
         s.click_text("settings:backups-enabled")
         assert s.wait_for(lambda: backup()["enabled"] is True, secs=8), "Master On was not saved"
 
+        s.click_text("tab:Server")
+        assert s.wait_for(lambda: target("settings:signup") and target("settings:link-preview"), secs=8)
+        url = s.base + "/api/link-preview/settings"
+        original_preview = s.pg.request.get(url).json()["on"]
+        s.click_text("settings:link-preview")
+        assert s.wait_for(lambda: s.pg.request.get(url).json()["on"] != original_preview, secs=8)
+        s.click_text("settings:link-preview")
+        assert s.wait_for(lambda: s.pg.request.get(url).json()["on"] == original_preview, secs=8)
+
+        s.click_text("tab:Storage")
+        assert s.wait_for(lambda: target("settings:storage"), secs=8)
+        s.key("Escape")
+        s.hook("account:storage")
+        assert s.wait_for(lambda: target("settings:storage"), secs=8)
+
     with Session(browser, testn=testn, outdir="shots") as member:
         member.sign_in("bob")
         member.open("drive")
         member.click_text("account:avatar", button=3)
         assert member.wait_for(lambda: (member.snapshot("targets") or {}).get("settings:dark"), secs=6)
-        assert "tab:Backups" not in member.snapshot("targets")
+        assert all("tab:" + name not in member.snapshot("targets") for name in ("Backups", "Server", "Storage"))
     print(f"PASS {browser}: settings, persistent appearance and Photos visibility, owner backup switch", flush=True)
 
 

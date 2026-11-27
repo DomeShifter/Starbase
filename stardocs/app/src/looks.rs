@@ -1,16 +1,15 @@
 //! Google Docs' look for the parts WordCraft draws itself: its dialogs (Page setup, Word count,
 //! Find and replace, Insert link, Table properties …) and the Comments pane. WordCraft takes the
 //! look through its host style hook (`WordApp::set_host_look`, fork commit "StarDocs 0008");
-//! web.rs sets it once at startup. Colours match the rest of our interface (shell.rs, share.rs).
+//! web.rs applies the current browser palette. Colours match the rest of our interface (shell.rs, share.rs).
 
 use egui::{Color32, CornerRadius, Frame, Margin, Shadow, Stroke, vec2};
 use wordcraft_ui_egui::theme::{medium, regular};
 use wordcraft_ui_egui::{ButtonLook, CommentsLook, DialogLook, HostLook, MarginLook, WordApp};
 
+use crate::theme::palette;
+
 const BLUE: Color32 = Color32::from_rgb(0x0B, 0x57, 0xD0);
-const TEXT: Color32 = Color32::from_rgb(0x1F, 0x1F, 0x1F);
-const TEXT_DIM: Color32 = Color32::from_rgb(0x44, 0x47, 0x46);
-const META: Color32 = Color32::from_rgb(0x5F, 0x63, 0x68);
 /// Field outlines: Google's grey at rest, near-black under the pointer.
 pub const FIELD: Color32 = Color32::from_rgb(0x74, 0x77, 0x75);
 /// Behind commented text, and behind the selected comment's text (Google Docs' yellows).
@@ -24,14 +23,15 @@ pub fn apply(app: &mut WordApp) {
 
 /// Google's buttons: OK is a filled blue pill with white text, Cancel a blue text button.
 fn buttons() -> ButtonLook {
+    let accent = palette().accent;
     ButtonLook {
         font: medium(14.0),
         height: 36.0,
         padding: 24.0,
         fill: BLUE,
         on_fill: Color32::WHITE,
-        text: BLUE,
-        hover: Color32::from_rgba_unmultiplied(0x0B, 0x57, 0xD0, 0x14),
+        text: accent,
+        hover: Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 0x14),
     }
 }
 
@@ -41,45 +41,47 @@ fn shadow(blur: u8, alpha: u8) -> Shadow {
 }
 
 pub fn look() -> HostLook {
+    let colours = palette();
+    let light = colours.card == Color32::WHITE;
     let dialog = DialogLook {
         frame: Frame::NONE
-            .fill(Color32::WHITE)
+            .fill(palette().card)
             .corner_radius(CornerRadius::same(8))
             .shadow(shadow(24, 60))
             .stroke(Stroke::NONE)
             .inner_margin(Margin::same(24)),
         title_font: regular(22.0),
-        title_color: TEXT,
+        title_color: palette().text,
         body_size: 14.0,
         heading_font: medium(14.0),
         item_spacing: vec2(10.0, 10.0),
         row_height: 36.0,
         field_stroke: Stroke::new(1.0, FIELD),
-        field_hover: Stroke::new(1.0, TEXT),
-        field_focus: Stroke::new(2.0, BLUE),
+        field_hover: Stroke::new(1.0, palette().text),
+        field_focus: Stroke::new(2.0, palette().accent),
         field_radius: 4,
         min_width: 420.0,
-        close_color: TEXT_DIM,
+        close_color: palette().text_dim,
         buttons: buttons(),
     };
     let comments = CommentsLook {
-        panel_fill: Color32::WHITE,
-        panel_stroke: Stroke::new(1.0, Color32::from_rgb(0xE1, 0xE3, 0xE1)),
+        panel_fill: colours.card,
+        panel_stroke: Stroke::new(1.0, if light { Color32::from_rgb(0xE1, 0xE3, 0xE1) } else { colours.menu_line }),
         header_font: regular(18.0),
-        header_color: TEXT,
+        header_color: palette().text,
         card: Frame::NONE
-            .fill(Color32::WHITE)
+            .fill(palette().card)
             .corner_radius(CornerRadius::same(8))
             .shadow(shadow(6, 40))
-            .stroke(Stroke::new(1.0, Color32::from_rgb(0xE8, 0xEA, 0xED)))
+            .stroke(Stroke::new(1.0, if light { Color32::from_rgb(0xE8, 0xEA, 0xED) } else { colours.menu_line }))
             .inner_margin(Margin::same(12)),
         card_gap: 12.0,
         author_font: medium(14.0),
-        author_color: TEXT,
+        author_color: palette().text,
         meta_font: regular(12.0),
-        meta_color: META,
+        meta_color: palette().meta,
         text_font: regular(14.0),
-        icon_color: TEXT_DIM,
+        icon_color: palette().text_dim,
         buttons: buttons(),
         // Cards beside the page, level with their text, as Docs shows comments.
         margin: Some(MarginLook {
@@ -88,12 +90,12 @@ pub fn look() -> HostLook {
             highlight: HIGHLIGHT,
             highlight_active: HIGHLIGHT_ACTIVE,
             active_card: Frame::NONE
-                .fill(Color32::WHITE)
+                .fill(palette().card)
                 .corner_radius(CornerRadius::same(8))
                 .shadow(Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(70) })
                 .stroke(Stroke::NONE)
                 .inner_margin(Margin::same(12)),
-            icon_color: TEXT_DIM,
+            icon_color: palette().text_dim,
         }),
     };
     HostLook { dialog: Some(dialog), comments: Some(comments) }
@@ -102,12 +104,12 @@ pub fn look() -> HostLook {
 /// Our own dialogs (Name version, Keyboard shortcuts) in the same look as WordCraft's under
 /// [`look`]: a white card with 8 px corners, a soft shadow and 24 px inside.
 pub fn dialog_frame() -> Frame {
-    Frame::NONE.fill(Color32::WHITE).corner_radius(CornerRadius::same(8)).shadow(shadow(24, 60)).inner_margin(Margin::same(24))
+    Frame::NONE.fill(palette().card).corner_radius(CornerRadius::same(8)).shadow(shadow(24, 60)).inner_margin(Margin::same(24))
 }
 
 /// A dialog's title: Google's 22 px.
 pub fn title(ui: &mut egui::Ui, text: &str) {
-    ui.label(egui::RichText::new(text).font(regular(22.0)).color(TEXT));
+    ui.label(egui::RichText::new(text).font(regular(22.0)).color(palette().text));
 }
 
 /// Text fields the Google way: 14 px text, 40 px tall, a grey outline with 4 px corners, 2 px
@@ -118,12 +120,14 @@ pub fn field_style(ui: &mut egui::Ui) {
     st.spacing.button_padding = vec2(12.0, 10.0);
     st.text_styles.insert(egui::TextStyle::Body, regular(14.0));
     let w = &mut st.visuals.widgets;
-    for (state, stroke) in [(&mut w.inactive, FIELD), (&mut w.hovered, TEXT), (&mut w.active, BLUE), (&mut w.open, BLUE)] {
+    for (state, stroke) in
+        [(&mut w.inactive, FIELD), (&mut w.hovered, palette().text), (&mut w.active, palette().accent), (&mut w.open, palette().accent)]
+    {
         state.bg_stroke = Stroke::new(1.0, stroke);
         state.corner_radius = CornerRadius::same(4);
         state.expansion = 0.0;
     }
-    st.visuals.selection.stroke = Stroke::new(2.0, BLUE);
+    st.visuals.selection.stroke = Stroke::new(2.0, palette().accent);
 }
 
 /// A dialog button: the default action filled blue, the others blue text, both pill-shaped and

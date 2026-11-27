@@ -60,7 +60,7 @@ pub fn start() {
                         return Ok(Box::new(presenter) as Box<dyn eframe::App>);
                     }
                     let inbox: Inbox = Inbox::default();
-                    let mode = crate::theme::Mode::default();
+                    let mode = if drive_dark() { crate::theme::Mode::Dark } else { crate::theme::Mode::Light };
                     let shell = Shell::new(mode);
                     let mut services = services(inbox.clone(), cc.egui_ctx.clone(), shell.presenter_flag());
                     if let Some(bridge) = &app_bridge {
@@ -124,6 +124,15 @@ pub fn start() {
             }
         }
     });
+}
+
+/// The shared Starbase appearance preference, saved by the Drive settings.
+fn drive_dark() -> bool {
+    web_sys::window()
+        .and_then(|w| w.local_storage().ok().flatten())
+        .and_then(|storage| storage.get_item("starbase_drive_dark").ok().flatten())
+        .as_deref()
+        == Some("1")
 }
 
 fn query() -> String {

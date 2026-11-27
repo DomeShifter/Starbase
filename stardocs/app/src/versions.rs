@@ -13,7 +13,7 @@
 use egui::{Align, Color32, Layout, RichText, Ui, vec2};
 use serde_json::Value;
 
-use crate::shell::{BLUE, DIVIDER, ON, TEXT, TEXT_DIM};
+use crate::theme::palette;
 
 /// The id the server gives the file as it is now.
 pub const CURRENT: &str = "current";
@@ -21,7 +21,6 @@ pub const CURRENT: &str = "current";
 /// What the panel says when there is no server to keep versions.
 pub const NO_SERVER: &str = "Version history needs a Starbase server: open the document from the home screen.";
 
-const ERROR: Color32 = Color32::from_rgb(0xB3, 0x26, 0x1E);
 const WIDTH: f32 = 300.0;
 
 /// One version: [`CURRENT`] or the server's id for an earlier one.
@@ -156,7 +155,7 @@ impl History {
                 self.close();
             }
             ui.add_space(8.0);
-            ui.label(RichText::new(self.shown_title()).size(22.0).color(TEXT));
+            ui.label(RichText::new(self.shown_title()).size(22.0).color(palette().text));
             if self.selected != CURRENT {
                 let id = self.selected.clone();
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -179,33 +178,35 @@ impl History {
         egui::Panel::right("stardocs_versions")
             .resizable(false)
             .exact_size(WIDTH)
-            .frame(egui::Frame::NONE.fill(Color32::WHITE).stroke(egui::Stroke::new(1.0, DIVIDER)).inner_margin(egui::Margin::symmetric(0, 16)))
+            .frame(
+                egui::Frame::NONE.fill(palette().card).stroke(egui::Stroke::new(1.0, palette().divider)).inner_margin(egui::Margin::symmetric(0, 16)),
+            )
             .show(ui, |ui| self.contents(ui));
     }
 
     fn contents(&mut self, ui: &mut Ui) {
         ui.horizontal(|ui| {
             ui.add_space(16.0);
-            ui.label(RichText::new("Version history").size(18.0).color(TEXT));
+            ui.label(RichText::new("Version history").size(18.0).color(palette().text));
         });
         ui.add_space(12.0);
         if let Some(e) = &self.error {
             ui.horizontal_wrapped(|ui| {
                 ui.add_space(16.0);
-                ui.label(RichText::new(e).size(13.0).color(ERROR));
+                ui.label(RichText::new(e).size(13.0).color(palette().error));
             });
         }
         let Some(list) = self.list.clone() else {
             ui.horizontal(|ui| {
                 ui.add_space(16.0);
-                ui.label(RichText::new("Loading…").size(13.0).color(TEXT_DIM));
+                ui.label(RichText::new("Loading…").size(13.0).color(palette().text_dim));
             });
             return;
         };
         if list.len() == 1 && self.error.is_none() {
             ui.horizontal_wrapped(|ui| {
                 ui.add_space(16.0);
-                ui.label(RichText::new("Earlier versions appear here once the document has been saved again.").size(12.0).color(TEXT_DIM));
+                ui.label(RichText::new("Earlier versions appear here once the document has been saved again.").size(12.0).color(palette().text_dim));
             });
             ui.add_space(6.0);
         }
@@ -231,9 +232,9 @@ impl History {
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("{label} {}", v.author)));
         let p = ui.painter();
         let fill = if selected {
-            ON
+            palette().active
         } else if resp.hovered() {
-            crate::theme::MENU_HOVER
+            palette().menu_hover
         } else {
             Color32::TRANSPARENT
         };
@@ -247,19 +248,19 @@ impl History {
             p.galley(egui::pos2(x + dx, *y), g, colour);
             *y += h + 2.0;
         };
-        line(&mut y, title, egui::FontId::proportional(14.0), TEXT, 0.0);
+        line(&mut y, title, egui::FontId::proportional(14.0), palette().text, 0.0);
         if v.id == CURRENT {
-            line(&mut y, "Current version".into(), egui::FontId::proportional(12.0), TEXT_DIM, 0.0);
+            line(&mut y, "Current version".into(), egui::FontId::proportional(12.0), palette().text_dim, 0.0);
         }
         if !v.name.is_empty() {
-            line(&mut y, when, egui::FontId::proportional(12.0), TEXT_DIM, 0.0);
+            line(&mut y, when, egui::FontId::proportional(12.0), palette().text_dim, 0.0);
         }
         if let Some(from) = v.restored_from {
-            line(&mut y, format!("Restored from {}", self::when(from)), egui::FontId::proportional(12.0), TEXT_DIM, 0.0);
+            line(&mut y, format!("Restored from {}", self::when(from)), egui::FontId::proportional(12.0), palette().text_dim, 0.0);
         }
         if !v.author.is_empty() {
             p.circle_filled(egui::pos2(x + 4.0, y + 8.0), 4.0, author_colour(&v.author));
-            line(&mut y, v.author.clone(), egui::FontId::proportional(13.0), TEXT, 14.0);
+            line(&mut y, v.author.clone(), egui::FontId::proportional(13.0), palette().text, 14.0);
         }
         if resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -272,7 +273,7 @@ impl History {
             ui.horizontal(|ui| {
                 ui.add_space(16.0);
                 let label = if v.id == CURRENT { "Name current version" } else { "Name this version" };
-                if ui.add(egui::Button::new(RichText::new(label).size(13.0).color(BLUE)).frame(false)).clicked() {
+                if ui.add(egui::Button::new(RichText::new(label).size(13.0).color(palette().accent)).frame(false)).clicked() {
                     self.naming = Some((v.id.clone(), v.name.clone(), true));
                 }
             });
@@ -292,7 +293,7 @@ impl History {
             crate::looks::title(ui, title);
             ui.add_space(16.0);
             crate::looks::field_style(ui);
-            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(f32::INFINITY).hint_text("Version name").text_color(TEXT));
+            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(f32::INFINITY).hint_text("Version name").text_color(palette().text));
             r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Version name"));
             if focus {
                 r.request_focus();

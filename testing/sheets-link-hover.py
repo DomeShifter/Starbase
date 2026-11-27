@@ -5,7 +5,7 @@ Runs on the build box via starbase_ui.ship_and_run, Chromium AND Firefox. Args: 
 Assumes user "ada" is the owner of the test server (else the switch POST answers 403 and the script says so).
 1. Switch OFF (default): hover-rest on a link cell -> card has no preview (linkCard.preview null/none).
    The owner then turns Link previews on (POST api/link-preview/settings; the People checkbox is target
-   "people:link-preview", click it by hand to see it).
+   "settings:link-preview", click it by hand to see it).
 2. A link to the server's own /api/link-preview target page (a public page is not reachable from the box, so the
    test points at a local page served by this script): hover-rest -> card shows linkCard.preview.state == "ok"
    with a title.
@@ -42,9 +42,10 @@ def run(br, testn, out, results):
         s._at(*cell_xy("A1")); time.sleep(2.5)
         c = (s.snapshot() or {}).get("linkCard") or {}
         results.append((br, "switch off: no preview", not (c.get("preview") or {}).get("title"), c))
-        # Owner ticks People > "Show a page preview when hovering a link" by a real click (hook target).
-        s.hook("account:people"); time.sleep(2)
-        s.click_text("people:link-preview"); time.sleep(2)
+        # Owner ticks Settings > Server > "Show a page preview when hovering a link" by a real click (hook target).
+        s.click_text("account:avatar", button=3)
+        s.click_text("tab:Server")
+        s.click_text("settings:link-preview"); time.sleep(2)
         chk = (s.snapshot() or {}).get("account", {}).get("linkPreviewChecked")
         results.append((br, "checkbox ticked by click (snapshot)", chk is True, chk))
         r = s.ctx.request.get(s.base + "/api/link-preview/settings")

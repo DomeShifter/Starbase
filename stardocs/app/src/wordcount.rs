@@ -9,7 +9,7 @@ use egui::{Color32, RichText, vec2};
 use serde_json::json;
 use wordcraft_ui_egui::WordApp;
 
-use crate::shell::{DIVIDER, TEXT};
+use crate::theme::palette;
 
 /// The shortest time between two counts, in seconds.
 const EVERY: f64 = 0.75;
@@ -94,8 +94,8 @@ impl WordCount {
         }
         let Some(text) = &self.shown else { return };
         let frame = egui::Frame::new()
-            .fill(Color32::WHITE)
-            .stroke(egui::Stroke::new(1.0, DIVIDER))
+            .fill(palette().card)
+            .stroke(egui::Stroke::new(1.0, palette().divider))
             .corner_radius(8.0)
             .inner_margin(vec2(12.0, 6.0))
             .shadow(egui::Shadow { offset: [0, 1], blur: 6, spread: 0, color: Color32::from_black_alpha(40) });
@@ -103,7 +103,7 @@ impl WordCount {
             .anchor(egui::Align2::LEFT_BOTTOM, vec2(16.0, -16.0))
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
-                let r = frame.show(ui, |ui| ui.label(RichText::new(text).size(13.0).color(TEXT))).response;
+                let r = frame.show(ui, |ui| ui.label(RichText::new(text).size(13.0).color(palette().text))).response;
                 r.interact(egui::Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text("Word count").clicked()
             })
             .inner;
