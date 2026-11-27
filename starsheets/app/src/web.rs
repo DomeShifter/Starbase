@@ -221,7 +221,7 @@ impl eframe::App for WebShell {
     /// near-black grey, which flashed in the grid area each time a file was opened or the page
     /// reloaded (the menus and tabs are drawn before the file arrives; the grid is not).
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-        crate::theme::PAGE.to_normalized_gamma_f32()
+        crate::theme::page().to_normalized_gamma_f32()
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -255,7 +255,9 @@ impl eframe::App for WebShell {
             crate::house::keep(ctx);
             return;
         }
-        crate::theme::sync_dark(ctx, false);
+        let dark = crate::theme::drive_dark();
+        self.app.ui.dark = dark;
+        crate::theme::sync_dark(ctx, dark);
         self.files.logic(&mut self.app, ctx);
         // External content (IMAGE pictures): blocked in spreadsheets that aren't this person's own.
         if let Some(d) = self.app.session.active() {

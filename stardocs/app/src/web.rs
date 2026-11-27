@@ -98,7 +98,8 @@ pub fn start() {
                     // Preferences from an earlier visit (#2132), as the desktop app reads `ui.json`.
                     let stored = stored_prefs();
                     crate::prefs::restore(&mut app, stored.as_deref());
-                    crate::theme::keep_light(&mut app);
+                    let dark = watch_appearance(&cc.egui_ctx);
+                    crate::theme::set_browser_dark(&mut app, dark.get());
                     // Google Docs' look for WordCraft's own dialogs and Comments pane.
                     crate::looks::apply(&mut app);
                     // A region chosen in File › Options replaces the browser's for the first blank
@@ -125,7 +126,7 @@ pub fn start() {
                     }
                     // `?test`: window.stardocs for agents and scripts (testhook.rs, TESTING.md).
                     let test = crate::testhook::TestHook::install(&cc.egui_ctx);
-                    Ok(Box::new(WebShell { app, inbox, messages, prefs, shell: crate::shell::Shell::default(), link, test }))
+                    Ok(Box::new(WebShell { app, inbox, messages, prefs, shell: crate::shell::Shell::default(), link, test, dark }))
                 }),
             )
             .await;
@@ -165,10 +166,35 @@ struct WebShell {
     link: Option<crate::server::Link>,
     /// `window.stardocs`, only when the URL has `test` (testhook.rs).
     test: Option<crate::testhook::TestHook>,
+    dark: Rc<Cell<bool>>,
 }
 
 fn local_storage() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok()?
+}
+
+/// Read the same browser setting as Drive. A storage event wakes an open Docs tab after a
+/// change in another tab, without reading local storage during each render.
+fn watch_appearance(ctx: &egui::Context) -> Rc<Cell<bool>> {
+    fn preference() -> bool {
+        local_storage().and_then(|store| store.get_item("starbase_drive_dark").ok().flatten()).as_deref() == Some("1")
+    }
+
+    let dark = Rc::new(Cell::new(preference()));
+    if let Some(window) = web_sys::window() {
+        let setting = dark.clone();
+        let ctx = ctx.clone();
+        let changed = wasm_bindgen::closure::Closure::<dyn Fn()>::new(move || {
+            let next = preference();
+            if setting.replace(next) != next {
+                ctx.request_repaint();
+            }
+        });
+        if window.add_event_listener_with_callback("storage", changed.as_ref().unchecked_ref()).is_ok() {
+            changed.forget();
+        }
+    }
+    dark
 }
 
 /// The preferences stored on an earlier visit, if the browser allows storage.
@@ -185,6 +211,7 @@ impl eframe::App for WebShell {
         for msg in msgs {
             self.app.status(msg);
         }
+        crate::theme::set_browser_dark(&mut self.app, self.dark.get());
         self.app.logic(ctx);
         if let Some(link) = &self.link {
             // Comments and tracked changes are signed with the server account's name; the name

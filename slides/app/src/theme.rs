@@ -3,14 +3,14 @@
 //! dark set); DeckCraft draws the slide list, the canvas and its dialogs with its own light or
 //! dark tokens, switched with its `view.dark` command so both halves always match.
 //!
-//! Slides is light only, like Drive, Sheets and Docs, whatever the system prefers: there is no
-//! menu for it and nothing is remembered. [`Mode::Dark`] is kept for tests and the test hook.
+//! Web Slides takes its appearance from the browser preference in Starbase settings.
+//! Native Slides uses the light appearance.
 
 use deckcraft_ui_egui::SlideApp;
 use egui::Color32;
 use serde_json::json;
 
-/// Light, or Dark (tests only).
+/// The appearance of the editor shell.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Mode {
     #[default]

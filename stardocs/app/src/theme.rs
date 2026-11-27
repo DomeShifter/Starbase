@@ -1,12 +1,6 @@
-//! StarDocs is light whatever the system prefers, like Google Docs (light grey round a white
-//! page). WordCraft's interface theme defaults to "Use system setting", so a browser that prefers
-//! a dark colour scheme turned the page surround, rulers, hover fills, tooltips and the title box
-//! dark under our light Docs header. Until StarDocs has a dark mode designed as a whole, the
-//! interface theme is pinned to Light: at startup (before the first frame, so nothing flashes
-//! dark) and on every frame (a stored or chosen "dark" doesn't come back).
-//!
-//! Google's colours that WordCraft's own drawing doesn't take as settings are put in after each
-//! frame is laid out ([`install`]): the page surround and the tooltips.
+//! StarDocs' interface theme and the finishing touches to WordCraft's drawing.
+//! The browser follows the Starbase setting. Native StarDocs uses light chrome. The document's
+//! own page appearance is a separate WordCraft choice.
 
 use std::sync::Arc;
 
@@ -16,12 +10,94 @@ use wordcraft_ui_egui::theme::{Appearance, Tokens};
 
 /// Google Docs' page surround (and the strip behind the rulers): the top bar's near-white.
 pub const SURROUND: Color32 = Color32::from_rgb(0xF9, 0xFB, 0xFD);
-/// A hovered toolbar button: #444746 at about 8 % over the toolbar pill (the same as StarSheets).
-pub const HOVER: Color32 = Color32::from_rgb(0xDD, 0xE3, 0xEA);
-/// A pressed toolbar button, or one whose menu is open.
-pub const PRESSED: Color32 = Color32::from_rgb(0xC9, 0xD3, 0xDF);
-/// A hovered menu row.
-pub const MENU_HOVER: Color32 = Color32::from_rgb(0xF1, 0xF3, 0xF4);
+pub(crate) struct Palette {
+    pub page: Color32,
+    pub toolbar: Color32,
+    pub card: Color32,
+    pub text: Color32,
+    pub text_dim: Color32,
+    pub meta: Color32,
+    pub divider: Color32,
+    pub menu_line: Color32,
+    pub hover: Color32,
+    pub pressed: Color32,
+    pub menu_hover: Color32,
+    pub active: Color32,
+    pub share: Color32,
+    pub accent: Color32,
+    pub notice: Color32,
+    pub error: Color32,
+}
+
+const fn rgb(colour: u32) -> Color32 {
+    Color32::from_rgb((colour >> 16) as u8, (colour >> 8) as u8, colour as u8)
+}
+
+static LIGHT: Palette = Palette {
+    page: SURROUND,
+    toolbar: rgb(0xedf2fa),
+    card: Color32::WHITE,
+    text: rgb(0x1f1f1f),
+    text_dim: rgb(0x444746),
+    meta: rgb(0x5f6368),
+    divider: rgb(0xc7c7c7),
+    menu_line: rgb(0xdadce0),
+    hover: rgb(0xdde3ea),
+    pressed: rgb(0xc9d3df),
+    menu_hover: rgb(0xf1f3f4),
+    active: rgb(0xd3e3fd),
+    share: rgb(0xc2e7ff),
+    accent: rgb(0x0b57d0),
+    notice: rgb(0x8a5a00),
+    error: rgb(0xb3261e),
+};
+
+#[cfg(target_arch = "wasm32")]
+static DARK: Palette = Palette {
+    page: rgb(0x1b1b1b),
+    toolbar: rgb(0x2d2f31),
+    card: rgb(0x2d2f31),
+    text: rgb(0xe3e3e3),
+    text_dim: rgb(0xc4c7c5),
+    meta: rgb(0x9aa0a6),
+    divider: rgb(0x5f6368),
+    menu_line: rgb(0x44474a),
+    hover: rgb(0x3c4043),
+    pressed: rgb(0x4a4e51),
+    menu_hover: rgb(0x3c4043),
+    active: rgb(0x004a77),
+    share: rgb(0x2b4465),
+    accent: rgb(0xa8c7fa),
+    notice: rgb(0xf6c35b),
+    error: rgb(0xf2b8b5),
+};
+
+#[cfg(target_arch = "wasm32")]
+thread_local! {
+    static BROWSER_DARK: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn browser_dark() -> bool {
+    BROWSER_DARK.with(std::cell::Cell::get)
+}
+
+pub(crate) fn palette() -> &'static Palette {
+    #[cfg(target_arch = "wasm32")]
+    if browser_dark() {
+        return &DARK;
+    }
+    &LIGHT
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn set_browser_dark(app: &mut WordApp, dark: bool) {
+    app.ui.theme = if dark { Appearance::Dark } else { Appearance::Light };
+    if BROWSER_DARK.with(|current| current.replace(dark)) != dark {
+        crate::looks::apply(app);
+    }
+}
+
 /// Tooltips: dark grey with white text, 4 px corners (Google's look, as StarSheets has).
 pub const TIP_BG: Color32 = Color32::from_rgb(0x3C, 0x40, 0x43);
 /// The picked row in a dark pop-up on the tooltip layer (white text stays readable on it).
@@ -50,8 +126,9 @@ pub fn install(ctx: &egui::Context) {
 /// have rounded corners, so they stay.) Tooltips are restyled dark, as in StarSheets: egui draws
 /// them in the menu frame, so only the tooltip layer is changed.
 fn after_pass(ctx: &egui::Context) {
-    let canvas = Tokens::light().canvas;
-    let shadow = Tokens::light().page_shadow;
+    let tokens = Tokens::get(ctx);
+    let canvas = tokens.canvas;
+    let shadow = tokens.page_shadow;
     let tip_fill = ctx.global_style().visuals.window_fill;
     let mut layers: Vec<egui::LayerId> =
         ctx.memory(|m| m.layer_ids().filter(|l| matches!(l.order, Order::Background | Order::Middle | Order::Foreground | Order::Tooltip)).collect());
@@ -71,13 +148,17 @@ fn after_pass(ctx: &egui::Context) {
                             }
                         }
                         Order::Background => {
-                            drawn += recolour_surround(&mut cs.shape, canvas);
-                            soften_page_shadow(&mut cs.shape, shadow);
+                            if !tokens.dark {
+                                drawn += recolour_surround(&mut cs.shape, canvas);
+                                soften_page_shadow(&mut cs.shape, shadow);
+                            }
                         }
                         // Dialogs and pop-ups: Google's small grey drop-down arrow.
                         _ => {
                             material_arrow(&mut cs.shape);
-                            soften_page_shadow(&mut cs.shape, shadow);
+                            if !tokens.dark {
+                                soften_page_shadow(&mut cs.shape, shadow);
+                            }
                         }
                     }
                 });
@@ -112,9 +193,6 @@ fn soften_page_shadow(shape: &mut egui::Shape, shadow: Color32) {
     }
 }
 
-/// Google's `arrow_drop_down`: a 10 x 5 grey triangle.
-pub const ARROW: Color32 = Color32::from_rgb(0x44, 0x47, 0x46);
-
 /// egui draws a drop-down's arrow as a big filled triangle in the text colour (WordCraft's
 /// dialogs: Paper size, Vertical alignment …); Google's is a small grey one. Each downward
 /// triangle of a drop-down's size becomes Google's, about the same centre.
@@ -127,7 +205,7 @@ fn material_arrow(shape: &mut egui::Shape) {
             if down && (6.0..=24.0).contains(&w) {
                 let centre = egui::pos2((a.x + b.x) / 2.0, (a.y + c.y) / 2.0);
                 p.points = vec![centre + vec2(-5.0, -2.5), centre + vec2(5.0, -2.5), centre + vec2(0.0, 2.5)];
-                p.fill = ARROW;
+                p.fill = palette().text_dim;
             }
         }
         egui::Shape::Vec(v) => v.iter_mut().for_each(material_arrow),
@@ -163,6 +241,7 @@ fn restyle_tip(shape: &mut egui::Shape, fill: Color32) -> bool {
 
 /// Pins WordCraft's interface theme to Light. WordCraft applies it (egui `ThemePreference::Light`)
 /// in its next `logic` pass, so every egui surface takes the light visuals.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn keep_light(app: &mut WordApp) {
     app.ui.theme = Appearance::Light;
 }
@@ -183,8 +262,8 @@ pub fn state(ctx: &egui::Context) -> serde_json::Value {
         "interface": name(ctx.theme()),
         "surround": hex(if drawn > 0 { SURROUND } else { tokens.canvas }),
         "surroundShapes": drawn,
-        "toolbarHover": hex(HOVER),
-        "toolbarPressed": hex(PRESSED),
+        "toolbarHover": hex(palette().hover),
+        "toolbarPressed": hex(palette().pressed),
         "tooltip": hex(TIP_BG),
         "ruler": hex(tokens.ruler),
         "hover": hex(visuals.widgets.hovered.weak_bg_fill),

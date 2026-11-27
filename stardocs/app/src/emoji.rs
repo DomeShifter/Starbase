@@ -5,7 +5,8 @@ use egui::{Align, Layout, RichText, vec2};
 use serde_json::json;
 use wordcraft_ui_egui::WordApp;
 
-use crate::shell::{TEXT, TEXT_DIM, run};
+use crate::shell::run;
+use crate::theme::palette;
 
 /// (emoji, words it is found by).
 const LIST: &[(&str, &str)] = &[
@@ -135,7 +136,12 @@ impl Emoji {
             let search = ui
                 .scope(|ui| {
                     crate::looks::field_style(ui);
-                    ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("Search emoji").desired_width(f32::INFINITY).text_color(TEXT))
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.filter)
+                            .hint_text("Search emoji")
+                            .desired_width(f32::INFINITY)
+                            .text_color(palette().text),
+                    )
                 })
                 .inner;
             if opening {
@@ -149,7 +155,7 @@ impl Emoji {
                 .filter(|e| ui.fonts_mut(|f| f.has_glyphs(&font, e)) && crate::bundled_fonts::body_can_draw(e))
                 .collect();
             if found.is_empty() {
-                ui.label(RichText::new("No emoji found").color(TEXT_DIM));
+                ui.label(RichText::new("No emoji found").color(palette().text_dim));
             }
             egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
                 ui.horizontal_wrapped(|ui| {

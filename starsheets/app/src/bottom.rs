@@ -163,7 +163,10 @@ impl Bottom {
         egui::Panel::bottom("starsheets_bottom")
             .exact_size(40.0)
             .frame(
-                Frame::NONE.fill(theme::PAGE).inner_margin(Margin { left: 8, right: 12, top: 4, bottom: 4 }).stroke(Stroke::new(1.0, theme::HOVER)),
+                Frame::NONE
+                    .fill(theme::page())
+                    .inner_margin(Margin { left: 8, right: 12, top: 4, bottom: 4 })
+                    .stroke(Stroke::new(1.0, theme::hover())),
             )
             .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
@@ -256,7 +259,7 @@ impl Bottom {
         for (tab, label) in list.iter().zip(labels) {
             // Sheets ticks the current sheet.
             let row = match (tab.index == active, icons::icon("check")) {
-                (true, Some(tick)) => Button::image_and_text(tick, RichText::new(label).size(14.0).color(theme::TEXT)).shortcut_text(""),
+                (true, Some(tick)) => Button::image_and_text(tick, RichText::new(label).size(14.0).color(theme::text())).shortcut_text(""),
                 _ => crate::shell::menu_row(&label, "", true),
             };
             if ui.add_sized([width, 32.0], row.frame_when_inactive(false)).clicked() {
@@ -298,10 +301,22 @@ impl Bottom {
             }
             return;
         }
-        let colour = if active { theme::BLUE } else { theme::TEXT_DIM };
+        let colour = if theme::photo_dark() {
+            theme::text()
+        } else if active {
+            theme::BLUE
+        } else {
+            theme::text_dim()
+        };
         let text = RichText::new(tab.name.clone()).size(13.5).color(colour);
         let text = if active { text.strong() } else { text };
-        let fill = if active { theme::ACTIVE_TAB } else { egui::Color32::TRANSPARENT };
+        let fill = if !active {
+            egui::Color32::TRANSPARENT
+        } else if theme::photo_dark() {
+            theme::drive_selection()
+        } else {
+            theme::ACTIVE_TAB
+        };
         // Sheets' tab: the name (click to switch, drag to reorder, double-click to rename) and a
         // small ▾ that opens the tab menu. Right-click anywhere on it opens the same menu once.
         let shown = Frame::NONE.fill(fill).corner_radius(6.0).inner_margin(Margin { left: 6, right: 2, top: 0, bottom: 0 }).show(ui, |ui| {
@@ -411,7 +426,7 @@ impl Bottom {
         if let Some((tab, rect)) = deferred {
             ui.painter()
                 .add(egui::epaint::Shadow { offset: [0, 2], blur: 8, spread: 0, color: egui::Color32::from_black_alpha(50) }.as_shape(rect, 6));
-            ui.painter().rect_filled(rect, 6.0, egui::Color32::WHITE);
+            ui.painter().rect_filled(rect, 6.0, theme::card());
             self.tab_at(app, ui, tab, rect, active, count);
             moving = true;
         }
@@ -471,7 +486,7 @@ impl Bottom {
             ui.label(
                 RichText::new(format!("\"{name}\" and everything on it will be deleted. You can undo this with Ctrl+Z."))
                     .size(crate::house::BODY)
-                    .color(theme::TEXT),
+                    .color(theme::text()),
             );
             match crate::house::actions(ui, &["Cancel", "Delete"]) {
                 Some(1) => delete = true,
@@ -504,7 +519,7 @@ impl Bottom {
             ui.close();
         }
         // Copy to ▸ New spreadsheet / Existing spreadsheet… (copyto.rs does the work).
-        let copy = row("Copy to").right_text(egui::containers::menu::SubMenuButton::arrow_atom(Some(theme::TEXT_DIM)));
+        let copy = row("Copy to").right_text(egui::containers::menu::SubMenuButton::arrow_atom(Some(theme::text_dim())));
         egui::containers::menu::SubMenuButton::from_button(copy).ui(ui, |ui| {
             let width = crate::shell::menu_style(ui, false);
             let sub = |label: &str| crate::shell::menu_row(label, "", false).min_size(vec2(width, 32.0));
@@ -519,7 +534,7 @@ impl Bottom {
             self.renaming = Some((s, tab.name.clone()));
             ui.close();
         }
-        let colour = row("Change colour").right_text(egui::containers::menu::SubMenuButton::arrow_atom(Some(theme::TEXT_DIM)));
+        let colour = row("Change colour").right_text(egui::containers::menu::SubMenuButton::arrow_atom(Some(theme::text_dim())));
         let now = tab.colour.map(|c| u32::from(c.r()) << 16 | u32::from(c.g()) << 8 | u32::from(c.b()));
         egui::containers::menu::SubMenuButton::from_button(colour).ui(ui, |ui| {
             crate::colourpicker::menu_for(app, ui, "sheet.tabColor", json!({ "sheet": s }), "none", now, false);
@@ -569,7 +584,7 @@ impl Bottom {
         };
         // A text-only selection shows Count, as Sheets does.
         let shown = if st.numeric == 0 { QuickSum::Count } else { self.quick };
-        let label = RichText::new(format!("{}: {}  ▾", shown.label(), value(shown))).size(13.0).color(theme::TEXT);
+        let label = RichText::new(format!("{}: {}  ▾", shown.label(), value(shown))).size(13.0).color(theme::text());
         ui.menu_button(label, |ui| {
             ui.set_min_width(200.0);
             for q in QuickSum::ALL {

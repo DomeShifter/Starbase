@@ -190,6 +190,25 @@ pub fn icon_px(name: &str, px: f32) -> Option<Image<'static>> {
 /// The icon called `name` at 18 px, or none for an unknown name.
 pub fn icon(name: &str) -> Option<Image<'static>> {
     let (n, bytes) = ICONS.iter().find(|(n, _)| *n == name)?;
+    #[cfg(target_arch = "wasm32")]
+    if crate::theme::browser_dark() {
+        use std::cell::RefCell;
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        thread_local! {
+            static DARK_ICONS: RefCell<HashMap<&'static str, Arc<[u8]>>> = RefCell::new(HashMap::new());
+        }
+        // Material assets have a grey source fill. Recolour once per icon because a tint can
+        // only darken that fill. A separate URI lets egui cache each mode independently.
+        let bytes = DARK_ICONS.with(|cache| {
+            cache.borrow_mut().entry(n).or_insert_with(|| String::from_utf8_lossy(bytes).replace("#444746", "#c4c7c5").into_bytes().into()).clone()
+        });
+        return Some(
+            Image::new(ImageSource::Bytes { uri: format!("bytes://stardocs/dark/{n}.svg").into(), bytes: bytes.into() })
+                .fit_to_exact_size(vec2(18.0, 18.0)),
+        );
+    }
     Some(
         Image::new(ImageSource::Bytes { uri: format!("bytes://stardocs/{n}.svg").into(), bytes: (*bytes).into() })
             .fit_to_exact_size(vec2(18.0, 18.0)),
