@@ -67,6 +67,20 @@ pub const SCHEMA_V4: &str = "BEGIN;
     PRAGMA user_version = 4;
     COMMIT;";
 
+/// Which face finder looked at a picture (index schema version 6): `faces_done.detect`. Pictures
+/// looked at before the column existed are version 1.
+pub const SCHEMA_V6: &str = "BEGIN;
+    ALTER TABLE faces_done ADD COLUMN detect INTEGER NOT NULL DEFAULT 1;
+    PRAGMA user_version = 6;
+    COMMIT;";
+
+/// The face finder's version, kept per picture in `faces_done.detect`. Raise it when the finder
+/// changes so that it finds faces it missed before: pictures looked at by an older one are
+/// looked at once more ([`recheck_todo`]), and only new faces are added ([`add_new`]).
+/// - 1: duplicate boxes merged above 0.3 overlap (lost a face right next to another).
+/// - 2: merged above 0.5 (PR #179, 2026-11-27).
+pub const DETECT_VERSION: i64 = 2;
+
 /// Similarities and distances (cosine) for one embedding model.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Thresholds {
