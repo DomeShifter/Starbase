@@ -609,7 +609,11 @@ impl PhotoMode {
             ui.add_space(house::XL);
             let h = ui.label(RichText::new(format!("{title} ({})", count(key, list.len()))).size(house::BODY).strong().color(theme::text()));
             house::target(ctx, target, h.rect);
-            let hint = if ignored { "Strangers: not shown in People, never grouped or asked about." } else { "Not faces (dolls, posters): never found again in the same picture." };
+            let hint = if ignored {
+                "Strangers: not shown in People, never grouped or asked about."
+            } else {
+                "Not faces (dolls, posters): never found again in the same picture."
+            };
             ui.label(RichText::new(hint).size(house::NOTE).color(theme::text_dim()));
             ui.add_space(house::M);
             ui.horizontal_wrapped(|ui| {
@@ -967,7 +971,9 @@ const PRIVACY: &str = "It runs on this server only; nothing is sent anywhere.";
 /// "Ignore …" and "Not a face" in a right-click or More menu: the server action picked.
 fn mark_rows(ui: &mut Ui, ctx: &egui::Context, ignore: &str) -> Option<&'static str> {
     let mut out = None;
-    for (icon, label, act, target) in [("visibility_off", ignore, "ignore", "people:ctx-ignore"), ("close", "Not a face", "notface", "people:ctx-notface")] {
+    for (icon, label, act, target) in
+        [("visibility_off", ignore, "ignore", "people:ctx-ignore"), ("close", "Not a face", "notface", "people:ctx-notface")]
+    {
         let y = ui.cursor().min.y;
         if house::menu_row(ui, Some(icon), label, "", true) {
             out = Some(act);

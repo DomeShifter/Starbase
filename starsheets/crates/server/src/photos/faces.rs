@@ -314,12 +314,17 @@ pub fn keep(ix: &Index, thumb: &str, model: &str, faces: &[Found]) -> rusqlite::
     let r = (|| {
         // Ignored and "not a face" boxes are remembered: the same box found again keeps its mark.
         let mut st = c.prepare("SELECT x, y, w, h, hidden FROM faces WHERE thumb = ?1 AND model = ?2 AND hidden IN (3, 4)")?;
-        let marked: Vec<([f32; 4], i64)> =
-            st.query_map(params![thumb, model], |r| Ok(([r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?], r.get(4)?)))?.collect::<rusqlite::Result<_>>()?;
+        let marked: Vec<([f32; 4], i64)> = st
+            .query_map(params![thumb, model], |r| Ok(([r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?], r.get(4)?)))?
+            .collect::<rusqlite::Result<_>>()?;
         c.execute("DELETE FROM faces WHERE thumb = ?1 AND model = ?2", params![thumb, model])?;
         for f in faces {
             let bx = [f.x, f.y, f.w, f.h];
-            let hidden = marked.iter().filter(|(m, _)| overlap(*m, bx) >= SAME_BOX).max_by(|a, b| overlap(a.0, bx).total_cmp(&overlap(b.0, bx))).map_or(0, |m| m.1);
+            let hidden = marked
+                .iter()
+                .filter(|(m, _)| overlap(*m, bx) >= SAME_BOX)
+                .max_by(|a, b| overlap(a.0, bx).total_cmp(&overlap(b.0, bx)))
+                .map_or(0, |m| m.1);
             c.execute(
                 "INSERT INTO faces(thumb, model, x, y, w, h, score, px, emb, hidden) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![thumb, model, f.x, f.y, f.w, f.h, f.score, f.px, emb_to_blob(&f.emb), hidden],
@@ -571,7 +576,11 @@ pub fn mark(ix: &Index, ids: &[i64], state: i64) -> rusqlite::Result<usize> {
 /// again").
 pub fn unmark(ix: &Index, ids: &[i64], state: i64, fresh: bool) -> rusqlite::Result<usize> {
     let c = conn(ix);
-    let sql = if fresh { "UPDATE faces SET hidden = 0, grp = NULL WHERE id = ?1 AND hidden = ?2" } else { "UPDATE faces SET hidden = 0 WHERE id = ?1 AND hidden = ?2" };
+    let sql = if fresh {
+        "UPDATE faces SET hidden = 0, grp = NULL WHERE id = ?1 AND hidden = ?2"
+    } else {
+        "UPDATE faces SET hidden = 0 WHERE id = ?1 AND hidden = ?2"
+    };
     let mut n = 0;
     for &id in ids {
         n += c.execute(sql, params![id, state])?;
@@ -585,7 +594,10 @@ pub fn assign(ix: &Index, ids: &[i64], p: i64) -> rusqlite::Result<usize> {
     let mut n = 0;
     for &id in ids {
         c.execute("DELETE FROM face_not WHERE face = ?1 AND person = ?2", params![id, p])?;
-        n += c.execute("UPDATE faces SET person = ?2, auto = 0, grp = NULL, suggest = NULL, hidden = 0 WHERE id = ?1 AND hidden IN (3, 4)", params![id, p])?;
+        n += c.execute(
+            "UPDATE faces SET person = ?2, auto = 0, grp = NULL, suggest = NULL, hidden = 0 WHERE id = ?1 AND hidden IN (3, 4)",
+            params![id, p],
+        )?;
     }
     Ok(n)
 }
@@ -718,7 +730,9 @@ pub fn apply(ix: &Index, plan: &Plan) -> rusqlite::Result<()> {
     let c = conn(ix);
     c.execute_batch("SAVEPOINT regroup")?;
     let r = (|| {
-        let mut st = c.prepare("UPDATE faces SET person = ?2, auto = ?3, suggest = ?4, grp = ?5 WHERE id = ?1 AND (person IS NULL OR auto = 1) AND hidden IN (0, 2)")?;
+        let mut st = c.prepare(
+            "UPDATE faces SET person = ?2, auto = ?3, suggest = ?4, grp = ?5 WHERE id = ?1 AND (person IS NULL OR auto = 1) AND hidden IN (0, 2)",
+        )?;
         for (id, person, sug, grp) in plan {
             st.execute(params![id, person, person.is_some() as i64, sug, grp])?;
         }

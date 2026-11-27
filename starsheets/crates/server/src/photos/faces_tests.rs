@@ -429,7 +429,8 @@ fn ignore_a_group_and_undo() {
     lock.lock().map(|ix| faces::keep(&ix, "s1", "auraface", &[found(near(2, 0, 0.1)), found(near(2, 1, 0.1))]).unwrap()).unwrap();
     faces::regroup(&lock, "auraface").unwrap();
     let g = by_thumb(&lock, "s1").grp.expect("a group");
-    let ids: Vec<i64> = lock.lock().map(|ix| faces::faces(&ix, "auraface").unwrap().iter().filter(|f| f.grp == Some(g)).map(|f| f.id).collect()).unwrap();
+    let ids: Vec<i64> =
+        lock.lock().map(|ix| faces::faces(&ix, "auraface").unwrap().iter().filter(|f| f.grp == Some(g)).map(|f| f.id).collect()).unwrap();
     assert_eq!(ids.len(), 2);
     assert_eq!(lock.lock().map(|ix| faces::mark(&ix, &ids, faces::IGNORED).unwrap()).unwrap(), 2);
     faces::regroup(&lock, "auraface").unwrap();
@@ -483,7 +484,9 @@ fn an_ignored_face_leaves_its_person_and_can_be_assigned_or_grouped_again() {
 fn not_a_face_is_not_found_again_on_a_rescan() {
     let lock = index();
     lock.lock().map(|ix| faces::keep(&ix, "d1", "auraface", &[found_at(near(3, 0, 0.1), 0.1), found_at(near(4, 0, 0.1), 0.6)]).unwrap()).unwrap();
-    let doll = by_thumb(&lock, "d1").id.min(lock.lock().map(|ix| faces::faces(&ix, "auraface").unwrap().iter().find(|f| f.bx[0] < 0.3).unwrap().id).unwrap());
+    let doll = by_thumb(&lock, "d1")
+        .id
+        .min(lock.lock().map(|ix| faces::faces(&ix, "auraface").unwrap().iter().find(|f| f.bx[0] < 0.3).unwrap().id).unwrap());
     lock.lock().map(|ix| faces::mark(&ix, &[doll], faces::NOT_FACE).unwrap()).unwrap();
     // Looked at again: the doll's box a little moved, the other face still there.
     lock.lock().map(|ix| faces::keep(&ix, "d1", "auraface", &[found_at(near(3, 1, 0.1), 0.12), found_at(near(4, 1, 0.1), 0.6)]).unwrap()).unwrap();
