@@ -211,6 +211,8 @@ pub(super) enum Got {
     Moved(Vec<String>, bool),
     /// A picture was turned (id, left, the new thumbnail version) or couldn't be.
     Rotated(String, bool, Result<Option<String>, String>),
+    /// The faces in a picture (the viewer's Info panel): its id and the answer (Null: none).
+    InPhoto(String, Json),
     Nothing,
     /// A file picked for upload (name, bytes), and the answer for upload number n (true: a duplicate).
     Picked(String, Vec<u8>),
@@ -255,7 +257,7 @@ impl Textures {
         self.total += bytes;
     }
     /// Frees textures, least recently drawn first, until within the budget; never one drawn in
-    /// `frame` (it is on screen).
+    /// `frame` or later (it is on screen).
     pub fn evict(&mut self, frame: u64) {
         while self.total > self.budget {
             let Some(k) = self.map.iter().filter(|(_, v)| v.2 < frame).min_by_key(|(_, v)| v.2).map(|(k, _)| k.clone()) else { return };
@@ -332,6 +334,11 @@ pub(super) struct PhotoMode {
     failed: HashSet<Key>,
     pub frame: u64,
     pub viewer: Option<Viewer>,
+    /// The viewer's Info panel "People": the picture asked about, and the server's answer
+    /// (`GET api/photos/faces/ID`; Null while asking or when it failed).
+    pub info_faces: Option<(String, Json)>,
+    /// How many pictures were asked of the server (the test hook: one open = one request).
+    pub image_requests: u64,
     /// The photo editor, over the viewer (photo_edit.rs).
     pub editor: Option<super::photo_edit::Editor>,
     /// Albums and Places beside the grid (albums.rs).
@@ -383,6 +390,8 @@ impl Default for PhotoMode {
             failed: HashSet::new(),
             frame: 0,
             viewer: None,
+            info_faces: None,
+            image_requests: 0,
             editor: None,
             alb: albums::Albums::default(),
             map: map::PlacesMap::default(),
@@ -605,6 +614,11 @@ impl PhotoMode {
                 }
                 Got::Moved(ids, into) => self.moved(ctx, store, &ids, into),
                 Got::Rotated(id, left, r) => self.rotated(ctx, id, left, r),
+                Got::InPhoto(id, v) => {
+                    if self.info_faces.as_ref().is_some_and(|f| f.0 == id) {
+                        self.info_faces = Some((id, v));
+                    }
+                }
                 Got::Nothing => {}
                 Got::Picked(name, bytes) => {
                     let f = folder.clone().or_else(|| self.folder.clone()).unwrap_or_default();
@@ -674,7 +688,9 @@ impl PhotoMode {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(RELIST));
         }
         self.locked_logic(ctx, store);
-        self.tex.evict(self.frame);
+        // Drawing comes after this, so what was drawn last frame is still on screen: keep it
+        // (else a picture bigger than the budget is freed and asked for again every frame).
+        self.tex.evict(self.frame.saturating_sub(1));
     }
 
     /// Asks for picture `i` at `size` if it isn't here or on its way (in the order called: the
@@ -712,6 +728,7 @@ impl PhotoMode {
             }
         };
         self.asking.insert(k.clone());
+        self.image_requests += 1;
         let max = ctx.input(|inp| inp.max_texture_side).min(8192) as u32;
         let (inbox, ctx2) = (self.inbox.clone(), ctx.clone());
         store.call(
@@ -723,6 +740,28 @@ impl PhotoMode {
                 Ok((200, bytes)) => decode(bytes, max, k, inbox, ctx2),
                 Ok((202, _)) => Self::push(&inbox, &ctx2, Got::NotYet(k)),
                 _ => Self::push(&inbox, &ctx2, Got::Image(k, None)),
+            }),
+        );
+    }
+
+    /// Asks which faces are in picture `id` (the viewer's Info panel), once per picture.
+    pub(super) fn ask_faces_in(&mut self, ctx: &egui::Context, store: &Backend, id: &str) {
+        if self.info_faces.as_ref().is_some_and(|f| f.0 == id) {
+            return;
+        }
+        self.info_faces = Some((id.to_string(), Json::Null));
+        let (inbox, ctx2, id2) = (self.inbox.clone(), ctx.clone(), id.to_string());
+        store.call(
+            ctx,
+            Method::Get,
+            &format!("api/photos/faces/{}", enc(id)),
+            None,
+            Box::new(move |a| {
+                let v = match a {
+                    Ok((200, b)) => serde_json::from_slice(&b).unwrap_or_else(|_| serde_json::json!({"people": [], "unnamed": 0})),
+                    _ => serde_json::json!({"people": [], "unnamed": 0}),
+                };
+                Self::push(&inbox, &ctx2, Got::InPhoto(id2, v));
             }),
         );
     }
@@ -1149,7 +1188,7 @@ impl PhotoMode {
             "locked": self.locked_state(),
             "lockedHint": { "shown": self.hint_shown, "dismissed": self.hint_dismissed },
             "upload": self.up.test_state(),
-            "textures": { "count": self.tex.len(), "bytes": self.tex.total, "budget": self.tex.budget, "asking": self.asking.len() },
+            "textures": { "count": self.tex.len(), "bytes": self.tex.total, "budget": self.tex.budget, "asking": self.asking.len(), "requests": self.image_requests },
             "items": self.pics.iter().take(60).map(|p| json!({
                 "id": p.id, "name": p.name, "taken": p.taken, "state": p.state, "v": p.v, "media": p.media, "duration": p.duration, "stack": p.stack.iter().map(|f| &f.name).collect::<Vec<_>>(),
                 "thumb": has(&p.id, SMALL), "large": has(&p.id, LARGE), "original": has(&p.id, ORIGINAL),
@@ -1159,7 +1198,7 @@ impl PhotoMode {
                 let p = self.pics.get(v.index());
                 json!({
                     "index": v.index(), "pos": v.pos, "id": p.map(|p| &p.id), "name": p.map(|p| &p.name),
-                    "info": v.info, "menu": v.menu, "toast": crate::house::toast_text(), "info_rows": p.map(|p| super::viewer::info_lines(p, &self.alb.albums_of(&p.id)).iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>()), "zoom": v.zoom, "playing": v.playing, "shuffle": v.shuffle, "every": v.every, "showing": v.showing, "raw": v.raw,
+                    "info": v.info, "menu": v.menu, "toast": crate::house::toast_text(), "people": self.info_faces.as_ref().filter(|f| p.is_some_and(|p| p.id == f.0)).map(|f| f.1.clone()), "info_rows": p.map(|p| super::viewer::info_lines(p, &self.alb.albums_of(&p.id)).iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>()), "zoom": v.zoom, "playing": v.playing, "shuffle": v.shuffle, "every": v.every, "showing": v.showing, "raw": v.raw,
                 })
             }),
         })
@@ -1358,6 +1397,33 @@ mod tests {
         t.budget = 0;
         t.evict(11);
         assert_eq!(t.len(), 3);
+    }
+
+    /// The flicker on big pictures (James 2026-11-27): `logic` frees textures before the frame is
+    /// drawn, so the picture on screen was last drawn the frame before. One bigger than the whole
+    /// budget (a 50 MP phone photo at full size) was freed every frame and asked for again.
+    #[test]
+    fn a_picture_bigger_than_the_budget_stays_while_shown() {
+        let ctx = egui::Context::default();
+        let mut pm = PhotoMode::default();
+        pm.tex.budget = 16 * 16 * 4;
+        let big = ctx.load_texture("big", egui::ColorImage::new([32, 32], vec![Color32::RED; 1024]), egui::TextureOptions::LINEAR);
+        let k: Key = ("p".into(), ORIGINAL);
+        let small = ctx.load_texture("s", egui::ColorImage::new([8, 8], vec![Color32::RED; 64]), egui::TextureOptions::LINEAR);
+        pm.tex.insert(("q".into(), SMALL), small, 0);
+        // Arrives during frame 1's logic, then each frame: logic (frees), then the viewer draws.
+        pm.frame = 1;
+        pm.tex.insert(k.clone(), big, pm.frame);
+        for _ in 0..5 {
+            pm.frame += 1;
+            pm.tex.evict(pm.frame.saturating_sub(1));
+            assert!(pm.best_id("p", ORIGINAL).is_some(), "freed while on screen: it would be asked for again");
+        }
+        assert!(!pm.tex.has(&("q".into(), SMALL)), "what isn't shown still goes");
+        // Closed: not drawn any more, so it goes too.
+        pm.frame += 2;
+        pm.tex.evict(pm.frame.saturating_sub(1));
+        assert_eq!(pm.tex.len(), 0);
     }
 
     #[test]

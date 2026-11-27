@@ -81,11 +81,33 @@ async fn a_name_is_seen_only_by_the_account_that_gave_it() {
     assert_eq!(one["name"], "");
     assert!(!one.to_string().contains("Sally Ride"));
 
+    let bob_pic = one["photos"][0]["id"].as_str().unwrap().to_string();
+    let unnamed = get(&app, &format!("/api/photos/faces/{bob_pic}"), Some("bob"), &[]).await.json;
+    assert_eq!((unnamed["people"].clone(), unnamed["unnamed"].clone()), (json!([]), json!(1)), "{unnamed}");
     // Bob's own name is his alone.
     assert_eq!(post(&app, &format!("/api/photos/people/{p}/name"), "bob", json!({"name": "Mae"})).await.status, 200);
     assert_eq!(get(&app, "/api/photos/people", Some("bob"), &[]).await.json["people"][0]["name"], "Mae");
     assert_eq!(get(&app, "/api/photos/people", Some("ada"), &[]).await.json["people"][0]["name"], "Sally Ride");
 
+    // The viewer's Info panel: the faces in one picture, with the asker's own names only.
+    let ada_pic = get(&app, &format!("/api/photos/people/{p}"), Some("ada"), &[]).await.json["photos"][0]["id"].as_str().unwrap().to_string();
+    let mine = get(&app, &format!("/api/photos/faces/{ada_pic}"), Some("ada"), &[]).await;
+    assert_eq!(mine.status, 200);
+    assert_eq!(mine.json["people"][0]["name"], "Sally Ride", "{}", mine.json);
+    assert_eq!(mine.json["people"][0]["id"], p.as_str());
+    assert_eq!(mine.json["people"][0]["pic"], ada_pic.as_str());
+    assert_eq!(mine.json["unnamed"], 0);
+    let his = get(&app, &format!("/api/photos/faces/{bob_pic}"), Some("bob"), &[]).await.json;
+    assert_eq!(his["people"][0]["name"], "Mae");
+    assert!(!his.to_string().contains("Sally Ride"), "{his}");
+    // Someone else's picture, or none: not found (nothing about its faces).
+    for (pic, who) in [(&ada_pic, "bob"), (&bob_pic, "ada")] {
+        let r = get(&app, &format!("/api/photos/faces/{pic}"), Some(who), &[]).await;
+        assert_eq!(r.status, 404, "{who} asking for {pic}");
+        assert!(!r.json.to_string().contains("Mae") && !r.json.to_string().contains("Sally"));
+    }
+    assert_eq!(get(&app, "/api/photos/faces/nope", Some("ada"), &[]).await.status, 404);
+    assert_eq!(get(&app, &format!("/api/photos/faces/{ada_pic}"), None, &[]).await.status, 401);
     // Ignore (a stranger), then every way back. Nothing is ever deleted.
     let list = |who: &'static str| {
         let app = app.clone();
