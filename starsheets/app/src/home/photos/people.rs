@@ -594,7 +594,7 @@ impl PhotoMode {
     /// "Ignored" and "Not faces" at the bottom of the list: each face with its way back ("Stop
     /// ignoring" / "It is a face"), "Group again" (ignored only) and "Assign to…" a person.
     fn marked_ui(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend) {
-        let st = &self.alb.ppl.state;
+        let st = self.alb.ppl.state.clone();
         let count = |k: &str, n: usize| st[k].as_u64().unwrap_or(n as u64);
         let lists = [
             ("Ignored", "people:ignored", "ignored_count", self.alb.ppl.ignored.clone(), true),
@@ -1076,5 +1076,17 @@ mod tests {
         assert!(off_view(&guest).1.contains("owner"));
         assert_eq!(fr_label(&json!({"on": true})), "Face recognition: On");
         assert!(off_view(&ready).1.contains(PRIVACY));
+    }
+
+    #[test]
+    fn ignored_and_not_faces_are_read_from_the_list() {
+        let face = |n: i64| json!({"face": n, "id": "f1", "v": "t", "box": [0.1, 0.1, 0.2, 0.2]});
+        let mut p = People { assign: Some(7), ..Default::default() };
+        p.take(&json!({"ignored": [face(7), face(8)], "notfaces": [face(9)], "ignored_count": 2, "notfaces_count": 1}));
+        assert_eq!(p.ignored.iter().map(|f| f.face).collect::<Vec<_>>(), [7, 8]);
+        assert_eq!(p.notfaces[0].face, 9);
+        assert_eq!(p.assign, Some(7), "still listed: the picker stays open");
+        p.take(&json!({"ignored": [], "notfaces": [face(9)]}));
+        assert_eq!(p.assign, None, "assigned or undone: the picker closes");
     }
 }

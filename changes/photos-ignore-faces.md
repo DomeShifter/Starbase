@@ -1,0 +1,2 @@
+### Added
+- Photos People: right-click a group or a face (or a group's More menu) for "Ignore" (strangers) or "Not a face" (dolls, posters). They move to "Ignored" and "Not faces" sections at the bottom of People, never show in groups, suggestions or "Same person?" questions, and a re-scan of the same picture keeps them out. Every one can be undone ("Stop ignoring", "It is a face"), grouped again, or assigned to a person. Nothing is deleted.

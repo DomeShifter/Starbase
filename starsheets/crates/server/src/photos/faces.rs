@@ -534,13 +534,33 @@ pub fn answer(ix: &Index, face: i64, p: i64, yes: bool) -> rusqlite::Result<bool
 /// [`unmark`] brings a group back together. Nothing is deleted.
 pub fn mark(ix: &Index, ids: &[i64], state: i64) -> rusqlite::Result<usize> {
     let c = conn(ix);
-    let mut n = 0;
-    for &id in ids {
-        let Some(f) = self::face(ix, id)? else { continue };
+    let found: Vec<Face> = ids.iter().filter_map(|&id| self::face(ix, id).ok().flatten()).filter(|f| f.state == 0 || f.state == 2).collect();
+    // A person's marked faces stay together as one group (named by its smallest face id); only
+    // faces taken from a person who keeps others are "not this person".
+    let mut of_person: HashMap<i64, Vec<i64>> = HashMap::new();
+    for f in &found {
         if let Some(p) = f.person {
+            of_person.entry(p).or_default().push(f.id);
+        }
+    }
+    let mut whole = HashSet::new();
+    for (p, mine) in &of_person {
+        if ids_of(c, Who::Person(*p))?.iter().all(|i| mine.contains(i)) {
+            whole.insert(*p);
+        }
+    }
+    let mut n = 0;
+    for f in &found {
+        let id = f.id;
+        if let Some(p) = f.person
+            && !whole.contains(&p)
+        {
             c.execute("INSERT OR IGNORE INTO face_not(face, person) VALUES(?1, ?2)", params![id, p])?;
         }
-        let grp = if f.person.is_some() { Some(id) } else { f.grp };
+        let grp = match f.person {
+            Some(p) => of_person.get(&p).and_then(|v| v.iter().min().copied()),
+            None => f.grp,
+        };
         n += c.execute("UPDATE faces SET hidden = ?2, person = NULL, auto = 0, suggest = NULL, grp = ?3 WHERE id = ?1", params![id, state, grp])?;
     }
     Ok(n)
