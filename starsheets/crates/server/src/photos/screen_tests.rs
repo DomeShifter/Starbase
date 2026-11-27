@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use super::decode::{self, LIMITS, SCREEN, ScreenForm};
+use super::decode::{self, LIMITS, ScreenForm};
 use super::tests::{encoded, exif_block, halves, jpeg, rescan, settle, with_exif, with_pictures};
 use super::*;
 
