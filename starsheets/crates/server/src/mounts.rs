@@ -2,7 +2,7 @@
 //!
 //! The deployment administrator mounts a directory under `Store::root`, inside the
 //! target user's space in a dedicated subdirectory without nested mounts, and records it in `.starsheets/mounts.json`. For example:
-//! `{"<account key>": {"library": "ann/Photo Library"}}`. The account key is stored in
+//! `{"<account key>": {"library": "ann/starbase-mounts/Photo Library"}}`. The account key is stored in
 //! the user's preferences and changes if the account is removed and recreated.
 //!
 //! The client selects an assigned ID or a folder inside My Files. These functions
@@ -22,6 +22,21 @@ use serde_json::{Value, json};
 use crate::auth::{self, User};
 use crate::spaces;
 use crate::store::{self, Store};
+
+/// This namespace stays private even if an assignment is removed or its mount disappears.
+const DIRECTORY: &str = "starbase-mounts";
+
+pub fn private_path(path: &str) -> bool {
+    path.split('/').nth(1) == Some(DIRECTORY)
+}
+
+pub fn account_mount_dir(username: &str) -> String {
+    store::join(username, DIRECTORY)
+}
+
+pub fn within(path: &str, root: &str) -> bool {
+    path == root || path.strip_prefix(root).is_some_and(|tail| tail.starts_with('/'))
+}
 
 const KEY: &str = "mount_account";
 const SELECTION: &str = "library_roots";
@@ -171,7 +186,7 @@ fn resolve(store: &Store, user: &User, saved: &SavedRoots, choices: &BTreeMap<St
                 && is_relative(folder)
             {
                 let path = store::join(base, folder);
-                if safe_folder(store, &path) { Root::Available(path) } else { Root::Unavailable }
+                if (!private_path(&path) || private_path(base)) && safe_folder(store, &path) { Root::Available(path) } else { Root::Unavailable }
             } else {
                 Root::Unavailable
             }
@@ -225,7 +240,13 @@ fn choices_with(store: &Store, user: &User, key: Option<&Value>, table: &MountTa
     mine.iter()
         .filter_map(|(id, path)| {
             let path = path.as_str()?;
-            if !valid_id(id) || !is_relative(path) || path == user.username || store::space_of(path) != user.username || !safe_folder(store, path) {
+            if !valid_id(id)
+                || !is_relative(path)
+                || !private_path(path)
+                || path.split('/').count() != 3
+                || store::space_of(path) != user.username
+                || !safe_folder(store, path)
+            {
                 return None;
             }
             let target = root.join(path);
@@ -276,6 +297,7 @@ fn mount_path(path: &[u8]) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
+    use std::path::Path;
 
     struct Fixture {
         store: Store,
@@ -317,6 +339,39 @@ mod tests {
     }
 
     #[test]
+    fn private_paths_without_live_grants_stay_hidden_even_from_admin_and_public_links() {
+        use crate::sharing::{Access, Role};
+
+        let f = Fixture::new();
+        let folder = "bob/starbase-mounts/Library";
+        f.directory(folder);
+        let path = store::join(folder, "Photo.png");
+        fs::write(f.store.full(&path), b"fixture").unwrap();
+        let id = f.store.synced_index().unwrap().into_iter().find(|(_, p)| p == &path).unwrap().0;
+
+        for (auth, user) in [(true, Some(&f.ann)), (true, Some(&f.bob)), (false, None)] {
+            let access = Access::new(&f.store, auth, user);
+            assert_eq!(access.file_role(&id), Role::None);
+            assert_eq!(access.folder_role(folder), Role::None);
+            assert!(!access.file_listed(&id));
+            assert!(!access.folder_listed(folder));
+            assert!(!access.folder_ids.contains_key(folder));
+        }
+
+        crate::publiclink::update(&f.store, &id, &json!({"public": {"on": true, "password": "test fixture"}})).unwrap();
+        let link = crate::publiclink::describe(&f.store, &id);
+        let token = link["token"].as_str().unwrap();
+        assert_eq!(crate::publiclink::serve(&f.store, token, "download", "").code, 404);
+        assert_eq!(crate::publiclink::unlock(&f.store, token, "test fixture").code, 404);
+
+        let no_auth = Store { root: f.store.root.clone(), keep: 2, spaces: false };
+        assert_eq!(no_auth.synced_index().unwrap().get(&id), Some(&path));
+        assert!(no_auth.path_of(&id).unwrap().is_none());
+        assert!(!no_auth.no_links(folder));
+        assert_eq!(crate::publiclink::serve(&no_auth, token, "download", "").code, 404);
+    }
+
+    #[test]
     fn no_settings_means_legacy_roots_without_provisioning() {
         let f = Fixture::new();
         assert_eq!(roots(&f.store, &f.ann), Roots { my_files: Root::Available("ann".into()), photos: Root::Available("ann".into()) });
@@ -332,29 +387,38 @@ mod tests {
         assert_ne!(ann, bob);
         f.provision(json!({
             (ann): {
-                "valid": "ann/Media", "wrong-account": "bob/BobFiles", "missing": "ann/Unplugged",
-                "traversal": "ann/../bob", "absolute": "/ann/Media", "symbolic": "ann/Alias",
-                "duplicate": "ann/Overlap", "prefix": "ann-other/Files",
-                "account-root": "ann", "nested": "ann/Nested"
+                "valid": "ann/starbase-mounts/Media", "wrong-account": "bob/starbase-mounts/BobFiles", "missing": "ann/starbase-mounts/Unplugged",
+                "traversal": "ann/../bob", "absolute": "/ann/starbase-mounts/Media", "symbolic": "ann/starbase-mounts/Alias",
+                "duplicate": "ann/starbase-mounts/Overlap", "prefix": "ann-other/Files",
+                "account-root": "ann", "ordinary": "ann/Ordinary", "nested": "ann/starbase-mounts/Nested"
             },
-            (bob): {"files": "bob/BobFiles"}
+            (bob): {"files": "bob/starbase-mounts/BobFiles"}
         }));
-        for path in ["ann/Media", "ann/Unplugged", "ann/Overlap", "bob/BobFiles", "ann-other/Files", "ann/Nested"] {
+        for path in [
+            "ann/starbase-mounts/Media",
+            "ann/starbase-mounts/Unplugged",
+            "ann/starbase-mounts/Overlap",
+            "bob/starbase-mounts/BobFiles",
+            "ann-other/Files",
+            "ann/starbase-mounts/Nested",
+            "ann/Ordinary",
+        ] {
             f.directory(path);
         }
-        symlink(f.store.full("ann/Media"), f.store.full("ann/Alias")).unwrap();
+        symlink(f.store.full("ann/starbase-mounts/Media"), f.store.full("ann/starbase-mounts/Alias")).unwrap();
         let table = f.table(&[
-            ("ann/Media", "/sources/media"),
-            ("ann/Alias", "/sources/alias"),
-            ("ann/Overlap", "/sources/bob/sub"),
-            ("bob/BobFiles", "/sources/bob"),
+            ("ann/starbase-mounts/Media", "/sources/media"),
+            ("ann/starbase-mounts/Alias", "/sources/alias"),
+            ("ann/starbase-mounts/Overlap", "/sources/bob/sub"),
+            ("bob/starbase-mounts/BobFiles", "/sources/bob"),
             ("ann-other/Files", "/sources/other"),
             ("ann", "/sources/account"),
-            ("ann/Nested", "/sources/nested"),
-            ("ann/Nested/Child", "/sources/bob"),
+            ("ann/Ordinary", "/sources/ordinary"),
+            ("ann/starbase-mounts/Nested", "/sources/nested"),
+            ("ann/starbase-mounts/Nested/Child", "/sources/bob"),
         ]);
         let prefs = spaces::prefs(&f.store, "ann");
-        assert_eq!(choices_with(&f.store, &f.ann, prefs.get(KEY), &table), BTreeMap::from([("valid".into(), "ann/Media".into())]));
+        assert_eq!(choices_with(&f.store, &f.ann, prefs.get(KEY), &table), BTreeMap::from([("valid".into(), "ann/starbase-mounts/Media".into())]));
         assert!(set_with(&f.store, &f.ann, Some("wrong-account"), None, &table).is_err());
         assert!(spaces::prefs(&f.store, "ann").get(SELECTION).is_none());
     }
@@ -363,16 +427,20 @@ mod tests {
     fn roots_are_saved_together_and_a_revoked_choice_never_falls_back() {
         let f = Fixture::new();
         let key = account_key(&f.store, &f.ann).unwrap();
-        f.provision(json!({(key.as_str()): {"files": "ann/Files", "photos": "ann/Separate Photos"}}));
-        for path in ["ann/Files/Family", "ann/Separate Photos", "bob/Family", "ann/Different Files"] {
+        f.provision(json!({(key.as_str()): {"files": "ann/starbase-mounts/Files", "photos": "ann/starbase-mounts/Separate Photos"}}));
+        for path in ["ann/starbase-mounts/Files/Family", "ann/starbase-mounts/Separate Photos", "bob/Family", "ann/starbase-mounts/Different Files"] {
             f.directory(path);
         }
-        symlink(f.store.full("bob/Family"), f.store.full("ann/Files/Link")).unwrap();
-        let table = f.table(&[("ann/Files", "/files"), ("ann/Separate Photos", "/photos"), ("ann/Different Files", "/different")]);
-        let my_files = Root::Available("ann/Files".into());
+        symlink(f.store.full("bob/Family"), f.store.full("ann/starbase-mounts/Files/Link")).unwrap();
+        let table = f.table(&[
+            ("ann/starbase-mounts/Files", "/files"),
+            ("ann/starbase-mounts/Separate Photos", "/photos"),
+            ("ann/starbase-mounts/Different Files", "/different"),
+        ]);
+        let my_files = Root::Available("ann/starbase-mounts/Files".into());
         assert_eq!(
             set_with(&f.store, &f.ann, Some("files"), Some(PhotosChoice::Folder("Family".into())), &table).unwrap(),
-            Roots { my_files: my_files.clone(), photos: Root::Available("ann/Files/Family".into()) }
+            Roots { my_files: my_files.clone(), photos: Root::Available("ann/starbase-mounts/Files/Family".into()) }
         );
         let before = spaces::prefs(&f.store, "ann");
         for path in ["../Separate Photos", "/bob/Family", "Link", "Missing"] {
@@ -380,7 +448,7 @@ mod tests {
             assert_eq!(spaces::prefs(&f.store, "ann"), before);
         }
         let separate = Some(PhotosChoice::Mount("photos".into()));
-        let expected = Roots { my_files, photos: Root::Available("ann/Separate Photos".into()) };
+        let expected = Roots { my_files, photos: Root::Available("ann/starbase-mounts/Separate Photos".into()) };
         assert_eq!(set_with(&f.store, &f.ann, Some("files"), separate, &table).unwrap(), expected);
 
         let prefs = spaces::prefs(&f.store, "ann");
@@ -388,11 +456,11 @@ mod tests {
         let available = choices_with(&f.store, &f.ann, prefs.get(KEY), &table);
         assert_eq!(resolve_saved(&f.store, &f.ann, selected, &available), expected);
         assert_eq!(roots(&f.store, &f.ann), Roots { my_files: Root::Unavailable, photos: Root::Unavailable }, "directories alone are insufficient");
-        f.provision(json!({(key): {"files": "ann/Different Files", "photos": "ann/Separate Photos"}}));
+        f.provision(json!({(key): {"files": "ann/starbase-mounts/Different Files", "photos": "ann/starbase-mounts/Separate Photos"}}));
         let changed = choices_with(&f.store, &f.ann, prefs.get(KEY), &table);
         assert_eq!(
             resolve_saved(&f.store, &f.ann, selected, &changed),
-            Roots { my_files: Root::Unavailable, photos: Root::Available("ann/Separate Photos".into()) }
+            Roots { my_files: Root::Unavailable, photos: Root::Available("ann/starbase-mounts/Separate Photos".into()) }
         );
     }
 
@@ -400,13 +468,13 @@ mod tests {
     fn a_recreated_account_cannot_inherit_an_old_mount_grant() {
         let f = Fixture::new();
         let key = account_key(&f.store, &f.bob).unwrap();
-        f.provision(json!({(key): {"files": "bob/Files"}}));
+        f.provision(json!({(key): {"files": "bob/starbase-mounts/Files"}}));
         auth::remove(&f.store, "bob").unwrap();
         spaces::retire(&f.store, "bob").unwrap();
         let bob = auth::add_hashed(&f.store, "bob", "New Bob", String::new()).unwrap();
         let key = spaces::prefs(&f.store, "bob").remove(KEY);
         assert!(key.is_none());
-        assert!(choices_with(&f.store, &bob, key.as_ref(), &f.table(&[("bob/Files", "/private")])).is_empty());
+        assert!(choices_with(&f.store, &bob, key.as_ref(), &f.table(&[("bob/starbase-mounts/Files", "/private")])).is_empty());
     }
 
     #[test]

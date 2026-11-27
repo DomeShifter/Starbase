@@ -635,6 +635,9 @@ impl Store {
     /// Whether no part of `relpath` (below the store's own folder) is a symbolic link or hidden.
     /// Missing parts are fine (checked by whoever needs them to exist).
     pub fn no_links(&self, relpath: &str) -> bool {
+        if !self.spaces && crate::mounts::private_path(relpath) {
+            return false;
+        }
         let mut p = self.root.clone();
         for part in relpath.split('/').filter(|x| !x.is_empty()) {
             if part.starts_with('.') {
@@ -923,6 +926,9 @@ impl Store {
     /// Creates a free folder name in `parent` ("Name", "Name (2)", …).
     fn claim_folder(&self, parent: &str, name: Option<&str>) -> R<String> {
         let name = if name.unwrap_or("").is_empty() { "New folder".to_string() } else { clean_name(name) };
+        if self.spaces && join(parent, &name) == crate::mounts::account_mount_dir(parent) && !parent.contains('/') {
+            return Err(Bad::new(403, "The deployment manages this mount folder."));
+        }
         for n in 1..10000 {
             let candidate = numbered(&name, n, "");
             match fs::create_dir(self.full(parent).join(&candidate)) {
@@ -935,6 +941,9 @@ impl Store {
     }
 
     fn free_folder_name(&self, parent: &str, name: &str) -> R<String> {
+        if self.spaces && join(parent, name) == crate::mounts::account_mount_dir(parent) && !parent.contains('/') {
+            return Err(Bad::new(403, "The deployment manages this mount folder."));
+        }
         (1..10000).map(|n| numbered(name, n, "")).find(|c| !self.full(parent).join(c).exists()).ok_or_else(|| Bad::new(409, "no free name"))
     }
 
@@ -954,6 +963,9 @@ impl Store {
 
     /// `name` in `parent` if nothing there has it, else 409.
     fn exact_folder_name(&self, parent: &str, name: &str) -> R<String> {
+        if self.spaces && join(parent, name) == crate::mounts::account_mount_dir(parent) && !parent.contains('/') {
+            return Err(Bad::new(403, "The deployment manages this mount folder."));
+        }
         if fs::symlink_metadata(self.full(parent).join(name)).is_ok() { Err(taken(name)) } else { Ok(name.to_string()) }
     }
 
@@ -1002,7 +1014,11 @@ impl Store {
         index: &mut Index,
     ) -> R<Reply> {
         if p.len() == 1 && method == "GET" {
-            let (files, folders) = self.walk();
+            let (mut files, mut folders) = self.walk();
+            if !self.spaces {
+                files.retain(|path| !crate::mounts::private_path(path));
+                folders.retain(|path| !crate::mounts::private_path(path));
+            }
             let by_path: HashMap<&String, &String> = index.iter().map(|(k, v)| (v, k)).collect();
             let mut out = Vec::new();
             for path in &files {
@@ -1221,6 +1237,11 @@ impl Store {
         self.need_folder(&path)?;
         if self.spaces && !path.contains('/') {
             return Err(Bad::new(400, "A person's own folder can't be changed."));
+        }
+        if (crate::mounts::private_path(&path) && path.split('/').count() <= 3)
+            || (!path.contains('/') && self.full(&crate::mounts::account_mount_dir(&path)).symlink_metadata().is_ok())
+        {
+            return Err(Bad::new(403, "The deployment manages this mount folder."));
         }
         let folder_ids = self.synced_folders()?;
         let fid = folder_ids.iter().find(|(_, p)| **p == path).map(|(k, _)| k.clone()).unwrap_or_default();

@@ -730,6 +730,12 @@ async fn accounts(
                     if who == me.username {
                         return Err("You can't remove your own account.".to_string());
                     }
+                    if app.store.spaces
+                        && auth::clean_username(&who).is_ok_and(|name| name == who)
+                        && app.store.full(&mounts::account_mount_dir(&who)).symlink_metadata().is_ok()
+                    {
+                        return Err("Detach and remove the account mount directory before removing this account.".to_string());
+                    }
                     auth::remove(&app.store, &who)?;
                     // Their folder goes to the owner as "Removed – <username>"; their shares go.
                     let moved = spaces::retire(&app.store, &who).map_err(|e| e.to_string())?;
