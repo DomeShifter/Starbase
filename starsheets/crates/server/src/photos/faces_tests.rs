@@ -416,3 +416,85 @@ fn no_is_remembered() {
     assert_eq!((g.person, g.suggest), (None, None), "{g:?}");
     assert!(!lock.lock().map(|ix| faces::answer(&ix, 999_999, ann, true).unwrap()).unwrap(), "no such face");
 }
+
+fn found_at(e: Vec<f32>, x: f32) -> Found {
+    Found { x, y: 0.1, w: 0.2, h: 0.2, score: 0.95, px: 80.0, emb: e }
+}
+
+/// James 2026-11-27: ignoring a group takes it out of People and grouping; undoing brings the
+/// same group back. Nothing is deleted.
+#[test]
+fn ignore_a_group_and_undo() {
+    let lock = index();
+    lock.lock().map(|ix| faces::keep(&ix, "s1", "auraface", &[found(near(2, 0, 0.1)), found(near(2, 1, 0.1))]).unwrap()).unwrap();
+    faces::regroup(&lock, "auraface").unwrap();
+    let g = by_thumb(&lock, "s1").grp.expect("a group");
+    let ids: Vec<i64> = lock.lock().map(|ix| faces::faces(&ix, "auraface").unwrap().iter().filter(|f| f.grp == Some(g)).map(|f| f.id).collect()).unwrap();
+    assert_eq!(ids.len(), 2);
+    assert_eq!(lock.lock().map(|ix| faces::mark(&ix, &ids, faces::IGNORED).unwrap()).unwrap(), 2);
+    faces::regroup(&lock, "auraface").unwrap();
+    {
+        let ix = lock.lock().unwrap();
+        assert!(faces::faces(&ix, "auraface").unwrap().is_empty(), "out of People and grouping");
+        let m = faces::marked(&ix, "auraface").unwrap();
+        assert_eq!(m.len(), 2);
+        assert!(m.iter().all(|f| f.state == faces::IGNORED && f.grp == Some(g)));
+        // Not on the "not a face" list: undoing that does nothing.
+        assert_eq!(faces::unmark(&ix, &ids, faces::NOT_FACE, false).unwrap(), 0);
+        assert_eq!(faces::unmark(&ix, &ids, faces::IGNORED, false).unwrap(), 2);
+    }
+    faces::regroup(&lock, "auraface").unwrap();
+    let ix = lock.lock().unwrap();
+    let all = faces::faces(&ix, "auraface").unwrap();
+    assert!(all.len() == 2 && all.iter().all(|f| f.grp == Some(g)), "the same group again: {all:?}");
+}
+
+/// An ignored face of a person: never that person again, never asked about; "Assign to…" gives
+/// it to someone; "Group again" lets grouping decide afresh.
+#[test]
+fn an_ignored_face_leaves_its_person_and_can_be_assigned_or_grouped_again() {
+    let (lock, ann) = with_ann();
+    let f = by_thumb(&lock, "a1");
+    assert_eq!(f.person, Some(ann));
+    lock.lock().map(|ix| faces::mark(&ix, &[f.id], faces::IGNORED).unwrap()).unwrap();
+    faces::regroup(&lock, "auraface").unwrap();
+    {
+        let ix = lock.lock().unwrap();
+        assert!(faces::faces(&ix, "auraface").unwrap().iter().all(|g| g.id != f.id));
+        assert!(!faces::answer(&ix, f.id, ann, true).unwrap(), "no questions about an ignored face");
+        // Group again: back without a group; regrouping never puts it with Ann (taken from her).
+        assert_eq!(faces::unmark(&ix, &[f.id], faces::IGNORED, true).unwrap(), 1);
+    }
+    faces::regroup(&lock, "auraface").unwrap();
+    let g = lock.lock().unwrap();
+    let back = faces::face(&g, f.id).unwrap().unwrap();
+    assert_eq!((back.person, back.state), (None, 0));
+    // Ignore again, then assign it to Ann after all.
+    faces::mark(&g, &[f.id], faces::IGNORED).unwrap();
+    assert_eq!(faces::assign(&g, &[f.id], ann).unwrap(), 1);
+    let back = faces::face(&g, f.id).unwrap().unwrap();
+    assert_eq!((back.person, back.state), (Some(ann), 0));
+    assert_eq!(faces::assign(&g, &[f.id], ann).unwrap(), 0, "only marked faces are assigned here");
+}
+
+/// "Not a face" survives the picture being looked at again (same box, a little off); a face
+/// somewhere else in the picture is new. "It is a face" undoes it.
+#[test]
+fn not_a_face_is_not_found_again_on_a_rescan() {
+    let lock = index();
+    lock.lock().map(|ix| faces::keep(&ix, "d1", "auraface", &[found_at(near(3, 0, 0.1), 0.1), found_at(near(4, 0, 0.1), 0.6)]).unwrap()).unwrap();
+    let doll = by_thumb(&lock, "d1").id.min(lock.lock().map(|ix| faces::faces(&ix, "auraface").unwrap().iter().find(|f| f.bx[0] < 0.3).unwrap().id).unwrap());
+    lock.lock().map(|ix| faces::mark(&ix, &[doll], faces::NOT_FACE).unwrap()).unwrap();
+    // Looked at again: the doll's box a little moved, the other face still there.
+    lock.lock().map(|ix| faces::keep(&ix, "d1", "auraface", &[found_at(near(3, 1, 0.1), 0.12), found_at(near(4, 1, 0.1), 0.6)]).unwrap()).unwrap();
+    faces::regroup(&lock, "auraface").unwrap();
+    let ix = lock.lock().unwrap();
+    let shown = faces::faces(&ix, "auraface").unwrap();
+    assert_eq!(shown.len(), 1, "{shown:?}");
+    assert!((shown[0].bx[0] - 0.6).abs() < 1e-6);
+    let m = faces::marked(&ix, "auraface").unwrap();
+    assert_eq!((m.len(), m[0].state), (1, faces::NOT_FACE));
+    assert!(faces::overlap([0.1, 0.1, 0.2, 0.2], [0.6, 0.1, 0.2, 0.2]) < faces::SAME_BOX);
+    assert_eq!(faces::unmark(&ix, &[m[0].id], faces::NOT_FACE, false).unwrap(), 1);
+    assert_eq!(faces::faces(&ix, "auraface").unwrap().len(), 2, "It is a face: back");
+}

@@ -1,7 +1,9 @@
 //! People beside the photo grid: faces grouped by the server (crates/server/src/photos/faces.rs)
 //! as round crops; name a person, merge two, take wrong faces out (select, or right-click "Not
 //! X", always confirmed), open a person's pictures. "Same person?" questions first (borderline
-//! matches the server didn't join on its own), then named people, unnamed groups below.
+//! matches the server didn't join on its own), then named people, unnamed groups below, and at
+//! the bottom "Ignored" (strangers) and "Not faces" (dolls): right-click a group or a face for
+//! "Ignore" / "Not a face"; every one can be undone, grouped again or given to a person there.
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -70,6 +72,11 @@ pub(in crate::home) struct People {
     /// The faces ticked on a person's page, and the ones the "Remove …?" question is about.
     pub selected: BTreeSet<i64>,
     confirm: Option<Vec<i64>>,
+    /// "Ignored" and "Not faces" at the bottom of the list (at most the server's 500 each).
+    pub ignored: Vec<FaceCard>,
+    pub notfaces: Vec<FaceCard>,
+    /// The ignored or "not a face" face whose "Assign to…" person picker is open.
+    assign: Option<i64>,
 }
 
 impl People {
@@ -90,6 +97,12 @@ impl People {
                 })
             })
             .collect();
+        let marks = |k: &str| v[k].as_array().into_iter().flatten().filter_map(face_card).collect::<Vec<_>>();
+        self.ignored = marks("ignored");
+        self.notfaces = marks("notfaces");
+        if self.assign.is_some_and(|f| !self.ignored.iter().chain(&self.notfaces).any(|c| c.face == f)) {
+            self.assign = None;
+        }
         self.state = v.clone();
     }
 
@@ -106,7 +119,7 @@ impl People {
                 .map(|c| json!({"id": c.id, "name": c.name, "count": c.count, "face": c.face, "cover": c.cover.as_ref().map(|x| &x.0)}))
                 .collect::<Vec<_>>()
         };
-        json!({"named": c(&self.named), "groups": c(&self.groups), "on": self.state["on"], "faces": self.faces.len(), "can_download": self.state["can_download"], "download": self.state["download"], "missing": self.state["missing"].as_array().map_or(0, Vec::len), "progress": self.state["progress"], "editing": self.editing, "merging": self.ask == Ask::Merge, "scan": self.scan.test_state(), "questions": self.asking().len(), "skipped": self.skipped.len(), "selected": self.selected.iter().collect::<Vec<_>>(), "confirm": self.confirm.as_ref().map(Vec::len)})
+        json!({"named": c(&self.named), "groups": c(&self.groups), "on": self.state["on"], "faces": self.faces.len(), "can_download": self.state["can_download"], "download": self.state["download"], "missing": self.state["missing"].as_array().map_or(0, Vec::len), "progress": self.state["progress"], "editing": self.editing, "merging": self.ask == Ask::Merge, "scan": self.scan.test_state(), "questions": self.asking().len(), "skipped": self.skipped.len(), "selected": self.selected.iter().collect::<Vec<_>>(), "confirm": self.confirm.as_ref().map(Vec::len), "ignored": self.ignored.iter().map(|f| f.face).collect::<Vec<_>>(), "notfaces": self.notfaces.iter().map(|f| f.face).collect::<Vec<_>>(), "ignored_count": self.state["ignored_count"], "notfaces_count": self.state["notfaces_count"], "assigning": self.assign})
     }
 
     /// The questions not skipped, at most [`QUESTIONS`].
@@ -265,6 +278,15 @@ impl PhotoMode {
         self.card_name(ui, ctx, store, c, n, Rect::from_min_size(rect.min + vec2(house::M, top), vec2(CARD_FACE, NAME_H)));
         let count = Rect::from_min_size(rect.min + vec2(house::M, top + NAME_H + house::XS), vec2(CARD_FACE, 14.0));
         one_line(&p, count.center_top(), &pictures(c.count), CARD_FACE, house::NOTE, theme::text_dim());
+        let mut mark = None;
+        resp.context_menu(|ui| {
+            house::menu(ui, 220.0);
+            mark = mark_rows(ui, ctx, "Ignore group");
+            house::target(ctx, "people:card-menu", ui.min_rect());
+        });
+        if let Some(act) = mark {
+            self.people_post(ctx, store, &format!("api/photos/people/{}/{act}", c.id), json!({}));
+        }
         resp.clicked()
     }
 
@@ -588,7 +610,8 @@ impl PhotoMode {
             return;
         }
         let (named, groups) = (self.alb.ppl.named.clone(), self.alb.ppl.groups.clone());
-        if named.is_empty() && groups.is_empty() {
+        let marked = !self.alb.ppl.ignored.is_empty() || !self.alb.ppl.notfaces.is_empty();
+        if named.is_empty() && groups.is_empty() && !marked {
             let scanning = st["progress"]["done"].as_u64() < st["progress"]["all"].as_u64();
             let (title, hint) = if scanning {
                 ("Still looking", "People appear here as they are found.")
@@ -622,9 +645,92 @@ impl PhotoMode {
                     }
                 });
             }
+            self.marked_ui(ui, &ctx, store);
         });
         if let Some(c) = open {
             self.people_open(&ctx, store, c);
+        }
+    }
+
+    /// "Ignored" and "Not faces" at the bottom of the list: each face with its way back ("Stop
+    /// ignoring" / "It is a face"), "Group again" (ignored only) and "Assign to…" a person.
+    fn marked_ui(&mut self, ui: &mut Ui, ctx: &egui::Context, store: &Backend) {
+        let st = &self.alb.ppl.state;
+        let count = |k: &str, n: usize| st[k].as_u64().unwrap_or(n as u64);
+        let lists = [
+            ("Ignored", "people:ignored", "ignored_count", self.alb.ppl.ignored.clone(), true),
+            ("Not faces", "people:notfaces", "notfaces_count", self.alb.ppl.notfaces.clone(), false),
+        ];
+        let mut post: Option<(&str, Json)> = None;
+        let mut k = 0;
+        for (title, target, key, list, ignored) in lists {
+            if list.is_empty() {
+                continue;
+            }
+            ui.add_space(house::XL);
+            let h = ui.label(RichText::new(format!("{title} ({})", count(key, list.len()))).size(house::BODY).strong().color(theme::text()));
+            house::target(ctx, target, h.rect);
+            let hint = if ignored { "Strangers: not shown in People, never grouped or asked about." } else { "Not faces (dolls, posters): never found again in the same picture." };
+            ui.label(RichText::new(hint).size(house::NOTE).color(theme::text_dim()));
+            ui.add_space(house::M);
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing = vec2(house::L, house::L);
+                for f in &list {
+                    let n = k;
+                    k += 1;
+                    ui.allocate_ui(vec2(MARK_W, 200.0), |ui| {
+                        ui.vertical_centered(|ui| {
+                            let (rect, _) = ui.allocate_exact_size(vec2(MARK_FACE, MARK_FACE), Sense::hover());
+                            house::target(ctx, &format!("people:marked:{n}"), rect);
+                            let p = ui.painter_at(rect);
+                            self.face_ui(ctx, store, &p, (&f.id, &f.v, f.bx), Some(f.face), rect.center(), MARK_FACE / 2.0);
+                            let back = if ignored { "Stop ignoring" } else { "It is a face" };
+                            let b = ui.add(house::quiet(back));
+                            house::target(ctx, &format!("{}:{n}", if ignored { "people:unignore" } else { "people:isface" }), b.rect);
+                            if b.clicked() {
+                                post = Some((if ignored { "unignore" } else { "isface" }, json!({"faces": [f.face]})));
+                            }
+                            if ignored {
+                                let g = ui.add(house::quiet("Group again"));
+                                house::target(ctx, &format!("people:regroup:{n}"), g.rect);
+                                if g.clicked() {
+                                    post = Some(("regroup", json!({"faces": [f.face]})));
+                                }
+                            }
+                            let a = ui.add(house::quiet("Assign to…"));
+                            house::target(ctx, &format!("people:assign:{n}"), a.rect);
+                            if a.clicked() {
+                                self.alb.ppl.assign = if self.alb.ppl.assign == Some(f.face) { None } else { Some(f.face) };
+                            }
+                        });
+                    });
+                }
+            });
+            if let Some(face) = self.alb.ppl.assign.filter(|a| list.iter().any(|f| f.face == *a)) {
+                ui.add_space(house::S);
+                ui.label(RichText::new("Assign to:").size(house::NOTE).color(theme::text_dim()));
+                let others: Vec<Card> = self.alb.ppl.named.iter().chain(&self.alb.ppl.groups).cloned().collect();
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(house::S, house::S);
+                    for (i, o) in others.iter().take(60).enumerate() {
+                        let label = if o.name.is_empty() { format!("Unnamed ({})", o.count) } else { o.name.clone() };
+                        let r = ui.add(house::secondary_in(&label, theme::BLUE));
+                        house::target(ctx, &format!("people:assign-to:{i}"), r.rect);
+                        if r.clicked() {
+                            post = Some(("assign", json!({"faces": [face], "into": o.id})));
+                        }
+                    }
+                    let x = ui.add(house::quiet("Cancel"));
+                    house::target(ctx, "people:assign-cancel", x.rect);
+                    if x.clicked() {
+                        self.alb.ppl.assign = None;
+                    }
+                });
+            }
+        }
+        if let Some((act, body)) = post {
+            self.alb.ppl.assign = None;
+            self.people_post(ctx, store, &format!("api/photos/people/marked/{act}"), body);
         }
     }
 
@@ -754,7 +860,7 @@ impl PhotoMode {
             ui.add_space(house::S);
         }
         let faces = self.alb.ppl.faces.clone();
-        let (mut open, mut toggle, mut ask) = (None, None, None);
+        let (mut open, mut toggle, mut ask, mut mark) = (None, None, None, None);
         let any = n > 0;
         ui.horizontal_wrapped(|ui| {
             for (i, f) in faces.iter().take(200).enumerate() {
@@ -788,6 +894,9 @@ impl PhotoMode {
                     if house::menu_row(ui, Some("close"), &format!("Not {label}"), "", true) {
                         ask = Some(vec![f.face]);
                     }
+                    if let Some(act) = mark_rows(ui, ctx, "Ignore face") {
+                        mark = Some((act, f.face));
+                    }
                     house::target(ctx, "people:face-menu", ui.min_rect());
                 });
             }
@@ -799,6 +908,10 @@ impl PhotoMode {
         }
         if let Some(ids) = ask {
             self.alb.ppl.confirm = Some(ids);
+        }
+        if let Some((act, face)) = mark {
+            self.alb.ppl.selected.remove(&face);
+            self.people_post(ctx, store, &format!("api/photos/people/{}/{act}", c.id), json!({"faces": [face]}));
         }
         if let Some(id) = open
             && let Some(i) = self.pics.iter().position(|p| p.id == id)
@@ -819,6 +932,7 @@ impl PhotoMode {
             return;
         }
         ui.add_space(house::S);
+        let mut gone = None;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = house::M;
             if self.alb.ppl.editing.as_deref() == Some(c.id.as_str()) {
@@ -845,8 +959,16 @@ impl PhotoMode {
                 if house::menu_row(ui, Some("call_split"), "Merge with…", "", true) {
                     self.alb.ppl.ask = Ask::Merge;
                 }
+                ui.separator();
+                gone = mark_rows(ui, ctx, "Ignore group");
             });
         });
+        if let Some(act) = gone {
+            // The group leaves People: back to the list, then mark it.
+            self.person_close();
+            self.people_post(ctx, store, &format!("{url}/{act}"), json!({}));
+            return;
+        }
         if self.alb.ppl.ask == Ask::Merge {
             ui.add_space(house::S);
             ui.horizontal(|ui| {
@@ -897,10 +1019,27 @@ const NAME_H: f32 = 18.0;
 const SAME_FACE: f32 = 64.0;
 /// The most "Same person?" questions shown at once.
 const QUESTIONS: usize = 5;
+/// A face in "Ignored" / "Not faces", and the room for its buttons.
+const MARK_FACE: f32 = 64.0;
+const MARK_W: f32 = 120.0;
 /// A face in the People strip.
 const STRIP_FACE: f32 = 64.0;
 /// Said wherever face recognition is offered.
 const PRIVACY: &str = "It runs on this server only; nothing is sent anywhere.";
+
+/// "Ignore …" and "Not a face" in a right-click or More menu: the server action picked.
+fn mark_rows(ui: &mut Ui, ctx: &egui::Context, ignore: &str) -> Option<&'static str> {
+    let mut out = None;
+    for (icon, label, act, target) in [("visibility_off", ignore, "ignore", "people:ctx-ignore"), ("close", "Not a face", "notface", "people:ctx-notface")] {
+        let y = ui.cursor().min.y;
+        if house::menu_row(ui, Some(icon), label, "", true) {
+            out = Some(act);
+        }
+        let row = Rect::from_min_max(pos2(ui.max_rect().min.x, y), pos2(ui.max_rect().max.x, ui.cursor().min.y.max(y + 32.0)));
+        house::target(ctx, target, row);
+    }
+    out
+}
 
 /// How a person without a name is shown, everywhere (strip, cards, person page).
 fn shown_name(name: &str) -> &str {
