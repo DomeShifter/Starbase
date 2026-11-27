@@ -35,6 +35,9 @@ def main():
     r0 = req(); time.sleep(5); r1 = req()
     rec("one open = no repeated image requests", r1 == r0, f"{r0} -> {r1}")
     S.click_text("viewer:info"); time.sleep(3)
+    for i in range(1, 27):  # find a picture with a NAMED person (People are loaded when the panel opens)
+        if (vw().get("people") or {}).get("people"): break
+        S.key("Right"); time.sleep(2.5)
     rec("People section shown", "photos:info-people" in tg(), str(vw().get("people")))
     S.shot(f"{br}-info-people")
     ppl = (vw().get("people") or {}).get("people") or []

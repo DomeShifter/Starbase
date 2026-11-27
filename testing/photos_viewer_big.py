@@ -44,7 +44,7 @@ def main():
     for i in range(3):  # open/close, next/prev between big pictures
         S.key("Escape"); time.sleep(1.5)
         S.hook("home:photos:open", index=i % 2); time.sleep(4)
-        for k in ("ArrowRight", "ArrowLeft"): S.key(k); time.sleep(3)
+        for k in ("Right", "Left"): S.key(k); time.sleep(3)
     S.key("Escape"); time.sleep(3)
     t = tx(); print("after churn", t, flush=True)
     rec("closed: textures freed", t.get("asking", 0) == 0 and t.get("bytes", 0) <= t.get("budget", 1) * 0.5, str(t))
