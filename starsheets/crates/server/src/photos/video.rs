@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
+use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
@@ -14,6 +15,7 @@ const EPOCH_1904: u64 = 2_082_844_800;
 
 const POSTER_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_POSTER: u64 = 512 * 1024;
+const POSTER_MEMORY: libc::rlim_t = 768 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Info {
@@ -34,7 +36,8 @@ pub fn extract_poster(mut file: File) -> Result<Vec<u8>, String> {
     }
     file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
     // fd: can seek in a regular file, unlike pipe:0. No path or network protocols are allowed.
-    let mut child = Command::new("ffmpeg")
+    let mut command = Command::new("ffmpeg");
+    command
         .args([
             "-nostdin",
             "-v",
@@ -73,9 +76,19 @@ pub fn extract_poster(mut file: File) -> Result<Vec<u8>, String> {
         .stdin(Stdio::from(file))
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .env_clear()
-        .spawn()
-        .map_err(|e| format!("Couldn't start FFmpeg: {e}"))?;
+        .env_clear();
+    // SAFETY: the post-fork hook uses only system calls to cap the child's memory and priority.
+    unsafe {
+        command.pre_exec(|| {
+            let limit = libc::rlimit { rlim_cur: POSTER_MEMORY, rlim_max: POSTER_MEMORY };
+            if libc::setrlimit(libc::RLIMIT_AS, &limit) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            libc::setpriority(libc::PRIO_PROCESS, 0, 15);
+            Ok(())
+        });
+    }
+    let mut child = command.spawn().map_err(|e| format!("Couldn't start FFmpeg: {e}"))?;
 
     let deadline = Instant::now() + POSTER_TIMEOUT;
     let result = (|| -> Result<Vec<u8>, String> {
