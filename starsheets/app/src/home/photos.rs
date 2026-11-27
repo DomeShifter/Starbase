@@ -213,6 +213,10 @@ pub(super) enum Got {
     Rotated(String, bool, Result<Option<String>, String>),
     /// The faces in a picture (the viewer's Info panel): its id and the answer (Null: none).
     InPhoto(String, Json),
+    /// The Info panel's details of a picture (GET /api/photos/info), Null when they couldn't be read.
+    InfoDetail(String, Json),
+    /// A save of the Info panel's fields: the picture, then the new etag and fields, or what went wrong.
+    InfoSaved(String, Result<(String, Json), String>),
     Nothing,
     /// A file picked for upload (name, bytes), and the answer for upload number n (true: a duplicate).
     Picked(String, Vec<u8>),
@@ -337,6 +341,11 @@ pub(super) struct PhotoMode {
     /// The viewer's Info panel "People": the picture asked about, and the server's answer
     /// (`GET api/photos/faces/ID`; Null while asking or when it failed).
     pub info_faces: Option<(String, Json)>,
+    /// The viewer's Info panel details (EXIF, typed fields, keywords): the picture and the answer
+    /// (Null while asking).
+    pub info_detail: Option<(String, Json)>,
+    /// The Info panel field being typed in: (field, text).
+    pub info_edit: Option<(String, String)>,
     /// How many pictures were asked of the server (the test hook: one open = one request).
     pub image_requests: u64,
     /// The photo editor, over the viewer (photo_edit.rs).
@@ -391,6 +400,8 @@ impl Default for PhotoMode {
             frame: 0,
             viewer: None,
             info_faces: None,
+            info_detail: None,
+            info_edit: None,
             image_requests: 0,
             editor: None,
             alb: albums::Albums::default(),
@@ -614,6 +625,26 @@ impl PhotoMode {
                 }
                 Got::Moved(ids, into) => self.moved(ctx, store, &ids, into),
                 Got::Rotated(id, left, r) => self.rotated(ctx, id, left, r),
+                Got::InfoDetail(id, v) => {
+                    if self.info_detail.as_ref().is_some_and(|f| f.0 == id) {
+                        self.info_detail = Some((id, v));
+                    }
+                }
+                Got::InfoSaved(id, r) => match r {
+                    Ok((etag, info)) => {
+                        if let Some((_, d)) = self.info_detail.as_mut().filter(|f| f.0 == id) {
+                            d["etag"] = serde_json::json!(etag);
+                            d["info"] = info;
+                        }
+                    }
+                    Err(e) => {
+                        crate::house::toast(ctx, &e);
+                        // Read again: someone else may have saved first.
+                        if self.info_detail.as_ref().is_some_and(|f| f.0 == id) {
+                            self.info_detail = None;
+                        }
+                    }
+                },
                 Got::InPhoto(id, v) => {
                     if self.info_faces.as_ref().is_some_and(|f| f.0 == id) {
                         self.info_faces = Some((id, v));
@@ -762,6 +793,59 @@ impl PhotoMode {
                     _ => serde_json::json!({"people": [], "unnamed": 0}),
                 };
                 Self::push(&inbox, &ctx2, Got::InPhoto(id2, v));
+            }),
+        );
+    }
+
+    /// Asks for picture `id`'s details for the Info panel, once per picture.
+    pub(super) fn ask_info(&mut self, ctx: &egui::Context, store: &Backend, id: &str) {
+        if self.info_detail.as_ref().is_some_and(|f| f.0 == id) {
+            return;
+        }
+        self.info_detail = Some((id.to_string(), Json::Null));
+        self.info_edit = None;
+        let (inbox, ctx2, id2) = (self.inbox.clone(), ctx.clone(), id.to_string());
+        store.call(
+            ctx,
+            Method::Get,
+            &format!("api/photos/info/{}", enc(id)),
+            None,
+            Box::new(move |a| {
+                let v = match a {
+                    Ok((200, b)) => serde_json::from_slice(&b).unwrap_or_else(|_| serde_json::json!({})),
+                    _ => serde_json::json!({}),
+                };
+                Self::push(&inbox, &ctx2, Got::InfoDetail(id2, v));
+            }),
+        );
+    }
+
+    /// Saves the Info panel's typed fields of picture `id` (all of them, as the server keeps them).
+    pub(super) fn save_info(&mut self, ctx: &egui::Context, store: &Backend, id: &str, info: Json) {
+        let Some((_, d)) = self.info_detail.as_mut().filter(|f| f.0 == id) else { return };
+        let etag = d["etag"].as_str().unwrap_or("none").to_string();
+        d["info"] = info.clone(); // shown at once; put right if the save fails
+        let (inbox, ctx2, id2) = (self.inbox.clone(), ctx.clone(), id.to_string());
+        let body = serde_json::to_vec(&info).unwrap_or_default();
+        store.call_if(
+            ctx,
+            Method::Put,
+            &format!("api/photos/info/{}", enc(id)),
+            Some(body),
+            Some(etag),
+            Box::new(move |a| {
+                let r = match a {
+                    Ok((200, b)) => {
+                        let v: Json = serde_json::from_slice(&b).unwrap_or_default();
+                        Ok((v["etag"].as_str().unwrap_or("none").to_string(), info))
+                    }
+                    Ok((_, b)) => Err(serde_json::from_slice::<Json>(&b)
+                        .ok()
+                        .and_then(|v| v["error"].as_str().map(str::to_string))
+                        .unwrap_or_else(|| "The details couldn't be saved.".into())),
+                    Err(e) => Err(format!("The details couldn't be saved: {e}")),
+                };
+                Self::push(&inbox, &ctx2, Got::InfoSaved(id2, r));
             }),
         );
     }
@@ -1198,7 +1282,7 @@ impl PhotoMode {
                 let p = self.pics.get(v.index());
                 json!({
                     "index": v.index(), "pos": v.pos, "id": p.map(|p| &p.id), "name": p.map(|p| &p.name),
-                    "info": v.info, "menu": v.menu, "toast": crate::house::toast_text(), "people": self.info_faces.as_ref().filter(|f| p.is_some_and(|p| p.id == f.0)).map(|f| f.1.clone()), "info_rows": p.map(|p| super::viewer::info_lines(p, &self.alb.albums_of(&p.id)).iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>()), "zoom": v.zoom, "playing": v.playing, "shuffle": v.shuffle, "every": v.every, "showing": v.showing, "raw": v.raw,
+                    "info": v.info, "menu": v.menu, "toast": crate::house::toast_text(), "people": self.info_faces.as_ref().filter(|f| p.is_some_and(|p| p.id == f.0)).map(|f| f.1.clone()), "info_edit": self.info_edit, "info_detail": self.info_detail.as_ref().map(|f| f.1.clone()), "info_rows": p.map(|p| super::viewer::info_lines(p, &self.alb.albums_of(&p.id), &self.info_detail.as_ref().filter(|f| f.0 == p.id && !f.1.is_null()).map_or(json!({}), |f| f.1.clone())).iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>()), "zoom": v.zoom, "playing": v.playing, "shuffle": v.shuffle, "every": v.every, "showing": v.showing, "raw": v.raw,
                 })
             }),
         })

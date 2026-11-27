@@ -456,6 +456,8 @@ mod dups_tests;
 mod edits_tests;
 #[path = "export_tests.rs"]
 mod export_tests;
+#[path = "info_tests.rs"]
+mod info_tests;
 #[path = "locked_tests.rs"]
 mod locked_tests;
 #[path = "people_tests.rs"]
