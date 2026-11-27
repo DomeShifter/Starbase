@@ -409,67 +409,6 @@ impl PhotoMode {
         super::albums::get(ctx, store, &self.inbox, &format!("api/photos/people/{key}"), move |v| Got::Opened(Tab::People, key, v));
     }
 
-    /// The People strip at the top of Photos: a "People … See all" heading row, then round 64 px
-    /// faces with their name under; a click opens the person, "See all" opens People.
-    pub(in crate::home) fn people_strip(&mut self, ui: &mut Ui, store: &Backend) {
-        let ctx = ui.ctx().clone();
-        self.people_boot(&ctx, store);
-        let st = self.alb.ppl.state.clone();
-        if st["on"].as_bool() != Some(true) {
-            return;
-        }
-        if self.scan_bar(ui, &st, false) {
-            self.people_poll(ui, 3.0);
-        }
-        let mut all = self.alb.ppl.named.clone();
-        all.extend(self.alb.ppl.groups.iter().filter(|c| c.count > 1).cloned());
-        if all.is_empty() {
-            return;
-        }
-        let mut see_all = false;
-        ui.horizontal(|ui| {
-            let h = ui.label(RichText::new("People").size(house::BODY).strong().color(theme::text()));
-            house::target(&ctx, "people:strip-heading", h.rect);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let b = ui.add(house::quiet_with(Some("chevron_right"), "See all", false));
-                house::target(&ctx, "pill-See all", b.rect);
-                house::target(&ctx, "people:see-all", b.rect);
-                see_all = b.clicked();
-            });
-        });
-        ui.add_space(house::S);
-        let (side, gap) = (STRIP_FACE, house::M);
-        let fit = ((ui.available_width() / (side + gap)) as usize).clamp(1, 12);
-        let mut open = None;
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = gap;
-            for (n, c) in all.iter().take(fit).enumerate() {
-                let (rect, resp) = ui.allocate_exact_size(vec2(side, side + house::XS + 16.0), Sense::click());
-                house::target(&ctx, &format!("people-strip:{n}"), rect);
-                let p = ui.painter_at(rect);
-                let centre = rect.min + vec2(side / 2.0, side / 2.0);
-                if let (Some((id, v)), Some(bx)) = (&c.cover, c.bx) {
-                    self.face_ui(&ctx, store, &p, (id, v, bx), c.face, centre, side / 2.0 - 2.0);
-                }
-                if resp.hovered() {
-                    p.circle_stroke(centre, side / 2.0 - 1.0, egui::Stroke::new(2.0, theme::SHARE));
-                }
-                let col = if c.name.is_empty() { theme::text_dim() } else { theme::text() };
-                one_line(&p, rect.min + vec2(side / 2.0, side + house::XS), shown_name(&c.name), side + gap - 2.0, house::NOTE, col);
-                if resp.on_hover_text(shown_name(&c.name)).clicked() {
-                    open = Some(c.clone());
-                }
-            }
-        });
-        if let Some(c) = open {
-            self.go(super::albums::Tab::People);
-            self.people_open(&ctx, store, c);
-        } else if see_all {
-            self.go(super::albums::Tab::People);
-        }
-        ui.add_space(house::XL);
-    }
-
     /// The model download's progress and errors (the button itself is in the face recognition
     /// menu, or the off page's main button).
     fn download_ui(&mut self, ui: &mut Ui, ctx: &egui::Context, st: &Json) {
@@ -687,12 +626,10 @@ const CARD_H: f32 = 184.0;
 const CARD_FACE: f32 = 120.0;
 /// The name line's height under a card's face.
 const NAME_H: f32 = 18.0;
-/// A face in the People strip.
-const STRIP_FACE: f32 = 64.0;
 /// Said wherever face recognition is offered.
 const PRIVACY: &str = "It runs on this server only; nothing is sent anywhere.";
 
-/// How a person without a name is shown, everywhere (strip, cards, person page).
+/// How a person without a name is shown, everywhere (cards, person page).
 fn shown_name(name: &str) -> &str {
     if name.trim().is_empty() { "Add a name" } else { name }
 }
