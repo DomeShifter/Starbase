@@ -1,0 +1,2 @@
+### Added
+- Photos: the viewer Info panel shows full details (title, caption, file, date with weekday and time zone, camera, ISO and shutter, lens and optics, place with altitude, a small map that opens Places, people, albums, labels, subject, copyright, artist, licence, keywords, camera photo ID). Typed fields are saved in the picture's XMP sidecar, never in the picture (GET/PUT /api/photos/info/ID).

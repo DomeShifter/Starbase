@@ -39,32 +39,32 @@ use crate::{App, Shared, auth, blocking, error, send_json, sharing, store};
 pub const MAX_BODY: usize = 16 * 1024;
 
 /// The picture and its sidecar as found under the store lock (step 1 or 3).
-struct Look {
-    path: String,
+pub(super) struct Look {
+    pub(super) path: String,
     /// The person may edit the picture.
-    may_edit: bool,
-    supported: bool,
-    side_name: String,
-    dir: Folder,
-    disk: Result<Option<OnDisk>, SideError>,
-    read_only: Option<&'static str>,
+    pub(super) may_edit: bool,
+    pub(super) supported: bool,
+    pub(super) side_name: String,
+    pub(super) dir: Folder,
+    pub(super) disk: Result<Option<OnDisk>, SideError>,
+    pub(super) read_only: Option<&'static str>,
     /// The picture, opened without following links (its size and orientation are read from it).
-    file: Option<std::fs::File>,
+    pub(super) file: Option<std::fs::File>,
 }
 
 impl Look {
-    fn bytes(&self) -> Option<&[u8]> {
+    pub(super) fn bytes(&self) -> Option<&[u8]> {
         self.disk.as_ref().ok().and_then(Option::as_ref).map(|d| d.bytes.as_slice())
     }
-    fn stat(&self) -> Option<&str> {
+    pub(super) fn stat(&self) -> Option<&str> {
         self.disk.as_ref().ok().and_then(Option::as_ref).map(|d| d.stat.as_str())
     }
-    fn etag(&self) -> String {
+    pub(super) fn etag(&self) -> String {
         sidecar::etag(self.bytes())
     }
 }
 
-fn look(a: &App, me: Option<&auth::User>, id: &str) -> Result<Look, Response<Body>> {
+pub(super) fn look(a: &App, me: Option<&auth::User>, id: &str) -> Result<Look, Response<Body>> {
     let acc = sharing::Access::new(&a.store, a.auth, me);
     let role = acc.file_role(id);
     if role < sharing::Role::View {

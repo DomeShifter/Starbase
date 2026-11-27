@@ -422,6 +422,73 @@ pub fn exif_meta(bytes: &[u8]) -> Meta {
     m
 }
 
+/// The camera facts the Info panel shows, read on demand from a picture's EXIF (never stored in
+/// the index). Every field is optional; texts are trimmed and at most 120 characters.
+#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+pub struct Details {
+    pub make: Option<String>,
+    pub model: Option<String>,
+    pub lens: Option<String>,
+    pub iso: Option<u32>,
+    /// Exposure time in seconds (shown as "1/12 s").
+    pub exposure: Option<f64>,
+    /// The f-number (ƒ/1.8).
+    pub aperture: Option<f64>,
+    /// Focal length in mm, and its 35 mm equivalent.
+    pub focal: Option<f64>,
+    pub focal35: Option<u32>,
+    /// `YYYY-MM-DDTHH:MM:SS[+HH:MM]`, as in [`Meta::taken`].
+    pub taken: Option<String>,
+    /// The camera's time zone (`+01:00`) when it wrote one.
+    pub zone: Option<String>,
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
+    pub alt: Option<f64>,
+    pub unique_id: Option<String>,
+    pub artist: Option<String>,
+    pub copyright: Option<String>,
+    pub description: Option<String>,
+}
+
+/// [`Details`] from a picture's first bytes (the EXIF block is near the start).
+pub fn exif_details(bytes: &[u8]) -> Details {
+    use exif::{In, Tag, Value};
+    let meta = exif_meta(bytes);
+    let mut d = Details { make: meta.make, model: meta.model, taken: meta.taken, lat: meta.lat, lon: meta.lon, alt: meta.alt, ..Details::default() };
+    d.zone = d.taken.as_deref().filter(|t| t.len() == 25).map(|t| t[19..].to_string());
+    let Ok(e) = exif::Reader::new().read_from_container(&mut Cursor::new(bytes)) else { return d };
+    let field = |t: Tag| e.get_field(t, In::PRIMARY);
+    let text = |t: Tag| -> Option<String> {
+        match &field(t)?.value {
+            Value::Ascii(v) => {
+                let s = String::from_utf8_lossy(v.first()?).trim().trim_end_matches('\0').trim().to_string();
+                (!s.is_empty()).then(|| s.chars().take(120).collect())
+            }
+            _ => None,
+        }
+    };
+    let ratio = |t: Tag| -> Option<f64> {
+        let v = match &field(t)?.value {
+            Value::Rational(v) if !v.is_empty() && v[0].denom != 0 => v[0].to_f64(),
+            Value::SRational(v) if !v.is_empty() && v[0].denom != 0 => v[0].to_f64(),
+            _ => return None,
+        };
+        (v.is_finite() && v > 0.0).then_some(v)
+    };
+    let uint = |t: Tag| field(t).and_then(|f| f.value.get_uint(0)).filter(|&n| n > 0);
+    d.lens = text(Tag::LensModel);
+    d.iso = uint(Tag::PhotographicSensitivity);
+    d.exposure = ratio(Tag::ExposureTime);
+    d.aperture = ratio(Tag::FNumber);
+    d.focal = ratio(Tag::FocalLength);
+    d.focal35 = uint(Tag::FocalLengthIn35mmFilm);
+    d.unique_id = text(Tag::ImageUniqueID);
+    d.artist = text(Tag::Artist);
+    d.copyright = text(Tag::Copyright);
+    d.description = text(Tag::ImageDescription);
+    d
+}
+
 // ---------------------------------------------------------------- the child process
 
 /// Header of a child's answer (one JSON line, then the thumbnails' bytes one after another).

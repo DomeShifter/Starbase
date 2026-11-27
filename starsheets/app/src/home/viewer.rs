@@ -197,6 +197,8 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
     // What the person asked for on this picture (keys or buttons): L add to album, Shift-L out of
     // the open album, F favourite, Delete move to bin. Run after drawing, on the picture shown.
     let mut acts: Vec<super::photos::Act> = Vec::new();
+    // The Info panel's small map clicked: the Places map at that spot.
+    let mut place: Option<(f64, f64)> = None;
     let mut toggle_raw = false;
     // Not while an album picker or a text box has the keys (typing "l" in its search box).
     let typing = pm.pick_busy() || ctx.memory(|m| m.focused().is_some());
@@ -527,7 +529,26 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
             let in_locked = pm.locked_tab();
             let p = p.clone();
             let people = info_people(pm, ctx, store, &p.id);
-            let (g, lock, shut, who) = info_panel(ui, rect, &p, &pm.alb.albums_of(&p.id), in_locked, &people);
+            pm.ask_info(ctx, store, &p.id);
+            let d = pm.info_detail.as_ref().filter(|f| f.0 == p.id && !f.1.is_null()).map_or(json!({}), |f| f.1.clone());
+            let names: Vec<String> = match &people {
+                InfoPeople::Found(v, _) => v.iter().map(|(c, _)| c.name.clone()).collect(),
+                _ => vec![],
+            };
+            let albums = pm.alb.albums_of(&p.id);
+            let o = info_panel(ui, rect, &p, &albums, in_locked, &people, &d, &names, &mut pm.info_edit);
+            drop(albums);
+            let (g, lock, shut, who) = (o.go, o.lock, o.close, o.who);
+            if let Some((r, lat, lon)) = o.map {
+                let clip = Rect::from_min_max(pos2(rect.right() - INFO_W, rect.top() + house::VIEW_BAR_HEIGHT), rect.max);
+                let r = r.intersect(clip);
+                if r.height() > 4.0 && pm.mini_map(ui, store, r, lat, lon) {
+                    place = Some((lat, lon));
+                }
+            }
+            if let Some((f, t)) = o.save {
+                pm.save_info(ctx, store, &p.id, info_with(&d, &f, &t));
+            }
             goto = g;
             if who.is_some() {
                 person = who;
@@ -584,6 +605,13 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
         }
         return false;
     }
+    if let Some((lat, lon)) = place {
+        pm.viewer = None;
+        super::video::hide();
+        pm.go(super::photos::albums::Tab::Places);
+        pm.places_at(lat, lon);
+        return false;
+    }
     if let Some(c) = goto {
         pm.viewer = None;
         pm.go(super::photos::albums::Tab::Albums);
@@ -604,35 +632,168 @@ fn p_has_size(w: f32, h: f32) -> bool {
     w > 1.0 && h > 1.0
 }
 
-/// The facts about a picture, in the Info panel's groups (WHAT, WHEN AND WHERE, CAMERA, IN); a
-/// group with nothing in it is left out. Where it was taken only when the server sent it (people
-/// who may edit).
-pub(super) fn info_groups(p: &super::photos::Pic, albums: &[&super::photos::albums::Card]) -> Vec<(&'static str, Vec<(&'static str, String)>)> {
-    let mut what = vec![("File name", p.name.clone())];
+/// The Info panel's sections, top to bottom.
+#[derive(Debug, PartialEq)]
+pub(super) enum Sec {
+    /// Read-only facts: heading, icon, rows (label, value).
+    Facts(&'static str, &'static str, Vec<(&'static str, String)>),
+    /// A typed field (server name, label, icon, value, placeholder shown when empty).
+    Edit(&'static str, &'static str, &'static str, String, String),
+    /// The small map at (lat, lon).
+    Map(f64, f64),
+    People,
+    Albums,
+}
+
+/// Day of the week of a date (Sakamoto's method), "Sunday".
+fn weekday(y: i32, m: u32, d: u32) -> &'static str {
+    const T: [i32; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    let y = if m < 3 { y - 1 } else { y };
+    let n = (y + y / 4 - y / 100 + y / 400 + T[(m.clamp(1, 12) - 1) as usize] + d as i32).rem_euclid(7);
+    ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][n as usize]
+}
+
+fn num(v: &Json) -> Option<f64> {
+    v.as_f64().filter(|f| f.is_finite())
+}
+
+/// "1/12 s", "2 s".
+fn shutter(t: f64) -> String {
+    if t >= 0.5 { format!("{} s", (t * 10.0).round() / 10.0) } else { format!("1/{} s", (1.0 / t).round()) }
+}
+
+/// The Info panel's sections for picture `p` with the server's details `d` (`{}` while asking)
+/// and the named people in it (for the default title). Empty fact rows are left out; the typed
+/// fields always show (their placeholder when empty).
+pub(super) fn info_sections(p: &super::photos::Pic, albums: &[&super::photos::albums::Card], d: &Json, people: &[String]) -> Vec<Sec> {
+    let (x, i) = (&d["exif"], &d["info"]);
+    let text = |v: &Json| v.as_str().unwrap_or("").to_string();
+    let year = p.taken.as_deref().filter(|t| t.len() >= 4).map(|t| t[..4].to_string());
+    let default_title = match (people.is_empty(), &year) {
+        (false, Some(y)) => format!("{} / {y}", people.join(", ")),
+        (false, None) => people.join(", "),
+        (true, Some(y)) => format!("Add a title ({y})"),
+        _ => "Add a title".into(),
+    };
+    let mut out = vec![
+        Sec::Edit("title", "Title", "edit", text(&i["title"]), default_title),
+        Sec::Edit("caption", "Caption", "description", text(&i["caption"]), x["description"].as_str().map_or("Add a caption".into(), str::to_string)),
+    ];
+    let format = p.name.rsplit_once('.').map(|(_, e)| e.to_uppercase()).unwrap_or_default();
+    let mut file = vec![("Name", p.name.clone())];
+    if let Some(f) = d["folder"].as_str().filter(|f| !f.is_empty()) {
+        file.push(("Folder", f.to_string()));
+    }
     if p.width > 0 {
-        what.push(("Size", format!("{} × {} px, {}", p.width, p.height, human(p.size))));
+        file.push(("Size", format!("{format}{}{} × {} px, {}", if format.is_empty() { "" } else { ", " }, p.width, p.height, human(p.size))));
     }
     if !p.stack.is_empty() {
         let mut files = vec![format!("{}, {}", p.name, human(p.size))];
         files.extend(p.stack.iter().map(|f| format!("{}, {}", f.name, human(f.size))));
-        what.push(("Files", files.join("\n")));
+        file.push(("Files", files.join("\n")));
     }
-    let mut when = vec![("Date taken", super::photos::date_label(p.taken.as_deref(), p.modified))];
+    out.push(Sec::Facts("File", "image", file));
+    let mut date = vec![];
+    if let Some(t) = p.taken.as_deref().filter(|t| t.len() >= 10)
+        && let (Ok(y), Ok(m), Ok(dd)) = (t[..4].parse::<i32>(), t[5..7].parse::<u32>(), t[8..10].parse::<u32>())
+    {
+        date.push(("Day", weekday(y, m, dd).to_string()));
+    }
+    date.push(("Taken", date_label(p.taken.as_deref(), p.modified)));
+    if let Some(z) = x["zone"].as_str() {
+        date.push(("Time zone", format!("UTC{z}")));
+    }
+    out.push(Sec::Facts("Date", "event", date));
+    let mut cam = vec![];
+    let camera = [x["make"].as_str(), x["model"].as_str()].into_iter().flatten().collect::<Vec<_>>().join(" ");
+    if !camera.is_empty() {
+        cam.push(("Camera", camera));
+    } else if let Some(c) = &p.camera {
+        cam.push(("Camera", c.clone()));
+    }
+    let exp = [x["iso"].as_u64().map(|n| format!("ISO {n}")), num(&x["exposure"]).map(shutter)].into_iter().flatten().collect::<Vec<_>>();
+    if !exp.is_empty() {
+        cam.push(("Exposure", exp.join(", ")));
+    }
+    out.push(Sec::Facts("Camera", "photo_mode", cam));
+    let mut lens = vec![];
+    if let Some(l) = x["lens"].as_str() {
+        lens.push(("Lens", l.to_string()));
+    }
+    let optics = [
+        num(&x["focal"]).map(|f| format!("{} mm", (f * 10.0).round() / 10.0)),
+        num(&x["aperture"]).map(|a| format!("ƒ/{}", (a * 10.0).round() / 10.0)),
+        x["focal35"].as_u64().map(|f| format!("{f} mm (35 mm equiv.)")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>();
+    if !optics.is_empty() {
+        lens.push(("Optics", optics.join(", ")));
+    }
+    out.push(Sec::Facts("Lens", "zoom_in", lens));
     if let Some((lat, lon)) = p.gps {
-        when.push(("Place", p.place.clone().unwrap_or_else(|| format!("{lat:.2}, {lon:.2}"))));
+        let mut place = vec![];
+        if let Some(pl) = &p.place {
+            place.push(("Place", pl.clone()));
+        }
+        place.push(("Position", format!("{lat:.4}, {lon:.4}")));
+        if let Some(a) = num(&x["alt"]) {
+            place.push(("Altitude", format!("{a:.0} m")));
+        }
+        out.push(Sec::Facts("Place", "location_on", place));
+        out.push(Sec::Map(lat, lon));
     }
-    let camera = p.camera.iter().map(|c| ("Camera", c.clone())).collect();
-    let mut inside = vec![];
+    out.push(Sec::People);
     if !albums.is_empty() {
-        inside.push(("Albums", albums.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", ")));
+        out.push(Sec::Albums);
     }
-    [("What", what), ("When and where", when), ("Camera", camera), ("In", inside)].into_iter().filter(|(_, rows)| !rows.is_empty()).collect()
+    let labels = i["labels"].as_array().map(|a| a.iter().filter_map(|l| l.as_str()).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+    out.push(Sec::Edit("labels", "Labels", "label", labels, "Add labels, separated by commas".into()));
+    for (k, label, icon, exif) in [
+        ("subject", "Subject", "sticky_note_2", None),
+        ("copyright", "Copyright", "description", x["copyright"].as_str()),
+        ("artist", "Artist", "group", x["artist"].as_str()),
+        ("licence", "Licence", "language", None),
+    ] {
+        out.push(Sec::Edit(k, label, icon, text(&i[k]), exif.map_or_else(|| format!("Add {}", label.to_lowercase()), str::to_string)));
+    }
+    let mut keys: Vec<String> = p.place.iter().flat_map(|pl| pl.split(',').map(|s| s.trim().to_string())).collect();
+    for k in d["keywords"].as_array().into_iter().flatten().filter_map(|k| k.as_str()) {
+        if !keys.iter().any(|q| q.eq_ignore_ascii_case(k)) {
+            keys.push(k.to_string());
+        }
+    }
+    keys.retain(|k| !k.is_empty());
+    if !keys.is_empty() {
+        out.push(Sec::Facts("Keywords", "search", vec![("Keywords", keys.join(" · "))]));
+    }
+    if let Some(u) = x["unique_id"].as_str() {
+        out.push(Sec::Facts("Photo ID", "numbers_123", vec![("Camera ID", u.to_string())]));
+    }
+    out.retain(|s| !matches!(s, Sec::Facts(_, _, rows) if rows.is_empty()));
+    out
 }
 
-/// The same facts as one list (the test hook's `info_rows`).
+/// The same facts as one list (the test hook's `info_rows`): fact rows, then typed fields that are set.
 #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
-pub(super) fn info_lines(p: &super::photos::Pic, albums: &[&super::photos::albums::Card]) -> Vec<(&'static str, String)> {
-    info_groups(p, albums).into_iter().flat_map(|(_, rows)| rows).collect()
+pub(super) fn info_lines(p: &super::photos::Pic, albums: &[&super::photos::albums::Card], d: &Json) -> Vec<(&'static str, String)> {
+    info_sections(p, albums, d, &[])
+        .into_iter()
+        .flat_map(|s| match s {
+            Sec::Facts(_, _, rows) => rows,
+            Sec::Edit(_, label, _, v, _) if !v.is_empty() => vec![(label, v)],
+            _ => vec![],
+        })
+        .collect()
+}
+
+/// The typed fields with `field` set to `text` (labels split at commas), as the server takes them.
+fn info_with(d: &Json, field: &str, text: &str) -> Json {
+    let mut i = if d["info"].is_object() { d["info"].clone() } else { json!({}) };
+    i[field] =
+        if field == "labels" { json!(text.split(',').map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>()) } else { json!(text.trim()) };
+    i
 }
 
 fn human(b: u64) -> String {
@@ -702,10 +863,80 @@ const FACE_D: f32 = 28.0;
 /// How wide the labels' column is in the Info panel.
 const INFO_LABEL_W: f32 = 88.0;
 
+/// One fact row in the Info panel: dim label, then the value (album names as links).
+fn info_row(
+    c: &mut egui::Ui,
+    ctx: &egui::Context,
+    k: &str,
+    v: &str,
+    albums: &[&super::photos::albums::Card],
+    go: &mut Option<super::photos::albums::Card>,
+) {
+    c.horizontal_top(|row| {
+        row.spacing_mut().item_spacing.x = 0.0;
+        let (lab, _) = row.allocate_exact_size(vec2(INFO_LABEL_W, house::BODY + house::XS), Sense::hover());
+        row.painter().text(
+            pos2(lab.left(), lab.center().y),
+            egui::Align2::LEFT_CENTER,
+            k,
+            egui::FontId::proportional(house::NOTE),
+            house::VIEW_BAR_DIM,
+        );
+        row.vertical(|val| {
+            val.set_width(val.available_width());
+            val.spacing_mut().item_spacing.y = house::XS;
+            if k == "Albums" {
+                for (n, a) in albums.iter().enumerate() {
+                    let r = val.add(egui::Label::new(RichText::new(&a.name).size(house::BODY).color(house::VIEW_BAR_LINK)).sense(Sense::click()));
+                    house::target(ctx, &format!("viewer:info:album:{n}"), r.rect);
+                    let r = r.on_hover_cursor(egui::CursorIcon::PointingHand);
+                    if r.hovered() {
+                        val.painter().hline(r.rect.x_range(), r.rect.bottom(), egui::Stroke::new(1.0, house::VIEW_BAR_LINK));
+                    }
+                    if r.clicked() {
+                        *go = Some((*a).clone());
+                    }
+                }
+            } else {
+                val.add(egui::Label::new(RichText::new(v).size(house::BODY).color(house::VIEW_BAR_TEXT)).wrap());
+            }
+        });
+    });
+}
+
+/// What was asked for in the Info panel this frame.
+struct InfoOut {
+    /// An album clicked.
+    go: Option<super::photos::albums::Card>,
+    /// "Move to Locked folder" (inside Locked, "Move out").
+    lock: bool,
+    close: bool,
+    /// A person clicked (Some(None): the unnamed faces).
+    who: Option<Option<super::photos::albums::Card>>,
+    /// A typed field finished: (field, text).
+    save: Option<(String, String)>,
+    /// Where the small map goes: (screen rect, lat, lon).
+    map: Option<(Rect, f64, f64)>,
+}
+
+/// A section heading in the Info panel: its icon, then the name in capitals.
+fn info_heading(c: &mut egui::Ui, heading: &str, icon: &str) {
+    c.add_space(house::L);
+    c.horizontal(|h| {
+        h.spacing_mut().item_spacing.x = house::S;
+        if let Some(img) = crate::icons::icon_in(icon, house::VIEW_BAR_DIM) {
+            h.add(img.fit_to_exact_size(vec2(house::BODY + 2.0, house::BODY + 2.0)));
+        }
+        h.label(RichText::new(heading.to_uppercase()).size(house::CAPS).strong().color(house::VIEW_BAR_DIM));
+    });
+    c.add_space(house::M);
+}
+
 /// The Info panel: a title row with a close button, then the groups of [`info_groups`] as
 /// two-column rows (dim label, value), then the Locked folder button. Returns the album whose name
 /// was clicked, whether "Move to Locked folder" (inside Locked, "Move out") was clicked, and
 /// whether the panel's close button was.
+#[allow(clippy::too_many_arguments)]
 fn info_panel(
     ui: &mut egui::Ui,
     rect: Rect,
@@ -713,7 +944,13 @@ fn info_panel(
     albums: &[&super::photos::albums::Card],
     in_locked: bool,
     people: &InfoPeople,
-) -> (Option<super::photos::albums::Card>, bool, bool, Option<Option<super::photos::albums::Card>>) {
+    d: &Json,
+    names: &[String],
+    edit: &mut Option<(String, String)>,
+) -> InfoOut {
+    let writable = d["writable"].as_bool() == Some(true);
+    let mut save = None;
+    let mut map = None;
     let ctx = ui.ctx().clone();
     let panel = Rect::from_min_max(pos2(rect.right() - INFO_W, rect.top() + house::VIEW_BAR_HEIGHT), pos2(rect.right(), rect.bottom()));
     ui.painter().rect_filled(panel, 0, house::VIEW_BAR);
@@ -738,94 +975,115 @@ fn info_panel(
     let mut who = None;
     let mut lock = false;
     egui::ScrollArea::vertical().auto_shrink([false, true]).show(&mut c, |c| {
-        for (heading, rows) in info_groups(p, albums) {
-            c.add_space(house::L);
-            c.label(RichText::new(heading.to_uppercase()).size(house::CAPS).strong().color(house::VIEW_BAR_DIM));
-            c.add_space(house::M);
+        for sec in info_sections(p, albums, d, names) {
+            let (heading, icon, rows) = match sec {
+                Sec::Facts(h, i, rows) => (h, i, rows),
+                Sec::Albums => ("Albums", "photo_library", vec![("Albums", String::new())]),
+                Sec::Map(lat, lon) => {
+                    c.add_space(house::M);
+                    let (r, _) = c.allocate_exact_size(vec2(c.available_width(), 120.0), Sense::hover());
+                    map = Some((r, lat, lon));
+                    continue;
+                }
+                Sec::Edit(field, label, icon, value, ph) => {
+                    info_heading(c, label, icon);
+                    let id = egui::Id::unique(("info_field", field));
+                    if let Some(e) = edit.as_mut().filter(|e| e.0 == field) {
+                        let te = if field == "caption" {
+                            egui::TextEdit::multiline(&mut e.1).desired_rows(2)
+                        } else {
+                            egui::TextEdit::singleline(&mut e.1)
+                        };
+                        let r = c.add(te.id(id).desired_width(f32::INFINITY).font(egui::FontId::proportional(house::BODY)).hint_text(ph.as_str()));
+                        house::target(&ctx, &format!("viewer:info:field:{field}"), r.rect);
+                        if r.lost_focus() {
+                            if !ctx.input(|i| i.key_pressed(egui::Key::Escape)) && e.1.trim() != value.trim() {
+                                save = Some((field.to_string(), e.1.clone()));
+                            }
+                            *edit = None;
+                        } else if !r.has_focus() {
+                            r.request_focus();
+                        }
+                    } else {
+                        let (shown, colour) = if value.is_empty() { (ph, house::VIEW_BAR_DIM) } else { (value.clone(), house::VIEW_BAR_TEXT) };
+                        let sense = if writable { Sense::click() } else { Sense::hover() };
+                        let r = c.add(egui::Label::new(RichText::new(shown).size(house::BODY).color(colour)).wrap().sense(sense));
+                        house::target(&ctx, &format!("viewer:info:edit:{field}"), r.rect);
+                        if writable {
+                            let r = r.on_hover_cursor(egui::CursorIcon::Text).on_hover_text(format!("Edit {}", label.to_lowercase()));
+                            if r.clicked() {
+                                *edit = Some((field.to_string(), value));
+                            }
+                        }
+                    }
+                    continue;
+                }
+                Sec::People => {
+                    // PEOPLE: each named person (round face + name, opens their page), then the unnamed faces.
+                    c.add_space(house::L);
+                    let top = c.cursor().top();
+                    c.label(RichText::new("PEOPLE").size(house::CAPS).strong().color(house::VIEW_BAR_DIM));
+                    c.add_space(house::M);
+                    c.spacing_mut().item_spacing.y = house::XS;
+                    if let Some(note) = people_note(people) {
+                        c.label(RichText::new(note).size(house::NOTE).color(house::VIEW_BAR_DIM));
+                    }
+                    if let InfoPeople::Found(named, unnamed) = people {
+                        for (n, (card, tex)) in named.iter().enumerate() {
+                            let r = c.horizontal(|row| {
+                                row.spacing_mut().item_spacing.x = house::S;
+                                let (face, _) = row.allocate_exact_size(vec2(FACE_D, FACE_D), Sense::hover());
+                                match tex {
+                                    Some(t) => {
+                                        egui::Image::new((t.id(), face.size())).corner_radius(FACE_D / 2.0).paint_at(row, face);
+                                    }
+                                    None => {
+                                        row.painter().circle_filled(face.center(), FACE_D / 2.0, house::VIEW_BAR_FIELD);
+                                    }
+                                }
+                                row.label(RichText::new(&card.name).size(house::BODY).color(house::VIEW_BAR_LINK));
+                            });
+                            let r = c
+                                .interact(r.response.rect, egui::Id::unique(("info_person", n)), Sense::click())
+                                .on_hover_cursor(egui::CursorIcon::PointingHand);
+                            house::target(&ctx, &format!("photos:info-person:{n}"), r.rect);
+                            if r.hovered() {
+                                c.painter().hline(r.rect.x_range(), r.rect.bottom(), egui::Stroke::new(1.0, house::VIEW_BAR_LINK));
+                            }
+                            if r.clicked() {
+                                who = Some(Some(card.clone()));
+                            }
+                        }
+                        if *unnamed > 0 {
+                            let r = c
+                                .add(
+                                    egui::Label::new(RichText::new(unnamed_label(*unnamed)).size(house::BODY).color(house::VIEW_BAR_LINK))
+                                        .sense(Sense::click()),
+                                )
+                                .on_hover_cursor(egui::CursorIcon::PointingHand);
+                            house::target(&ctx, "photos:info-people-unnamed", r.rect);
+                            if r.clicked() {
+                                who = Some(None);
+                            }
+                        }
+                    }
+                    house::target(
+                        &ctx,
+                        "photos:info-people",
+                        Rect::from_min_max(pos2(c.max_rect().left(), top), pos2(c.max_rect().right(), c.cursor().top())),
+                    );
+                    c.spacing_mut().item_spacing.y = 0.0;
+                    continue;
+                }
+            };
+            info_heading(c, heading, icon);
             for (i, (k, v)) in rows.iter().enumerate() {
                 if i > 0 {
                     c.add_space(house::S);
                 }
-                c.horizontal_top(|row| {
-                    row.spacing_mut().item_spacing.x = 0.0;
-                    let (lab, _) = row.allocate_exact_size(vec2(INFO_LABEL_W, house::BODY + house::XS), Sense::hover());
-                    row.painter().text(
-                        pos2(lab.left(), lab.center().y),
-                        egui::Align2::LEFT_CENTER,
-                        *k,
-                        egui::FontId::proportional(house::NOTE),
-                        house::VIEW_BAR_DIM,
-                    );
-                    row.vertical(|val| {
-                        val.set_width(val.available_width());
-                        val.spacing_mut().item_spacing.y = house::XS;
-                        if *k == "Albums" {
-                            // One link per album (a name may hold a comma, so the cards, not the joined text).
-                            for (n, a) in albums.iter().enumerate() {
-                                let r = val.add(
-                                    egui::Label::new(RichText::new(&a.name).size(house::BODY).color(house::VIEW_BAR_LINK)).sense(Sense::click()),
-                                );
-                                house::target(&ctx, &format!("viewer:info:album:{n}"), r.rect);
-                                let r = r.on_hover_cursor(egui::CursorIcon::PointingHand);
-                                if r.hovered() {
-                                    val.painter().hline(r.rect.x_range(), r.rect.bottom(), egui::Stroke::new(1.0, house::VIEW_BAR_LINK));
-                                }
-                                if r.clicked() {
-                                    go = Some((*a).clone());
-                                }
-                            }
-                        } else {
-                            val.add(egui::Label::new(RichText::new(v).size(house::BODY).color(house::VIEW_BAR_TEXT)).wrap());
-                        }
-                    });
-                });
+                info_row(c, &ctx, k, v, albums, &mut go);
             }
         }
-        // PEOPLE: each named person (round face + name, opens their page), then the unnamed faces.
-        c.add_space(house::L);
-        let top = c.cursor().top();
-        c.label(RichText::new("PEOPLE").size(house::CAPS).strong().color(house::VIEW_BAR_DIM));
-        c.add_space(house::M);
-        c.spacing_mut().item_spacing.y = house::XS;
-        if let Some(note) = people_note(people) {
-            c.label(RichText::new(note).size(house::NOTE).color(house::VIEW_BAR_DIM));
-        }
-        if let InfoPeople::Found(named, unnamed) = people {
-            for (n, (card, tex)) in named.iter().enumerate() {
-                let r = c.horizontal(|row| {
-                    row.spacing_mut().item_spacing.x = house::S;
-                    let (face, _) = row.allocate_exact_size(vec2(FACE_D, FACE_D), Sense::hover());
-                    match tex {
-                        Some(t) => {
-                            egui::Image::new((t.id(), face.size())).corner_radius(FACE_D / 2.0).paint_at(row, face);
-                        }
-                        None => {
-                            row.painter().circle_filled(face.center(), FACE_D / 2.0, house::VIEW_BAR_FIELD);
-                        }
-                    }
-                    row.label(RichText::new(&card.name).size(house::BODY).color(house::VIEW_BAR_LINK));
-                });
-                let r =
-                    c.interact(r.response.rect, egui::Id::unique(("info_person", n)), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand);
-                house::target(&ctx, &format!("photos:info-person:{n}"), r.rect);
-                if r.hovered() {
-                    c.painter().hline(r.rect.x_range(), r.rect.bottom(), egui::Stroke::new(1.0, house::VIEW_BAR_LINK));
-                }
-                if r.clicked() {
-                    who = Some(Some(card.clone()));
-                }
-            }
-            if *unnamed > 0 {
-                let r = c
-                    .add(egui::Label::new(RichText::new(unnamed_label(*unnamed)).size(house::BODY).color(house::VIEW_BAR_LINK)).sense(Sense::click()))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand);
-                house::target(&ctx, "photos:info-people-unnamed", r.rect);
-                if r.clicked() {
-                    who = Some(None);
-                }
-            }
-        }
-        house::target(&ctx, "photos:info-people", Rect::from_min_max(pos2(c.max_rect().left(), top), pos2(c.max_rect().right(), c.cursor().top())));
         c.add_space(house::L);
         c.painter().hline(c.max_rect().x_range(), c.cursor().top(), egui::Stroke::new(1.0, house::VIEW_BAR_FIELD));
         c.add_space(house::L);
@@ -834,7 +1092,7 @@ fn info_panel(
         house::target(&ctx, "viewer:info:lock", r.rect);
         lock = r.clicked();
     });
-    (go, lock, close, who)
+    InfoOut { go, lock, close, who, save, map }
 }
 
 /// A white icon button on the dark bar (its hook target is `viewer:<icon>`).
@@ -878,24 +1136,60 @@ mod tests {
     use super::*;
 
     #[test]
-    fn info_groups_leave_out_empty_ones_and_keep_their_order() {
+    fn info_sections_in_order_with_exif_and_typed_fields() {
         let mut p = super::super::photos::Pic { name: "IMG_2041.jpg".into(), ..Default::default() };
-        let heads = |p: &super::super::photos::Pic| info_groups(p, &[]).iter().map(|(h, _)| *h).collect::<Vec<_>>();
-        // A bare picture: only its name and a date.
-        assert_eq!(heads(&p), ["What", "When and where"]);
+        let heads = |s: &[Sec]| {
+            s.iter()
+                .map(|x| match x {
+                    Sec::Facts(h, ..) => *h,
+                    Sec::Edit(_, l, ..) => *l,
+                    Sec::Map(..) => "map",
+                    Sec::People => "People",
+                    Sec::Albums => "Albums",
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            heads(&info_sections(&p, &[], &json!({}), &[])),
+            ["Title", "Caption", "File", "Date", "People", "Labels", "Subject", "Copyright", "Artist", "Licence"]
+        );
         p.width = 4032;
         p.height = 3024;
         p.size = 3_100_000;
-        p.camera = Some("Pixel 8".into());
+        p.taken = Some("2024-07-14T19:05:33".into());
         p.gps = Some((38.72, -9.14));
-        p.place = Some("Lisbon".into());
-        let g = info_groups(&p, &[]);
-        assert_eq!(g.iter().map(|(h, _)| *h).collect::<Vec<_>>(), ["What", "When and where", "Camera"]);
-        assert_eq!(g[0].1[1], ("Size", "4032 × 3024 px, 3.1 MB".to_string()));
-        assert_eq!(g[1].1[1], ("Place", "Lisbon".to_string()));
-        // The flat list (the test hook's info_rows) is the groups in order.
-        let keys = info_lines(&p, &[]).iter().map(|(k, _)| *k).collect::<Vec<_>>();
-        assert_eq!(keys, ["File name", "Size", "Date taken", "Place", "Camera"]);
+        p.place = Some("Lisbon, Portugal".into());
+        let d = json!({"folder": "ann/Trip", "exif": {"make": "Google", "model": "Pixel 8", "iso": 640, "exposure": 0.0833, "lens": "Main", "focal": 6.9, "aperture": 1.8, "focal35": 26, "zone": "+01:00", "alt": 12.4, "unique_id": "U1"}, "info": {"title": "Bay", "labels": ["sea"]}, "keywords": ["Trip", "sea"]});
+        let s = info_sections(&p, &[], &d, &["Ann".into()]);
+        assert_eq!(
+            heads(&s),
+            [
+                "Title",
+                "Caption",
+                "File",
+                "Date",
+                "Camera",
+                "Lens",
+                "Place",
+                "map",
+                "People",
+                "Labels",
+                "Subject",
+                "Copyright",
+                "Artist",
+                "Licence",
+                "Keywords",
+                "Photo ID"
+            ]
+        );
+        let rows = info_lines(&p, &[], &d);
+        let get = |k: &str| rows.iter().find(|r| r.0 == k).map(|r| r.1.clone()).unwrap_or_default();
+        assert_eq!((get("Title"), get("Day"), get("Time zone")), ("Bay".into(), "Sunday".into(), "UTC+01:00".into()));
+        assert_eq!((get("Exposure"), get("Optics")), ("ISO 640, 1/12 s".into(), "6.9 mm, ƒ/1.8, 26 mm (35 mm equiv.)".into()));
+        assert_eq!((get("Position"), get("Altitude"), get("Size")), ("38.7200, -9.1400".into(), "12 m".into(), "JPG, 4032 × 3024 px, 3.1 MB".into()));
+        assert_eq!(get("Keywords"), "Lisbon · Portugal · Trip · sea");
+        assert!(matches!(&s[0], Sec::Edit("title", _, _, v, _) if v == "Bay"));
+        assert_eq!(info_with(&d, "labels", "sea, , boats ")["labels"], json!(["sea", "boats"]));
     }
 
     #[test]

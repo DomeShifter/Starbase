@@ -33,6 +33,9 @@ const THUMB: f32 = 56.0;
 const MIN_ZOOM: f32 = 0.0;
 const MAX_ZOOM: f32 = 18.0;
 /// Past this zoom the built-in map shows its close-up band (1:50m).
+/// The Info panel's small map's zoom, and the Places map's when opened from it.
+const MINI_ZOOM: f32 = 11.0;
+const PLACES_ZOOM: f32 = 13.0;
 const CLOSE_UP: f32 = 2.6;
 /// Detailed tiles (when the server has them) take over from this zoom.
 const TILES_FROM: f32 = 3.0;
@@ -342,6 +345,35 @@ impl PhotoMode {
             self.map.asked = true;
             super::albums::get(ctx, store, &self.inbox, "api/photos/places?all=1", Got::Map);
         }
+    }
+
+    /// The Info panel's small map around (`lat`, `lon`) with a pin: the built-in map, and the
+    /// server's tiles once the Places map knows them. Returns whether it was clicked.
+    pub(in crate::home) fn mini_map(&mut self, ui: &Ui, store: &Backend, view: Rect, lat: f64, lon: f64) -> bool {
+        let ctx = ui.ctx().clone();
+        self.map_boot(&ctx, store);
+        let saved = (self.map.centre, self.map.zoom);
+        self.map.centre = mercator(lat, lon);
+        self.map.zoom = MINI_ZOOM;
+        let painter = ui.painter_at(view);
+        painter.rect_filled(view, 4, SEA);
+        self.draw_base(&painter, view);
+        self.draw_tiles(&ctx, store, &painter, view);
+        (self.map.centre, self.map.zoom) = saved;
+        let pin = view.center();
+        painter.circle_filled(pin, 7.0, Color32::from_rgb(0xEA, 0x43, 0x35));
+        painter.circle_stroke(pin, 7.0, Stroke::new(2.0, Color32::WHITE));
+        house::target(&ctx, "viewer:info:map", view);
+        ui.interact(view, egui::Id::unique("info_mini_map"), Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
+    }
+
+    /// The Places map (not its list), centred close in on (`lat`, `lon`).
+    pub(in crate::home) fn places_at(&mut self, lat: f64, lon: f64) {
+        self.map.list = false;
+        self.map.centre = mercator(lat, lon);
+        self.map.zoom = PLACES_ZOOM;
+        self.map.fitted = true;
+        self.map.open = None;
     }
 
     /// The Places map, filling `ui`.
