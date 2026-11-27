@@ -8,5 +8,5 @@ fill, and list it in `app/src/icons.rs`.
 - `white_*.svg` are copies with `fill="#FFFFFF"`, for the photo viewer's dark bar.
 - `numbers_123.svg` has a tighter `viewBox` (the glyph drawn a third larger), so "123" is as big as the other menu icons.
 - `folder_fill.svg` has `fill="#FFFFFF"` instead, so it can be tinted (folder colours).
-- `starsheets.svg`, `stardocs.svg`, `starslides.svg` and `stardrive.svg` and `starphotos.svg` (rose pink, Photo Mode's header and tab icon; also `app/starphotos.svg`) are our own logos, not Material Symbols. `stardrive.svg`
-  (a purple rounded square with a white folder and a star, like the other two, the home screen's logo) is also `app/stardrive.svg`, its tab icon.
+- `starsheets.svg`, `stardocs.svg`, `starslides.svg` and `stardrive.svg` and `starphotos.svg` (Photo Mode's header and tab icon; also `app/starphotos.svg`) are our own logos, not Material Symbols. `stardrive.svg`
+  (the home screen's logo; all five share the space-card design, a dark rounded square with a coloured planet glow, a star and a white symbol) is also `app/stardrive.svg`, its tab icon.
