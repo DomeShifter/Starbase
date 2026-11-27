@@ -63,6 +63,7 @@ fn formats_best_first_and_jpeg_for_everyone_else() {
 #[test]
 fn the_service_makes_screen_copies_on_request() {
     let (_s, svc) = with_pictures();
+    svc.enable("ann/Trip", "ann").unwrap();
     rescan(&svc);
     settle(&svc);
     let key = |p: &str| svc.row(p).unwrap().thumb_key().unwrap().to_string();

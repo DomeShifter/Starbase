@@ -20,17 +20,6 @@ pub enum Format {
     Jpeg,
 }
 
-impl Format {
-    /// The file extension it is kept under ("jpg" stands for "jpg or png": transparent
-    /// pictures are kept as PNG).
-    pub fn ext(self) -> &'static str {
-        match self {
-            Format::Jxl => "jxl",
-            Format::Jpeg => "jpg",
-        }
-    }
-}
-
 /// Formats in order of preference; the last one every browser shows.
 pub const FORMATS: [Format; 2] = [Format::Jxl, Format::Jpeg];
 
