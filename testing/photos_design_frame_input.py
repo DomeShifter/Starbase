@@ -5,6 +5,7 @@ Expects (desktop window, light and dark):
  1. Top bar: Upload (photos:upload), View (photos:view-menu), Scan now (photos:scan-now), Slideshow; no second bar of buttons over the grid.
  2. View opens one menu with SHOW / TYPE / SORT / THEME (photos:view:show|type|sort|theme); "Oldest first" sets newestFirst false.
  3. Left list: views Photos, Albums, People, Places, Timeline, Events; tools Duplicates, Locked; no More row (photos:nav:more is gone).
+ 3b. Clicking Timeline, Events, Duplicates, People, Places opens each (snapshot home.photos.albums.tab); no People strip above the grid.
  4. Ctrl+A: the selection bar shows Add to album, Favourite, Download, Move to bin (photos:sel:*) and More (photos:sel:more).
  5. More > Info opens the viewer with its Info panel (viewer:info-panel), not Drive's Details."""
 import glob, os, sys, time, urllib.parse
@@ -48,7 +49,13 @@ def main():
     rec("left list: views and tools, no More", all(k in tg() for k in ["Photos", "Albums", "People", "Places", "Timeline", "Events", "Duplicates", "Locked"]) and "photos:nav:more" not in tg())
     rec("People strip is gone", not any(k.startswith("people:strip") or k in ("people:see-all", "pill-See all") for k in tg()))
     S.shot(f"{tag}-3-nav-more")
+    for row in ["Timeline", "Events", "Duplicates", "People", "Places"]:
+        S.click_text(row); time.sleep(2)
+        rec(f"{row} opens with its row highlighted", S.snapshot("home.photos.albums.tab") == row.lower(), S.snapshot("home.photos.albums.tab"))
+        rec(f"{row}: no People heading / See all above the grid", not any(k.startswith("people:strip") or k in ("people:see-all", "pill-See all") for k in tg()))
     S.click_text("Photos"); time.sleep(1)
+    rec("Photos row highlighted", S.snapshot("home.photos.albums.tab") == "photos")
+    S.shot(f"{tag}-3b-photos-main")
     S.click_xy(700, 400); S.key("Control+a"); time.sleep(1)
     t = tg()
     rec("selection bar: four + More", all(f"photos:sel:{k}" in t for k in ["add-to-album", "favourite", "download", "move-to-bin", "more"]))

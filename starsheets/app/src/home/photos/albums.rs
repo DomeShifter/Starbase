@@ -100,8 +100,8 @@ pub(super) fn nav_rows() -> Vec<NavRow> {
     use NavRow::*;
     vec![
         Go(Tab::Photos, "Photos", "photo_library"),
-        Go(Tab::Albums, "Albums", "collections"),
-        Go(Tab::People, "People", "face"),
+        Go(Tab::Albums, "Albums", "folder"),
+        Go(Tab::People, "People", "group"),
         Go(Tab::Places, "Places", "location_on"),
         Go(Tab::Timeline, "Timeline", "schedule"),
         Go(Tab::Events, "Events", "event"),
