@@ -7,12 +7,16 @@
 //!   detector's score, its size in pixels, the model that made its embedding and the embedding.
 //! - **Grouping** ([`regroup`]): faces are first matched against named people (the most similar
 //!   of a person's faces; a face someone removed from a person is never matched to them again):
-//!   at or above the model's `auto` similarity they join the person, at or above `suggest` the
-//!   person is offered. The rest are grouped by **average linkage** (not DBSCAN: the face trial of
+//!   at or above the model's `auto` ("sure") similarity they join the person; at or above
+//!   `suggest` ("maybe") they don't join: People asks "Same person?" ([`answer`]), and a "No"
+//!   is kept as "not this person" like a removed face. The rest are grouped by **average linkage** (not DBSCAN: the face trial of
 //!   2026-11 found DBSCAN chains people together) and cut at the model's `group_cut` distance.
 //!   Only good faces (score and size, see [`good`]) start or join a group.
-//! - **Thresholds** ([`thresholds`]) are the ones measured in the trial: AuraFace group 0.75,
-//!   suggest 0.35, auto 0.45; SFace group 0.67, suggest 0.43, auto 0.54.
+//! - **Thresholds** ([`thresholds`]): the trial's (2026-11) group cuts, AuraFace 0.75 and SFace
+//!   0.67. Its join line (AuraFace 0.45, SFace 0.54) blended two friends into one person
+//!   (James 2026-11-27), so that line is now only "maybe" (ask), and "sure" is 0.10 above it.
+//! - **Removing a face from a person** makes it a new face again: its own unnamed group (it can
+//!   be named, merged or grouped with others), and never that person again (`face_not`).
 
 use std::collections::{HashMap, HashSet};
 
@@ -62,17 +66,22 @@ pub const SCHEMA_V4: &str = "BEGIN;
 pub struct Thresholds {
     /// Average-linkage cut: faces closer than this (1 − similarity) form a group.
     pub group_cut: f32,
-    /// Offer "Is this X?" at or above this similarity to a person.
+    /// "Maybe": at or above this similarity (and below `auto`) People asks "Same person?".
     pub suggest: f32,
-    /// Put the face with the person without asking at or above this similarity.
+    /// "Sure": put the face with the person without asking at or above this similarity.
     pub auto: f32,
 }
 
-/// The measured thresholds of a model (face trial 2026-11, RESULTS.md).
+/// The thresholds of a model. The group cuts are the face trial's (2026-11, RESULTS.md). Its
+/// join line (AuraFace 0.45, SFace 0.54) still joined look-alike friends on real pictures
+/// (2026-11-27), so it became the "maybe" line (ask first), and "sure" is 0.10 above it: in the
+/// trial nearly all same-person matches of good faces scored well above that, so sure matches
+/// still join on their own while the borderline band is asked about. The trial's old offer
+/// line (0.35 / 0.43) is dropped: too many wrong questions.
 pub fn thresholds(model: &str) -> Thresholds {
     match model {
-        "sface" => Thresholds { group_cut: 0.67, suggest: 0.43, auto: 0.54 },
-        _ => Thresholds { group_cut: 0.75, suggest: 0.35, auto: 0.45 },
+        "sface" => Thresholds { group_cut: 0.67, suggest: 0.54, auto: 0.64 },
+        _ => Thresholds { group_cut: 0.75, suggest: 0.45, auto: 0.55 },
     }
 }
 
@@ -436,8 +445,9 @@ pub fn merge(ix: &Index, from: Who, into: Who) -> rusqlite::Result<i64> {
     Ok(p)
 }
 
-/// Takes face `face` out of `who`: never matched to that person again; out of a group, it is
-/// never grouped again. False if the face isn't in `who`.
+/// Takes face `face` out of `who`. Out of a person it is a new face again: its own unnamed
+/// group (until a regroup finds it others), never matched to that person again. Out of a group,
+/// it is never grouped again. False if the face isn't in `who`.
 pub fn remove(ix: &Index, who: Who, face: i64) -> rusqlite::Result<bool> {
     let c = conn(ix);
     if !ids_of(c, who)?.contains(&face) {
@@ -446,10 +456,40 @@ pub fn remove(ix: &Index, who: Who, face: i64) -> rusqlite::Result<bool> {
     match who {
         Who::Person(p) => {
             c.execute("INSERT OR IGNORE INTO face_not(face, person) VALUES(?1, ?2)", params![face, p])?;
-            c.execute("UPDATE faces SET person = NULL, auto = 0, suggest = NULL, grp = NULL, hidden = 2 WHERE id = ?1", [face])?;
+            c.execute("UPDATE faces SET person = NULL, auto = 0, suggest = NULL, grp = ?1, hidden = 0 WHERE id = ?1", [face])?;
         }
         Who::Group(_) => {
             c.execute("UPDATE faces SET grp = NULL, hidden = 2 WHERE id = ?1", [face])?;
+        }
+    }
+    Ok(true)
+}
+
+/// The answer to "Same person?" for face `face` (with its group, when it is in one) and person
+/// `p`. Yes: they join `p`. No: "not this person", never asked or joined again. False when the
+/// face is already someone's or `p` is gone.
+pub fn answer(ix: &Index, face: i64, p: i64, yes: bool) -> rusqlite::Result<bool> {
+    let c = conn(ix);
+    let Some(f) = self::face(ix, face)? else { return Ok(false) };
+    let known: Option<i64> = c.query_row("SELECT id FROM people WHERE id = ?1", [p], |r| r.get(0)).optional()?;
+    if f.person.is_some() || known.is_none() {
+        return Ok(false);
+    }
+    let ids = match f.grp {
+        Some(g) => ids_of(c, Who::Group(g))?,
+        None => vec![face],
+    };
+    for id in ids {
+        let not: Option<i64> = c.query_row("SELECT face FROM face_not WHERE face = ?1 AND person = ?2", params![id, p], |r| r.get(0)).optional()?;
+        if yes && not.is_some() {
+            // Someone said this face isn't `p`: the rest of its group joins, it doesn't.
+            continue;
+        }
+        if yes {
+            c.execute("UPDATE faces SET person = ?1, auto = 0, grp = NULL, suggest = NULL, hidden = 0 WHERE id = ?2", params![p, id])?;
+        } else {
+            c.execute("INSERT OR IGNORE INTO face_not(face, person) VALUES(?1, ?2)", params![id, p])?;
+            c.execute("UPDATE faces SET suggest = NULL WHERE id = ?1 AND suggest = ?2", params![id, p])?;
         }
     }
     Ok(true)
@@ -567,7 +607,11 @@ pub fn plan(s: &Snapshot, t: Thresholds) -> Plan {
             let id = s.loose[i].0;
             match joins[i] {
                 Some(p) => (id, Some(p), None, None),
-                None => (id, None, best[i].filter(|(_, sim)| *sim >= t.suggest).map(|(p, _)| p), grp_of.get(&id).copied()),
+                // A face taken out of a person stays its own group when nothing else is like it.
+                None => {
+                    let own = s.not.contains_key(&id).then_some(id);
+                    (id, None, best[i].filter(|(_, sim)| *sim >= t.suggest).map(|(p, _)| p), grp_of.get(&id).copied().or(own))
+                }
             }
         })
         .collect()

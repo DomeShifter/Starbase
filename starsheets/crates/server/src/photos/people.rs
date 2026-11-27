@@ -5,11 +5,15 @@
 //! - `GET /api/photos/people`: `{"on", "can_toggle", "forced", "note", "missing", "model",
 //!   "progress": {"done", "all", "faces"}, "people": [card], "groups": [card]}`; a card is
 //!   `{"id", "name", "count", "cover": {"id", "v", "box": [x, y, w, h]}}` (box 0..1 of the
-//!   thumbnail). `people` are named (by name), `groups` unnamed (biggest first).
+//!   thumbnail). `people` are named (by name), `groups` unnamed (biggest first). `questions`:
+//!   "Same person?" ([`MAX_QUESTIONS`]): `{"face", "person", "name", "a": face, "b": face}`
+//!   (`a` the borderline face, `b` the person's cover face).
 //! - `GET /api/photos/people/ID`: `{"id", "name", "faces": [{"face", "id", "v", "box"}], "photos", "waiting"}`.
 //! - `GET /api/photos/people/face/FACE/FILE[?v=]`: face FACE (in picture FILE) as a square
 //!   [`FACE_PX`] JPEG, cut from the big thumbnail so it is sharp (`v` = the cover's content tag).
-//! - `POST /api/photos/people/ID/name` `{"name"}`; `/merge` `{"into": ID}`; `/remove` `{"face"}`.
+//! - `POST /api/photos/people/ID/name` `{"name"}`; `/merge` `{"into": ID}`; `/remove` `{"face"}`
+//!   or `{"faces": [..]}` (out of a person: back to the unnamed groups, never that person again);
+//!   `/same` `{"face", "yes": bool}` (the answer to a question about person ID).
 //! - `GET|POST /api/photos/faces` `{"on": bool}`: face recognition on or off (the server's owner;
 //!   `STARBASE_PHOTOS_FACES` overrides).
 //! - `POST /api/photos/faces/models` (owner, `ml` builds): download the missing model files from
@@ -36,6 +40,10 @@ use crate::{App, Shared, auth, blocking, error, send_json, sharing};
 
 const MAX_NAME: usize = 80;
 const MAX_GROUPS: usize = 300;
+/// The most "Same person?" questions in the list at once.
+const MAX_QUESTIONS: usize = 20;
+/// The most faces taken out in one go.
+const MAX_REMOVE: usize = 500;
 
 /// The owner's "Download face models": fetches the missing pinned model files in the background.
 fn fetch(a: &App, owner: bool) -> Answer {
@@ -167,6 +175,17 @@ fn list(a: &App, me: Option<auth::User>, owner: bool) -> Answer {
             g.1 = face_json(f, &vis);
         }
     }
+    // "Same person?": one per group (or loose face) and person, while the person shows.
+    let mut questions = Vec::new();
+    let mut asked = std::collections::HashSet::new();
+    for f in &all {
+        let (None, Some(p)) = (f.person, f.suggest) else { continue };
+        let Some(Some(b)) = groups.get(&Who::Person(p)).map(|g| g.1.clone()) else { continue };
+        let Some(a) = face_json(f, &vis) else { continue };
+        if questions.len() < MAX_QUESTIONS && asked.insert((f.grp.unwrap_or(-f.id), p)) {
+            questions.push(json!({"face": f.id, "person": Who::Person(p).key(), "name": names.get(&p).cloned().unwrap_or_default(), "a": a, "b": b}));
+        }
+    }
     let mut named = Vec::new();
     let mut unnamed = Vec::new();
     for (who, (pics, cover)) in groups {
@@ -183,6 +202,7 @@ fn list(a: &App, me: Option<auth::User>, owner: bool) -> Answer {
     let mut v = state(a, owner);
     v["people"] = Value::Array(named);
     v["groups"] = Value::Array(unnamed);
+    v["questions"] = Value::Array(questions);
     Ok(v)
 }
 
@@ -252,11 +272,29 @@ fn change(a: &App, me: Option<auth::User>, id: &str, act: &str, b: &Value) -> An
             json!({"id": Who::Person(p).key()})
         }
         "remove" => {
-            let face = b["face"].as_i64().ok_or_else(|| error(400, "Which face?"))?;
-            if !mine.iter().any(|f| f.id == face) || !s.with_db(|ix| faces::remove(ix, who, face)).map_err(db_err)? {
+            let list: Vec<i64> = match b["faces"].as_array() {
+                Some(a) => a.iter().filter_map(Value::as_i64).take(MAX_REMOVE).collect(),
+                None => b["face"].as_i64().into_iter().collect(),
+            };
+            if list.is_empty() {
+                return Err(error(400, "Which face?"));
+            }
+            if !list.iter().all(|id| mine.iter().any(|f| f.id == *id)) {
                 return Err(error(404, "That face isn't in this group."));
             }
+            s.with_db(|ix| list.iter().try_for_each(|id| faces::remove(ix, who, *id).map(drop))).map_err(db_err)?;
             json!({"id": who.key()})
+        }
+        "same" => {
+            let Who::Person(p) = who else { return Err(error(404, "No such person.")) };
+            let face = b["face"].as_i64().ok_or_else(|| error(400, "Which face?"))?;
+            let yes = b["yes"].as_bool().ok_or_else(|| error(400, "Yes or no?"))?;
+            let vis = visible(a, &s, &me);
+            let f = s.with_db(|ix| faces::face(ix, face)).map_err(db_err)?;
+            if !f.is_some_and(|f| vis.contains_key(&f.thumb)) || !s.with_db(|ix| faces::answer(ix, face, p, yes)).map_err(db_err)? {
+                return Err(error(404, "That question was already answered."));
+            }
+            json!({"id": Value::Null})
         }
         _ => return Err(error(404, "not found")),
     };
