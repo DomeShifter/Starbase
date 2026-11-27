@@ -97,10 +97,11 @@ pub fn media_of(name: &str) -> Option<(&'static str, bool)> {
         "avif" => ("image/avif", false),
         "dng" | "cr2" | "nef" | "arw" | "orf" | "rw2" | "raf" | "pef" | "srw" => ("image/x-raw", true),
         "cr3" => ("image/x-raw", false),
-        // Videos: listed with a generic tile, played by the browser from the Drive's Range-aware raw route.
+        // Videos use on-demand posters and are played from the Drive's Range-aware raw route.
         "mp4" | "m4v" => ("video/mp4", false),
         "mov" => ("video/quicktime", false),
         "webm" => ("video/webm", false),
+        "ogv" => ("video/ogg", false),
         _ => return None,
     })
 }

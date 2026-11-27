@@ -440,6 +440,7 @@ async fn thumb(
         return error(400, "size is 256, 1024 or 2560");
     };
     let screen = (size == decode::SCREEN).then(|| super::jxl::best(fmt == Some("best")));
+    let file_id = id.clone();
     let path = blocking(app, move |a| -> Result<String, Response<Body>> {
         let acc = sharing::Access::with_locked(&a.store, a.auth, me.as_ref());
         if acc.file_role(&id) < sharing::Role::View {
@@ -455,14 +456,19 @@ async fn thumb(
         Ok(p) => p,
         Err(r) => return r,
     };
-    if media_of(&path).is_none() {
+    let Some((media, _)) = media_of(&path) else {
         return error(404, "not a picture");
-    }
+    };
     let a = app.clone();
     let got = off(move || -> Result<Found, (u16, Value)> {
         let svc = service(&a.store).ok_or((503, json!({"error": super::NOT_SET_UP})))?;
         if !svc.covers(&path) {
             return Err((404, json!({"error": "Photos isn't turned on for this folder.", "state": "off"})));
+        }
+        if super::video::is_video(media) && size == 256 {
+            let version = a.store.safe_file(&path).and_then(|p| a.store.version_of(&p).ok()).ok_or((404, json!({"error": "no such video"})))?;
+            let png = crate::thumbs::video_poster(&a.store, &file_id, &path, &version).map_err(|_| (404, json!({"error": "no poster"})))?;
+            return Ok((png, "png", version, store::base_of(&path)));
         }
         for tries in 0..2 {
             if let Some(r) = svc.row(&path).filter(|r| svc.fresh(r)) {

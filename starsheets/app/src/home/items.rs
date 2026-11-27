@@ -414,6 +414,13 @@ impl Home {
         let pic = Rect::from_min_size(r.min + vec2(8.0, 8.0), vec2(cw - 16.0, ph - 8.0));
         p.rect_filled(pic, 6, Color32::WHITE);
         match self.thumbs.get(&f.id).map(|(_, t)| t) {
+            Some(Thumb::Ready(tex)) if self.vo.previews && file_kind(&f.name) == "video" => {
+                let size = tex.size_vec2();
+                let scale = (pic.width() / size.x).max(pic.height() / size.y);
+                let visible = vec2(pic.width() / (size.x * scale), pic.height() / (size.y * scale));
+                let uv = Rect::from_center_size(egui::pos2(0.5, 0.5), visible);
+                p.image(tex.id(), pic, uv, Color32::WHITE);
+            }
             Some(Thumb::Ready(tex)) if self.vo.previews => {
                 // The picture's full width (columns A to L, as Drive shows), cut off at the bottom.
                 let tw = tex.size_vec2();
