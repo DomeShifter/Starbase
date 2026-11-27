@@ -34,6 +34,7 @@ def luminance(page, clip):
 
 def run(browser, testn):
     header = {"x": 244, "y": 3, "width": 175, "height": 20}
+    sheet_tabs = {"x": 300, "y": 772, "width": 120, "height": 16}
     paper = {"x": 610, "y": 335, "width": 100, "height": 80}
     with Session(browser, testn=testn, outdir="shots") as s:
         s.sign_in("ada")
@@ -49,6 +50,9 @@ def run(browser, testn):
                     s.open(app)
                 colour = luminance(s.pg, header)
                 assert (colour < 105 if dark else colour > 185), (browser, app, dark, colour)
+                if app == "sheets":
+                    tabs = luminance(s.pg, sheet_tabs)
+                    assert (tabs < 105 if dark else tabs > 185), (browser, app, "tabs", dark, tabs)
                 if app in ("sheets", "docs", "slides"):
                     canvas = luminance(s.pg, paper)
                     assert canvas > 185, (browser, app, dark, canvas)

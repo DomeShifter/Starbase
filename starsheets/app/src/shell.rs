@@ -1044,7 +1044,7 @@ fn title_and_menus(app: &mut SheetApp, ui: &mut Ui, title_draft: &mut Option<Str
                     Some(img) => Button::image_and_text(img.fit_to_exact_size(vec2(20.0, 20.0)), label),
                     None => Button::new(label),
                 }
-                .fill(egui::Color32::WHITE)
+                .fill(theme::card())
                 .stroke(Stroke::new(1.0, theme::BOX))
                 .corner_radius(18.0)
                 .min_size(vec2(92.0, 36.0))
