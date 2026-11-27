@@ -155,3 +155,4 @@ the fork commit marked "(StarSheets NNNN)".
 | 0108 | ui-egui | With `sheets_marks`: a drop-down cell (list, in-cell arrow shown) keeps its right end free for the ▾: its text is clipped or wrapped before it and no longer spills into the next cell past it | Sheets-specific |
 | 0109 | ui-egui | With `sheets_marks`: no green "number stored as text" corner and no warning button (Sheets has neither); Excel mode and the data are unchanged |
 | 0110 | engine | Inserting immediately after the last visible row or column extends a sized grid. The original edge cells and worksheet limits are preserved. Fork commit `851699d`. | Sheets-specific |
+| 0111 | ui-egui | Use pixels in row-height and column-width dialogs with Sheets keys enabled. The default GridCraft dialogs keep Excel units. Fork commit `c8cba5f`. | Sheets-specific |
