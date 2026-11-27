@@ -705,7 +705,10 @@ impl PhotoMode {
             self.editor = None;
             self.retry_at.clear();
             self.failed.clear();
-            if let Some(f) = &folder {
+            // Locked loads its own list. A general list response is ignored on that tab.
+            if let Some(f) = &folder
+                && !self.locked_tab()
+            {
                 self.list(ctx, store, f);
             }
         }

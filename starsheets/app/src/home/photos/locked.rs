@@ -129,6 +129,7 @@ impl PhotoMode {
         self.lk.reset();
         self.lk.lock_req = false;
         self.lk.checked = true;
+        self.loading = false;
         self.pics.clear();
         self.viewer = None;
         self.clear_selection();
