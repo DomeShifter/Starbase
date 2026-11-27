@@ -7,7 +7,7 @@ use egui::{Align, Button, Color32, Layout, RichText, Stroke, Ui, vec2};
 use serde_json::{Value, json};
 use wordcraft_ui_egui::WordApp;
 
-use crate::{icons, theme::palette};
+use crate::{icons, theme::palette as chrome_palette};
 
 pub const BLUE: Color32 = Color32::from_rgb(0x0B, 0x57, 0xD0);
 
@@ -1148,7 +1148,7 @@ impl Shell {
         self.flags.sync(before);
         self.keys(app, ui.ctx());
         egui::Panel::top("stardocs_head")
-            .frame(egui::Frame::NONE.fill(palette().page).inner_margin(egui::Margin { left: 12, right: 16, top: 8, bottom: 6 }))
+            .frame(egui::Frame::NONE.fill(chrome_palette().page).inner_margin(egui::Margin { left: 12, right: 16, top: 8, bottom: 6 }))
             .show(ui, |ui| {
                 self.share.logic(link, ui.ctx());
                 // Version history is a mode of its own, as in Google Docs: its bar replaces the
@@ -1391,7 +1391,7 @@ impl Shell {
         let right_end = &mut self.right_end;
         let room_seen = &mut self.room;
         let mut tools = Tools { app, cur: &cur, fonts: &fonts, custom: &mut self.custom };
-        egui::Frame::NONE.fill(palette().toolbar).corner_radius(24.0).inner_margin(egui::Margin::symmetric(10, 4)).show(ui, |ui| {
+        egui::Frame::NONE.fill(chrome_palette().toolbar).corner_radius(24.0).inner_margin(egui::Margin::symmetric(10, 4)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
                 flat(ui);
@@ -1469,12 +1469,12 @@ impl Shell {
         let Some(mut text) = self.restart.take() else { return };
         let mut done = None;
         let modal = egui::Modal::new(egui::Id::unique("stardocs_restart_numbering"))
-            .frame(egui::Frame::popup(&ctx.global_style()).fill(palette().card).corner_radius(8.0).inner_margin(20.0));
+            .frame(egui::Frame::popup(&ctx.global_style()).fill(chrome_palette().card).corner_radius(8.0).inner_margin(20.0));
         let shown = modal.show(ctx, |ui| {
-            ui.label(RichText::new("Restart numbering").size(18.0).color(palette().text));
+            ui.label(RichText::new("Restart numbering").size(18.0).color(chrome_palette().text));
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Start at").size(14.0).color(palette().text));
+                ui.label(RichText::new("Start at").size(14.0).color(chrome_palette().text));
                 let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(80.0));
                 r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, "Start at"));
                 if std::mem::take(&mut self.restart_focus) {
@@ -1514,9 +1514,9 @@ impl Shell {
         let Some(mut c) = self.custom else { return };
         let mut done = None;
         let modal = egui::Modal::new(egui::Id::unique("stardocs_custom_colour"))
-            .frame(egui::Frame::popup(&ctx.global_style()).fill(palette().card).corner_radius(8.0).inner_margin(20.0));
+            .frame(egui::Frame::popup(&ctx.global_style()).fill(chrome_palette().card).corner_radius(8.0).inner_margin(20.0));
         let shown = modal.show(ctx, |ui| {
-            ui.label(RichText::new("Custom colour").size(18.0).color(palette().text));
+            ui.label(RichText::new("Custom colour").size(18.0).color(chrome_palette().text));
             ui.add_space(8.0);
             egui::widgets::color_picker::color_picker_color32(ui, &mut c, egui::widgets::color_picker::Alpha::Opaque);
             ui.add_space(8.0);
@@ -1759,7 +1759,7 @@ fn mode_switch(app: &mut WordApp, ui: &mut Ui, may_edit: bool) {
         Mode::Suggesting => ("rate_review", "Suggesting"),
         Mode::Editing => ("edit", "Editing"),
     };
-    let text = RichText::new(label).size(14.0).color(palette().text_dim);
+    let text = RichText::new(label).size(14.0).color(chrome_palette().text_dim);
     let button = match icons::icon(icon) {
         Some(img) => Button::image_and_text(img, text),
         None => Button::new(text),
@@ -1783,7 +1783,7 @@ fn mode_switch(app: &mut WordApp, ui: &mut Ui, may_edit: bool) {
             (Mode::Suggesting, "rate_review", "Suggesting", "Edits become suggestions"),
             (Mode::Viewing, "visibility", "Viewing", "Read or print the final document"),
         ] {
-            let text = RichText::new(format!("{title}\n{about}")).size(14.0).color(palette().text);
+            let text = RichText::new(format!("{title}\n{about}")).size(14.0).color(chrome_palette().text);
             let item = match icons::icon(icon) {
                 Some(img) => Button::image_and_text(img, text),
                 None => Button::new(text),
@@ -1852,11 +1852,11 @@ impl Shell {
                         ui.add_space(6.0);
                         ui.vertical_centered(|ui| {
                             crate::share::avatar(ui, &name, &colour, 56.0);
-                            ui.label(RichText::new(format!("Hi, {name}!")).size(18.0).color(palette().text));
-                            ui.label(RichText::new(&username).size(13.0).color(palette().text_dim));
+                            ui.label(RichText::new(format!("Hi, {name}!")).size(18.0).color(chrome_palette().text));
+                            ui.label(RichText::new(&username).size(13.0).color(chrome_palette().text_dim));
                         });
                         ui.add_space(6.0);
-                        if ui.button(RichText::new("Starbase home").size(14.0).color(palette().text)).clicked() {
+                        if ui.button(RichText::new("Starbase home").size(14.0).color(chrome_palette().text)).clicked() {
                             if let Some(l) = link {
                                 l.home();
                             }
@@ -1866,8 +1866,8 @@ impl Shell {
                     ui.add_space(8.0);
                 }
                 let label = if self.share.waiting() { "Saving…" } else { "Share" };
-                let share = Button::new(RichText::new(label).size(14.0).color(palette().text))
-                    .fill(palette().share)
+                let share = Button::new(RichText::new(label).size(14.0).color(chrome_palette().text))
+                    .fill(chrome_palette().share)
                     .corner_radius(18.0)
                     .min_size(vec2(84.0, 36.0));
                 match link {
@@ -1924,13 +1924,13 @@ impl Shell {
             // Docs' rename box hugs the name (it grows as you type), with a 2 px blue outline and
             // 4 px corners.
             let font = egui::FontId::proportional(18.0);
-            let width = ui.painter().layout_no_wrap(text.clone(), font.clone(), palette().text).size().x + 18.0; // the 6 px margins, and room for the caret
+            let width = ui.painter().layout_no_wrap(text.clone(), font.clone(), chrome_palette().text).size().x + 18.0; // the 6 px margins, and room for the caret
             let edit = ui
                 .scope(|ui| {
                     let v = ui.visuals_mut();
-                    v.selection.stroke = Stroke::new(2.0, palette().accent);
+                    v.selection.stroke = Stroke::new(2.0, chrome_palette().accent);
                     for w in [&mut v.widgets.inactive, &mut v.widgets.hovered, &mut v.widgets.active] {
-                        w.bg_stroke = Stroke::new(2.0, palette().accent);
+                        w.bg_stroke = Stroke::new(2.0, chrome_palette().accent);
                         w.corner_radius = egui::CornerRadius::same(4);
                     }
                     ui.add(egui::TextEdit::singleline(text).font(font).margin(vec2(6.0, 0.0)).desired_width(width.clamp(40.0, 600.0)))
@@ -1953,7 +1953,7 @@ impl Shell {
                 self.renaming = None;
             }
         } else {
-            let label = ui.add(egui::Label::new(RichText::new(&stem).size(18.0).color(palette().text)).sense(egui::Sense::click()));
+            let label = ui.add(egui::Label::new(RichText::new(&stem).size(18.0).color(chrome_palette().text)).sense(egui::Sense::click()));
             if (server_name.is_some() || new_doc) && label.on_hover_text("Rename").clicked() {
                 self.renaming = Some(stem.clone());
                 ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(RENAME), true));
@@ -1964,7 +1964,7 @@ impl Shell {
             // what the old text beside the name said, shorter.
             ui.add_space(6.0);
             let info = self.save_info(app, link);
-            let pal = starbase_savestate::SavePalette::house(palette().text_dim, palette().page);
+            let pal = starbase_savestate::SavePalette::house(chrome_palette().text_dim, chrome_palette().page);
             let out = starbase_savestate::save_icon(ui, &info, &pal);
             target(ui.ctx(), "save-icon", out.response.rect);
             if let Some(card) = out.card {
@@ -1975,7 +1975,7 @@ impl Shell {
             }
             if let Some(notice) = link.notice() {
                 ui.add_space(10.0);
-                ui.add(egui::Label::new(RichText::new(&notice).size(13.0).color(palette().notice)).truncate());
+                ui.add(egui::Label::new(RichText::new(&notice).size(13.0).color(chrome_palette().notice)).truncate());
                 ui.ctx().request_repaint_after(std::time::Duration::from_secs(1));
             }
         }
@@ -2005,9 +2005,9 @@ fn menu_look(ui: &mut Ui) {
     let w = &mut st.visuals.widgets;
     for (state, fill) in [
         (&mut w.inactive, Color32::TRANSPARENT),
-        (&mut w.hovered, palette().menu_hover),
-        (&mut w.active, palette().hover),
-        (&mut w.open, palette().menu_hover),
+        (&mut w.hovered, chrome_palette().menu_hover),
+        (&mut w.active, chrome_palette().hover),
+        (&mut w.open, chrome_palette().menu_hover),
     ] {
         state.bg_stroke = Stroke::NONE;
         state.weak_bg_fill = fill;
@@ -2030,7 +2030,7 @@ fn docs_menu_style() -> egui::style::StyleModifier {
 /// One of the menu bar's menus with [`docs_menu_style`].
 fn menu_bar_menu(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
     let config = egui::containers::menu::MenuConfig::new().style(docs_menu_style());
-    let (r, _) = egui::containers::menu::MenuButton::new(RichText::new(title).size(14.0).color(palette().text)).config(config).ui(ui, add);
+    let (r, _) = egui::containers::menu::MenuButton::new(RichText::new(title).size(14.0).color(chrome_palette().text)).config(config).ui(ui, add);
     target(ui.ctx(), &format!("menu:{title}"), r.rect);
 }
 
@@ -2083,7 +2083,7 @@ pub(crate) fn menu_row(icon: Option<&str>, column: bool, label: &str, keys: &str
     let b = if keys.is_empty() {
         b.right_text(egui::Atom::grow())
     } else {
-        b.shortcut_text(RichText::new(keys.to_string()).size(13.0).color(palette().meta))
+        b.shortcut_text(RichText::new(keys.to_string()).size(13.0).color(chrome_palette().meta))
     };
     b.min_size(vec2(width, ROW))
 }
@@ -2096,14 +2096,14 @@ fn sub_row(icon: Option<&str>, column: bool, label: &str, width: f32) -> Button<
     let b = row_start(icon, column, label);
     let b = match icons::icon_px("arrow_right", ICON) {
         Some(arrow) => b.right_text(arrow),
-        None => b.right_text(egui::containers::menu::SubMenuButton::arrow_atom(Some(palette().meta))),
+        None => b.right_text(egui::containers::menu::SubMenuButton::arrow_atom(Some(chrome_palette().meta))),
     };
     b.min_size(vec2(width, ROW))
 }
 
 /// A menu row's icon column (an icon, a tick, or the same space blank) and label.
 fn row_start(icon: Option<&str>, column: bool, label: &str) -> Button<'static> {
-    let text = RichText::new(label.to_string()).size(14.0).color(palette().text);
+    let text = RichText::new(label.to_string()).size(14.0).color(chrome_palette().text);
     match icon.and_then(|n| icons::icon_px(n, ICON)) {
         Some(img) if column => Button::image_and_text(img, text),
         // Keeps the label lined up with its iconed neighbours.
@@ -2118,7 +2118,7 @@ fn row_start(icon: Option<&str>, column: bool, label: &str) -> Button<'static> {
 /// How wide a menu is: its longest label plus shortcut, the icon column and the padding (at
 /// least 240 px, as Docs' shortest menus).
 fn menu_width(app: &mut WordApp, ui: &Ui, flags: &Flags, items: &[Item], column: bool) -> f32 {
-    let measure = |t: &str, size: f32| ui.painter().layout_no_wrap(t.to_string(), egui::FontId::proportional(size), palette().text).size().x;
+    let measure = |t: &str, size: f32| ui.painter().layout_no_wrap(t.to_string(), egui::FontId::proportional(size), chrome_palette().text).size().x;
     let widest = items
         .iter()
         .map(|i| {
@@ -2134,7 +2134,7 @@ fn menu_width(app: &mut WordApp, ui: &Ui, flags: &Flags, items: &[Item], column:
 fn menu_sep(ui: &mut Ui, width: f32) {
     ui.add_space(8.0);
     let (r, _) = ui.allocate_exact_size(vec2(width, 1.0), egui::Sense::hover());
-    ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0, palette().menu_line));
+    ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0, chrome_palette().menu_line));
     ui.add_space(8.0);
 }
 
@@ -2274,11 +2274,16 @@ fn table_grid(app: &mut WordApp, ui: &mut Ui) {
             let min = rect.min + vec2(c as f32 * (CELL + GAP), r as f32 * (CELL + GAP));
             let cell = egui::Rect::from_min_size(min, vec2(CELL, CELL));
             let lit = r < pick.0 && c < pick.1;
-            painter.rect_filled(cell, 2.0, if lit { palette().active } else { palette().card });
-            painter.rect_stroke(cell, 2.0, Stroke::new(1.0, if lit { palette().accent } else { palette().divider }), egui::StrokeKind::Inside);
+            painter.rect_filled(cell, 2.0, if lit { chrome_palette().active } else { chrome_palette().card });
+            painter.rect_stroke(
+                cell,
+                2.0,
+                Stroke::new(1.0, if lit { chrome_palette().accent } else { chrome_palette().divider }),
+                egui::StrokeKind::Inside,
+            );
         }
     }
-    ui.label(RichText::new(format!("{} × {}", pick.1, pick.0)).size(13.0).color(palette().text_dim));
+    ui.label(RichText::new(format!("{} × {}", pick.1, pick.0)).size(13.0).color(chrome_palette().text_dim));
     if resp.clicked() {
         run(app, "insert.table", json!({ "rows": pick.0, "cols": pick.1 }));
         ui.close();
@@ -2299,9 +2304,9 @@ fn flat(ui: &mut Ui) {
     let w = &mut ui.visuals_mut().widgets;
     for (state, fill) in [
         (&mut w.inactive, Color32::TRANSPARENT),
-        (&mut w.hovered, palette().hover),
-        (&mut w.active, palette().pressed),
-        (&mut w.open, palette().pressed),
+        (&mut w.hovered, chrome_palette().hover),
+        (&mut w.active, chrome_palette().pressed),
+        (&mut w.open, chrome_palette().pressed),
     ] {
         state.bg_stroke = Stroke::NONE;
         state.weak_bg_fill = fill;
@@ -2313,7 +2318,7 @@ fn flat(ui: &mut Ui) {
 fn bar(ui: &mut Ui) {
     ui.add_space(4.0);
     let (r, _) = ui.allocate_exact_size(vec2(1.0, 20.0), egui::Sense::hover());
-    ui.painter().rect_filled(r, 0.0, palette().divider);
+    ui.painter().rect_filled(r, 0.0, chrome_palette().divider);
     ui.add_space(4.0);
 }
 
@@ -2323,7 +2328,7 @@ fn icon_button(ui: &mut Ui, name: &str, on: bool) -> egui::Response {
         None => Button::new(name),
     };
     // A set fill would also replace the hover and pressed fills: only a button that is on has one.
-    let b = if on { b.fill(palette().active) } else { b };
+    let b = if on { b.fill(chrome_palette().active) } else { b };
     ui.add(b.corner_radius(4.0).min_size(vec2(26.0, 28.0)))
 }
 
@@ -2405,18 +2410,18 @@ fn drop_menu(ui: &mut Ui, text: &str, width: f32, add: impl FnOnce(&mut Ui)) -> 
         let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp));
         let p = ui.painter();
         if open || resp.is_pointer_button_down_on() {
-            p.rect_filled(rect, 4.0, palette().pressed);
+            p.rect_filled(rect, 4.0, chrome_palette().pressed);
         } else if resp.hovered() {
-            p.rect_filled(rect, 4.0, palette().hover);
+            p.rect_filled(rect, 4.0, chrome_palette().hover);
         }
         let room = rect.width() - 6.0 - ARROW - 2.0;
-        let galley = egui::WidgetText::from(RichText::new(text).size(14.0).color(palette().text_dim)).into_galley(
+        let galley = egui::WidgetText::from(RichText::new(text).size(14.0).color(chrome_palette().text_dim)).into_galley(
             ui,
             Some(egui::TextWrapMode::Truncate),
             room,
             egui::TextStyle::Button,
         );
-        p.galley(egui::pos2(rect.left() + 6.0, rect.center().y - galley.size().y / 2.0), galley, palette().text_dim);
+        p.galley(egui::pos2(rect.left() + 6.0, rect.center().y - galley.size().y / 2.0), galley, chrome_palette().text_dim);
         if let Some(arrow) = icons::icon_px("arrow_drop_down", ARROW) {
             let at = egui::Rect::from_center_size(egui::pos2(rect.right() - 2.0 - ARROW / 2.0, rect.center().y), vec2(ARROW, ARROW));
             arrow.paint_at(ui, at);
@@ -2444,14 +2449,14 @@ fn size_box(app: &mut WordApp, ui: &mut Ui, size: f64) {
         .char_limit(5)
         .align(egui::Align2::CENTER_CENTER)
         .font(egui::FontId::proportional(14.0))
-        .text_color(palette().text_dim)
+        .text_color(chrome_palette().text_dim)
         .margin(vec2(4.0, 5.0))
         .background_color(Color32::TRANSPARENT);
     let r = ui
         .scope(|ui| {
             let w = &mut ui.visuals_mut().widgets;
             for s in [&mut w.inactive, &mut w.hovered] {
-                s.bg_stroke = Stroke::new(1.0, palette().text_dim);
+                s.bg_stroke = Stroke::new(1.0, chrome_palette().text_dim);
             }
             ui.add(edit)
         })
@@ -2509,7 +2514,7 @@ fn palette<'a>(ui: &mut Ui, colours: impl Iterator<Item = (&'a str, &'a str)>, m
             let colour = Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8);
             let (r, resp) = ui.allocate_exact_size(vec2(20.0, 20.0), egui::Sense::click());
             ui.painter().circle_filled(r.center(), 9.0, colour);
-            ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, palette().divider));
+            ui.painter().circle_stroke(r.center(), 9.0, Stroke::new(1.0, chrome_palette().divider));
             if resp.on_hover_text(*value).clicked() {
                 pick(value);
                 ui.close();

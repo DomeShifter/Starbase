@@ -1182,9 +1182,7 @@ impl Account {
             self.error = None;
             call(&self.inbox, ctx, Method::Post, "api/photos/faces", Some(json!({"on": on})), Reply::FaceSettingsChanged);
         }
-        if state["can_download"].as_bool() == Some(true)
-            && ui.add_enabled(!self.busy && !busy, house::secondary("Download face models")).clicked()
-        {
+        if state["can_download"].as_bool() == Some(true) && ui.add_enabled(!self.busy && !busy, house::secondary("Download face models")).clicked() {
             self.busy = true;
             call(&self.inbox, ctx, Method::Post, "api/photos/faces/models", Some(json!({})), |_| Reply::FaceModels);
         }
