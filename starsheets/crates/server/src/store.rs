@@ -1091,12 +1091,13 @@ impl Store {
                 {
                     return Ok(Reply::Json(json!({"error": "changed elsewhere", "name": base_of(&path)}), 409));
                 }
-                // Every file keeps its earlier versions (Drive's "Manage versions"); only a big file the
-                // apps don't edit goes to the bin instead, so versions can't fill the disk.
-                if is_editable(&path) || fs::metadata(&fpath).map_or(0, |m| m.len()) <= MAX_VERSIONED_OTHER {
-                    self.keep_version(fid, &fpath)?;
-                } else {
-                    self.copy_to_bin(&path)?;
+                // Kanban autosaves retain the current file. Other writes keep their existing history policy.
+                if !path.rsplit_once('.').is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("kanban")) {
+                    if is_editable(&path) || fs::metadata(&fpath).map_or(0, |m| m.len()) <= MAX_VERSIONED_OTHER {
+                        self.keep_version(fid, &fpath)?;
+                    } else {
+                        self.copy_to_bin(&path)?;
+                    }
                 }
                 self.write_file(&fpath, body)?;
                 ok(json!({"version": self.version_of(&fpath)?, "name": base_of(&path), "folder": parent_of(&path)}))
