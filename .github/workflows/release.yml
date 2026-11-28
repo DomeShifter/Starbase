@@ -14,6 +14,9 @@
 # unless "publish_flatpak_repo" is ticked (Pages only accepts main and v* tags). The very first
 # publish is a run by hand on main with both boxes ticked (packaging/README.md).
 #
+# The Windows preview (desktop-other.yml, Windows only: unsigned per-user MSI and portable zip) is
+# built in the same run; for a version tag both go on the release, in SHA256SUMS and GPG-signed.
+#
 # The release key's secrets live in the `release-signing` environment (tags v* and main only),
 # used by the two signing jobs alone.
 name: Release
@@ -62,6 +65,12 @@ jobs:
   flatpak:
     name: Flatpak
     uses: ./.github/workflows/flatpak.yml
+
+  windows:
+    name: Windows preview (unsigned MSI and zip)
+    uses: ./.github/workflows/desktop-other.yml
+    with:
+      windows_only: true
 
   image:
     name: Docker image
@@ -165,12 +174,12 @@ jobs:
         run: gh release create "$GITHUB_REF_NAME" --draft --title "Starbase $VERSION" --notes-file notes.md "build/starbase-web-$VERSION.zip"
 
   sign:
-    # Signs every Linux download on the draft release with the project's release key
+    # Signs every download on the draft release (Linux, and the Windows preview) with the project's release key
     # (packaging/linux/starbase-release-signing.asc): SHA256SUMS + SHA256SUMS.asc, and a detached
     # .asc next to each file. The private key and its passphrase live only in the secrets
     # STARBASE_GPG_PRIVATE_KEY / STARBASE_GPG_PASSPHRASE of the `release-signing` environment.
     name: Sign the downloads
-    needs: [image, desktop, flatpak]
+    needs: [image, desktop, flatpak, windows]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -187,6 +196,18 @@ jobs:
         with:
           name: starbase-flatpak
           path: dist
+      # The Windows preview (not Authenticode-signed yet): in SHA256SUMS and GPG-signed like the rest.
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: starbase-*-x64-setup
+          path: dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v8
+        with:
+          name: starbase-windows-x64-portable
+          path: dist
+      - name: Versioned name for the Windows zip
+        run: mv dist/starbase-windows-x64-portable.zip "dist/starbase-${GITHUB_REF_NAME#v}-windows-x64-portable.zip"
       - name: The draft's web zip
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -216,7 +237,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd dist
-          gh release upload "$GITHUB_REF_NAME" --clobber -- *.AppImage *.AppImage.zsync *.flatpak SHA256SUMS *.asc
+          gh release upload "$GITHUB_REF_NAME" --clobber -- *.AppImage *.AppImage.zsync *.flatpak *.msi *-windows-x64-portable.zip SHA256SUMS *.asc
 
   flatpak-repo:
     # Our own Flatpak repository (packaging/linux/flatpak/make-repo.sh): the bundle from the

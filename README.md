@@ -20,7 +20,7 @@
 </p>
 
 > [!NOTE]
-> **Early preview (v0.1.0).** Starbase works and we use it every day, but it is young: expect
+> **Early preview (v0.2.0).** Starbase works and we use it every day, but it is young: expect
 > rough edges, keep your own backups (the built-in backups help), and please
 > [tell us what breaks](https://github.com/DomeShifter/Starbase/issues). Starbase Sheets is the
 > most mature part; Starbase Docs and Starbase Drive are newer, and Starbase Slides has only just
@@ -70,7 +70,7 @@ pictures (with crop and text wrapping), comments, version history and your own d
   <img src="docs/images/docs-newsletter.png" alt="Starbase Docs: a newsletter with headings, a list and a table" width="800">
 </p>
 
-**Starbase Slides** (new on `main`, not yet in a release), presentations at `/slides/`: open, edit
+**Starbase Slides** (new in v0.2.0), presentations at `/slides/` and on the desktop: open, edit
 and save `.pptx` files in the browser, straight from Drive. It is at an early stage: one person
 edits at a time, with no live co-editing yet.
 
@@ -105,15 +105,15 @@ Step-by-step guides: [Docker and Compose](docs/install/docker.md) ·
 in the [Docker guide](docs/install/docker.md); single sign-on is in
 [docs/oidc.md](starsheets/docs/oidc.md).
 
-**Desktop programs (Linux):** from v0.2.0, Starbase Drive, Sheets and Docs install from our own
+**Desktop programs (Linux):** from v0.2.0, Starbase Drive, Sheets, Docs and Slides install from our own
 signed Flatpak repository (not Flathub), and update with `flatpak update`:
 
 ```sh
 flatpak install --user --from https://domeshifter.github.io/Starbase/starbase.flatpakref
 ```
 
-The runtime comes from Flathub. A signed AppImage is attached to each release too. Windows and
-Mac come later.
+The runtime comes from Flathub. A signed AppImage is attached to each release too. Windows has an
+unsigned preview on the release page; Mac comes later.
 
 ## Roadmap highlights
 
