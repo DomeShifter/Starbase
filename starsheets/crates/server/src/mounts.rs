@@ -92,7 +92,8 @@ struct Mount {
 /// The same container path may have stacked mounts. Refuse ambiguous locations.
 type MountTable = HashMap<PathBuf, Option<Mount>>;
 
-/// Get or create the provisioning key only when the administrator sets up mounts.
+/// Generate and persist a provisioning key for the test fixture.
+#[cfg(test)]
 pub fn account_key(store: &Store, user: &User) -> io::Result<String> {
     check_account(store, user)?;
     let mut prefs = spaces::prefs(store, &user.username);
