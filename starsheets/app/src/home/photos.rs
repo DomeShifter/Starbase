@@ -333,6 +333,8 @@ pub(super) struct PhotoMode {
     listed_at: f64,
     list_request: u64,
     inbox: Arc<Mutex<Vec<Got>>>,
+    /// Responses for the current Photos library; replaced when its root changes.
+    library_inbox: Arc<Mutex<Vec<Got>>>,
     pub tex: Textures,
     asking: HashSet<Key>,
     retry_at: HashMap<Key, f64>,
@@ -399,6 +401,7 @@ impl Default for PhotoMode {
             up: Default::default(),
             shell: Default::default(),
             inbox: Arc::default(),
+            library_inbox: Arc::default(),
             tex: Textures { budget: BUDGET, ..Default::default() },
             asking: HashSet::new(),
             retry_at: HashMap::new(),
@@ -512,6 +515,28 @@ impl PhotoMode {
         self.editor = None;
         self.retry_at.clear();
         self.failed.clear();
+    }
+
+    pub(super) fn reset_library(&mut self) {
+        self.library_inbox = Arc::default();
+        let tab = self.alb.tab;
+        self.alb = Default::default();
+        self.alb.tab = tab;
+        self.map = Default::default();
+        self.dups.reset();
+        self.pick = Default::default();
+        self.info_faces = None;
+        self.reset_folder();
+        self.asking.retain(|(id, _)| !id.starts_with("face/"));
+        let total = &mut self.tex.total;
+        self.tex.map.retain(|(id, _), (_, bytes, _)| {
+            if id.starts_with("face/") {
+                *total -= *bytes;
+                false
+            } else {
+                true
+            }
+        });
     }
 
     pub(super) fn browse_my_files(&self) -> bool {
@@ -659,14 +684,15 @@ impl PhotoMode {
                 self.list(ctx, store, &f);
             }
         }
-        let got: Vec<Got> = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(|e| e.into_inner()));
+        let mut got = std::mem::take(&mut *self.inbox.lock().unwrap_or_else(|e| e.into_inner()));
+        got.append(&mut self.library_inbox.lock().unwrap_or_else(|e| e.into_inner()));
         for g in got {
             match g {
                 Got::Cards(t, v) => self.alb.take_cards(t, &v),
                 Got::Map(v) => self.map.take(&v),
                 Got::Opened(t, key, v) => self.take_opened(t, &key, &v),
                 Got::Dups(f, v) => self.dups.take(&f, &v),
-                Got::Changed => self.alb.changed(ctx, store, &self.inbox),
+                Got::Changed => self.alb.changed(ctx, store, &self.library_inbox),
                 Got::PersonIs(id) => self.people_changed(ctx, store, id),
                 Got::Added(c, n, asked, ids) => self.added(ctx, store, c, n, asked, ids),
                 Got::Picker(v) => self.take_picker(&v),
@@ -828,7 +854,8 @@ impl PhotoMode {
         self.asking.insert(k.clone());
         self.image_requests += 1;
         let max = ctx.input(|inp| inp.max_texture_side).min(8192) as u32;
-        let (inbox, ctx2) = (self.inbox.clone(), ctx.clone());
+        let inbox = if id.starts_with("face/") { self.library_inbox.clone() } else { self.inbox.clone() };
+        let ctx2 = ctx.clone();
         store.call(
             ctx,
             Method::Get,
@@ -848,7 +875,7 @@ impl PhotoMode {
             return;
         }
         self.info_faces = Some((id.to_string(), Json::Null));
-        let (inbox, ctx2, id2) = (self.inbox.clone(), ctx.clone(), id.to_string());
+        let (inbox, ctx2, id2) = (self.library_inbox.clone(), ctx.clone(), id.to_string());
         store.call(
             ctx,
             Method::Get,
@@ -1007,7 +1034,7 @@ impl PhotoMode {
         let _ = best_format();
         self.hint_shown = false;
         if self.in_library() {
-            self.alb.boot_cards(ui.ctx(), store, &self.inbox);
+            self.alb.boot_cards(ui.ctx(), store, &self.library_inbox);
         }
         match self.alb.tab {
             albums::Tab::Photos | albums::Tab::MyFiles | albums::Tab::Timeline => self.folder_ui(ui, store, folder),
@@ -1482,6 +1509,28 @@ mod tests {
         fn has_photos(&self) -> bool {
             true
         }
+    }
+
+    #[test]
+    fn switching_libraries_discards_old_people_responses() {
+        let ctx = egui::Context::default();
+        let store = Backend(std::rc::Rc::new(Settings::default()));
+        let mut pm = PhotoMode::default();
+        let old = pm.library_inbox.clone();
+        let reply = |id| Got::Cards(albums::Tab::People, serde_json::json!({"people": [{"id": id, "name": id}]}));
+        PhotoMode::push(&old, &ctx, reply("first"));
+        pm.logic(&ctx, &store, None);
+        assert_eq!(pm.alb.ppl.named[0].id, "first");
+
+        pm.reset_library();
+        assert!(pm.alb.ppl.named.is_empty());
+        PhotoMode::push(&old, &ctx, reply("first"));
+        pm.logic(&ctx, &store, None);
+        assert!(pm.alb.ppl.named.is_empty());
+
+        PhotoMode::push(&pm.library_inbox, &ctx, reply("second"));
+        pm.logic(&ctx, &store, None);
+        assert_eq!(pm.alb.ppl.named[0].id, "second");
     }
 
     #[test]

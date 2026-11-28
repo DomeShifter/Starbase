@@ -276,7 +276,7 @@ impl PhotoMode {
             }
             Act::AddTo if !self.in_library() => {}
             Act::AddTo => {
-                self.alb.boot_cards(ctx, store, &self.inbox);
+                self.alb.boot_cards(ctx, store, &self.library_inbox);
                 self.pick.dialog = Some(Dialog { ids, ..Default::default() });
             }
             Act::Favourite => self.out.push(Out::Star(ids)),
@@ -315,7 +315,7 @@ impl PhotoMode {
             Act::RotateLeft | Act::RotateRight => self.rotate(ctx, store, ids, act == Act::RotateLeft),
             Act::Remove => {
                 let Some(c) = self.open_album() else { return };
-                post(ctx, store, &self.inbox, &format!("api/photos/albums/{}/remove", c.id), json!({ "files": ids }));
+                post(ctx, store, &self.library_inbox, &format!("api/photos/albums/{}/remove", c.id), json!({ "files": ids }));
                 let n = ids.len();
                 self.pics.retain(|p| !ids.contains(&p.id));
                 self.clear_selection();
@@ -329,7 +329,7 @@ impl PhotoMode {
     pub(super) fn add_to(&mut self, ctx: &egui::Context, store: &Backend, c: &Card, ids: Vec<String>) {
         let (id, name, asked) = (c.id.clone(), c.name.clone(), ids.len() as u64);
         self.used(store, &c.id);
-        let (inbox, ctx2) = (self.inbox.clone(), ctx.clone());
+        let (inbox, ctx2) = (self.library_inbox.clone(), ctx.clone());
         store.call(
             ctx,
             Method::Post,
@@ -342,7 +342,7 @@ impl PhotoMode {
 
     /// A new album named `name`, with `ids` in it.
     pub(super) fn new_album(&mut self, ctx: &egui::Context, store: &Backend, name: &str, ids: Vec<String>) {
-        let (inbox, ctx2, asked) = (self.inbox.clone(), ctx.clone(), ids.len() as u64);
+        let (inbox, ctx2, asked) = (self.library_inbox.clone(), ctx.clone(), ids.len() as u64);
         store.call(
             ctx,
             Method::Post,
@@ -365,7 +365,7 @@ impl PhotoMode {
         if let Some(note) = &mut self.pick.note {
             note.undo = undo;
         }
-        self.alb.changed(ctx, store, &self.inbox);
+        self.alb.changed(ctx, store, &self.library_inbox);
     }
 
     fn recent(&mut self, store: &Backend) -> &mut Vec<String> {
@@ -441,7 +441,7 @@ impl PhotoMode {
         let Some(album) = self.open_album() else { return };
         let folder = self.folder.clone().unwrap_or_default();
         let url = format!("api/photos?folder={}&sort=taken&desc=1&sub=1", enc(&folder));
-        get(ctx, store, &self.inbox, &url, Got::Picker);
+        get(ctx, store, &self.library_inbox, &url, Got::Picker);
         self.pick.picker = Some(Picker { album, loading: true, ..Default::default() });
     }
 

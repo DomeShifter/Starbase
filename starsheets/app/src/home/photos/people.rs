@@ -176,7 +176,7 @@ impl PhotoMode {
     pub(super) fn people_boot(&mut self, ctx: &egui::Context, store: &Backend) {
         if !self.alb.ppl.asked {
             self.alb.ppl.asked = true;
-            super::albums::get(ctx, store, &self.inbox, "api/photos/people", |v| Got::Cards(Tab::People, v));
+            super::albums::get(ctx, store, &self.library_inbox, "api/photos/people", |v| Got::Cards(Tab::People, v));
         }
     }
 
@@ -186,12 +186,12 @@ impl PhotoMode {
         self.people_boot(ctx, store);
         if let (Some(id), Some(c)) = (id, self.alb.open.as_mut()) {
             c.id = id.clone();
-            super::albums::get(ctx, store, &self.inbox, &format!("api/photos/people/{id}"), move |v| Got::Opened(Tab::People, id, v));
+            super::albums::get(ctx, store, &self.library_inbox, &format!("api/photos/people/{id}"), move |v| Got::Opened(Tab::People, id, v));
         }
     }
 
     fn people_post(&mut self, ctx: &egui::Context, store: &Backend, url: &str, body: Json) {
-        let (inbox, ctx2) = (self.inbox.clone(), ctx.clone());
+        let (inbox, ctx2) = (self.library_inbox.clone(), ctx.clone());
         store.call(
             ctx,
             Method::Post,
@@ -511,7 +511,7 @@ impl PhotoMode {
         self.loading = true;
         let key = c.id.clone();
         self.alb.open = Some(c);
-        super::albums::get(ctx, store, &self.inbox, &format!("api/photos/people/{key}"), move |v| Got::Opened(Tab::People, key, v));
+        super::albums::get(ctx, store, &self.library_inbox, &format!("api/photos/people/{key}"), move |v| Got::Opened(Tab::People, key, v));
     }
 
     /// The model download's progress and errors (the button itself is in the face recognition

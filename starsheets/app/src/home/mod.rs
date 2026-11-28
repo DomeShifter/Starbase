@@ -471,7 +471,11 @@ impl Home {
         self.accounts = v.get("space").is_some();
         self.space = s(&v, "space");
         let library = |key| v.get(key).map(|path| path.as_str().map(str::to_string));
-        self.photo_library = library("photo_library");
+        let photos = library("photo_library");
+        if self.photo_library != photos {
+            self.photo_library = photos;
+            self.photos.reset_library();
+        }
         self.my_files_library = library("my_files_library");
         self.admin = v["admin"].as_bool().unwrap_or(!self.accounts);
         self.files = v["files"]

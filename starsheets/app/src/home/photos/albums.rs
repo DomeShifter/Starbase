@@ -289,7 +289,7 @@ impl PhotoMode {
         };
         let key = c.id.clone();
         self.alb.open = Some(c);
-        get(ctx, store, &self.inbox, &url, move |v| Got::Opened(t, key, v));
+        get(ctx, store, &self.library_inbox, &url, move |v| Got::Opened(t, key, v));
     }
 
     /// The album and place cards, or the opened one.
@@ -378,7 +378,7 @@ impl PhotoMode {
                     self.map.list = false;
                 }
             });
-            self.alb.boot_cards(&ctx, store, &self.inbox);
+            self.alb.boot_cards(&ctx, store, &self.library_inbox);
         } else if t == Tab::Albums {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Albums").size(house::TITLE).color(theme::text()));
@@ -391,7 +391,7 @@ impl PhotoMode {
             self.pick_ui(ui, store);
         } else {
             ui.label(RichText::new(if t == Tab::Events { "Moments" } else { "Places" }).size(house::TITLE).color(theme::text()));
-            self.alb.boot_cards(&ctx, store, &self.inbox);
+            self.alb.boot_cards(&ctx, store, &self.library_inbox);
         }
         ui.add_space(house::S);
         let list = match t {
@@ -505,19 +505,19 @@ impl PhotoMode {
 
     fn create(&mut self, ctx: &egui::Context, store: &Backend, name: &str, all: bool) {
         let files = if all { self.pics.iter().map(|p| p.id.clone()).collect() } else { self.selection() };
-        post(ctx, store, &self.inbox, "api/photos/albums", json!({"name": name, "files": files}));
+        post(ctx, store, &self.library_inbox, "api/photos/albums", json!({"name": name, "files": files}));
         self.clear_selection();
     }
 
     fn rename(&mut self, ctx: &egui::Context, store: &Backend, id: &str, name: &str) {
-        post(ctx, store, &self.inbox, &format!("api/photos/albums/{id}/rename"), json!({"name": name}));
+        post(ctx, store, &self.library_inbox, &format!("api/photos/albums/{id}/rename"), json!({"name": name}));
         if let Some(c) = &mut self.alb.open {
             c.name = name.to_string();
         }
     }
 
     fn delete(&mut self, ctx: &egui::Context, store: &Backend, id: &str) {
-        post(ctx, store, &self.inbox, &format!("api/photos/albums/{id}/delete"), json!({}));
+        post(ctx, store, &self.library_inbox, &format!("api/photos/albums/{id}/delete"), json!({}));
         self.alb.open = None;
         self.clear_selection();
         self.pics.clear();
@@ -575,13 +575,13 @@ impl PhotoMode {
             }
             "home:photos:place:open" => {
                 self.alb.tab = Tab::Places;
-                self.alb.boot_cards(ctx, store, &self.inbox);
+                self.alb.boot_cards(ctx, store, &self.library_inbox);
                 let c = find(&self.alb.places, &s("place")).ok_or("no such place (yet)")?;
                 self.open_card(ctx, store, c);
             }
             "home:photos:event:open" => {
                 self.alb.tab = Tab::Events;
-                self.alb.boot_cards(ctx, store, &self.inbox);
+                self.alb.boot_cards(ctx, store, &self.library_inbox);
                 let c = find(&self.alb.events, &s("event")).ok_or("no such event (yet)")?;
                 self.open_card(ctx, store, c);
             }
