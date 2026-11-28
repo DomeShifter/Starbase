@@ -32,7 +32,6 @@ impl Tab {
         matches!(self, Self::MyFiles | Self::Photos | Self::Timeline)
     }
 
-
     #[cfg(target_arch = "wasm32")]
     fn name(self) -> &'static str {
         match self {

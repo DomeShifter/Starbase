@@ -166,12 +166,8 @@ impl Home {
     }
 
     pub(super) fn folder_children(&self, path: &str) -> Vec<String> {
-        let mut c: Vec<String> = self
-            .folders
-            .iter()
-            .filter(|f| parent_of(&f.path) == path && f.path != path && !f.path.is_empty())
-            .map(|f| f.path.clone())
-            .collect();
+        let mut c: Vec<String> =
+            self.folders.iter().filter(|f| parent_of(&f.path) == path && f.path != path && !f.path.is_empty()).map(|f| f.path.clone()).collect();
         c.sort_by_key(|p| name_of(p).to_lowercase());
         c
     }
@@ -214,7 +210,7 @@ impl Home {
         folder: Option<String>,
     ) -> bool {
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 34.0), Sense::click());
-        house::target(ui.ctx(), label, r);
+        house::target(ui.ctx(), if key.starts_with("photos:") { key } else { label }, r);
         let p = ui.painter().clone();
         let dropping = self.dragging.is_some() && folder.is_some() && resp.contains_pointer();
         if current {
@@ -235,7 +231,10 @@ impl Home {
             if let Some(img) = crate::icons::icon(if open { "expand_more" } else { "chevron_right" }) {
                 img.paint_at(ui, arrow);
             }
-            if ui.input(|i| i.pointer.primary_clicked() && i.pointer.interact_pos().is_some_and(|pos| ui.clip_rect().contains(pos) && arrow.expand(4.0).contains(pos))) {
+            if ui.input(|i| {
+                i.pointer.primary_clicked()
+                    && i.pointer.interact_pos().is_some_and(|pos| ui.clip_rect().contains(pos) && arrow.expand(4.0).contains(pos))
+            }) {
                 toggled = true;
                 if open {
                     self.expanded.remove(key);

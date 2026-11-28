@@ -372,7 +372,8 @@ impl Home {
                     // Reveal the panel from the left, keeping its controls at their final size.
                     let (r, _) = ui.allocate_exact_size(vec2(216.0 * tree, ui.available_height()), egui::Sense::hover());
                     let bounds = egui::Rect::from_min_size(r.min, vec2(216.0, r.height()));
-                    let mut tree_ui = ui.new_child(egui::UiBuilder::new().id_salt("photos_tree").max_rect(bounds).layout(egui::Layout::top_down(egui::Align::Min)));
+                    let mut tree_ui =
+                        ui.new_child(egui::UiBuilder::new().id_salt("photos_tree").max_rect(bounds).layout(egui::Layout::top_down(egui::Align::Min)));
                     tree_ui.set_clip_rect(ui.clip_rect().intersect(r));
                     self.photo_tree_ui(&mut tree_ui, folder, r.height());
                 }
@@ -456,17 +457,19 @@ impl Home {
 
     fn photo_tree_row(&mut self, ui: &mut Ui, root: &str, path: &str, current: &str, key: &str, depth: usize) {
         let key_for_path = format!("{key}{path}");
-        let children = self
-            .folder_children(path)
-            .into_iter()
-            .filter(|p| self.photo_nav_path(root, p))
-            .collect::<Vec<_>>();
+        let children = self.folder_children(path).into_iter().filter(|p| self.photo_nav_path(root, p)).collect::<Vec<_>>();
         let colour = self.folder(path).and_then(|f| f.colour);
         let label = if path.is_empty() { "All folders" } else { name_of(path) };
         let icon = if colour.is_some() { "folder_fill" } else { "folder" };
         let selected = path == current;
         let top = ui.cursor().min;
-        if self.row(ui, label, icon, colour, depth, selected, !children.is_empty(), &key_for_path, None) && !selected {
+        if self.row(ui, label, icon, colour, depth, selected, !children.is_empty(), &key_for_path, None)
+            && (!selected || self.photos.shell.scope == Scope::All)
+        {
+            if self.photos.shell.scope == Scope::All {
+                self.photos.shell.scope = Scope::Folder;
+                self.photos.sub = false;
+            }
             let chosen = if self.photos.browse_my_files() { &mut self.photo_nav.my_files_folder } else { &mut self.photo_nav.photos_folder };
             *chosen = Some(path.to_string());
             self.photos.reset_folder();

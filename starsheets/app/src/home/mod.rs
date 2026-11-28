@@ -1184,6 +1184,13 @@ impl Home {
     /// Files dropped on the page or picked with Upload: saved into the folder shown, any type,
     /// under their own name (`as_is`: photo.jpg stays photo.jpg).
     pub fn upload(&mut self, ctx: &egui::Context, name: String, bytes: Vec<u8>) {
+        if self.photos.alb.tab.folder_grid()
+            && let Some(folder) = self.photo_folder()
+        {
+            self.photos.upload_add(&folder, name, bytes);
+            ctx.request_repaint();
+            return;
+        }
         let Some(folder) = self.here().or_else(|| self.mine_root().map(str::to_string)) else {
             self.error = Some("My Files is unavailable.".into());
             return;
