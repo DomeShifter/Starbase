@@ -119,6 +119,7 @@ pub(super) struct Kanban {
     filter: String,
     create_in: Option<String>,
     confirm_close: bool,
+    leave_after_save: bool,
     archive_open: bool,
     delete_from_archive: Option<usize>,
     renaming: Option<(CardPosition, String)>,
@@ -418,8 +419,10 @@ impl Kanban {
                 ui.horizontal(|ui| {
                     let apply = ui.add_enabled(!card.title.trim().is_empty(), egui::Button::new("Apply card"));
                     save = target(ui, "kanban:apply-card", apply);
-                    let archive = ui.button("Archive card");
-                    trash = index.is_some() && target(ui, "kanban:archive-card", archive);
+                    if index.is_some() {
+                        let archive = ui.button("Archive card");
+                        trash = target(ui, "kanban:archive-card", archive);
+                    }
                 });
             });
         });
@@ -624,12 +627,22 @@ impl Kanban {
         self.edit_ui(&ctx);
         self.column_ui(&ctx);
         self.confirm_delete(&ctx);
+        if exit && self.dirty {
+            exit = false;
+            self.leave_after_save = self.error.is_none();
+            self.confirm_close = !self.leave_after_save;
+        }
+        if self.leave_after_save && !self.pending {
+            if !self.dirty {
+                return true;
+            }
+            if self.error.is_some() {
+                self.leave_after_save = false;
+                self.confirm_close = true;
+            }
+        }
         if self.dirty && !self.pending && (self.error.is_none() || save) {
             self.save(&ctx);
-        }
-        if exit && self.dirty {
-            self.confirm_close = true;
-            exit = false;
         }
         if self.confirm_close {
             let mut close = false;
