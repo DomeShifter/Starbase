@@ -2685,6 +2685,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn my_files_media_browses_unindexed_folders_without_expanding_photos_scope() {
+        let (app, ip, boss) = owned().await;
+        assert_eq!(post(&app, &ip, "/api/users", &boss, json!({"username":"vic", "name":"Vic", "password":"vicpassword"})).await.status, 200);
+        let vic = cookie_of(&post(&app, &ip, "/api/login", "", json!({"username":"vic", "password":"vicpassword"})).await);
+        std::fs::create_dir_all(app.store.full("vic/Library")).unwrap();
+        let roots = json!({"my_files": null, "photos": {"folder": "Library"}});
+        let json_header = [("Content-Type", "application/json")];
+        assert_eq!(send(&app, &ip, "PUT", "/api/library-roots", &vic, &json_header, roots.to_string().into_bytes()).await.status, 200);
+        let picture = send(&app, &ip, "POST", "/api/files?folder=vic&name=Outside.png&as_is=1", &vic, &[], vec![0]).await;
+        assert_eq!(picture.status, 201);
+        let browse = "/api/photos?browse=1&folder=vic";
+        let listed = send(&app, &ip, "GET", browse, &vic, &[], vec![]).await;
+        assert_eq!(listed.status, 200);
+        assert_eq!(listed.json["photos"][0]["id"], picture.json["id"]);
+        assert_eq!(listed.json["can_enable"], false);
+        assert_eq!(send(&app, &ip, "GET", browse, &boss, &[], vec![]).await.status, 403);
+        assert_eq!(send(&app, &ip, "GET", "/api/photos?folder=vic", &vic, &[], vec![]).await.status, 403);
+    }
+
+    #[tokio::test]
     async fn backup_master_switch_preserves_configuration_and_guards_runs() {
         let (app, ip, boss) = owned().await;
         backup::update(&app.base, |s| {

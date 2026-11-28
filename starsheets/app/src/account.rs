@@ -1307,12 +1307,16 @@ impl Account {
         ui.label("My Files location");
         let current =
             if form.my_files.is_empty() { "Account folder" } else { mounts.get(&form.my_files).map_or("Unavailable mount", String::as_str) };
-        egui::ComboBox::from_id_salt("my_files_location").selected_text(current).show_ui(ui, |ui| {
-            ui.selectable_value(&mut form.my_files, String::new(), "Account folder");
+        let location = egui::ComboBox::from_id_salt("my_files_location").selected_text(current).show_ui(ui, |ui| {
+            let account = ui.selectable_value(&mut form.my_files, String::new(), "Account folder");
+            house::target(ctx, "settings:my-files-account", account.rect);
             for (id, path) in mounts {
-                ui.selectable_value(&mut form.my_files, id.clone(), path);
+                let mount = ui.selectable_value(&mut form.my_files, id.clone(), path);
+                house::target(ctx, &format!("settings:my-files-choice:{id}"), mount.rect);
             }
         });
+
+        house::target(ctx, "settings:my-files-location", location.response.rect);
 
         ui.label("Photos location");
         let current = match &form.photos {

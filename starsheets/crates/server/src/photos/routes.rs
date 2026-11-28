@@ -3,6 +3,7 @@
 //! - `GET /api/photos?all=1` (instead of folder): every picture I may see, anywhere (everything.rs).
 //! - `GET /api/photos?folder=PATH` (or `folder_id=ID`; `sub=1` with every folder inside;
 //!   `sort=taken|name|modified`, `desc=1`): the pictures in a folder, with their EXIF date.
+//! - `GET /api/photos?browse=1&folder=PATH`: media under My Files without indexing.
 //! - `GET /api/photos/thumb/ID/SIZE` (SIZE 256 or 1024, `?v=` the picture's `v`): a thumbnail.
 //! - `POST /api/photos/enable?folder=PATH` (or `folder_id`): turns Photos on for a folder and
 //!   everything in it (anyone who may edit the folder). Until then nothing in it is indexed.
@@ -175,12 +176,88 @@ async fn status(app: &Shared, me: Option<auth::User>) -> Response<Body> {
 /// role there, and whether that role is mine by name (not through a link).
 type Checked = (String, HashMap<String, String>, sharing::Role, bool);
 
+/// Lists media from Drive without registering a Photos folder or queuing index work.
+async fn browse_my_files(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>, deep: bool, sort: String, desc: bool) -> Response<Body> {
+    let Some(me) = me else { return error(403, "You don't have access to that.") };
+    let requested = q.get("folder").cloned();
+    blocking(app, move |a| {
+        use crate::mounts::{Root, private_path, roots, within};
+
+        let Root::Available(root) = roots(&a.store, &me).my_files else {
+            return error(403, "My Files location is unavailable.");
+        };
+        let folder = match requested {
+            Some(path) => match store::rel(Some(&path)) {
+                Ok(path) => path,
+                Err(b) => return error(b.code, &b.msg),
+            },
+            None => root.clone(),
+        };
+        let in_my_files = |path: &str| within(path, &root) && (!private_path(path) || private_path(&root));
+        let acc = sharing::Access::new(&a.store, a.auth, Some(&me));
+        let role = acc.folder_role(&folder);
+        if !in_my_files(&folder) || role < sharing::Role::View || !acc.folder_listed(&folder) {
+            return error(403, "You don't have access to that.");
+        }
+        if !a.store.no_links(&folder) || !std::fs::symlink_metadata(a.store.full(&folder)).is_ok_and(|m| m.is_dir()) {
+            return error(404, "no such folder");
+        }
+        let stars: HashSet<_> = crate::spaces::starred(&a.store, &me).into_iter().collect();
+        let mut items: Vec<_> = acc
+            .file_paths
+            .iter()
+            .filter_map(|(id, path)| {
+                let parent = store::parent_of(path);
+                if !in_my_files(path)
+                    || (parent != folder && !(deep && within(&parent, &folder)))
+                    || !acc.file_listed(id)
+                    || acc.file_role(id) < sharing::Role::View
+                {
+                    return None;
+                }
+                let (media, _) = media_of(path)?;
+                let full = a.store.safe_file(path)?;
+                let metadata = std::fs::metadata(full).ok()?;
+                let modified = metadata.modified().ok()?.duration_since(std::time::UNIX_EPOCH).map_or(0, |t| t.as_secs());
+                let name = store::base_of(path);
+                let key = if sort == "name" { name.to_lowercase() } else { format!("{modified:020}") };
+                Some((
+                    key,
+                    path,
+                    json!({
+                        "id": id, "name": name, "folder": parent, "media": media, "state": "ready",
+                        "size": metadata.len(), "modified": modified, "v": store::Store::file_version(&metadata),
+                    }),
+                ))
+            })
+            .collect();
+        items.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(b.1)));
+        if desc {
+            items.reverse();
+        }
+        let mut photos: Vec<_> = items.into_iter().map(|(_, _, item)| item).collect();
+        mark_stars(&mut photos, &stars);
+        send_json(
+            &json!({
+                "folder": folder, "sub": deep, "role": role.name(), "enabled": true,
+                "can_enable": false, "can_disable": false, "photos": stack_raw_pairs(photos), "waiting": 0,
+            }),
+            200,
+        )
+    })
+    .await
+    .unwrap_or_else(|| error(500, "server error"))
+}
+
 async fn list(app: &Shared, q: &HashMap<String, String>, me: Option<auth::User>) -> Response<Body> {
     let deep = q.get("sub").is_some_and(|v| v == "1" || v == "true");
     let sort = q.get("sort").cloned().unwrap_or_else(|| "taken".into());
     let desc = q.get("desc").is_some_and(|v| v == "1" || v == "true");
     if !["taken", "name", "modified"].contains(&sort.as_str()) {
         return error(400, "sort is taken, name or modified");
+    }
+    if q.get("browse").is_some_and(|v| v == "1" || v == "true") {
+        return browse_my_files(app, q, me, deep, sort, desc).await;
     }
     if q.get("all").is_some_and(|v| v == "1" || v == "true") {
         return super::everything::list_all(app, &sort, desc, me).await;

@@ -126,11 +126,6 @@ impl Home {
         if self.view == Some(View::Storage) {
             self.storage_header(ui);
         }
-        if let Some(folder) = self.photo_folder() {
-            self.photos.ui(ui, &self.store, &folder);
-            self.photo_outs(ui.ctx());
-            return;
-        }
         let (folders, files) = self.contents();
         let ctx = ui.ctx().clone();
         let mut clicked_item = false;
@@ -217,7 +212,7 @@ impl Home {
             bg.context_menu(|ui| {
                 house::menu(ui, 260.0);
                 let here = self.here();
-                let into = here.clone().unwrap_or_else(|| self.space.clone());
+                let Some(into) = here.clone().or_else(|| self.mine_root().map(str::to_string)) else { return };
                 if house::menu_row(ui, Some("note_add"), "New spreadsheet", "", true) {
                     self.new_file(&into, false);
                 }
@@ -232,7 +227,7 @@ impl Home {
                 }
                 if house::menu_row(ui, Some("create_new_folder"), "New folder", "", true) {
                     if here.is_none() {
-                        self.navigate(View::Mine(self.space.clone()));
+                        self.navigate(View::Mine(into.clone()));
                     }
                     call(&self.store, &self.inbox, ui.ctx(), Method::Post, format!("api/folders?path={}&name=New%20folder", enc(&into)), None, |b| {
                         let v: Json = serde_json::from_slice(&b).unwrap_or_default();

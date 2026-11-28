@@ -316,7 +316,8 @@ impl Home {
         // Where things can go: folders you can edit, not into a folder being moved.
         let moving: Vec<String> = items.iter().filter_map(|i| if let Item::Folder(p) = i { Some(p.clone()) } else { None }).collect();
         let ok = |path: &str, role: &str| may_edit(role) && !moving.iter().any(|m| under(path, m));
-        let mut tops: Vec<(String, String)> = vec![(self.space.clone(), if self.accounts { "My files".into() } else { "All files".into() })];
+        let mut tops: Vec<(String, String)> =
+            self.mine_root().map(|root| (root.to_string(), if self.accounts { "My files".into() } else { "All files".into() })).into_iter().collect();
         for t in &self.shared_folders {
             if self.folder(t).is_some_and(|f| may_edit(&f.role)) {
                 tops.push((t.clone(), format!("{} (shared by {})", name_of(t), self.person(space_of(t)))));
@@ -327,7 +328,7 @@ impl Home {
                 tops.push((f.path.clone(), format!("{}'s files", self.person(&f.path))));
             }
         }
-        let folders = self.folders.clone();
+        let folders: Vec<_> = self.folders.iter().filter(|f| self.drive_path(&f.path)).cloned().collect();
         let mut close = false;
         let mut choice = None;
         house::dialog(ctx, "home_move_to", 460.0, &what, Some(&mut close), |ui| {
