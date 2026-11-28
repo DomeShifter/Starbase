@@ -5,6 +5,7 @@ import argparse
 import sys
 from pathlib import Path
 from urllib.parse import urlencode
+from uuid import uuid4
 
 sys.path.insert(0, str(Path.home() / ".claude/tools"))
 from starbase_ui import Session, ship_and_run
@@ -15,7 +16,7 @@ def check(browser, testn):
         s.sign_in("ada")
         s.open("drive")
         api = s.base + "/api/library-roots"
-        name = f"Picker {browser}"
+        name = f"00 Picker {browser} {uuid4().hex[:6]}"
         folder = s.pg.request.post(s.base + "/api/folders?" + urlencode({"name": name})).json()["path"]
         child = s.pg.request.post(s.base + "/api/folders?" + urlencode({"path": folder, "name": "Nested"})).json()["path"]
         s.click_text("account:avatar", button=3)
