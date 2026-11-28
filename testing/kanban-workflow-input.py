@@ -45,7 +45,8 @@ def check(browser, testn):
         positions = s.snapshot("targets")
         first, second = positions["kanban:card:0:0"], positions["kanban:card:0:1"]
         assert abs(second[1] - first[1]) < 10 and second[0] > first[0], (first, second)
-        assert positions["kanban:expand:0:0"][0] > first[0]
+        assert positions["kanban:grip:0:0"][0] < first[0] < positions["kanban:expand:0:0"][0]
+        assert positions["kanban:tile:0:0"][1] == positions["kanban:tile:0:1"][1]
 
         s._at(*first)
         subprocess.run(["xdotool", "click", "--repeat", "2", "--delay", "125", "1"], check=True)
@@ -57,7 +58,7 @@ def check(browser, testn):
         assert s.wait_for(lambda: board()["columns"][0]["cards"][0]["title"] == "Renamed")
         assert s.wait_text("kanban:save:saved")
         positions = s.snapshot("targets")
-        s.pg.mouse.move(*positions["kanban:card:0:0"])
+        s.pg.mouse.move(*positions["kanban:grip:0:0"])
         s.pg.mouse.down()
         s.pg.mouse.move(*positions["kanban:drop:1"], steps=18)
         s.pg.mouse.up()
@@ -65,6 +66,16 @@ def check(browser, testn):
         assert s.wait_text("kanban:save:saved")
 
         s.click_text("kanban:expand:1:0")
+        s.click_text("kanban:move")
+        s.click_text("kanban:move-to:2")
+        assert s.wait_for(lambda: board()["columns"][2]["cards"][0]["title"] == "Renamed")
+        assert s.wait_text("kanban:save:saved")
+        s.click_text("kanban:column-edit:2")
+        s.click_text("kanban:colour:Blue")
+        s.click_text("kanban:column-apply")
+        assert s.wait_for(lambda: board()["columns"][2]["colour"] == [44, 104, 198])
+        assert s.wait_text("kanban:save:saved")
+        s.click_text("kanban:expand:2:0")
         s.click_text("kanban:archive-card")
         assert s.wait_for(lambda: board()["archive"][0]["number"] == 1)
         s.click_text("kanban:archive")
@@ -79,7 +90,7 @@ def check(browser, testn):
         s.click_text(f"item:{name}.kanban")
         s.key("Return")
         assert s.wait_text("kanban:card:0:1")
-        print(f"PASS {browser}: auto save, layout, rename, whole-column drag, archive, numbering and reopen", flush=True)
+        print(f"PASS {browser}: auto save, layout, rename, grip drag, move menu, column colour, archive, numbering and reopen", flush=True)
 
 
 if __name__ == "__main__":

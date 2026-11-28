@@ -25,7 +25,7 @@ def check(browser, testn):
         s.pg.keyboard.type("Review launch")
         s.click_text("kanban:apply-card")
         assert s.wait_text("kanban:card:0:0")
-        start = s.snapshot("targets")["kanban:card:0:0"]
+        start = s.snapshot("targets")["kanban:grip:0:0"]
         end = s.snapshot("targets")["kanban:drop:1"]
         s.pg.mouse.move(*start)
         s.pg.mouse.down()
