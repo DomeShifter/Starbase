@@ -23,6 +23,7 @@
 mod emacs_keys;
 mod fonts;
 mod icons;
+mod pasteprompt;
 mod shell;
 mod theme;
 

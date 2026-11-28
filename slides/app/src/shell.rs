@@ -394,6 +394,7 @@ impl Shell {
             // Light whatever the OS prefers (egui would follow it otherwise), as Docs does.
             ctx.set_theme(egui::ThemePreference::Light);
         }
+        crate::pasteprompt::before(&ctx);
         if app.show.is_some() {
             self.presenting = self.presenter.get();
         } else if self.presenting {
@@ -1020,7 +1021,7 @@ struct Targets(std::collections::BTreeMap<String, (u64, egui::Rect)>);
 
 /// Remembers where a control was drawn, for the test hook's `targets`: real-click tests read
 /// the spot from there instead of guessing positions (as in Starbase Sheets and Docs).
-fn target(ctx: &egui::Context, label: &str, rect: egui::Rect) {
+pub(crate) fn target(ctx: &egui::Context, label: &str, rect: egui::Rect) {
     let pass = ctx.cumulative_pass_nr();
     ctx.data_mut(|d| d.get_temp_mut_or_default::<Targets>(egui::Id::NULL).0.insert(label.to_owned(), (pass, rect)));
 }
