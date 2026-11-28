@@ -3,6 +3,7 @@
 
 import argparse
 from pathlib import Path
+import subprocess
 import sys
 from uuid import uuid4
 
@@ -46,7 +47,8 @@ def check(browser, testn):
         assert abs(second[1] - first[1]) < 10 and second[0] > first[0], (first, second)
         assert positions["kanban:expand:0:0"][0] > first[0]
 
-        s.pg.mouse.dblclick(*first)
+        s._at(*first)
+        subprocess.run(["xdotool", "click", "--repeat", "2", "--delay", "125", "1"], check=True)
         assert s.wait_text("kanban:inline-title")
         assert "kanban:apply-card" not in s.snapshot("targets")
         s.pg.keyboard.press("Control+a")

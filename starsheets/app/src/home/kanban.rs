@@ -277,8 +277,11 @@ impl Kanban {
                                         }
                                         let position = (index, card_index);
                                         let can_drag = writable && query.is_empty() && self.renaming.is_none();
-                                        let mut body = |ui: &mut Ui| {
-                                            egui::Frame::NONE.fill(theme::card()).corner_radius(8).inner_margin(10).show(ui, |ui| {
+                                        let tile = egui::Frame::NONE
+                                            .fill(theme::card())
+                                            .corner_radius(8)
+                                            .inner_margin(10)
+                                            .show(ui, |ui| {
                                                 ui.set_width(tile_width);
                                                 ui.horizontal(|ui| {
                                                     ui.allocate_ui_with_layout(
@@ -304,8 +307,13 @@ impl Kanban {
                                                                 } else {
                                                                     card.title.clone()
                                                                 };
-                                                                let title = ui.add(egui::Label::new(title).wrap().sense(egui::Sense::click()));
+                                                                let sense =
+                                                                    if can_drag { egui::Sense::click_and_drag() } else { egui::Sense::click() };
+                                                                let title = ui.add(egui::Label::new(title).wrap().sense(sense));
                                                                 house::target(ui.ctx(), &format!("kanban:card:{index}:{card_index}"), title.rect);
+                                                                if can_drag {
+                                                                    title.dnd_set_drag_payload(CardDrag(position));
+                                                                }
                                                                 if writable && title.double_clicked() {
                                                                     self.renaming = Some((position, card.title.clone()));
                                                                 }
@@ -332,13 +340,8 @@ impl Kanban {
                                                         card.checklist.len()
                                                     ));
                                                 }
-                                            });
-                                        };
-                                        let tile = if can_drag {
-                                            ui.dnd_drag_source(ui.scope_id().with(card_index), CardDrag(position), body).response
-                                        } else {
-                                            ui.vertical(&mut body).response
-                                        };
+                                            })
+                                            .response;
                                         if writable && let Some(source) = tile.dnd_release_payload::<CardDrag>() {
                                             movement = Some((source.0, position));
                                         }
