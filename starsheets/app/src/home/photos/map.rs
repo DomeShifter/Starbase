@@ -345,7 +345,7 @@ impl PhotoMode {
     pub(super) fn map_boot(&mut self, ctx: &egui::Context, store: &Backend) {
         if !self.map.asked {
             self.map.asked = true;
-            super::albums::get(ctx, store, &self.inbox, "api/photos/places?all=1", Got::Map);
+            super::albums::get(ctx, store, &self.library_inbox, "api/photos/places?all=1", Got::Map);
         }
     }
 

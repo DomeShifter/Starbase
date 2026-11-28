@@ -54,7 +54,7 @@ pub mod tiles;
 pub mod video;
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::Read;
+use std::io::{Read, Seek};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -344,20 +344,30 @@ pub fn drive_picture(store: &Store, path: &str, size: u32) -> Result<Vec<u8>, St
         return Ok(bytes);
     }
     let memory = svc.as_ref().map_or(decode::CHILD_MEMORY, |s| s.cfg.child_memory);
-    let file = store.open_safe(path).ok_or("no such file")?;
+    let mut file = store.open_safe(path).ok_or("no such file")?;
     if file.metadata().map_err(|e| e.to_string())?.len() > MAX_FILE {
         return Err("too big".into());
     }
     let _one = DRIVE_READING.lock().unwrap_or_else(|e| e.into_inner());
+    let (_, edits) = sidecar_edits_at(store, path, || edits::geo_of(Some(&file)));
+    file.rewind().map_err(|e| e.to_string())?;
     let made = match WORKER_EXE.get() {
-        Some(exe) => decode::run_isolated(exe, file, memory, None)?,
+        Some(exe) => decode::run_isolated(exe, file, memory, edits.as_ref())?,
         None => {
             let mut bytes = Vec::new();
             file.take(MAX_FILE).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-            decode::make_guarded(&bytes, &decode::Limits::for_memory(memory), None)?
+            decode::make_guarded(&bytes, &decode::Limits::for_memory(memory), edits.as_ref())?
         }
     };
     made.thumbs.into_iter().find(|t| t.size == size).map(|t| t.bytes).ok_or_else(|| "no thumbnail".into())
+}
+
+fn sidecar_edits_at(store: &Store, path: &str, geo: impl FnOnce() -> Option<sidecar::Geo>) -> (index::Side, Option<model::Edits>) {
+    let (folder, name) = index::split(path);
+    let Some(dir) = sidecar::Folder::open(store, folder) else { return (index::Side::default(), None) };
+    let Ok(Some(d)) = dir.read(&sidecar::name_for(name)) else { return (index::Side::default(), None) };
+    let edits = sidecar::read_for(&d.bytes, geo().as_ref()).ok().map(|p| p.edits).filter(|e| !e.is_identity());
+    (index::Side { edits: edits.as_ref().and_then(sidecar::edits_hash), stat: Some(d.stat) }, edits)
 }
 
 /// The photo service of `store`, started on first use.
@@ -553,8 +563,8 @@ impl Photos {
                 }
             };
             match path {
-                (path, None) if self.covers(&path) => self.process(&path),
-                (path, Some(f)) if self.covers(&path) => self.make_screen_copy(&path, f),
+                (path, None) if self.covers(&path) && self.in_current_library(&path) => self.process(&path),
+                (path, Some(f)) if self.covers(&path) && self.in_current_library(&path) => self.make_screen_copy(&path, f),
                 _ => {}
             }
             self.queue.lock().unwrap_or_else(|e| e.into_inner()).working -= 1;
@@ -693,21 +703,14 @@ impl Photos {
     /// The edits in the sidecar of the picture at `path` (none when it has no usable sidecar):
     /// their hash for the index, and the edits themselves (what thumbnails are rendered with).
     fn sidecar_edits(&self, path: &str) -> (index::Side, Option<model::Edits>) {
-        let (folder, name) = index::split(path);
-        let Some(dir) = sidecar::Folder::open(&self.store, folder) else { return (index::Side::default(), None) };
-        match dir.read(&sidecar::name_for(name)) {
-            Ok(Some(d)) => {
-                // Adobe's crop is relative to the stored picture: known once it has been read.
-                let geo = self.db().get(path).ok().flatten().filter(|r| r.meta.width > 0).map(|r| {
-                    let o = r.meta.orientation;
-                    let (w, h) = if (5..=8).contains(&o) { (r.meta.height, r.meta.width) } else { (r.meta.width, r.meta.height) };
-                    sidecar::Geo { width: w, height: h, orientation: o }
-                });
-                let edits = sidecar::read_for(&d.bytes, geo.as_ref()).ok().map(|p| p.edits).filter(|e| !e.is_identity());
-                (index::Side { edits: edits.as_ref().and_then(sidecar::edits_hash), stat: Some(d.stat) }, edits)
-            }
-            _ => (index::Side::default(), None),
-        }
+        sidecar_edits_at(&self.store, path, || {
+            // Adobe's crop is relative to the stored picture: known once it has been read.
+            self.db().get(path).ok().flatten().filter(|r| r.meta.width > 0).map(|r| {
+                let o = r.meta.orientation;
+                let (w, h) = if (5..=8).contains(&o) { (r.meta.height, r.meta.width) } else { (r.meta.width, r.meta.height) };
+                sidecar::Geo { width: w, height: h, orientation: o }
+            })
+        })
     }
 
     /// Edits were saved for the picture at `path` (the edits API): its thumbnails are made
@@ -824,10 +827,28 @@ impl Photos {
 
     // ------------------------------------------------------------ finding files
 
+    fn library_allows(path: &str, root: Option<&crate::mounts::Root>) -> bool {
+        match root {
+            None => !crate::mounts::private_path(path),
+            Some(crate::mounts::Root::Available(root)) => crate::mounts::within(path, root),
+            Some(crate::mounts::Root::Unavailable) => false,
+        }
+    }
+
+    fn in_current_library(&self, path: &str) -> bool {
+        let root = self
+            .store
+            .spaces
+            .then(|| crate::auth::users(&self.store))
+            .and_then(|users| users.into_iter().find(|user| user.username == crate::store::space_of(path)))
+            .and_then(|user| crate::mounts::configured_photos(&self.store, &user));
+        Self::library_allows(path, root.as_ref())
+    }
+
     /// Picture files at and below `folder` (only that folder unless `deep`): path → (size,
     /// modified ns), and the pictures' sidecars (`photo.jpg.xmp`): picture path → the sidecar's
     /// stat. None when the folder isn't there (or is reached through a link).
-    fn list(&self, folder: &str, deep: bool) -> Option<Listed> {
+    fn list(&self, folder: &str, deep: bool, libraries: &HashMap<String, crate::mounts::Root>) -> Option<Listed> {
         if !self.store.no_links(folder) || !std::fs::symlink_metadata(self.store.full(folder)).is_ok_and(|m| m.is_dir()) {
             return None;
         }
@@ -844,6 +865,12 @@ impl Photos {
                 // Never through a symbolic link (store.rs walk_dir says why).
                 let Ok(m) = std::fs::symlink_metadata(e.path()) else { continue };
                 let rel = crate::store::join(&here, &name);
+                let root = libraries.get(crate::store::space_of(&rel));
+                if !Self::library_allows(&rel, root)
+                    && !(m.is_dir() && matches!(root, Some(crate::mounts::Root::Available(root)) if crate::mounts::within(root, &rel)))
+                {
+                    continue;
+                }
                 if m.is_dir() {
                     if deep {
                         todo.push(rel);
@@ -887,11 +914,19 @@ impl Photos {
     /// Runs on the scanner thread (tests call it directly).
     fn scan(&self, scopes: &[(String, bool)]) -> usize {
         let scopes = self.covered_scopes(scopes);
+        let libraries: HashMap<_, _> = if self.store.spaces {
+            crate::auth::users(&self.store)
+                .into_iter()
+                .filter_map(|user| crate::mounts::configured_photos(&self.store, &user).map(|root| (user.username, root)))
+                .collect()
+        } else {
+            HashMap::new()
+        };
         let mut present: HashMap<String, (u64, i64)> = HashMap::new();
         let mut sides: HashMap<String, String> = HashMap::new();
         let mut gone_scopes = Vec::new();
         for (folder, deep) in &scopes {
-            match self.list(folder, *deep) {
+            match self.list(folder, *deep, &libraries) {
                 Some((found, side)) => {
                     present.extend(found);
                     sides.extend(side);

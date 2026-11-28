@@ -160,6 +160,7 @@ pub fn open_menu(ctx: &egui::Context) -> Result<(), String> {
 
 /// What the avatar menu asked for (in egui memory, picked up by `Account::logic`).
 pub(crate) const FACES_SETTINGS_CHANGED: &str = "starbase_faces_settings_changed";
+pub(crate) const LIBRARY_SETTINGS_CHANGED: &str = "starbase_library_settings_changed";
 const PHOTOS_AVAILABLE: &str = "starbase_photos_available";
 
 fn browser_settings() -> Option<web_sys::Storage> {
@@ -285,6 +286,7 @@ enum Reply {
     /// Backup settings and how the last one went (GET /api/backup).
     Backup(Json),
     FaceSettings(Json),
+    LibraryRoots(Json, bool),
     FaceSettingsChanged(Json),
     FaceModels,
     BackupEnabled(bool),
@@ -470,6 +472,40 @@ enum Dialog {
     Devices,
 }
 
+#[derive(PartialEq)]
+enum PhotoSource {
+    SameAsMyFiles,
+    Folder,
+    Mount(String),
+}
+
+struct LibrarySettings {
+    mounts: std::collections::BTreeMap<String, String>,
+    my_files: String,
+    photos: PhotoSource,
+    folder: String,
+}
+
+impl LibrarySettings {
+    fn from_reply(value: &Json) -> Self {
+        let selected = &value["selected"];
+        let photos = &selected["photos"];
+        let folder = photos["folder"].as_str().unwrap_or_default().to_string();
+        Self {
+            mounts: serde_json::from_value(value["mounts"].clone()).unwrap_or_default(),
+            my_files: selected["my_files"].as_str().unwrap_or_default().to_string(),
+            photos: if let Some(id) = photos["mount"].as_str() {
+                PhotoSource::Mount(id.to_string())
+            } else if photos["folder"].is_string() {
+                PhotoSource::Folder
+            } else {
+                PhotoSource::SameAsMyFiles
+            },
+            folder,
+        }
+    }
+}
+
 #[derive(Default)]
 pub struct Account {
     inbox: Rc<RefCell<Vec<Reply>>>,
@@ -531,6 +567,7 @@ pub struct Account {
     /// backups made before, and the backup a "Restore" was clicked on once.
     settings_tab: usize,
     face_settings: Option<Json>,
+    library_settings: Option<LibrarySettings>,
     backup: Option<Json>,
     backup_list: Option<Vec<Json>>,
     backup_to: String,
@@ -772,6 +809,13 @@ impl Account {
                     }
                 }
                 Reply::FaceSettings(v) => self.face_settings = Some(v),
+                Reply::LibraryRoots(value, saved) => {
+                    self.library_settings = Some(LibrarySettings::from_reply(&value));
+                    if saved {
+                        self.done = Some("Library locations saved.".to_string());
+                        ctx.data_mut(|data| data.insert_temp(egui::Id::unique(LIBRARY_SETTINGS_CHANGED), true));
+                    }
+                }
                 Reply::FaceSettingsChanged(v) => {
                     self.face_settings = Some(v);
                     ctx.data_mut(|data| data.insert_temp(egui::Id::unique(FACES_SETTINGS_CHANGED), true));
@@ -841,6 +885,10 @@ impl Account {
                     };
                     self.face_settings = None;
                     call(&self.inbox, ctx, Method::Get, "api/photos/faces", None, Reply::FaceSettings);
+                    self.library_settings = None;
+                    if self.settings_tab == 1 {
+                        self.load_library_settings(ctx);
+                    }
                     self.backup = None;
                     self.backup_list = None;
                     self.backup_key = None;
@@ -1224,6 +1272,7 @@ impl Account {
         house::dialog(ctx, "starsheets_settings", 560.0, "Settings", Some(&mut close), |ui| {
             if self.settings_tabs(ui) {
                 if self.settings_tab == 1 {
+                    self.load_library_settings(ctx);
                     call(&self.inbox, ctx, Method::Get, "api/photos/faces", None, Reply::FaceSettings);
                 }
                 return;
@@ -1235,7 +1284,7 @@ impl Account {
                 if r.changed() {
                     crate::theme::set_drive_dark(dark);
                 }
-                house::note(ui, "This setting is saved in this browser. Photo Mode always uses the dark appearance.");
+                house::note(ui, "This setting is saved in this browser. Photos always uses the dark appearance.");
             } else {
                 self.photos_settings_ui(ui, ctx);
             }
@@ -1246,15 +1295,79 @@ impl Account {
         }
     }
 
+    fn load_library_settings(&self, ctx: &egui::Context) {
+        if me().is_some() {
+            call(&self.inbox, ctx, Method::Get, "api/library-roots", None, |value| Reply::LibraryRoots(value, false));
+        }
+    }
+
+    fn library_settings_ui(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+        let Some(form) = self.library_settings.as_mut() else { return };
+        let mounts = &form.mounts;
+        ui.label("My Files location");
+        let current =
+            if form.my_files.is_empty() { "Account folder" } else { mounts.get(&form.my_files).map_or("Unavailable mount", String::as_str) };
+        let location = egui::ComboBox::from_id_salt("my_files_location").selected_text(current).show_ui(ui, |ui| {
+            let account = ui.selectable_value(&mut form.my_files, String::new(), "Account folder");
+            house::target(ctx, "settings:my-files-account", account.rect);
+            for (id, path) in mounts {
+                let mount = ui.selectable_value(&mut form.my_files, id.clone(), path);
+                house::target(ctx, &format!("settings:my-files-choice:{id}"), mount.rect);
+            }
+        });
+
+        house::target(ctx, "settings:my-files-location", location.response.rect);
+
+        ui.label("Photos location");
+        let current = match &form.photos {
+            PhotoSource::SameAsMyFiles => "Same as My Files",
+            PhotoSource::Folder => "Folder in My Files",
+            PhotoSource::Mount(id) => mounts.get(id).map_or("Unavailable mount", String::as_str),
+        };
+        let location = egui::ComboBox::from_id_salt("photos_location").selected_text(current).show_ui(ui, |ui| {
+            ui.selectable_value(&mut form.photos, PhotoSource::SameAsMyFiles, "Same as My Files");
+            let folder = ui.selectable_value(&mut form.photos, PhotoSource::Folder, "Folder in My Files");
+            house::target(ctx, "settings:photos-folder-choice", folder.rect);
+            for (id, path) in mounts {
+                ui.selectable_value(&mut form.photos, PhotoSource::Mount(id.clone()), path);
+            }
+        });
+        house::target(ctx, "settings:photos-location", location.response.rect);
+        if form.photos == PhotoSource::Folder {
+            let field = Self::field(ui, &mut form.folder, "Folder path within My Files", false);
+            house::target(ctx, "settings:photos-folder", field.rect);
+        }
+
+        let valid = form.photos != PhotoSource::Folder || !form.folder.trim().is_empty();
+        let save = ui.add_enabled(valid && !self.busy, egui::Button::new("Save library locations"));
+        house::target(ctx, "settings:save-library", save.rect);
+        if save.clicked() {
+            let files = (!form.my_files.is_empty()).then_some(form.my_files.as_str());
+            let photos = match &form.photos {
+                PhotoSource::SameAsMyFiles => Json::Null,
+                PhotoSource::Folder => json!({"folder": form.folder.trim()}),
+                PhotoSource::Mount(id) => json!({"mount": id}),
+            };
+            self.busy = true;
+            self.error = None;
+            self.done = None;
+            call(&self.inbox, ctx, Method::Put, "api/library-roots", Some(json!({"my_files": files, "photos": photos})), |value| {
+                Reply::LibraryRoots(value, true)
+            });
+        }
+        house::gap(ui);
+    }
+
     fn photos_settings_ui(&mut self, ui: &mut Ui, ctx: &egui::Context) {
         let mut enabled = photos_available();
-        let r = ui.checkbox(&mut enabled, "Show Photo Mode in Drive on this browser");
+        let r = ui.checkbox(&mut enabled, "Show Photos in Drive on this browser");
         house::target(ctx, "settings:photos-enabled", r.rect);
         if r.changed()
             && let Some(storage) = browser_settings()
         {
             let _ = storage.set_item(PHOTOS_AVAILABLE, if enabled { "1" } else { "0" });
         }
+        self.library_settings_ui(ui, ctx);
         let Some(state) = &self.face_settings else {
             house::note(ui, "Loading face recognition settings…");
             return;

@@ -81,7 +81,7 @@ impl PhotoMode {
     }
 
     /// A file came from the picker: line it up.
-    pub(super) fn upload_add(&mut self, folder: &str, name: String, bytes: Vec<u8>) {
+    pub(in crate::home) fn upload_add(&mut self, folder: &str, name: String, bytes: Vec<u8>) {
         self.up.files.push(Up { name, folder: folder.to_string(), bytes: Some(Rc::new(bytes)), state: State::Waiting, tries: 0, retry_at: 0.0 });
     }
 

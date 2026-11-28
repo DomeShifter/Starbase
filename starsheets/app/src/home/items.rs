@@ -99,7 +99,9 @@ impl Home {
                     self.store.set_setting("starsheets_home_list", "1");
                     self.photos.set_on(&self.store, false);
                 }
-                if self.photos_available() && toggle(ui, "photo_mode", photos, "Photo Mode") {
+                if self.photos_available() && toggle(ui, "photo_mode", photos, "Photos") {
+                    self.photo_nav = Default::default();
+                    self.photos.go(photos::albums::Tab::Photos);
                     self.photos.set_on(&self.store, true);
                     self.search.clear();
                 }
@@ -125,11 +127,6 @@ impl Home {
         }
         if self.view == Some(View::Storage) {
             self.storage_header(ui);
-        }
-        if let Some(folder) = self.photo_folder() {
-            self.photos.ui(ui, &self.store, &folder);
-            self.photo_outs(ui.ctx());
-            return;
         }
         let (folders, files) = self.contents();
         let ctx = ui.ctx().clone();
@@ -217,7 +214,7 @@ impl Home {
             bg.context_menu(|ui| {
                 house::menu(ui, 260.0);
                 let here = self.here();
-                let into = here.clone().unwrap_or_else(|| self.space.clone());
+                let Some(into) = here.clone().or_else(|| self.mine_root().map(str::to_string)) else { return };
                 if house::menu_row(ui, Some("note_add"), "New spreadsheet", "", true) {
                     self.new_file(&into, false);
                 }
@@ -232,7 +229,7 @@ impl Home {
                 }
                 if house::menu_row(ui, Some("create_new_folder"), "New folder", "", true) {
                     if here.is_none() {
-                        self.navigate(View::Mine(self.space.clone()));
+                        self.navigate(View::Mine(into.clone()));
                     }
                     call(&self.store, &self.inbox, ui.ctx(), Method::Post, format!("api/folders?path={}&name=New%20folder", enc(&into)), None, |b| {
                         let v: Json = serde_json::from_slice(&b).unwrap_or_default();
@@ -779,6 +776,12 @@ pub(super) fn file_kind(name: &str) -> &'static str {
         | "nfo" => "text",
         _ => "other",
     }
+}
+
+/// Pictures supported by the server's unindexed 1024-pixel viewer endpoint.
+pub(super) fn photo_preview(name: &str) -> bool {
+    let ext = name.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase());
+    matches!(ext.as_deref(), Some("png" | "jpg" | "jpeg" | "jfif" | "gif" | "webp" | "bmp" | "ico" | "tif" | "tiff"))
 }
 
 /// The icon of a file's type.

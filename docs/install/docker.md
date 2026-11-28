@@ -80,6 +80,44 @@ Already run a sign-in service such as Authelia, Authentik, Keycloak or Pocket ID
 use it (OpenID Connect) alongside its own passwords: see
 [starsheets/docs/oidc.md](../../starsheets/docs/oidc.md).
 
+## Separate My Files and Photos locations
+
+In the browser, open **Settings → Photos** to choose a folder inside My Files as
+your Photos library. With a separate library, the Photos folder tree and features
+such as People and Moments use that library. The My Files tree still lets you
+browse your other images and videos.
+
+An administrator can also assign Docker bind mounts to an individual account.
+Create the account first. To assign a mount for an account called `ann`:
+
+1. Add a bind mount in Compose from your storage directory to
+   `/data/ann/starbase-mounts/Library`. Give the container's user access to the
+   source directory. Use a dedicated target here and keep other mounts out of
+   its subtree.
+2. In the data volume, add a `mount_account` field to
+   `.starsheets/people/ann.json`, preserving its other settings. Keep the
+   existing field if present. Otherwise generate a new value with
+   `openssl rand -hex 16`. Make changes to preference files while Starbase is
+   stopped so writes from the app cannot overwrite them.
+3. Add the assignment to `.starsheets/mounts.json` in the same data volume,
+   preserving entries for other accounts. Substitute the account key from step 2.
+
+   ```json
+   {
+     "<mount_account>": {
+       "library": "ann/starbase-mounts/Library"
+     }
+   }
+   ```
+
+4. Recreate the container with Compose. Sign in as the assigned account and
+   choose the mount in **Settings → Photos**. Select **Same as My Files** to
+   use one location for both.
+
+Starbase includes mounted files in its backup. The browser's Restore command
+skips private mount folders. Restore them with restic to staging storage, then
+copy them back to the original private mount with the container stopped.
+
 ## Backups
 
 Starbase backs itself up once a day, encrypted, to the folder mounted as `/backups`. It keeps the

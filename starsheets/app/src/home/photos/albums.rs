@@ -17,6 +17,7 @@ use crate::theme;
 pub(in crate::home) enum Tab {
     #[default]
     Photos,
+    MyFiles,
     Timeline,
     Albums,
     Places,
@@ -27,10 +28,15 @@ pub(in crate::home) enum Tab {
 }
 
 impl Tab {
+    pub fn folder_grid(self) -> bool {
+        matches!(self, Self::MyFiles | Self::Photos | Self::Timeline)
+    }
+
     #[cfg(target_arch = "wasm32")]
     fn name(self) -> &'static str {
         match self {
             Tab::Photos => "photos",
+            Tab::MyFiles => "my-files",
             Tab::Timeline => "timeline",
             Tab::Albums => "albums",
             Tab::Places => "places",
@@ -96,7 +102,7 @@ pub(super) enum NavRow {
 /// Photos, Albums, People, Places, Timeline, Events); below it are TOOLS AND SETTINGS (things
 /// that manage the library: Duplicates, Locked). A new item goes in the half that fits it; there
 /// is no "More" menu. Every row is a plain row with an icon.
-pub(super) fn nav_rows() -> Vec<NavRow> {
+pub(super) fn nav_rows(my_files: bool) -> Vec<NavRow> {
     use NavRow::*;
     let mut rows = vec![
         Go(Tab::Photos, "Photos", "photo_library"),
@@ -104,10 +110,13 @@ pub(super) fn nav_rows() -> Vec<NavRow> {
         Go(Tab::People, "People", "group"),
         Go(Tab::Places, "Places", "location_on"),
         Go(Tab::Timeline, "Timeline", "schedule"),
-        Go(Tab::Events, "Events", "event"),
+        Go(Tab::Events, "Moments", "event"),
         Divider,
         Go(Tab::Duplicates, "Duplicates", "content_copy"),
     ];
+    if my_files {
+        rows.insert(0, Go(Tab::MyFiles, "My Files", "home_storage"));
+    }
     if crate::home::LOCKED_PHOTOS_VISIBLE {
         rows.push(Go(Tab::Locked, "Locked", "lock"));
     }
@@ -206,7 +215,7 @@ impl Albums {
             Tab::Places => self.places = cards(v, "places"),
             Tab::People => self.ppl.take(v),
             Tab::Events => self.events = cards(v, "events"),
-            Tab::Photos | Tab::Timeline | Tab::Duplicates | Tab::Locked => {}
+            Tab::Photos | Tab::MyFiles | Tab::Timeline | Tab::Duplicates | Tab::Locked => {}
         }
     }
 
@@ -244,34 +253,7 @@ impl PhotoMode {
             self.alb.ask = Ask::None;
             self.dups.reset();
             self.lk.reset();
-            self.pics.clear();
-            self.viewer = None;
-            // Back to the folder: listed again.
-            if matches!(t, Tab::Photos | Tab::Timeline) {
-                self.folder = None;
-            }
-        }
-    }
-
-    /// Left nav: one quiet 36-high row per tab ([`nav_rows`]), the picked one filled.
-    pub(super) fn nav_ui(&mut self, ui: &mut Ui, _store: &Backend) {
-        ui.add_space(house::S);
-        ui.spacing_mut().item_spacing.y = house::XS;
-        for row in nav_rows() {
-            match row {
-                NavRow::Divider => {
-                    ui.add_space(house::XS);
-                    house::menu_sep(ui);
-                    ui.add_space(house::XS);
-                }
-                NavRow::Go(t, label, icon) => {
-                    let r = ui.add(house::quiet_with(Some(icon), label, self.alb.tab == t).min_size(vec2(120.0, house::BUTTON_HEIGHT)));
-                    house::target(ui.ctx(), label, r.rect);
-                    if r.clicked() {
-                        self.go(t);
-                    }
-                }
-            }
+            self.reset_folder();
         }
     }
 
@@ -306,7 +288,7 @@ impl PhotoMode {
         };
         let key = c.id.clone();
         self.alb.open = Some(c);
-        get(ctx, store, &self.inbox, &url, move |v| Got::Opened(t, key, v));
+        get(ctx, store, &self.library_inbox, &url, move |v| Got::Opened(t, key, v));
     }
 
     /// The album and place cards, or the opened one.
@@ -326,7 +308,7 @@ impl PhotoMode {
                     if ui
                         .add(link(match t {
                             Tab::Albums => "‹ Albums",
-                            Tab::Events => "‹ Events",
+                            Tab::Events => "‹ Moments",
                             _ => "‹ Places",
                         }))
                         .clicked()
@@ -395,7 +377,7 @@ impl PhotoMode {
                     self.map.list = false;
                 }
             });
-            self.alb.boot_cards(&ctx, store, &self.inbox);
+            self.alb.boot_cards(&ctx, store, &self.library_inbox);
         } else if t == Tab::Albums {
             ui.horizontal(|ui| {
                 ui.label(RichText::new("Albums").size(house::TITLE).color(theme::text()));
@@ -407,8 +389,8 @@ impl PhotoMode {
             });
             self.pick_ui(ui, store);
         } else {
-            ui.label(RichText::new(if t == Tab::Events { "Events" } else { "Places" }).size(house::TITLE).color(theme::text()));
-            self.alb.boot_cards(&ctx, store, &self.inbox);
+            ui.label(RichText::new(if t == Tab::Events { "Moments" } else { "Places" }).size(house::TITLE).color(theme::text()));
+            self.alb.boot_cards(&ctx, store, &self.library_inbox);
         }
         ui.add_space(house::S);
         let list = match t {
@@ -522,19 +504,19 @@ impl PhotoMode {
 
     fn create(&mut self, ctx: &egui::Context, store: &Backend, name: &str, all: bool) {
         let files = if all { self.pics.iter().map(|p| p.id.clone()).collect() } else { self.selection() };
-        post(ctx, store, &self.inbox, "api/photos/albums", json!({"name": name, "files": files}));
+        post(ctx, store, &self.library_inbox, "api/photos/albums", json!({"name": name, "files": files}));
         self.clear_selection();
     }
 
     fn rename(&mut self, ctx: &egui::Context, store: &Backend, id: &str, name: &str) {
-        post(ctx, store, &self.inbox, &format!("api/photos/albums/{id}/rename"), json!({"name": name}));
+        post(ctx, store, &self.library_inbox, &format!("api/photos/albums/{id}/rename"), json!({"name": name}));
         if let Some(c) = &mut self.alb.open {
             c.name = name.to_string();
         }
     }
 
     fn delete(&mut self, ctx: &egui::Context, store: &Backend, id: &str) {
-        post(ctx, store, &self.inbox, &format!("api/photos/albums/{id}/delete"), json!({}));
+        post(ctx, store, &self.library_inbox, &format!("api/photos/albums/{id}/delete"), json!({}));
         self.alb.open = None;
         self.clear_selection();
         self.pics.clear();
@@ -592,13 +574,13 @@ impl PhotoMode {
             }
             "home:photos:place:open" => {
                 self.alb.tab = Tab::Places;
-                self.alb.boot_cards(ctx, store, &self.inbox);
+                self.alb.boot_cards(ctx, store, &self.library_inbox);
                 let c = find(&self.alb.places, &s("place")).ok_or("no such place (yet)")?;
                 self.open_card(ctx, store, c);
             }
             "home:photos:event:open" => {
                 self.alb.tab = Tab::Events;
-                self.alb.boot_cards(ctx, store, &self.inbox);
+                self.alb.boot_cards(ctx, store, &self.library_inbox);
                 let c = find(&self.alb.events, &s("event")).ok_or("no such event (yet)")?;
                 self.open_card(ctx, store, c);
             }
@@ -639,10 +621,10 @@ mod tests {
     /// The left list: views above the divider, tools and settings below, no More menu.
     #[test]
     fn the_left_list_has_views_then_tools() {
-        let rows = nav_rows();
+        let rows = nav_rows(false);
         let split = rows.iter().position(|r| *r == NavRow::Divider).unwrap();
         let names = |s: &[NavRow]| s.iter().filter_map(|r| if let NavRow::Go(_, l, _) = r { Some(*l) } else { None }).collect::<Vec<_>>();
-        assert_eq!(names(&rows[..split]), ["Photos", "Albums", "People", "Places", "Timeline", "Events"]);
+        assert_eq!(names(&rows[..split]), ["Photos", "Albums", "People", "Places", "Timeline", "Moments"]);
         assert_eq!(names(&rows[split..]), ["Duplicates", "Locked"]);
         assert_eq!(rows.iter().filter(|r| **r == NavRow::Divider).count(), 1);
     }

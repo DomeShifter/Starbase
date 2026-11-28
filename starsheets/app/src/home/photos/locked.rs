@@ -154,7 +154,7 @@ impl PhotoMode {
         let n = ids.len();
         let what = if n == 1 { "1 picture".to_string() } else { format!("{n} pictures") };
         self.say(ctx, if into { format!("Moved {what} to the Locked folder") } else { format!("Moved {what} out of the Locked folder") }, None);
-        self.alb.changed(ctx, store, &self.inbox);
+        self.alb.changed(ctx, store, &self.library_inbox);
     }
 
     /// Each frame: the idle timer, leaving Locked, and "Move out" asked in the viewer.

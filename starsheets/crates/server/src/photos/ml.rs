@@ -299,6 +299,38 @@ impl Photos {
     }
 
     /// The face worker thread.
+    pub(super) fn active_face_libraries(&self, engine: &str) -> Option<std::collections::HashMap<String, std::collections::HashSet<String>>> {
+        use std::collections::{HashMap, HashSet};
+
+        if !self.store.spaces {
+            return None;
+        }
+        let libraries: HashMap<_, _> = crate::auth::users(&self.store)
+            .into_iter()
+            .filter_map(|user| {
+                let root = crate::mounts::configured_photos(&self.store, &user)?;
+                let model = crate::mounts::face_model(&self.store, Some(&user), engine);
+                Some((user.username, (root, model)))
+            })
+            .collect();
+        if libraries.is_empty() {
+            return None;
+        }
+        let paths = self.with_db(faces::thumb_paths).unwrap_or_default();
+        let mut active: HashMap<String, HashSet<String>> = HashMap::new();
+        for (thumb, path) in paths {
+            let library = libraries.get(crate::store::space_of(&path));
+            let root = library.map(|(root, _)| root);
+            if Self::library_allows(&path, root) {
+                let model = library.map_or(engine, |(_, model)| model);
+                if !model.ends_with(":unavailable") {
+                    active.entry(model.to_string()).or_default().insert(thumb);
+                }
+            }
+        }
+        Some(active)
+    }
+
     pub(super) fn face_worker(self: Arc<Self>) {
         super::low_priority();
         let model = self.face_model().to_string();
@@ -313,8 +345,15 @@ impl Photos {
                 self.ml.nap(Duration::from_secs(30));
                 continue;
             }
+            let active = self.active_face_libraries(&model);
             if self.ml.dirty.swap(false, Ordering::Relaxed) {
-                let _ = faces::regroup(self.db_lock(), &model);
+                if let Some(active) = &active {
+                    for (model, thumbs) in active {
+                        let _ = faces::regroup_in(self.db_lock(), model, Some(thumbs));
+                    }
+                } else {
+                    let _ = faces::regroup(self.db_lock(), &model);
+                }
             }
             if engine.is_none() {
                 let missing = self.missing_models();
@@ -345,11 +384,16 @@ impl Photos {
             }
             // New pictures first; then, once, pictures an older face finder looked at
             // (faces::DETECT_VERSION): only faces it missed are added, nothing is changed.
-            let mut todo = self.with_db(|ix| faces::todo(ix, &model, 16).unwrap_or_default());
-            let recheck = todo.is_empty();
-            if recheck {
-                todo = self.with_db(|ix| faces::recheck_todo(ix, &model, 16).unwrap_or_default());
-            }
+            let (recheck, todo) = if let Some(active) = &active {
+                self.with_db(|ix| faces::scoped_jobs(ix, active, 16)).unwrap_or_default()
+            } else {
+                let mut jobs = self.with_db(|ix| faces::todo(ix, &model, 16).unwrap_or_default());
+                let recheck = jobs.is_empty();
+                if recheck {
+                    jobs = self.with_db(|ix| faces::recheck_todo(ix, &model, 16).unwrap_or_default());
+                }
+                (recheck, jobs.into_iter().map(|thumb| (thumb, model.clone())).collect())
+            };
             if todo.is_empty() {
                 self.ml.say("Up to date.");
                 self.ml.nap(Duration::from_secs(60));
@@ -357,7 +401,8 @@ impl Photos {
             }
             self.ml.say(if recheck { "Checking older photos for faces missed before." } else { "Looking for faces." });
             let Some(eng) = engine.as_mut() else { continue };
-            for thumb in todo {
+            let mut changed = std::collections::BTreeSet::new();
+            for (thumb, scoped_model) in todo {
                 if self.stopped() || !self.faces_on() {
                     break;
                 }
@@ -379,12 +424,16 @@ impl Photos {
                     None => Vec::new(),
                 };
                 if recheck {
-                    self.with_db(|ix| faces::add_new(ix, &thumb, &model, &found)).ok();
+                    self.with_db(|ix| faces::add_new(ix, &thumb, &scoped_model, &found)).ok();
                 } else {
-                    self.with_db(|ix| faces::keep(ix, &thumb, &model, &found)).ok();
+                    self.with_db(|ix| faces::keep(ix, &thumb, &scoped_model, &found)).ok();
                 }
+                changed.insert(scoped_model);
             }
-            let _ = faces::regroup(self.db_lock(), &model);
+            for model in changed {
+                let thumbs = active.as_ref().and_then(|active| active.get(&model));
+                let _ = faces::regroup_in(self.db_lock(), &model, thumbs);
+            }
         }
     }
 }

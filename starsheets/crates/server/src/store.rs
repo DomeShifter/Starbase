@@ -635,6 +635,9 @@ impl Store {
     /// Whether no part of `relpath` (below the store's own folder) is a symbolic link or hidden.
     /// Missing parts are fine (checked by whoever needs them to exist).
     pub fn no_links(&self, relpath: &str) -> bool {
+        if !self.spaces && crate::mounts::private_path(relpath) {
+            return false;
+        }
         let mut p = self.root.clone();
         for part in relpath.split('/').filter(|x| !x.is_empty()) {
             if part.starts_with('.') {
@@ -751,12 +754,19 @@ impl Store {
         version_names(&self.versions().join(fid)).pop().unwrap_or_default()
     }
 
-    /// Writes a file atomically (temp file in .starsheets, then rename).
+    /// Stages the write beside its destination so replacing it also works on bind mounts.
     pub fn write_file(&self, path: &Path, data: &[u8]) -> io::Result<()> {
-        fs::create_dir_all(self.meta())?;
-        let tmp = self.meta().join(format!(".{}.tmp", random_hex(6)));
-        fs::write(&tmp, data)?;
-        fs::rename(&tmp, path)
+        use std::io::Write as _;
+
+        let tmp = path.with_file_name(format!(".{}.tmp", random_hex(6)));
+        let mut out = fs::File::options().write(true).create_new(true).open(&tmp)?;
+        let written = out.write_all(data);
+        drop(out);
+        let result = written.and_then(|()| fs::rename(&tmp, path));
+        if result.is_err() {
+            let _ = fs::remove_file(&tmp);
+        }
+        result
     }
 
     /// Copies the file as it is now into its versions folder ([`thin`] says which are kept). The
@@ -926,6 +936,9 @@ impl Store {
     /// Creates a free folder name in `parent` ("Name", "Name (2)", …).
     fn claim_folder(&self, parent: &str, name: Option<&str>) -> R<String> {
         let name = if name.unwrap_or("").is_empty() { "New folder".to_string() } else { clean_name(name) };
+        if self.spaces && join(parent, &name) == crate::mounts::account_mount_dir(parent) && !parent.contains('/') {
+            return Err(Bad::new(403, "The deployment manages this mount folder."));
+        }
         for n in 1..10000 {
             let candidate = numbered(&name, n, "");
             match fs::create_dir(self.full(parent).join(&candidate)) {
@@ -938,6 +951,9 @@ impl Store {
     }
 
     fn free_folder_name(&self, parent: &str, name: &str) -> R<String> {
+        if self.spaces && join(parent, name) == crate::mounts::account_mount_dir(parent) && !parent.contains('/') {
+            return Err(Bad::new(403, "The deployment manages this mount folder."));
+        }
         (1..10000).map(|n| numbered(name, n, "")).find(|c| !self.full(parent).join(c).exists()).ok_or_else(|| Bad::new(409, "no free name"))
     }
 
@@ -957,6 +973,9 @@ impl Store {
 
     /// `name` in `parent` if nothing there has it, else 409.
     fn exact_folder_name(&self, parent: &str, name: &str) -> R<String> {
+        if self.spaces && join(parent, name) == crate::mounts::account_mount_dir(parent) && !parent.contains('/') {
+            return Err(Bad::new(403, "The deployment manages this mount folder."));
+        }
         if fs::symlink_metadata(self.full(parent).join(name)).is_ok() { Err(taken(name)) } else { Ok(name.to_string()) }
     }
 
@@ -1005,7 +1024,11 @@ impl Store {
         index: &mut Index,
     ) -> R<Reply> {
         if p.len() == 1 && method == "GET" {
-            let (files, folders) = self.walk();
+            let (mut files, mut folders) = self.walk();
+            if !self.spaces {
+                files.retain(|path| !crate::mounts::private_path(path));
+                folders.retain(|path| !crate::mounts::private_path(path));
+            }
             let by_path: HashMap<&String, &String> = index.iter().map(|(k, v)| (v, k)).collect();
             let mut out = Vec::new();
             for path in &files {
@@ -1225,6 +1248,11 @@ impl Store {
         if self.spaces && !path.contains('/') {
             return Err(Bad::new(400, "A person's own folder can't be changed."));
         }
+        if (crate::mounts::private_path(&path) && path.split('/').count() <= 3)
+            || (!path.contains('/') && self.full(&crate::mounts::account_mount_dir(&path)).symlink_metadata().is_ok())
+        {
+            return Err(Bad::new(403, "The deployment manages this mount folder."));
+        }
         let folder_ids = self.synced_folders()?;
         let fid = folder_ids.iter().find(|(_, p)| **p == path).map(|(k, _)| k.clone()).unwrap_or_default();
         // ?id=<the folder's id> (an Undo): the folder at `path` must still be the one the action
@@ -1344,8 +1372,20 @@ impl Store {
                     return Err(Bad::new(409, "That isn't in the bin any more."));
                 }
                 let mut folder = parent_of(&original);
+                let private = crate::mounts::private_path(&original);
+                if private {
+                    let grant = self.spaces
+                        && space_of(&original) == space
+                        && crate::auth::users(self)
+                            .iter()
+                            .find(|u| u.username == space)
+                            .is_some_and(|u| crate::mounts::choices(self, u).values().any(|root| crate::mounts::within(&folder, root)));
+                    if !grant {
+                        return Err(Bad::new(409, "The original account mount is unavailable."));
+                    }
+                }
                 if !self.full(&folder).is_dir() || !self.no_links(&folder) || (self.spaces && space_of(&folder) != space) {
-                    if exact {
+                    if exact || private {
                         return Err(Bad::new(409, format!("The folder \u{201c}{}\u{201d} was in isn't there any more.", base_of(&original))));
                     }
                     folder = space.clone();
@@ -1655,6 +1695,48 @@ mod tests {
         assert_eq!((code, v["used"].as_u64(), v["bin"].as_u64(), v["files"].as_u64()), (200, Some(150), Some(7), Some(2)), "{v}");
         assert!(v["free"].as_u64().is_some());
         assert_eq!(call(&store, "GET", "usage").0, 400, "no space named");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn atomic_file_write_uses_the_destination_filesystem() {
+        use std::os::unix::fs::MetadataExt as _;
+
+        let root = std::env::temp_dir();
+        let other = Path::new("/dev/shm");
+        let base = match (fs::metadata(&root), fs::metadata(other)) {
+            (Ok(root_meta), Ok(other_meta)) if root_meta.dev() != other_meta.dev() => other,
+            _ => root.as_path(),
+        };
+        let dir = base.join(format!("starsheets-write-{}", random_hex(6)));
+        fs::create_dir(&dir).unwrap();
+        let store = Store { root, keep: 3, spaces: true };
+        let path = dir.join("Photo.jpg");
+        fs::write(&path, b"original").unwrap();
+        store.write_file(&path, b"replacement").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"replacement");
+
+        let occupied = dir.join("folder");
+        fs::create_dir(&occupied).unwrap();
+        assert!(store.write_file(&occupied, b"fails to replace a directory").is_err());
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 2);
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn private_bin_restore_waits_for_the_original_mount() {
+        let dir = std::env::temp_dir().join(format!("starsheets-private-bin-{}", random_hex(6)));
+        let store = Store { root: dir.clone(), keep: 3, spaces: true };
+        let library = dir.join("ann").join(crate::mounts::DIRECTORY).join("Library");
+        fs::create_dir_all(&library).unwrap();
+        fs::write(library.join("Photo.jpg"), b"fixture").unwrap();
+        let file = format!("ann/{}/Library/Photo.jpg", crate::mounts::DIRECTORY);
+        let name = store.to_bin(&file, &mut store.synced_index().unwrap()).unwrap();
+        fs::remove_dir(&library).unwrap();
+
+        assert_eq!(call(&store, "POST", &format!("bin/restore?space=ann&name={name}")).0, 409);
+        assert!(store.bin("ann").join(&name).is_file());
+        assert!(!dir.join("ann/Photo.jpg").exists());
         let _ = fs::remove_dir_all(&dir);
     }
 

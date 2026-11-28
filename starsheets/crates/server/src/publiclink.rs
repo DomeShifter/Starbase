@@ -154,6 +154,11 @@ fn password_page(token: &str, wrong: bool) -> Reply {
 pub fn unlock(store: &Store, token: &str, password: &str) -> Reply {
     let mut all = load(store);
     let Some(entry) = all.get_mut(token) else { return page(404, "Link not found", "<p>This link doesn't exist or was turned off.</p>") };
+    let id = entry["file"].as_str().unwrap_or_default();
+    let Some(_) = store.path_of(id).ok().flatten().filter(|rel| !crate::mounts::private_path(rel) && !crate::photos::locked::is_locked(store, id))
+    else {
+        return page(404, "File not found", "<p>That file is gone.</p>");
+    };
     if entry["expires"].as_f64().is_some_and(|e| now() >= e) {
         return page(410, "This link has expired", "<p>Ask the person who shared it for a new one.</p>");
     }
@@ -201,19 +206,20 @@ fn viewable(name: &str) -> Option<&'static str> {
 pub fn serve(store: &Store, token: &str, what: &str, grant: &str) -> Reply {
     let all = load(store);
     let Some(entry) = all.get(token) else { return page(404, "Link not found", "<p>This link doesn't exist or was turned off.</p>") };
+    let id = entry["file"].as_str().unwrap_or_default();
+    let Some(rel) = store.path_of(id).ok().flatten().filter(|rel| !crate::mounts::private_path(rel) && !crate::photos::locked::is_locked(store, id))
+    else {
+        return page(404, "File not found", "<p>That file is gone.</p>");
+    };
     if entry["expires"].as_f64().is_some_and(|e| now() >= e) {
         return page(410, "This link has expired", "<p>Ask the person who shared it for a new one.</p>");
     }
-    let id = entry["file"].as_str().unwrap_or_default();
     if entry["password"].as_str().is_some() {
         let ok = !grant.is_empty() && entry["grants"][grant].as_f64().is_some_and(|e| e > now());
         if !ok {
             return password_page(token, false);
         }
     }
-    let Some(rel) = store.path_of(id).ok().flatten().filter(|_| !crate::photos::locked::is_locked(store, id)) else {
-        return page(404, "File not found", "<p>That file is gone.</p>");
-    };
     let name = rel.rsplit('/').next().unwrap_or("file").to_string();
     let no_download = entry["no_download"].as_bool().unwrap_or(false);
     let base = format!("/api/public/{token}");

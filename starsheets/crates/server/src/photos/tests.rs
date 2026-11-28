@@ -280,6 +280,20 @@ pub(super) fn settle(svc: &Photos) {
 }
 
 #[test]
+fn scanner_reconciles_an_enabled_parent_with_the_selected_library() {
+    let (store, svc) = with_pictures();
+    let ann = crate::auth::add_hashed(&store, "ann", "Ann", String::new()).unwrap();
+    svc.enable("ann", "ann").unwrap();
+    rescan(&svc);
+    assert!(!svc.rows("ann/Private", true).is_empty());
+    crate::mounts::set_roots(&store, &ann, None, Some(crate::mounts::PhotosChoice::Folder("Trip".into()))).unwrap();
+    rescan(&svc);
+    assert!(!svc.rows("ann/Trip", true).is_empty());
+    assert!(svc.rows("ann/Private", true).is_empty());
+    svc.stop();
+}
+
+#[test]
 fn nothing_is_indexed_until_photos_is_turned_on() {
     let (s, svc) = with_pictures();
     rescan(&svc);

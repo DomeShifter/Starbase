@@ -206,10 +206,10 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
     if !typing {
         ctx.input_mut(|i| {
             use super::photos::Act;
-            if i.consume_key(Modifiers::SHIFT, Key::L) {
+            if pm.in_library() && i.consume_key(Modifiers::SHIFT, Key::L) {
                 acts.push(Act::Remove);
             }
-            if i.consume_key(Modifiers::NONE, Key::L) {
+            if pm.in_library() && i.consume_key(Modifiers::NONE, Key::L) {
                 acts.push(Act::AddTo);
             }
             if i.consume_key(Modifiers::NONE, Key::F) {
@@ -349,7 +349,7 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
         area.max.x -= side;
         let is_video = p.is_video();
         // Bigger on screen than the 1024 copy: the 2560 screen copy (never the original).
-        let want_screen = !is_video && !v.raw && {
+        let want_screen = pm.in_library() && !is_video && !v.raw && {
             let fit = (area.width() / pw).min(area.height() / ph);
             pw * fit * v.zoom * ctx.pixels_per_point() > LARGE as f32 + 1.0 && pw.max(ph) > LARGE as f32
         };
@@ -420,10 +420,10 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
             if button(ui, "white_delete", "Move to bin (Delete)") {
                 acts.push(super::photos::Act::Delete);
             }
-            if pm.open_album().is_some() && button(ui, "white_remove", "Remove from this album (Shift-L)") {
+            if pm.in_library() && pm.open_album().is_some() && button(ui, "white_remove", "Remove from this album (Shift-L)") {
                 acts.push(super::photos::Act::Remove);
             }
-            if button(ui, "white_photo_library", "Add to album (L)") {
+            if pm.in_library() && button(ui, "white_photo_library", "Add to album (L)") {
                 acts.push(super::photos::Act::AddTo);
             }
             let starred = pm.pics.get(v.index()).is_some_and(|p| p.starred);
@@ -530,14 +530,14 @@ pub(super) fn ui(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend) -> bo
         {
             let in_locked = pm.locked_tab();
             let p = p.clone();
-            let people = info_people(pm, ctx, store, &p.id);
+            let people = if !pm.in_library() { InfoPeople::OutsideLibrary } else { info_people(pm, ctx, store, &p.id) };
             pm.ask_info(ctx, store, &p.id);
             let d = pm.info_detail.as_ref().filter(|f| f.0 == p.id && !f.1.is_null()).map_or(json!({}), |f| f.1.clone());
             let names: Vec<String> = match &people {
                 InfoPeople::Found(v, _) => v.iter().map(|(c, _)| c.name.clone()).collect(),
                 _ => vec![],
             };
-            let albums = pm.alb.albums_of(&p.id);
+            let albums = if !pm.in_library() { Vec::new() } else { pm.alb.albums_of(&p.id) };
             let o = info_panel(ui, rect, &p, &albums, in_locked, &people, &d, &names, &mut pm.info_edit);
             drop(albums);
             let (g, lock, shut, who) = (o.go, o.lock, o.close, o.who);
@@ -808,6 +808,7 @@ fn human(b: u64) -> String {
 
 /// The Info panel's "People" section, asked of the server once per picture shown.
 enum InfoPeople {
+    OutsideLibrary,
     Asking,
     Off,
     /// Named people (card for their page, their face picture if here yet) and how many unnamed.
@@ -847,6 +848,7 @@ fn info_people(pm: &mut PhotoMode, ctx: &egui::Context, store: &Backend, id: &st
 /// The quiet line under "People" when there is nothing to link to.
 fn people_note(p: &InfoPeople) -> Option<&'static str> {
     match p {
+        InfoPeople::OutsideLibrary => None,
         InfoPeople::Asking => Some("Looking for faces…"),
         InfoPeople::Off => Some("Face recognition is off."),
         InfoPeople::Found(v, 0) if v.is_empty() => Some("No faces found"),
@@ -1021,6 +1023,9 @@ fn info_panel(
                     continue;
                 }
                 Sec::People => {
+                    if matches!(people, InfoPeople::OutsideLibrary) {
+                        continue;
+                    }
                     // PEOPLE: each named person (round face + name, opens their page), then the unnamed faces.
                     c.add_space(house::L);
                     let top = c.cursor().top();

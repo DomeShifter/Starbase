@@ -96,7 +96,7 @@ impl PhotoMode {
             self.dups.reset();
             self.dups.asked = Some(folder.to_string());
             let f = folder.to_string();
-            get(&ctx, store, &self.inbox, &format!("api/photos/duplicates?folder={}", enc(folder)), move |v| Got::Dups(f, v));
+            get(&ctx, store, &self.library_inbox, &format!("api/photos/duplicates?folder={}", enc(folder)), move |v| Got::Dups(f, v));
         }
         ui.add_space(house::S);
         let dim = |t: String| RichText::new(t).size(house::BODY).color(theme::text_dim());

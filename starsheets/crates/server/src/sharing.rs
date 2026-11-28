@@ -165,8 +165,9 @@ pub struct Access {
     /// Folder path → id, and file id → path.
     pub folder_ids: HashMap<String, String>,
     pub file_paths: HashMap<String, String>,
-    /// Locked pictures (photos/locked.rs): left out of every list and refused to everyone.
     hidden: std::collections::HashSet<String>,
+    private_roots: Vec<String>,
+    photo_root: std::sync::OnceLock<Option<crate::mounts::Root>>,
 }
 
 impl Access {
@@ -184,12 +185,48 @@ impl Access {
         let group = |g: &str| -> HashMap<String, Share> {
             all.get(g).and_then(Value::as_object).map(|m| m.iter().map(|(k, v)| (k.clone(), parse(v))).collect()).unwrap_or_default()
         };
-        let folder_ids: HashMap<String, String> = store.synced_folders().unwrap_or_default().into_iter().map(|(id, p)| (p, id)).collect();
+        let private_roots: Vec<_> =
+            user.filter(|_| auth && store.spaces).map(|user| crate::mounts::choices(store, user).into_values().collect()).unwrap_or_default();
+        let allowed = |path: &str| !crate::mounts::private_path(path) || private_roots.iter().any(|root| crate::mounts::within(path, root));
+        let folder_ids: HashMap<String, String> =
+            store.synced_folders().unwrap_or_default().into_iter().filter(|(_, p)| allowed(p)).map(|(id, p)| (p, id)).collect();
         let by_id = group("folders");
         let folders = folder_ids.iter().filter_map(|(p, id)| Some((p.clone(), by_id.get(id)?.clone()))).collect();
-        let hidden = crate::photos::locked::hidden_for(store, user.map(|u| u.username.as_str()), with_mine);
-        let file_paths = store.synced_index().unwrap_or_default().into_iter().filter(|(id, _)| !hidden.contains(id)).collect();
-        Access { auth, user: user.cloned(), files: group("files"), folders, folder_ids, file_paths, hidden }
+        let mut hidden = crate::photos::locked::hidden_for(store, user.map(|u| u.username.as_str()), with_mine);
+        let file_paths = store
+            .synced_index()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|(id, p)| {
+                if !allowed(p) {
+                    hidden.insert(id.clone());
+                }
+                !hidden.contains(id)
+            })
+            .collect();
+        Access {
+            auth,
+            user: user.cloned(),
+            files: group("files"),
+            folders,
+            folder_ids,
+            file_paths,
+            hidden,
+            private_roots,
+            photo_root: std::sync::OnceLock::new(),
+        }
+    }
+
+    pub fn photo_root(&self, store: &Store) -> Option<&crate::mounts::Root> {
+        self.photo_root.get_or_init(|| self.user.as_ref().and_then(|u| crate::mounts::configured_photos(store, u))).as_ref()
+    }
+
+    pub fn photo_allowed(&self, store: &Store, path: &str) -> bool {
+        match self.photo_root(store) {
+            None => !crate::mounts::private_path(path),
+            Some(crate::mounts::Root::Available(root)) => crate::mounts::within(path, root),
+            Some(crate::mounts::Root::Unavailable) => false,
+        }
     }
 
     fn me(&self) -> &str {
@@ -225,6 +262,9 @@ impl Access {
 
     /// What I may do with the folder at `relpath` ("" = the top).
     pub fn folder_role(&self, relpath: &str) -> Role {
+        if crate::mounts::private_path(relpath) {
+            return if self.private_roots.iter().any(|root| crate::mounts::within(relpath, root)) { Role::Owner } else { Role::None };
+        }
         if self.admin() {
             return Role::Owner;
         }
@@ -275,6 +315,9 @@ impl Access {
     }
 
     pub fn folder_listed(&self, relpath: &str) -> bool {
+        if crate::mounts::private_path(relpath) {
+            return self.folder_role(relpath) == Role::Owner;
+        }
         if self.admin() || crate::store::space_of(relpath) == self.me() {
             return true;
         }
@@ -348,6 +391,9 @@ pub fn describe(store: &Store, item: Item, relpath: &str, you: Role) -> Value {
 /// Applies the Share dialog's changes: `people` maps username → "view", "comment", "edit" or
 /// "remove"; `link` is "none", "view", "comment" or "edit".
 pub fn update(store: &Store, item: Item, relpath: &str, body: &Value) -> Result<(), String> {
+    if crate::mounts::private_path(relpath) {
+        return Err("Files and folders on account mounts are private.".into());
+    }
     let mut share = get(store, item);
     let owner = owner_of(store, relpath);
     let known: Vec<String> = auth::users(store).into_iter().map(|u| u.username).collect();
