@@ -269,6 +269,9 @@ impl Kanban {
         let query = self.filter.trim().to_lowercase();
         let pointer = ui.input(|input| input.pointer.interact_pos());
         let released = ui.input(|input| input.pointer.primary_released());
+        if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.dragging = None;
+        }
         let mut destination = None;
         let mut rename = None;
         let width = ((ui.available_width() - 72.0) / 3.0).clamp(286.0, 380.0);
@@ -319,7 +322,7 @@ impl Kanban {
                                             continue;
                                         }
                                         let position = (index, card_index);
-                                        let can_drag = writable && query.is_empty() && self.renaming.is_none();
+                                        let can_drag = writable && self.renaming.is_none();
                                         let (tile, _) = ui.allocate_exact_size(tile_size, egui::Sense::hover());
                                         let visible = tile.intersect(ui.clip_rect());
                                         house::target(ui.ctx(), &format!("kanban:tile:{index}:{card_index}"), visible);
@@ -396,7 +399,7 @@ impl Kanban {
                                 });
                             });
                         });
-                        if writable && query.is_empty() {
+                        if writable {
                             let zone = panel.response;
                             house::target(ui.ctx(), &format!("kanban:drop:{index}"), zone.rect);
                             if self.dragging.is_some() && pointer.is_some_and(|p| zone.rect.intersect(ui.clip_rect()).contains(p)) {

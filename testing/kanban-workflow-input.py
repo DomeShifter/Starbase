@@ -58,10 +58,20 @@ def check(browser, testn):
         assert s.wait_for(lambda: board()["columns"][0]["cards"][0]["title"] == "Renamed")
         assert s.wait_text("kanban:save:saved")
         positions = s.snapshot("targets")
-        s.pg.mouse.move(*positions["kanban:grip:0:0"])
-        s.pg.mouse.down()
-        s.pg.mouse.move(*positions["kanban:drop:1"], steps=18)
-        s.pg.mouse.up()
+        start = positions["kanban:grip:0:0"]
+        end = positions["kanban:drop:1"]
+        ox, oy = s.origin()
+
+        def xpoint(point):
+            return [str(round(ox + point[0])), str(round(oy + point[1]))]
+
+        middle = ((start[0] + end[0]) / 2, (start[1] + end[1]) / 2)
+        subprocess.run(
+            ["xdotool", "mousemove", *xpoint(start), "mousedown", "1", "sleep", "0.1",
+             "mousemove", *xpoint(middle), "sleep", "0.1", "mousemove", *xpoint(end),
+             "sleep", "0.15", "mouseup", "1"],
+            check=True,
+        )
         assert s.wait_for(lambda: board()["columns"][1]["cards"][0]["title"] == "Renamed")
         assert s.wait_text("kanban:save:saved")
 
