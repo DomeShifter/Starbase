@@ -71,17 +71,6 @@ impl Home {
                 self.filters = Default::default();
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let toggle = |ui: &mut Ui, icon: &str, on: bool, tip: &str| {
-                    let b = match crate::icons::icon(icon) {
-                        Some(img) => egui::Button::image(img.fit_to_exact_size(vec2(20.0, 20.0))),
-                        None => egui::Button::new(tip),
-                    };
-                    let r = ui
-                        .add(b.fill(if on { theme::drive_selection() } else { theme::card() }).corner_radius(16).min_size(vec2(44.0, 32.0)))
-                        .on_hover_text(tip);
-                    house::target(ui.ctx(), &format!("drive:{icon}"), r.rect);
-                    r.clicked()
-                };
                 let photos = self.photo_folder().is_some();
                 // [Grid | ▾] and [List | ▾]: the ▾ holds that view's options (viewopts.rs).
                 let (grid, more) = self.view_button(ui, "grid_view", !self.list && !photos, "Grid");
@@ -98,12 +87,6 @@ impl Home {
                     self.list = true;
                     self.store.set_setting("starsheets_home_list", "1");
                     self.photos.set_on(&self.store, false);
-                }
-                if self.photos_available() && toggle(ui, "photo_mode", photos, "Photos") {
-                    self.photo_nav = Default::default();
-                    self.photos.go(photos::albums::Tab::Photos);
-                    self.photos.set_on(&self.store, true);
-                    self.search.clear();
                 }
                 ui.add_space(house::S);
                 self.sort_menu(ui);
@@ -726,6 +709,10 @@ impl Home {
             // Other files: Drive's preview over the list (pictures, PDFs, sound, films, text; else
             // "No preview available" with Download).
             Item::File(id) => {
+                #[cfg(target_arch = "wasm32")]
+                if self.open_kanban(ctx, id) {
+                    return;
+                }
                 let name = self.file(id).map(|f| f.name.clone()).unwrap_or_default();
                 // This computer's own files open where they belong: Sheets, Docs, else the
                 // system's default app (localstore.rs).
@@ -776,6 +763,15 @@ pub(super) fn file_kind(name: &str) -> &'static str {
         | "nfo" => "text",
         _ => "other",
     }
+}
+
+/// Still images that Photos lists, including camera originals.
+pub(super) fn photos_image(name: &str) -> bool {
+    if file_kind(name) == "image" {
+        return true;
+    }
+    let ext = name.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase());
+    matches!(ext.as_deref(), Some("jpe" | "heic" | "heif" | "dng" | "cr2" | "cr3" | "nef" | "arw" | "orf" | "rw2" | "raf" | "pef" | "srw"))
 }
 
 /// Pictures supported by the server's unindexed 1024-pixel viewer endpoint.

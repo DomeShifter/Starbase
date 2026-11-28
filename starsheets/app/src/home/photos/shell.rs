@@ -5,7 +5,7 @@
 
 use egui::{RichText, Ui, vec2};
 
-use super::super::{Home, name_of};
+use super::super::{Home, header, name_of};
 use super::albums::{NavRow, Tab, nav_rows};
 use super::{PhotoMode, Pic};
 use crate::{house, theme};
@@ -193,56 +193,22 @@ impl Home {
     /// Slideshow (in a narrow window all but the account sit in one overflow menu).
     pub(in crate::home) fn photo_top_ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
-        let narrow = ui.available_width() < 640.0;
+        let narrow = ui.available_width() < 1100.0;
         let folder = self.photo_folder();
         let pm = &self.photos;
         // Upload, sorting and Slideshow belong to the picture grid (Photos and Timeline).
         let grid = folder.is_some() && pm.enabled == Some(true) && pm.alb.tab.folder_grid();
         let slideshow = grid && !pm.pics.is_empty();
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            let back = house::icon_button(ui, "arrow_back", "Back to Drive", false);
-            house::target(&ctx, "photo-exit", back.rect);
-            if back.clicked() {
-                self.photos.set_on(&self.store, false);
-                self.search.clear();
-            }
-            if let Some(img) = crate::icons::photos_logo(32.0) {
-                let logo = ui.add(img);
-                house::target(&ctx, "photo-logo", logo.rect);
-            }
-            if !narrow {
-                ui.label(RichText::new("Photos").size(house::TITLE).color(theme::text()));
-                ui.add_space(house::M);
-            }
-            let reserve = if narrow { 130.0 } else { 640.0 };
-            let w = (ui.available_width() - reserve).clamp(120.0, 700.0);
-            let search = house::field(&mut self.search, house::SEARCH_TEXT)
-                .id(egui::Id::unique("photo_search"))
-                .hint_text(RichText::new("Search photos").size(house::SEARCH_TEXT))
-                .frame(egui::Frame::NONE)
-                .margin(vec2(0.0, 0.0))
-                .min_size(vec2(0.0, 24.0))
-                .desired_width((w - 64.0).max(60.0));
-            let boxed = ui.allocate_ui_with_layout(vec2(w, 48.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                egui::Frame::NONE
-                    .fill(if theme::photo_dark() { theme::menu_hover() } else { theme::toolbar() })
-                    .corner_radius(24)
-                    .inner_margin(egui::Margin::symmetric(16, 12))
-                    .show(ui, |ui| {
-                        if let Some(img) = crate::icons::icon("search") {
-                            ui.add(img.fit_to_exact_size(vec2(20.0, 20.0)));
-                        }
-                        ui.add_space(house::S);
-                        ui.add(search);
-                    });
-            });
-            house::target(&ctx, "photo-search", boxed.response.rect);
+            header::brand(ui, crate::icons::photos_logo(36.0), "Photos", Some("photo-logo"));
+            header::search(ui, &mut self.search, "photo_search", "Search photos", "photo-search");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = house::S;
-                #[cfg(target_arch = "wasm32")]
-                crate::account::me_ui(ui);
-                #[cfg(not(target_arch = "wasm32"))]
-                self.connect.menu_ui(ui, &self.store);
+                self.header_account(ui);
+                if header::switch(ui, "Return to Drive", "photo-exit", true) {
+                    self.photos.set_on(&self.store, false);
+                    self.search.clear();
+                }
                 let lit = self.photos.shell.filtering() || self.photos.shell.scope != Scope::Folder;
                 let items = view_items(narrow, grid, slideshow);
                 if narrow {
@@ -351,7 +317,7 @@ impl Home {
                 }
             });
         }
-        if ui.available_width() < 560.0 {
+        if ui.ctx().content_rect().width() < 760.0 {
             ui.horizontal_wrapped(|ui| self.photo_nav_ui(ui));
             ui.separator();
             if self.shown_photo_tree().is_some() {
@@ -363,10 +329,6 @@ impl Home {
             }
         } else {
             ui.horizontal_top(|ui| {
-                ui.vertical(|ui| {
-                    ui.set_width(130.0);
-                    self.photo_nav_ui(ui);
-                });
                 let tree = ui.ctx().animate_bool(egui::Id::unique("photos_folder_tree"), self.shown_photo_tree().is_some());
                 if tree > 0.0 {
                     // Reveal the panel from the left, keeping its controls at their final size.
@@ -386,7 +348,7 @@ impl Home {
         self.photo_outs(ui.ctx());
     }
 
-    fn photo_nav_ui(&mut self, ui: &mut Ui) {
+    pub(in crate::home) fn photo_nav_ui(&mut self, ui: &mut Ui) {
         ui.add_space(house::S);
         ui.spacing_mut().item_spacing.y = house::XS;
         for row in nav_rows(self.photos_my_files_root().is_some()) {

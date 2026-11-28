@@ -26,9 +26,12 @@ mod activity;
 mod bin;
 mod filepreview;
 mod filters;
+mod header;
 mod history;
 mod input;
 mod items;
+#[cfg(target_arch = "wasm32")]
+mod kanban;
 mod photo_edit;
 mod photos;
 #[cfg(target_arch = "wasm32")]
@@ -171,6 +174,8 @@ struct PendingMove {
 
 #[derive(Default)]
 pub struct Home {
+    #[cfg(target_arch = "wasm32")]
+    kanban: Option<kanban::Kanban>,
     /// Where the files are: the server, or a folder on disk in the desktop app (store.rs).
     store: Backend,
     /// Shown instead of a spreadsheet (the page was opened without ?file=, ?new or ?folder=).
@@ -1245,6 +1250,14 @@ impl Home {
 
     pub fn ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        #[cfg(target_arch = "wasm32")]
+        if let Some(board) = &mut self.kanban {
+            if board.ui(ui) {
+                self.kanban = None;
+                self.refresh(&ctx);
+            }
+            return;
+        }
         crate::prefetch::tick(&ctx, self.loading, ui.input(|i| i.time));
         self.templates_ui(&ctx);
         let photo_mode = self.photo_folder().is_some();
@@ -1254,21 +1267,23 @@ impl Home {
             .exact_size(TOP)
             .frame(egui::Frame::NONE.fill(theme::page()).inner_margin(egui::Margin::symmetric(16, 0)))
             .show(ui, |ui| if photo_mode { self.photo_top_ui(ui) } else { self.top_ui(ui) });
-        // Photo Mode has no Drive list on the left.
-        if !photo_mode {
+        let separate_sidebar = ui.available_width() >= 760.0;
+        if !photo_mode || separate_sidebar {
             egui::Panel::left("home_left")
                 .show_separator_line(false)
                 .exact_size(LEFT)
                 .resizable(false)
                 .frame(egui::Frame::NONE.fill(theme::page()).inner_margin(egui::Margin { left: 12, right: 12, top: 8, bottom: 8 }))
-                .show(ui, |ui| self.left_ui(ui));
+                .show(ui, |ui| if photo_mode { self.photo_nav_ui(ui) } else { self.left_ui(ui) });
         }
         egui::CentralPanel::default()
             .frame(
-                egui::Frame::NONE
-                    .fill(theme::card())
-                    .corner_radius(egui::CornerRadius { nw: if photo_mode { 0 } else { 16 }, ..Default::default() })
-                    .inner_margin(egui::Margin { left: if photo_mode { 12 } else { 24 }, right: 16, top: 16, bottom: 0 }),
+                egui::Frame::NONE.fill(theme::card()).corner_radius(egui::CornerRadius { nw: 16, ..Default::default() }).inner_margin(egui::Margin {
+                    left: 24,
+                    right: 16,
+                    top: 16,
+                    bottom: 0,
+                }),
             )
             .show(ui, |ui| self.main_ui(ui));
         self.drag_ui(&ctx);
@@ -1300,44 +1315,31 @@ impl Home {
 
     fn top_ui(&mut self, ui: &mut Ui) {
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            if let Some(img) = crate::icons::drive_logo(36.0) {
-                ui.add(img);
-            }
-            ui.add_space(house::S);
-            ui.label(RichText::new("Starbase Drive").size(22.0).color(theme::text()));
-            // The search box starts where it always has, whatever the name's width.
-            let x = ui.cursor().min.x - ui.max_rect().left();
-            ui.add_space((LEFT - 28.0 - x - ui.spacing().item_spacing.x).max(house::M));
-            let search = house::field(&mut self.search, house::SEARCH_TEXT)
-                .id(egui::Id::unique("home_search"))
-                .hint_text(RichText::new("Search in Drive").size(house::SEARCH_TEXT))
-                .frame(egui::Frame::NONE)
-                .margin(vec2(0.0, 0.0))
-                .min_size(vec2(0.0, 24.0))
-                .desired_width((ui.available_width() - 140.0).clamp(200.0, 700.0));
-            let w = (ui.available_width() - 100.0).clamp(220.0, 740.0);
-            ui.allocate_ui_with_layout(vec2(w, 48.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                // One rounded box: the field itself draws no frame of its own.
-                egui::Frame::NONE.fill(theme::drive_surface()).corner_radius(24).inner_margin(egui::Margin::symmetric(20, 12)).show(ui, |ui| {
-                    if let Some(img) = crate::icons::icon("search") {
-                        ui.add(img.fit_to_exact_size(vec2(20.0, 20.0)));
-                    }
-                    ui.add_space(house::S);
-                    let field = ui.add(search);
-                    house::target(ui.ctx(), "drive:search", field.rect);
-                });
-            });
-            // Who is signed in (the server's accounts; none in the desktop app's local mode).
-            #[cfg(target_arch = "wasm32")]
+            header::brand(ui, crate::icons::drive_logo(36.0), "Starbase Drive", None);
+            header::search(ui, &mut self.search, "home_search", "Search in Drive", "drive:search");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                crate::account::me_ui(ui);
-            });
-            // The desktop app: "Connect to a server…", or who is signed in on the server.
-            #[cfg(not(target_arch = "wasm32"))]
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                self.connect.menu_ui(ui, &self.store);
+                ui.spacing_mut().item_spacing.x = house::S;
+                self.header_account(ui);
+                if self.photos_available()
+                    && self.photos_root().is_some()
+                    && self.search.trim().is_empty()
+                    && self.here().is_some_and(|folder| self.files.iter().any(|f| f.folder == folder && items::photos_image(&f.name)))
+                    && header::switch(ui, "Photos", "drive:photo_mode", true)
+                {
+                    self.photo_nav = Default::default();
+                    self.photos.go(photos::albums::Tab::Photos);
+                    self.photos.set_on(&self.store, true);
+                    self.search.clear();
+                }
             });
         });
+    }
+
+    fn header_account(&mut self, ui: &mut Ui) {
+        #[cfg(target_arch = "wasm32")]
+        crate::account::me_ui(ui);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.connect.menu_ui(ui, &self.store);
     }
 }
 
