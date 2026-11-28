@@ -529,10 +529,15 @@ impl PhotoMode {
         self.list_request += 1;
         let order = if self.newest_first { "&desc=1" } else { "" };
         let extra = if self.browse_my_files() { "&browse=1" } else { "" };
-        let url = match (self.shell.scope, self.shell.scope_root.as_deref()) {
-            (shell::Scope::All, Some(root)) => format!("api/photos?folder={}&sub=1&sort=taken{order}{extra}", enc(root)),
-            (shell::Scope::All, None) => format!("api/photos?all=1&sort=taken{order}"),
-            _ => format!("api/photos?folder={}&sort=taken{order}{extra}{}", enc(folder), if self.sub { "&sub=1" } else { "" }),
+        let url = if self.shell.scope == shell::Scope::All {
+            if self.browse_my_files() {
+                let root = self.shell.scope_root.as_deref().unwrap_or(folder);
+                format!("api/photos?folder={}&sub=1&sort=taken{order}{extra}", enc(root))
+            } else {
+                format!("api/photos?all=1&sort=taken{order}")
+            }
+        } else {
+            format!("api/photos?folder={}&sort=taken{order}{extra}{}", enc(folder), if self.sub { "&sub=1" } else { "" })
         };
         let (inbox, ctx2, request) = (self.inbox.clone(), ctx.clone(), self.list_request);
         store.call(
