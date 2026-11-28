@@ -2,7 +2,7 @@
 
 use std::{cell::RefCell, rc::Rc};
 
-use egui::{RichText, Ui, vec2};
+use egui::{Color32, RichText, Ui, vec2};
 use serde::{Deserialize, Serialize};
 
 use super::Home;
@@ -30,6 +30,8 @@ struct Board {
 struct Column {
     name: String,
     limit: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    colour: Option<[u8; 3]>,
     cards: Vec<Card>,
 }
 
@@ -50,7 +52,10 @@ impl Default for Board {
             numbering: false,
             last_number: 0,
             archive: Vec::new(),
-            columns: ["To do", "In progress", "Done"].into_iter().map(|name| Column { name: name.into(), limit: None, cards: Vec::new() }).collect(),
+            columns: ["To do", "In progress", "Done"]
+                .into_iter()
+                .map(|name| Column { name: name.into(), limit: None, colour: None, cards: Vec::new() })
+                .collect(),
         }
     }
 }
@@ -62,8 +67,33 @@ fn target(ui: &Ui, label: &str, response: egui::Response) -> bool {
 
 type CardPosition = (usize, usize);
 
-#[derive(Clone, Copy)]
-struct CardDrag(CardPosition);
+struct ColumnEditor {
+    index: Option<usize>,
+    name: String,
+    limit: usize,
+    colour: Option<[u8; 3]>,
+}
+
+const COLUMN_COLOURS: [(&str, [u8; 3]); 7] = [
+    ("Blue", [44, 104, 198]),
+    ("Teal", [16, 132, 121]),
+    ("Green", [52, 136, 65]),
+    ("Amber", [185, 117, 22]),
+    ("Red", [193, 64, 66]),
+    ("Pink", [189, 71, 126]),
+    ("Purple", [110, 82, 176]),
+];
+
+fn drag_grip(ui: &mut Ui, enabled: bool) -> egui::Response {
+    let sense = if enabled { egui::Sense::drag() } else { egui::Sense::hover() };
+    let (rect, response) = ui.allocate_exact_size(vec2(22.0, 28.0), sense);
+    for x in [-3.0, 3.0] {
+        for y in [-6.0, 0.0, 6.0] {
+            ui.painter().circle_filled(rect.center() + vec2(x, y), 1.65, theme::text_dim());
+        }
+    }
+    if enabled { response.on_hover_cursor(egui::CursorIcon::Grab).on_hover_text("Drag card") } else { response }
+}
 
 impl Board {
     fn number_cards(&mut self) {
@@ -115,7 +145,8 @@ pub(super) struct Kanban {
     board: Option<Board>,
     inbox: Rc<RefCell<Option<Response>>>,
     editor: Option<(usize, Option<usize>, usize, Card)>,
-    column: Option<(Option<usize>, String, usize)>,
+    column: Option<ColumnEditor>,
+    dragging: Option<CardPosition>,
     filter: String,
     create_in: Option<String>,
     confirm_close: bool,
@@ -236,14 +267,22 @@ impl Kanban {
         let Some(board) = self.board.as_mut() else { return };
         let writable = self.writable && !self.pending;
         let query = self.filter.trim().to_lowercase();
-        let mut movement = None;
+        let pointer = ui.input(|input| input.pointer.interact_pos());
+        let released = ui.input(|input| input.pointer.primary_released());
+        if ui.input(|input| input.key_pressed(egui::Key::Escape)) {
+            self.dragging = None;
+        }
+        let mut destination = None;
         let mut rename = None;
         let width = ((ui.available_width() - 72.0) / 3.0).clamp(286.0, 380.0);
         egui::ScrollArea::horizontal().id_salt("kanban_columns").show(ui, |ui| {
             ui.horizontal_top(|ui| {
                 for (index, column) in board.columns.iter().enumerate() {
                     ui.push_id(index, |ui| {
-                        let panel = egui::Frame::NONE.fill(theme::drive_surface()).corner_radius(12).inner_margin(12).show(ui, |ui| {
+                        let accent = column.colour.map(|[r, g, b]| Color32::from_rgb(r, g, b));
+                        let background = accent.map_or_else(theme::drive_surface, |colour| theme::drive_surface().lerp_to_gamma(colour, 0.16));
+                        let mut insert = None;
+                        let panel = egui::Frame::NONE.fill(background).corner_radius(12).inner_margin(12).show(ui, |ui| {
                             ui.set_width(width);
                             ui.horizontal(|ui| {
                                 ui.label(RichText::new(&column.name).strong());
@@ -255,8 +294,14 @@ impl Kanban {
                             });
                             if writable {
                                 ui.horizontal(|ui| {
-                                    if ui.small_button("Edit column").clicked() {
-                                        self.column = Some((Some(index), column.name.clone(), column.limit.unwrap_or_default()));
+                                    let edit = ui.small_button("Edit column");
+                                    if target(ui, &format!("kanban:column-edit:{index}"), edit) {
+                                        self.column = Some(ColumnEditor {
+                                            index: Some(index),
+                                            name: column.name.clone(),
+                                            limit: column.limit.unwrap_or_default(),
+                                            colour: column.colour,
+                                        });
                                     }
                                     let add = ui.small_button("Add card");
                                     if target(ui, &format!("kanban:add:{index}"), add) {
@@ -267,8 +312,10 @@ impl Kanban {
                             let height = (ui.available_height() - 18.0).max(112.0);
                             egui::ScrollArea::vertical().min_scrolled_height(height).max_height(height).show(ui, |ui| {
                                 ui.set_min_height(height);
-                                ui.horizontal_wrapped(|ui| {
-                                    let tile_width = (width - ui.spacing().item_spacing.x) / 2.0 - 22.0;
+                                egui::Grid::new("card_rows").num_columns(2).spacing(vec2(8.0, 8.0)).show(ui, |ui| {
+                                    let tile_width = ((width - 8.0) / 2.0).floor();
+                                    let tile_size = vec2(tile_width, 104.0);
+                                    let mut visible_cards = 0usize;
                                     for (card_index, card) in column.cards.iter().enumerate() {
                                         if !query.is_empty()
                                             && ![&card.title, &card.description, &card.label].iter().any(|s| s.to_lowercase().contains(&query))
@@ -276,99 +323,114 @@ impl Kanban {
                                             continue;
                                         }
                                         let position = (index, card_index);
-                                        let can_drag = writable && query.is_empty() && self.renaming.is_none();
-                                        let tile = egui::Frame::NONE
-                                            .fill(theme::card())
-                                            .corner_radius(8)
-                                            .inner_margin(10)
-                                            .show(ui, |ui| {
-                                                ui.set_width(tile_width);
-                                                ui.horizontal(|ui| {
-                                                    ui.allocate_ui_with_layout(
-                                                        vec2((tile_width - 38.0).max(40.0), 34.0),
-                                                        egui::Layout::top_down(egui::Align::Min),
-                                                        |ui| {
-                                                            if let Some((editing, text)) = self.renaming.as_mut().filter(|(p, _)| *p == position) {
-                                                                let edit = ui.add(
-                                                                    egui::TextEdit::singleline(text).desired_width((tile_width - 40.0).max(36.0)),
-                                                                );
-                                                                house::target(ui.ctx(), "kanban:inline-title", edit.rect);
-                                                                if !edit.has_focus() && !edit.lost_focus() {
-                                                                    edit.request_focus();
-                                                                }
-                                                                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                                                                    rename = Some((*editing, None));
-                                                                } else if edit.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                                                                    rename = Some((*editing, Some(text.trim().to_string())));
-                                                                }
-                                                            } else {
-                                                                let title = if let Some(number) = card.number.filter(|_| board.numbering) {
-                                                                    format!("#{number} {}", card.title)
-                                                                } else {
-                                                                    card.title.clone()
-                                                                };
-                                                                let sense =
-                                                                    if can_drag { egui::Sense::click_and_drag() } else { egui::Sense::click() };
-                                                                let title = ui.add(egui::Label::new(title).wrap().sense(sense));
-                                                                house::target(ui.ctx(), &format!("kanban:card:{index}:{card_index}"), title.rect);
-                                                                if can_drag {
-                                                                    title.dnd_set_drag_payload(CardDrag(position));
-                                                                }
-                                                                if writable && title.double_clicked() {
-                                                                    self.renaming = Some((position, card.title.clone()));
-                                                                }
-                                                            }
-                                                        },
-                                                    );
-                                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                        let expand = house::icon_button(ui, "expand_more", "Expand card", false);
-                                                        if target(ui, &format!("kanban:expand:{index}:{card_index}"), expand) {
-                                                            self.editor = Some((index, Some(card_index), index, card.clone()));
+                                        let can_drag = writable && self.renaming.is_none();
+                                        let (tile, _) = ui.allocate_exact_size(tile_size, egui::Sense::hover());
+                                        let visible = tile.intersect(ui.clip_rect());
+                                        house::target(ui.ctx(), &format!("kanban:tile:{index}:{card_index}"), visible);
+                                        ui.painter().rect_filled(tile, 8, theme::card());
+                                        let mut card_ui = ui.new_child(
+                                            egui::UiBuilder::new()
+                                                .id_salt(("card", card_index))
+                                                .max_rect(tile.shrink(7.0))
+                                                .layout(egui::Layout::top_down(egui::Align::Min)),
+                                        );
+                                        card_ui.set_clip_rect(visible);
+                                        card_ui.horizontal(|ui| {
+                                            let grip = drag_grip(ui, can_drag);
+                                            house::target(ui.ctx(), &format!("kanban:grip:{index}:{card_index}"), grip.rect);
+                                            if can_drag && grip.drag_started() {
+                                                self.dragging = Some(position);
+                                            }
+                                            ui.allocate_ui_with_layout(
+                                                vec2((tile_width - 79.0).max(38.0), 34.0),
+                                                egui::Layout::top_down(egui::Align::Min),
+                                                |ui| {
+                                                    if let Some((editing, text)) = self.renaming.as_mut().filter(|(p, _)| *p == position) {
+                                                        let edit =
+                                                            ui.add(egui::TextEdit::singleline(text).desired_width((tile_width - 79.0).max(38.0)));
+                                                        house::target(ui.ctx(), "kanban:inline-title", edit.rect);
+                                                        if !edit.has_focus() && !edit.lost_focus() {
+                                                            edit.request_focus();
                                                         }
-                                                    });
-                                                });
-                                                if !card.label.is_empty() {
-                                                    ui.label(&card.label);
+                                                        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                                            rename = Some((*editing, None));
+                                                        } else if edit.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                                            rename = Some((*editing, Some(text.trim().to_string())));
+                                                        }
+                                                    } else {
+                                                        let title = if let Some(number) = card.number.filter(|_| board.numbering) {
+                                                            format!("#{number} {}", card.title)
+                                                        } else {
+                                                            card.title.clone()
+                                                        };
+                                                        let title = ui
+                                                            .add(egui::Label::new(&title).truncate().sense(egui::Sense::click()))
+                                                            .on_hover_text(&title);
+                                                        house::target(ui.ctx(), &format!("kanban:card:{index}:{card_index}"), title.rect);
+                                                        if writable && title.double_clicked() {
+                                                            self.renaming = Some((position, card.title.clone()));
+                                                        }
+                                                    }
+                                                },
+                                            );
+                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                let expand = house::icon_button(ui, "expand_more", "Expand card", false);
+                                                if target(ui, &format!("kanban:expand:{index}:{card_index}"), expand) {
+                                                    self.editor = Some((index, Some(card_index), index, card.clone()));
                                                 }
-                                                if !card.due.is_empty() {
-                                                    ui.label(&card.due);
-                                                }
-                                                if !card.checklist.is_empty() {
-                                                    ui.label(format!(
-                                                        "{}/{} checklist",
-                                                        card.checklist.iter().filter(|(done, _)| *done).count(),
-                                                        card.checklist.len()
-                                                    ));
-                                                }
-                                            })
-                                            .response;
-                                        if writable && let Some(source) = tile.dnd_release_payload::<CardDrag>() {
-                                            movement = Some((source.0, position));
+                                            });
+                                        });
+                                        if !card.label.is_empty() {
+                                            card_ui.add(egui::Label::new(&card.label).truncate());
+                                        }
+                                        if !card.due.is_empty() {
+                                            card_ui.add(egui::Label::new(&card.due).truncate());
+                                        }
+                                        if !card.checklist.is_empty() {
+                                            card_ui.label(format!(
+                                                "{}/{} checklist",
+                                                card.checklist.iter().filter(|(done, _)| *done).count(),
+                                                card.checklist.len()
+                                            ));
+                                        }
+                                        if pointer.is_some_and(|p| visible.contains(p)) {
+                                            insert = Some(card_index);
+                                        }
+                                        visible_cards += 1;
+                                        if visible_cards.is_multiple_of(2) {
+                                            ui.end_row();
                                         }
                                     }
                                 });
                             });
                         });
-                        if writable && query.is_empty() {
+                        if writable {
                             let zone = panel.response;
                             house::target(ui.ctx(), &format!("kanban:drop:{index}"), zone.rect);
-                            if zone.dnd_hover_payload::<CardDrag>().is_some() {
-                                ui.painter().rect_stroke(zone.rect, 12, egui::Stroke::new(2.0, theme::text_dim()), egui::StrokeKind::Inside);
-                            }
-                            if let Some(source) = zone.dnd_release_payload::<CardDrag>() {
-                                movement = Some((source.0, (index, column.cards.len())));
+                            if self.dragging.is_some() && pointer.is_some_and(|p| zone.rect.intersect(ui.clip_rect()).contains(p)) {
+                                ui.painter().rect_stroke(
+                                    zone.rect,
+                                    12,
+                                    egui::Stroke::new(2.0, accent.unwrap_or(theme::text_dim())),
+                                    egui::StrokeKind::Inside,
+                                );
+                                destination = Some((index, insert.unwrap_or(column.cards.len())));
                             }
                         }
                     });
                 }
                 if writable && ui.button("Add column").clicked() {
-                    self.column = Some((None, String::new(), 0));
+                    self.column = Some(ColumnEditor { index: None, name: String::new(), limit: 0, colour: None });
                 }
             });
         });
-        if let Some((source, target)) = movement {
-            board.move_card(source, target);
-            self.dirty = true;
+        if released {
+            if let (Some(source), Some(target)) = (self.dragging.take(), destination) {
+                board.move_card(source, target);
+                self.dirty = true;
+            }
+        } else if !ui.input(|input| input.pointer.primary_down()) {
+            self.dragging = None;
         }
         if let Some(((column, card), title)) = rename {
             if let Some(title) = title.filter(|title| !title.is_empty()) {
@@ -395,11 +457,6 @@ impl Kanban {
                 ui.text_edit_singleline(&mut card.label);
                 ui.label("Due date");
                 ui.add(egui::TextEdit::singleline(&mut card.due).hint_text("YYYY-MM-DD"));
-                egui::ComboBox::from_id_salt("kanban_card_column").selected_text(&board.columns[*to].name).show_ui(ui, |ui| {
-                    for (i, column) in board.columns.iter().enumerate() {
-                        ui.selectable_value(to, i, &column.name);
-                    }
-                });
                 ui.label("Checklist");
                 let mut remove = None;
                 egui::ScrollArea::vertical().max_height(145.0).show(ui, |ui| {
@@ -419,9 +476,24 @@ impl Kanban {
                 if ui.button("Add checklist item").clicked() {
                     card.checklist.push((false, String::new()));
                 }
+                if index.is_some() && board.columns.len() > 1 {
+                    ui.label("Move to column");
+                    let valid = !card.title.trim().is_empty();
+                    let menu = egui::ComboBox::from_id_salt("kanban_card_column").selected_text(&board.columns[*to].name).show_ui(ui, |ui| {
+                        for (i, column) in board.columns.iter().enumerate().filter(|(i, _)| *i != *from) {
+                            let option = ui.add_enabled(valid, egui::Button::new(&column.name).frame(false));
+                            if target(ui, &format!("kanban:move-to:{i}"), option) {
+                                *to = i;
+                                save = true;
+                                ui.close();
+                            }
+                        }
+                    });
+                    house::target(ui.ctx(), "kanban:move", menu.response.rect);
+                }
                 ui.horizontal(|ui| {
                     let apply = ui.add_enabled(!card.title.trim().is_empty(), egui::Button::new("Apply card"));
-                    save = target(ui, "kanban:apply-card", apply);
+                    save |= target(ui, "kanban:apply-card", apply);
                     if index.is_some() {
                         let archive = ui.button("Archive card");
                         trash = target(ui, "kanban:archive-card", archive);
@@ -455,7 +527,7 @@ impl Kanban {
     }
 
     fn column_ui(&mut self, ctx: &egui::Context) {
-        let (Some(board), Some((index, name, limit))) = (&mut self.board, &mut self.column) else { return };
+        let (Some(board), Some(ColumnEditor { index, name, limit, colour })) = (&mut self.board, &mut self.column) else { return };
         let mut close = false;
         let mut save = false;
         let mut remove = false;
@@ -468,8 +540,23 @@ impl Kanban {
                 ui.add(egui::DragValue::new(limit).range(0..=999));
             });
             house::note(ui, "Use 0 for no limit.");
+            ui.label("Column colour");
+            ui.horizontal_wrapped(|ui| {
+                let default = ui.selectable_label(colour.is_none(), "Default");
+                if target(ui, "kanban:colour:default", default) {
+                    *colour = None;
+                }
+                for (label, rgb) in COLUMN_COLOURS {
+                    let fill = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                    let choice = ui.add(egui::Button::new(RichText::new("●").color(fill)).selected(*colour == Some(rgb))).on_hover_text(label);
+                    if target(ui, &format!("kanban:colour:{label}"), choice) {
+                        *colour = Some(rgb);
+                    }
+                }
+            });
             ui.horizontal(|ui| {
-                save = ui.add_enabled(!name.trim().is_empty(), egui::Button::new("Apply column")).clicked();
+                let apply = ui.add_enabled(!name.trim().is_empty(), egui::Button::new("Apply column"));
+                save = target(ui, "kanban:column-apply", apply);
                 if let Some(i) = *index {
                     if ui.add_enabled(i > 0, egui::Button::new("Move left")).clicked() {
                         shift = Some(i - 1);
@@ -488,8 +575,9 @@ impl Kanban {
             if let Some(i) = *index {
                 board.columns[i].name = name.trim().into();
                 board.columns[i].limit = limit;
+                board.columns[i].colour = *colour;
             } else {
-                board.columns.push(Column { name: name.trim().into(), limit, cards: Vec::new() });
+                board.columns.push(Column { name: name.trim().into(), limit, colour: *colour, cards: Vec::new() });
             }
         }
         if let Some(i) = *index {
