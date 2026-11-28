@@ -30,7 +30,12 @@ def library_settings(session, choices=None):
 
 def open_photos(session, root):
     session.open("drive")
-    session.click_text("drive:photo_mode")
+    entry = "drive:photo_mode"
+    exit_button = "photo-exit"
+    visible = session.wait_for(lambda: {entry, exit_button} & targets(session).keys())
+    assert visible, f"Neither Drive nor Photos rendered its navigation: {sorted(targets(session))}"
+    if exit_button not in visible:
+        session.click_text(entry)
     expect_folder(session, root)
     assert session.wait_text("photo-exit")
 
