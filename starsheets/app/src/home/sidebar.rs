@@ -46,6 +46,10 @@ impl Home {
             {
                 self.error = Some(e);
             }
+            #[cfg(target_arch = "wasm32")]
+            if house::menu_row(ui, Some("view_column"), "New Kanban board", "", true) {
+                self.new_kanban(&folder);
+            }
             if house::menu_row(ui, Some("description"), "From a template…", "", true) {
                 templates::open(ui.ctx(), &folder);
             }

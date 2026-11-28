@@ -28,6 +28,8 @@ mod filepreview;
 mod filters;
 mod history;
 mod input;
+#[cfg(target_arch = "wasm32")]
+mod kanban;
 mod items;
 mod photo_edit;
 mod photos;
@@ -171,6 +173,8 @@ struct PendingMove {
 
 #[derive(Default)]
 pub struct Home {
+    #[cfg(target_arch = "wasm32")]
+    kanban: Option<kanban::Kanban>,
     /// Where the files are: the server, or a folder on disk in the desktop app (store.rs).
     store: Backend,
     /// Shown instead of a spreadsheet (the page was opened without ?file=, ?new or ?folder=).
@@ -1245,6 +1249,14 @@ impl Home {
 
     pub fn ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        #[cfg(target_arch = "wasm32")]
+        if let Some(board) = &mut self.kanban {
+            if board.ui(ui) {
+                self.kanban = None;
+                self.refresh(&ctx);
+            }
+            return;
+        }
         crate::prefetch::tick(&ctx, self.loading, ui.input(|i| i.time));
         self.templates_ui(&ctx);
         let photo_mode = self.photo_folder().is_some();

@@ -726,6 +726,10 @@ impl Home {
             // Other files: Drive's preview over the list (pictures, PDFs, sound, films, text; else
             // "No preview available" with Download).
             Item::File(id) => {
+                #[cfg(target_arch = "wasm32")]
+                if self.open_kanban(ctx, id) {
+                    return;
+                }
                 let name = self.file(id).map(|f| f.name.clone()).unwrap_or_default();
                 // This computer's own files open where they belong: Sheets, Docs, else the
                 // system's default app (localstore.rs).
