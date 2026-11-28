@@ -126,6 +126,15 @@ pub struct SaveIcon {
 
 /// The icon (a 36-point round button) with its hover card. The caller handles the click.
 pub fn save_icon(ui: &mut Ui, info: &SaveInfo, pal: &SavePalette) -> SaveIcon {
+    draw_save_icon(ui, info, pal, false)
+}
+
+/// The same save states, using a disk for every state on files without revision history.
+pub fn disk_save_icon(ui: &mut Ui, info: &SaveInfo, pal: &SavePalette) -> SaveIcon {
+    draw_save_icon(ui, info, pal, true)
+}
+
+fn draw_save_icon(ui: &mut Ui, info: &SaveInfo, pal: &SavePalette, disk_only: bool) -> SaveIcon {
     let ctx = ui.ctx().clone();
     let now = ctx.input(|i| i.time);
     // When nobody says when it was saved, time it from the moment the save was seen to finish.
@@ -151,7 +160,7 @@ pub fn save_icon(ui: &mut Ui, info: &SaveInfo, pal: &SavePalette) -> SaveIcon {
     let icon = Rect::from_center_size(rect.center(), vec2(20.0, 20.0));
     let painter = ui.painter();
     match info.kind {
-        SaveKind::Saved | SaveKind::ViewOnly => clock(painter, icon, colour),
+        SaveKind::Saved | SaveKind::ViewOnly if !disk_only => clock(painter, icon, colour),
         SaveKind::Saving => {
             // A gentle pulse while saving.
             let a = 0.55 + 0.45 * ((now * 4.0).sin() * 0.5 + 0.5) as f32;

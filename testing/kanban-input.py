@@ -32,7 +32,7 @@ def check(browser, testn):
         s.pg.mouse.move(*end, steps=18)
         s.pg.mouse.up()
         assert s.wait_text("kanban:card:1:0"), "Card did not move into In progress"
-        s.click_text("kanban:save")
+        assert s.wait_text("kanban:save:saved")
         api = s.base + "/api/files"
         row = next(row for row in s.pg.request.get(api).json()["files"] if row["name"] == f"{name}.kanban")
         assert s.wait_for(lambda: bool(s.pg.request.get(f"{api}/{row['id']}").json()["columns"][1]["cards"]))
