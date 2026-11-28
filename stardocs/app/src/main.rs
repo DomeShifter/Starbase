@@ -36,6 +36,7 @@ mod emoji;
 mod icons;
 mod looks;
 mod mystyles;
+mod pasting;
 mod prefs;
 mod shell;
 mod shortcuts;

@@ -94,6 +94,8 @@ pub fn start() {
                     });
                     // Pasted pictures wait apart from dropped files: the app inserts one only when the page is the edit target (#1349).
                     app.services.pasted = Some(pasted);
+                    // The Paste standard: Docs' own copy is forgotten once the tab loses the focus.
+                    starbase_clipboard::watch_focus();
                     app.autosave = false;
                     // Preferences from an earlier visit (#2132), as the desktop app reads `ui.json`.
                     let stored = stored_prefs();

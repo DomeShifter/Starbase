@@ -1154,6 +1154,35 @@ fn leave_page_guard_only_while_something_is_unsaved() {
     }
 }
 
+/// The Paste standard (pasting.rs): menu Paste pastes our own current copy once; without one it
+/// asks for Ctrl+V (no stale copy pasted), which then pastes exactly once and closes the prompt (#114).
+#[test]
+fn menu_paste_follows_the_paste_standard() {
+    use starbase_clipboard as clip;
+    let mut h = window(1400.0);
+    type_text(&mut h, "hello");
+    keys(&mut h, Modifiers::COMMAND, Key::A);
+    run(&mut h, "edit.copy", json!({}));
+    steps(&mut h, 2);
+    assert!(clip::own_copy_current(), "the copy is remembered");
+    keys(&mut h, Modifiers::NONE, Key::End);
+    let route = clip::decide(clip::own_copy().as_deref(), false, false);
+    assert_eq!(route, clip::PasteRoute::Own("hello".into()));
+    crate::pasting::paste_by(&mut h.state_mut().app, route).unwrap();
+    steps(&mut h, 2);
+    assert_eq!(body_text(&mut h).trim_end(), "hellohello");
+    clip::forget();
+    let route = clip::decide(clip::own_copy().as_deref(), false, false);
+    crate::pasting::paste_by(&mut h.state_mut().app, route).unwrap();
+    steps(&mut h, 2);
+    assert!(clip::prompt_shown());
+    assert_eq!(body_text(&mut h).trim_end(), "hellohello", "no stale copy pasted");
+    h.input_mut().events.push(Event::Paste("xyz".into()));
+    steps(&mut h, 3);
+    assert_eq!(body_text(&mut h).trim_end(), "hellohelloxyz", "Ctrl+V pastes once");
+    assert!(!clip::prompt_shown(), "the paste closes the prompt");
+}
+
 /// An idle window must not keep repainting: after it settles, every frame may only ask for the next
 /// one at least 200 ms later (at most 5 repaints a second), e.g. a caret blink or a clock.
 #[test]

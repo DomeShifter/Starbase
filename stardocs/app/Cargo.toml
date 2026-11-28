@@ -21,6 +21,7 @@ wordcraft-ui-egui = { workspace = true }
 egui = { workspace = true }
 # The save-state icon on the title row (shared with Sheets and Slides).
 starbase-savestate = { path = "../../starsheets/crates/savestate" }
+starbase-clipboard = { path = "../../starsheets/crates/clipboard" }
 log = { workspace = true }
 serde_json = { workspace = true }
 wordcraft-doc = { workspace = true }

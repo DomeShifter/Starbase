@@ -138,6 +138,29 @@ pub fn read_native() -> Option<String> {
     arboard::Clipboard::new().ok()?.get_text().ok().filter(|t| !t.is_empty())
 }
 
+/// Keeps the page's keyboard focus on the app while the prompt waits for Ctrl+V (call each
+/// frame the prompt shows). Clicking a widget of the prompt (e.g. "Don't explain again") takes
+/// egui's focus from the text being edited; eframe then blurs its hidden text input and the
+/// browser's focus falls to the page body, where eframe ignores the paste event, so Ctrl+V did
+/// nothing. Focusing the app's canvas again lets the paste through.
+pub fn hold_page_focus() {
+    #[cfg(target_arch = "wasm32")]
+    {
+        use wasm_bindgen::JsCast;
+        let Some(d) = web_sys::window().and_then(|w| w.document()) else { return };
+        let lost = match d.active_element() {
+            None => true,
+            Some(e) => d.body().is_some_and(|b| *b == e),
+        };
+        if lost
+            && let Ok(Some(c)) = d.query_selector("canvas")
+            && let Ok(c) = c.dyn_into::<web_sys::HtmlElement>()
+        {
+            let _ = c.focus();
+        }
+    }
+}
+
 /// Forgets the own copy whenever the window loses the focus or the tab is hidden (call once at
 /// start). Checking `document.hasFocus()` once per frame wasn't enough: egui draws no frame
 /// while the tab is in the background and has the focus back by the next one, so a copy made
