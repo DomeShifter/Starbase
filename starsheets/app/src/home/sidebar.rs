@@ -162,10 +162,14 @@ impl Home {
     }
 
     pub(super) fn children(&self, path: &str) -> Vec<String> {
+        self.folder_children(path).into_iter().filter(|p| self.drive_path(p)).collect()
+    }
+
+    pub(super) fn folder_children(&self, path: &str) -> Vec<String> {
         let mut c: Vec<String> = self
             .folders
             .iter()
-            .filter(|f| parent_of(&f.path) == path && f.path != path && !f.path.is_empty() && self.drive_path(&f.path))
+            .filter(|f| parent_of(&f.path) == path && f.path != path && !f.path.is_empty())
             .map(|f| f.path.clone())
             .collect();
         c.sort_by_key(|p| name_of(p).to_lowercase());
@@ -222,15 +226,16 @@ impl Home {
             p.rect_stroke(r, 17, Stroke::new(2.0, ACCENT), egui::StrokeKind::Inside);
             ui.ctx().data_mut(|m| m.insert_temp(egui::Id::unique("home_drop"), folder.clone().unwrap_or_default()));
         }
-        let x = r.left() + 4.0 + depth as f32 * 16.0;
+        let x = r.left() + (4.0 + depth as f32 * 16.0).min((r.width() - 76.0).max(4.0));
         let arrow = Rect::from_center_size(egui::pos2(x + 10.0, r.center().y), vec2(20.0, 20.0));
         let mut toggled = false;
         if has_children {
+            house::target(ui.ctx(), &format!("{key}:toggle"), arrow);
             let open = self.expanded.contains(key);
             if let Some(img) = crate::icons::icon(if open { "expand_more" } else { "chevron_right" }) {
                 img.paint_at(ui, arrow);
             }
-            if ui.input(|i| i.pointer.primary_clicked() && i.pointer.interact_pos().is_some_and(|pos| arrow.expand(4.0).contains(pos))) {
+            if ui.input(|i| i.pointer.primary_clicked() && i.pointer.interact_pos().is_some_and(|pos| ui.clip_rect().contains(pos) && arrow.expand(4.0).contains(pos))) {
                 toggled = true;
                 if open {
                     self.expanded.remove(key);
@@ -247,7 +252,7 @@ impl Home {
             img.paint_at(ui, Rect::from_center_size(egui::pos2(x + 34.0, r.center().y), vec2(20.0, 20.0)));
         }
         let font = FontId::proportional(14.0);
-        let galley = p.layout(label.to_string(), font, theme::text(), r.right() - x - 56.0);
+        let galley = p.layout(label.to_string(), font, theme::text(), (r.right() - x - 56.0).max(0.0));
         p.galley(egui::pos2(x + 52.0, r.center().y - galley.size().y / 2.0), galley, theme::text());
         resp.clicked() && !toggled
     }

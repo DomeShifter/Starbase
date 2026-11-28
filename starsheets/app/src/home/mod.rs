@@ -241,6 +241,7 @@ pub struct Home {
     fetching: usize,
     /// "View as photos" (photos.rs, viewer.rs).
     photos: photos::PhotoMode,
+    photo_nav: photos::shell::Navigation,
     /// The file preview over the Drive (filepreview.rs), when open.
     file_preview: Option<filepreview::FilePreview>,
     /// Where each file was last drawn (id → screen rect), for the test hook's real clicks.
@@ -771,24 +772,55 @@ impl Home {
         self.store.has_photos()
     }
 
-    /// The folder shown as photos, when "View as photos" is on and a folder is shown (not
-    /// Recent, Starred, the bin, or search results).
+    /// The effective Photos library. With no saved settings, it follows My Files.
+    fn photos_root(&self) -> Option<&str> {
+        self.photo_library.as_ref().map_or_else(|| self.mine_root(), |root| root.as_deref())
+    }
+
+    fn photos_my_files_root(&self) -> Option<&str> {
+        let mine = self.mine_root()?;
+        (mine != self.photos_root()?).then_some(mine)
+    }
+
     fn photo_folder(&self) -> Option<String> {
-        if !self.photos.on || !self.photos_available() {
+        if !self.photos.on || !self.photos_available() || self.view.is_none() {
             return None;
         }
-        if let Some(root) = &self.photo_library {
-            let root = root.as_ref()?;
-            return match self.view.as_ref() {
-                Some(View::Mine(p) | View::Shared(Some(p)) | View::Everyone(p)) if under(p, root) => Some(p.clone()),
-                _ => Some(root.clone()),
+        let tab = self.photos.alb.tab;
+        let root = self.photos_root()?;
+        if tab == photos::albums::Tab::MyFiles
+            && let Some(mine) = self.photos_my_files_root()
+        {
+            return Some(self.photo_nav.my_files_folder.as_deref().filter(|p| self.photo_folder_listed(mine, p)).unwrap_or(mine).to_string());
+        }
+        if tab == photos::albums::Tab::Photos {
+            if let Some(path) = &self.photo_nav.photos_folder {
+                return Some(if self.photo_folder_listed(root, path) { path.clone() } else { root.to_string() });
+            }
+            let drive_folder = match self.view.as_ref() {
+                Some(View::Mine(p) | View::Shared(Some(p))) => Some(p),
+                Some(View::Everyone(p)) if !p.is_empty() => Some(p),
+                _ => None,
             };
+            if self.photo_library.is_none() && !self.photo_nav.tree_open {
+                return drive_folder.cloned();
+            }
+            if let Some(path) = drive_folder.filter(|p| self.photo_folder_listed(root, p)) {
+                return Some(path.clone());
+            }
         }
-        match self.view.as_ref()? {
-            View::Mine(p) | View::Shared(Some(p)) => Some(p.clone()),
-            View::Everyone(p) if !p.is_empty() => Some(p.clone()),
-            _ => None,
-        }
+        Some(root.to_string())
+    }
+
+    fn photo_folder_listed(&self, root: &str, path: &str) -> bool {
+        self.photo_nav_path(root, path) && (root == path || self.folder(path).is_some())
+    }
+
+    /// Only folders from the selected tree. The account's mount registry is a
+    /// container for granted roots, not a folder in either library.
+    fn photo_nav_path(&self, root: &str, path: &str) -> bool {
+        (root.is_empty() || under(path, root))
+            && (!self.accounts || path.split('/').nth(1) != Some("starbase-mounts") || root.split('/').nth(1) == Some("starbase-mounts"))
     }
 
     /// The folder new things go into from here (None: nowhere here, e.g. Recent).
@@ -1041,12 +1073,6 @@ impl Home {
         if self.photos.on && !self.photos_available() {
             self.photos.set_on(&self.store, false);
         }
-        let folder = self.photo_folder();
-        // Photo Mode: always dark while it is open (no switch, whatever the Drive's look), the search box searches photos.
-        theme::sync_dark(ctx, folder.is_some() || theme::drive_dark());
-        let query = if folder.is_some() { self.search.clone() } else { String::new() };
-        self.photos.shell_query(&query);
-        self.photos.logic(ctx, &self.store, folder);
         self.ask_text_matches(ctx);
         let replies: Vec<Reply> = std::mem::take(&mut *self.inbox.borrow_mut());
         for r in replies {
@@ -1132,6 +1158,23 @@ impl Home {
                 }
             }
         }
+        if self.photos.alb.tab == photos::albums::Tab::MyFiles && self.photos_my_files_root().is_none() {
+            self.photos.go(photos::albums::Tab::Photos);
+        }
+        let folder = self.photo_folder();
+        let scope_root = if self.photos.alb.tab == photos::albums::Tab::MyFiles {
+            self.photos_my_files_root()
+        } else {
+            self.photo_library.as_ref().and_then(|root| root.as_deref())
+        };
+        if self.photos.shell.scope_root.as_deref() != scope_root {
+            self.photos.shell.scope_root = scope_root.map(str::to_string);
+            self.photos.reset_folder();
+        }
+        theme::sync_dark(ctx, folder.is_some() || theme::drive_dark());
+        let query = if folder.is_some() { self.search.as_str() } else { "" };
+        self.photos.shell_query(query);
+        self.photos.logic(ctx, &self.store, folder);
     }
 
     /// Files dropped on the page or picked with Upload: saved into the folder shown, any type,
@@ -1269,7 +1312,8 @@ impl Home {
                         ui.add(img.fit_to_exact_size(vec2(20.0, 20.0)));
                     }
                     ui.add_space(house::S);
-                    ui.add(search);
+                    let field = ui.add(search);
+                    house::target(ui.ctx(), "drive:search", field.rect);
                 });
             });
             // Who is signed in (the server's accounts; none in the desktop app's local mode).

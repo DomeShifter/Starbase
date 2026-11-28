@@ -5,8 +5,8 @@
 
 use egui::{RichText, Ui, vec2};
 
-use super::super::Home;
-use super::albums::Tab;
+use super::super::{Home, name_of};
+use super::albums::{NavRow, Tab, nav_rows};
 use super::{PhotoMode, Pic};
 use crate::{house, theme};
 
@@ -60,8 +60,16 @@ pub(in crate::home) fn kind_of(p: &Pic) -> Option<usize> {
     })
 }
 
+#[derive(Default)]
+pub(in crate::home) struct Navigation {
+    pub photos_folder: Option<String>,
+    pub my_files_folder: Option<String>,
+    pub tree_open: bool,
+}
+
 pub(in crate::home) struct Shell {
     pub scope: Scope,
+    pub scope_root: Option<String>,
     /// The Type filter: which of `KINDS` are shown (none ticked = all).
     pub types: [bool; 7],
     /// The "Search photos" text.
@@ -72,7 +80,7 @@ pub(in crate::home) struct Shell {
 
 impl Default for Shell {
     fn default() -> Shell {
-        Shell { scope: Scope::Folder, types: [false; 7], query: String::new(), full: Vec::new() }
+        Shell { scope: Scope::Folder, scope_root: None, types: [false; 7], query: String::new(), full: Vec::new() }
     }
 }
 
@@ -189,7 +197,7 @@ impl Home {
         let folder = self.photo_folder();
         let pm = &self.photos;
         // Upload, sorting and Slideshow belong to the picture grid (Photos and Timeline).
-        let grid = folder.is_some() && pm.enabled == Some(true) && matches!(pm.alb.tab, Tab::Photos | Tab::Timeline);
+        let grid = folder.is_some() && pm.enabled == Some(true) && pm.alb.tab.folder_grid();
         let slideshow = grid && !pm.pics.is_empty();
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
             let back = house::icon_button(ui, "arrow_back", "Back to Drive", false);
@@ -249,7 +257,9 @@ impl Home {
                 if slideshow && ui.add(house::secondary_in("Slideshow", theme::BLUE)).clicked() {
                     self.photos.slideshow(&ctx);
                 }
-                self.photos.alb.ppl.scan.ui(ui, &self.store);
+                if !self.photos.browse_my_files() {
+                    self.photos.alb.ppl.scan.ui(ui, &self.store);
+                }
                 let view = ui.add(house::quiet_with(Some("filter_list"), "View", lit));
                 house::target(&ctx, "photos:view-menu", view.rect);
                 egui::Popup::menu(&view).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
@@ -300,9 +310,10 @@ impl Home {
                         self.photos.slideshow(ctx);
                     }
                 }
-                ViewItem::Scan => {
+                ViewItem::Scan if !self.photos.browse_my_files() => {
                     ui.horizontal_wrapped(|ui| self.photos.alb.ppl.scan.ui(ui, &self.store));
                 }
+                ViewItem::Scan => {}
             }
         }
     }
@@ -340,8 +351,133 @@ impl Home {
                 }
             });
         }
-        self.photos.ui(ui, &self.store, folder);
+        if ui.available_width() < 560.0 {
+            ui.horizontal_wrapped(|ui| self.photo_nav_ui(ui));
+            ui.separator();
+            if self.shown_photo_tree().is_some() {
+                self.photo_tree_ui(ui, folder, 180.0);
+                ui.separator();
+            }
+            if let Some(path) = self.photo_folder() {
+                self.photos.tab_ui(ui, &self.store, &path);
+            }
+        } else {
+            ui.horizontal_top(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_width(130.0);
+                    self.photo_nav_ui(ui);
+                });
+                let tree = ui.ctx().animate_bool(egui::Id::new("photos_folder_tree"), self.shown_photo_tree().is_some());
+                if tree > 0.0 {
+                    // Reveal the panel from the left, keeping its controls at their final size.
+                    let (r, _) = ui.allocate_exact_size(vec2(216.0 * tree, ui.available_height()), egui::Sense::hover());
+                    let bounds = egui::Rect::from_min_size(r.min, vec2(216.0, r.height()));
+                    let mut tree_ui = ui.new_child(egui::UiBuilder::new().id_salt("photos_tree").max_rect(bounds).layout(egui::Layout::top_down(egui::Align::Min)));
+                    tree_ui.set_clip_rect(ui.clip_rect().intersect(r));
+                    self.photo_tree_ui(&mut tree_ui, folder, r.height());
+                }
+                ui.separator();
+                if let Some(path) = self.photo_folder() {
+                    ui.vertical(|ui| self.photos.tab_ui(ui, &self.store, &path));
+                }
+            });
+        }
         self.photo_outs(ui.ctx());
+    }
+
+    fn photo_nav_ui(&mut self, ui: &mut Ui) {
+        ui.add_space(house::S);
+        ui.spacing_mut().item_spacing.y = house::XS;
+        for row in nav_rows(self.photos_my_files_root().is_some()) {
+            match row {
+                NavRow::Divider => {
+                    ui.add_space(house::XS);
+                    house::menu_sep(ui);
+                    ui.add_space(house::XS);
+                }
+                NavRow::Go(tab, label, icon) => {
+                    let r = ui.add(house::quiet_with(Some(icon), label, self.photos.alb.tab == tab).min_size(vec2(120.0, house::BUTTON_HEIGHT)));
+                    house::target(ui.ctx(), label, r.rect);
+                    if r.clicked() {
+                        let from = self.photos.alb.tab;
+                        self.photos.go(tab);
+                        let open = !self.photo_nav.tree_open || from != tab;
+                        self.photo_nav.tree_open = matches!(tab, Tab::MyFiles | Tab::Photos);
+                        if open && let Some(root) = self.shown_photo_tree().map(str::to_string) {
+                            let key = if tab == Tab::MyFiles { "photos:my-files:" } else { "photos:library:" };
+                            self.expanded.insert(format!("{key}{root}"));
+                            if tab == Tab::Photos && self.photo_nav.photos_folder.is_none() {
+                                self.photo_nav.photos_folder = Some(self.photo_folder().unwrap_or(root));
+                            }
+                        }
+                        if matches!(tab, Tab::MyFiles) != matches!(from, Tab::MyFiles) {
+                            self.search.clear();
+                        }
+                        ui.ctx().request_repaint();
+                    }
+                }
+            }
+        }
+    }
+
+    fn shown_photo_tree(&self) -> Option<&str> {
+        if !self.photo_nav.tree_open {
+            return None;
+        }
+        match self.photos.alb.tab {
+            Tab::MyFiles => self.photos_my_files_root(),
+            Tab::Photos => self.photos_root(),
+            _ => None,
+        }
+    }
+
+    fn photo_tree_ui(&mut self, ui: &mut Ui, current: &str, height: f32) {
+        let Some(root) = self.shown_photo_tree().map(str::to_string) else { return };
+        let tab = self.photos.alb.tab;
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Folders").size(house::BODY).color(theme::text()));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let hide = house::icon_button(ui, "chevron_left", "Hide folders", false);
+                house::target(ui.ctx(), "photos:tree:hide", hide.rect);
+                if hide.clicked() {
+                    self.photo_nav.tree_open = false;
+                }
+            });
+        });
+        egui::ScrollArea::vertical()
+            .id_salt(("photos_folder_tree", tab == Tab::MyFiles))
+            .auto_shrink([false, false])
+            .max_height((height - house::BUTTON_HEIGHT).max(house::BUTTON_HEIGHT))
+            .show(ui, |ui| {
+                let key = if tab == Tab::MyFiles { "photos:my-files:" } else { "photos:library:" };
+                self.photo_tree_row(ui, &root, &root, current, key, 0);
+            });
+    }
+
+    fn photo_tree_row(&mut self, ui: &mut Ui, root: &str, path: &str, current: &str, key: &str, depth: usize) {
+        let key_for_path = format!("{key}{path}");
+        let children = self
+            .folder_children(path)
+            .into_iter()
+            .filter(|p| self.photo_nav_path(root, p))
+            .collect::<Vec<_>>();
+        let colour = self.folder(path).and_then(|f| f.colour);
+        let label = if path.is_empty() { "All folders" } else { name_of(path) };
+        let icon = if colour.is_some() { "folder_fill" } else { "folder" };
+        let selected = path == current;
+        let top = ui.cursor().min;
+        if self.row(ui, label, icon, colour, depth, selected, !children.is_empty(), &key_for_path, None) && !selected {
+            let chosen = if self.photos.browse_my_files() { &mut self.photo_nav.my_files_folder } else { &mut self.photo_nav.photos_folder };
+            *chosen = Some(path.to_string());
+            self.photos.reset_folder();
+            ui.ctx().request_repaint();
+        }
+        house::target(ui.ctx(), &format!("photos:folder:{path}"), egui::Rect::from_min_size(top, vec2(ui.available_width(), 34.0)));
+        if self.expanded.contains(&key_for_path) {
+            for child in children {
+                self.photo_tree_row(ui, root, &child, current, key, depth + 1);
+            }
+        }
     }
 }
 

@@ -274,6 +274,7 @@ impl PhotoMode {
                 let i = at.or_else(|| self.pics.iter().position(|p| p.id == ids[0])).unwrap_or(0);
                 self.viewer = Some(super::Viewer::new(i, self.pics.len()));
             }
+            Act::AddTo if !self.in_library() => {}
             Act::AddTo => {
                 self.alb.boot_cards(ctx, store, &self.inbox);
                 self.pick.dialog = Some(Dialog { ids, ..Default::default() });
@@ -402,7 +403,10 @@ impl PhotoMode {
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = house::S;
-                let rows = sel_rows(self.open_album().is_some());
+                let mut rows = sel_rows(self.open_album().is_some());
+                if !self.in_library() {
+                    rows.retain(|(act, _, _, _)| *act != Act::AddTo);
+                }
                 let more = house::icon_button(ui, "more_vert", "More", false);
                 house::target(&ctx, "photos:sel:more", more.rect);
                 egui::Popup::menu(&more).show(|ui| {

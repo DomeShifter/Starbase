@@ -186,7 +186,7 @@ pub(super) fn stars_on(ids: &[String], photos: &[Pic], drive: impl Fn(&str) -> O
 
 /// Answers, from the network or a decoder (possibly another thread on the desktop).
 pub(super) enum Got {
-    Listed(String, bool, Json),
+    Listed(u64, Result<Json, String>),
     Switched,
     Image(Key, Option<egui::ColorImage>),
     /// The server is still making it: ask again later.
@@ -331,6 +331,7 @@ pub(super) struct PhotoMode {
     pub error: Option<String>,
     pub waiting: u64,
     listed_at: f64,
+    list_request: u64,
     inbox: Arc<Mutex<Vec<Got>>>,
     pub tex: Textures,
     asking: HashSet<Key>,
@@ -394,6 +395,7 @@ impl Default for PhotoMode {
             error: None,
             waiting: 0,
             listed_at: -1e9,
+            list_request: 0,
             up: Default::default(),
             shell: Default::default(),
             inbox: Arc::default(),
@@ -487,8 +489,7 @@ impl PhotoMode {
         self.on = on;
         store.set_setting("starsheets_home_photos", if on { "1" } else { "0" });
         if !on {
-            self.viewer = None;
-            self.editor = None;
+            self.reset_folder();
         }
     }
 
@@ -497,33 +498,58 @@ impl PhotoMode {
         ctx.request_repaint();
     }
 
+    pub(super) fn reset_folder(&mut self) {
+        self.folder = None;
+        self.list_request += 1;
+        self.pics.clear();
+        self.shell.full.clear();
+        self.clear_selection();
+        self.enabled = None;
+        self.loading = false;
+        self.waiting = 0;
+        self.error = None;
+        self.viewer = None;
+        self.editor = None;
+        self.retry_at.clear();
+        self.failed.clear();
+    }
+
+    pub(super) fn browse_my_files(&self) -> bool {
+        self.alb.tab == albums::Tab::MyFiles
+    }
+
+    pub(super) fn in_library(&self) -> bool {
+        !self.drive_viewer && !self.browse_my_files()
+    }
+
     /// Asks for the listing of `folder`.
     pub fn list(&mut self, ctx: &egui::Context, store: &Backend, folder: &str) {
-        let now = ctx.input(|i| i.time);
-        self.listed_at = now;
+        self.listed_at = ctx.input(|i| i.time);
         self.loading = true;
+        self.list_request += 1;
         let order = if self.newest_first { "&desc=1" } else { "" };
-        let url = if self.shell.scope == shell::Scope::All {
-            format!("api/photos?all=1&sort=taken{order}")
-        } else {
-            format!("api/photos?folder={}&sort=taken{order}{}", enc(folder), if self.sub { "&sub=1" } else { "" })
+        let extra = if self.browse_my_files() { "&browse=1" } else { "" };
+        let url = match (self.shell.scope, self.shell.scope_root.as_deref()) {
+            (shell::Scope::All, Some(root)) => format!("api/photos?folder={}&sub=1&sort=taken{order}{extra}", enc(root)),
+            (shell::Scope::All, None) => format!("api/photos?all=1&sort=taken{order}"),
+            _ => format!("api/photos?folder={}&sort=taken{order}{extra}{}", enc(folder), if self.sub { "&sub=1" } else { "" }),
         };
-        let (inbox, ctx2, f, sub) = (self.inbox.clone(), ctx.clone(), folder.to_string(), self.sub);
+        let (inbox, ctx2, request) = (self.inbox.clone(), ctx.clone(), self.list_request);
         store.call(
             ctx,
             Method::Get,
             &url,
             None,
             Box::new(move |a| {
-                let g = match a {
-                    Ok((200, b)) => Got::Listed(f, sub, serde_json::from_slice(&b).unwrap_or_default()),
+                let result = match a {
+                    Ok((200, b)) => Ok(serde_json::from_slice(&b).unwrap_or_default()),
                     Ok((s, b)) => {
                         let v: Json = serde_json::from_slice(&b).unwrap_or_default();
-                        Got::Error(crate::home::photos::said(&v, s))
+                        Err(crate::home::photos::said(&v, s))
                     }
-                    Err(e) => Got::Error(e),
+                    Err(e) => Err(e),
                 };
-                Self::push(&inbox, &ctx2, g);
+                Self::push(&inbox, &ctx2, Got::Listed(request, result));
             }),
         );
     }
@@ -678,9 +704,15 @@ impl PhotoMode {
                     self.upload_add(&f, name, bytes);
                 }
                 Got::Uploaded(i, r) => self.upload_answer(i, r, now),
-                Got::Listed(f, sub, v) => {
-                    if Some(&f) == self.folder.as_ref() && sub == self.sub && matches!(self.alb.tab, albums::Tab::Photos | albums::Tab::Timeline) {
-                        self.take_list(&v);
+                Got::Listed(request, result) => {
+                    if request == self.list_request && self.alb.tab.folder_grid() {
+                        match result {
+                            Ok(v) => self.take_list(&v),
+                            Err(e) => {
+                                self.loading = false;
+                                self.error = Some(e);
+                            }
+                        }
                     }
                 }
                 Got::Switched => {
@@ -716,17 +748,10 @@ impl PhotoMode {
         }
         // Another folder (or none): start again.
         if folder != self.folder {
+            self.reset_folder();
             self.folder = folder.clone();
-            self.pics.clear();
-            self.enabled = None;
-            self.error = None;
-            self.viewer = None;
-            self.editor = None;
-            self.retry_at.clear();
-            self.failed.clear();
-            // Locked loads its own list. A general list response is ignored on that tab.
             if let Some(f) = &folder
-                && !self.locked_tab()
+                && self.alb.tab.folder_grid()
             {
                 self.list(ctx, store, f);
             }
@@ -734,7 +759,7 @@ impl PhotoMode {
         if let Some(f) = &folder
             && !self.loading
             && self.enabled == Some(true)
-            && matches!(self.alb.tab, albums::Tab::Photos | albums::Tab::Timeline)
+            && self.alb.tab.folder_grid()
             && (self.waiting > 0 || self.pics.iter().any(|p| p.state == "pending"))
             && now - self.listed_at > RELIST
         {
@@ -777,8 +802,10 @@ impl PhotoMode {
             format!("api/photos/people/{id}?v={}", v.unwrap_or(""))
         } else if size == ORIGINAL {
             format!("api/files/{id}/raw")
-        } else if self.drive_viewer {
-            format!("api/files/{id}/picture")
+        } else if self.browse_my_files() && size == SMALL {
+            format!("api/files/{id}/thumb?v={}", v.unwrap_or(""))
+        } else if !self.in_library() {
+            format!("api/files/{id}/picture?v={}", v.unwrap_or(""))
         } else if size == SCREEN {
             // The best format this browser shows (JPEG XL), else JPEG; asked once it is known.
             let fmt = match best_format() {
@@ -971,33 +998,14 @@ impl PhotoMode {
 
     // ------------------------------------------------------------ drawing
 
-    /// Left nav (Photos, Albums, Places) and what it shows.
-    pub fn ui(&mut self, ui: &mut Ui, store: &Backend, folder: &str) {
-        let ctx = ui.ctx().clone();
-        // Find out early which screen-copy format this browser shows.
+    pub(super) fn tab_ui(&mut self, ui: &mut Ui, store: &Backend, folder: &str) {
         let _ = best_format();
         self.hint_shown = false;
-        self.alb.boot_cards(&ctx, store, &self.inbox);
-        // On a phone the nav is a wrapped row above the pictures, not a column beside them.
-        if ui.available_width() < 560.0 {
-            ui.horizontal_wrapped(|ui| self.nav_ui(ui, store));
-            ui.separator();
-            self.tab_ui(ui, store, folder);
-            return;
+        if self.in_library() {
+            self.alb.boot_cards(ui.ctx(), store, &self.inbox);
         }
-        ui.horizontal_top(|ui| {
-            ui.vertical(|ui| {
-                ui.set_width(130.0);
-                self.nav_ui(ui, store);
-            });
-            ui.separator();
-            ui.vertical(|ui| self.tab_ui(ui, store, folder));
-        });
-    }
-
-    fn tab_ui(&mut self, ui: &mut Ui, store: &Backend, folder: &str) {
         match self.alb.tab {
-            albums::Tab::Photos | albums::Tab::Timeline => self.folder_ui(ui, store, folder),
+            albums::Tab::Photos | albums::Tab::MyFiles | albums::Tab::Timeline => self.folder_ui(ui, store, folder),
             albums::Tab::People => self.people_ui(ui, store),
             albums::Tab::Duplicates => self.dups_ui(ui, store, folder),
             albums::Tab::Locked => self.locked_ui(ui, store),
@@ -1028,7 +1036,7 @@ impl PhotoMode {
         }
         if self.alb.selected.is_empty() {
             self.bar_ui(ui, store, folder);
-            if super::LOCKED_PHOTOS_VISIBLE {
+            if super::LOCKED_PHOTOS_VISIBLE && self.in_library() {
                 self.locked_hint_ui(ui, store);
             }
         } else {
@@ -1190,6 +1198,9 @@ impl PhotoMode {
         resp.context_menu(|ui| {
             house::menu(ui, 240.0);
             for (act, icon, label) in pick::menu_rows(in_album, self.locked_tab()) {
+                if !self.in_library() && matches!(act, Act::AddTo | Act::Lock) {
+                    continue;
+                }
                 if house::menu_row(ui, Some(icon), label, "", true) {
                     chosen = Some(act);
                     ui.close();

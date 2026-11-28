@@ -100,6 +100,8 @@ impl Home {
                     self.photos.set_on(&self.store, false);
                 }
                 if self.photos_available() && toggle(ui, "photo_mode", photos, "Photos") {
+                    self.photo_nav = Default::default();
+                    self.photos.go(photos::albums::Tab::Photos);
                     self.photos.set_on(&self.store, true);
                     self.search.clear();
                 }

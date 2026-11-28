@@ -17,6 +17,7 @@ use crate::theme;
 pub(in crate::home) enum Tab {
     #[default]
     Photos,
+    MyFiles,
     Timeline,
     Albums,
     Places,
@@ -27,10 +28,16 @@ pub(in crate::home) enum Tab {
 }
 
 impl Tab {
+    pub fn folder_grid(self) -> bool {
+        matches!(self, Self::MyFiles | Self::Photos | Self::Timeline)
+    }
+
+
     #[cfg(target_arch = "wasm32")]
     fn name(self) -> &'static str {
         match self {
             Tab::Photos => "photos",
+            Tab::MyFiles => "my-files",
             Tab::Timeline => "timeline",
             Tab::Albums => "albums",
             Tab::Places => "places",
@@ -96,7 +103,7 @@ pub(super) enum NavRow {
 /// Photos, Albums, People, Places, Timeline, Events); below it are TOOLS AND SETTINGS (things
 /// that manage the library: Duplicates, Locked). A new item goes in the half that fits it; there
 /// is no "More" menu. Every row is a plain row with an icon.
-pub(super) fn nav_rows() -> Vec<NavRow> {
+pub(super) fn nav_rows(my_files: bool) -> Vec<NavRow> {
     use NavRow::*;
     let mut rows = vec![
         Go(Tab::Photos, "Photos", "photo_library"),
@@ -108,6 +115,9 @@ pub(super) fn nav_rows() -> Vec<NavRow> {
         Divider,
         Go(Tab::Duplicates, "Duplicates", "content_copy"),
     ];
+    if my_files {
+        rows.insert(0, Go(Tab::MyFiles, "My Files", "home_storage"));
+    }
     if crate::home::LOCKED_PHOTOS_VISIBLE {
         rows.push(Go(Tab::Locked, "Locked", "lock"));
     }
@@ -206,7 +216,7 @@ impl Albums {
             Tab::Places => self.places = cards(v, "places"),
             Tab::People => self.ppl.take(v),
             Tab::Events => self.events = cards(v, "events"),
-            Tab::Photos | Tab::Timeline | Tab::Duplicates | Tab::Locked => {}
+            Tab::Photos | Tab::MyFiles | Tab::Timeline | Tab::Duplicates | Tab::Locked => {}
         }
     }
 
@@ -244,34 +254,7 @@ impl PhotoMode {
             self.alb.ask = Ask::None;
             self.dups.reset();
             self.lk.reset();
-            self.pics.clear();
-            self.viewer = None;
-            // Back to the folder: listed again.
-            if matches!(t, Tab::Photos | Tab::Timeline) {
-                self.folder = None;
-            }
-        }
-    }
-
-    /// Left nav: one quiet 36-high row per tab ([`nav_rows`]), the picked one filled.
-    pub(super) fn nav_ui(&mut self, ui: &mut Ui, _store: &Backend) {
-        ui.add_space(house::S);
-        ui.spacing_mut().item_spacing.y = house::XS;
-        for row in nav_rows() {
-            match row {
-                NavRow::Divider => {
-                    ui.add_space(house::XS);
-                    house::menu_sep(ui);
-                    ui.add_space(house::XS);
-                }
-                NavRow::Go(t, label, icon) => {
-                    let r = ui.add(house::quiet_with(Some(icon), label, self.alb.tab == t).min_size(vec2(120.0, house::BUTTON_HEIGHT)));
-                    house::target(ui.ctx(), label, r.rect);
-                    if r.clicked() {
-                        self.go(t);
-                    }
-                }
-            }
+            self.reset_folder();
         }
     }
 
@@ -639,7 +622,7 @@ mod tests {
     /// The left list: views above the divider, tools and settings below, no More menu.
     #[test]
     fn the_left_list_has_views_then_tools() {
-        let rows = nav_rows();
+        let rows = nav_rows(false);
         let split = rows.iter().position(|r| *r == NavRow::Divider).unwrap();
         let names = |s: &[NavRow]| s.iter().filter_map(|r| if let NavRow::Go(_, l, _) = r { Some(*l) } else { None }).collect::<Vec<_>>();
         assert_eq!(names(&rows[..split]), ["Photos", "Albums", "People", "Places", "Timeline", "Moments"]);
