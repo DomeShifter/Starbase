@@ -6,7 +6,10 @@ use egui::{RichText, Ui, vec2};
 use serde::{Deserialize, Serialize};
 
 use super::Home;
-use crate::{files::{Method, enc, fetch}, house, theme};
+use crate::{
+    files::{Method, enc, fetch},
+    house, theme,
+};
 
 pub(super) fn is_board(name: &str) -> bool {
     name.rsplit_once('.').is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("kanban"))
@@ -36,10 +39,7 @@ struct Card {
 impl Default for Board {
     fn default() -> Self {
         Self {
-            columns: ["To do", "In progress", "Done"]
-                .into_iter()
-                .map(|name| Column { name: name.into(), limit: None, cards: Vec::new() })
-                .collect(),
+            columns: ["To do", "In progress", "Done"].into_iter().map(|name| Column { name: name.into(), limit: None, cards: Vec::new() }).collect(),
         }
     }
 }
@@ -89,7 +89,12 @@ pub(super) struct Kanban {
 
 impl Kanban {
     fn request(
-        &mut self, ctx: &egui::Context, method: Method, url: String, bytes: Option<Vec<u8>>, version: Option<String>,
+        &mut self,
+        ctx: &egui::Context,
+        method: Method,
+        url: String,
+        bytes: Option<Vec<u8>>,
+        version: Option<String>,
         finish: impl FnOnce(web_sys::Headers, Vec<u8>) -> Result<Response, String> + 'static,
     ) {
         self.pending = true;
@@ -98,7 +103,9 @@ impl Kanban {
         wasm_bindgen_futures::spawn_local(async move {
             let response = match fetch(method, &url, bytes, version).await {
                 Ok((200 | 201, headers, bytes)) => finish(headers, bytes),
-                Ok((409, _, _)) => Err("A newer version was saved elsewhere. Your edits are still here. Reopen the file from Drive to see the newer version.".into()),
+                Ok((409, _, _)) => {
+                    Err("A newer version was saved elsewhere. Your edits are still here. Reopen the file from Drive to see the newer version.".into())
+                }
                 Ok((status, _, bytes)) => Err(super::said(&serde_json::from_slice(&bytes).unwrap_or_default(), status)),
                 Err(error) => Err(error),
             };
@@ -178,7 +185,8 @@ impl Kanban {
                             ui.set_width(240.0);
                             ui.horizontal(|ui| {
                                 ui.label(RichText::new(&column.name).strong());
-                                let count = column.limit.map_or_else(|| column.cards.len().to_string(), |limit| format!("{}/{limit}", column.cards.len()));
+                                let count =
+                                    column.limit.map_or_else(|| column.cards.len().to_string(), |limit| format!("{}/{limit}", column.cards.len()));
                                 let over = column.limit.is_some_and(|limit| column.cards.len() > limit);
                                 let count = RichText::new(count);
                                 ui.label(if over { count.color(house::ERROR) } else { count });
@@ -196,7 +204,9 @@ impl Kanban {
                             }
                             egui::ScrollArea::vertical().max_height((ui.available_height() - 44.0).max(100.0)).show(ui, |ui| {
                                 for (card_index, card) in column.cards.iter().enumerate() {
-                                    if !query.is_empty() && ![&card.title, &card.description, &card.label].iter().any(|s| s.to_lowercase().contains(&query)) {
+                                    if !query.is_empty()
+                                        && ![&card.title, &card.description, &card.label].iter().any(|s| s.to_lowercase().contains(&query))
+                                    {
                                         continue;
                                     }
                                     let body = |ui: &mut Ui| {
@@ -206,10 +216,18 @@ impl Kanban {
                                             if target(ui, &format!("kanban:card:{index}:{card_index}"), title) {
                                                 self.editor = Some((index, Some(card_index), index, card.clone()));
                                             }
-                                            if !card.label.is_empty() { ui.label(&card.label); }
-                                            if !card.due.is_empty() { ui.label(&card.due); }
+                                            if !card.label.is_empty() {
+                                                ui.label(&card.label);
+                                            }
+                                            if !card.due.is_empty() {
+                                                ui.label(&card.due);
+                                            }
                                             if !card.checklist.is_empty() {
-                                                ui.label(format!("{}/{} checklist", card.checklist.iter().filter(|(done, _)| *done).count(), card.checklist.len()));
+                                                ui.label(format!(
+                                                    "{}/{} checklist",
+                                                    card.checklist.iter().filter(|(done, _)| *done).count(),
+                                                    card.checklist.len()
+                                                ));
                                             }
                                         });
                                     };
@@ -275,12 +293,18 @@ impl Kanban {
                         ui.horizontal(|ui| {
                             ui.checkbox(done, "");
                             ui.text_edit_singleline(text);
-                            if ui.small_button("Remove").clicked() { remove = Some(i); }
+                            if ui.small_button("Remove").clicked() {
+                                remove = Some(i);
+                            }
                         });
                     }
                 });
-                if let Some(i) = remove { card.checklist.remove(i); }
-                if ui.button("Add checklist item").clicked() { card.checklist.push((false, String::new())); }
+                if let Some(i) = remove {
+                    card.checklist.remove(i);
+                }
+                if ui.button("Add checklist item").clicked() {
+                    card.checklist.push((false, String::new()));
+                }
                 ui.horizontal(|ui| {
                     let apply = ui.add_enabled(!card.title.trim().is_empty(), egui::Button::new("Apply card"));
                     save = target(ui, "kanban:apply-card", apply);
@@ -327,9 +351,15 @@ impl Kanban {
             ui.horizontal(|ui| {
                 save = ui.add_enabled(!name.trim().is_empty(), egui::Button::new("Apply column")).clicked();
                 if let Some(i) = *index {
-                    if ui.add_enabled(i > 0, egui::Button::new("Move left")).clicked() { shift = Some(i - 1); }
-                    if ui.add_enabled(i + 1 < board.columns.len(), egui::Button::new("Move right")).clicked() { shift = Some(i + 1); }
-                    remove = ui.add_enabled(board.columns.len() > 1 && board.columns[i].cards.is_empty(), egui::Button::new("Remove empty column")).clicked();
+                    if ui.add_enabled(i > 0, egui::Button::new("Move left")).clicked() {
+                        shift = Some(i - 1);
+                    }
+                    if ui.add_enabled(i + 1 < board.columns.len(), egui::Button::new("Move right")).clicked() {
+                        shift = Some(i + 1);
+                    }
+                    remove = ui
+                        .add_enabled(board.columns.len() > 1 && board.columns[i].cards.is_empty(), egui::Button::new("Remove empty column"))
+                        .clicked();
                 }
             });
         });
@@ -343,8 +373,12 @@ impl Kanban {
             }
         }
         if let Some(i) = *index {
-            if let Some(target) = shift { board.columns.swap(i, target); }
-            if remove { board.columns.remove(i); }
+            if let Some(target) = shift {
+                board.columns.swap(i, target);
+            }
+            if remove {
+                board.columns.remove(i);
+            }
         }
         self.dirty |= save || remove || shift.is_some();
         if close || save || remove || shift.is_some() || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
@@ -358,34 +392,53 @@ impl Kanban {
         let ctx = ui.ctx().clone();
         let mut exit = false;
         let mut save = false;
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Starbase Kanban").size(house::TITLE));
-            if self.board.is_some() {
-                ui.label(self.name.strip_suffix(".kanban").unwrap_or(&self.name));
-                ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("Filter cards"));
-                let save_button = ui.add_enabled(self.writable && self.dirty && !self.pending, egui::Button::new("Save board"));
-                save = target(ui, "kanban:save", save_button);
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                crate::account::me_ui(ui);
-                let back = ui.add_enabled(!self.pending, egui::Button::new("Return to Drive"));
-                exit = target(ui, "kanban:back", back);
+        egui::Panel::top("kanban_header")
+            .show_separator_line(false)
+            .exact_size(super::TOP)
+            .frame(egui::Frame::NONE.fill(theme::page()).inner_margin(egui::Margin::symmetric(16, 0)))
+            .show(ui, |ui| {
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    super::header::brand(ui, crate::icons::icon("view_column"), "Starbase Kanban", None);
+                    if self.board.is_some() {
+                        super::header::search(ui, &mut self.filter, "kanban_search", "Filter cards", "kanban:search");
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.spacing_mut().item_spacing.x = house::S;
+                        crate::account::me_ui(ui);
+                        exit = super::header::switch(ui, "Return to Drive", "kanban:back", !self.pending);
+                        if self.board.is_some() {
+                            let save_button = ui.add_enabled(self.writable && self.dirty && !self.pending, egui::Button::new("Save board"));
+                            save = target(ui, "kanban:save", save_button);
+                        }
+                    });
+                });
             });
-        });
-        ui.separator();
-        if save { self.save(&ctx); }
-        if let Some(error) = &self.error { ui.colored_label(house::ERROR, error); }
-        if self.pending { ui.spinner(); }
-        if let Some(folder) = self.create_in.clone() {
-            ui.label("Board name");
-            let title = ui.text_edit_singleline(&mut self.name);
-            house::target(ui.ctx(), "kanban:board-name", title.rect);
-            let create = ui.add_enabled(!self.pending && !self.name.trim().is_empty(), egui::Button::new("Create board"));
-            if target(ui, "kanban:create", create) {
-                self.create(&ctx, &folder);
-            }
+        if save {
+            self.save(&ctx);
         }
-        self.draw_board(ui);
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE.fill(theme::card()).corner_radius(16).inner_margin(egui::Margin::symmetric(24, 16)))
+            .show(ui, |ui| {
+                if let Some(error) = &self.error {
+                    ui.colored_label(house::ERROR, error);
+                }
+                if self.pending {
+                    ui.spinner();
+                }
+                if let Some(folder) = self.create_in.clone() {
+                    ui.label("Board name");
+                    let title = ui.text_edit_singleline(&mut self.name);
+                    house::target(ui.ctx(), "kanban:board-name", title.rect);
+                    let create = ui.add_enabled(!self.pending && !self.name.trim().is_empty(), egui::Button::new("Create board"));
+                    if target(ui, "kanban:create", create) {
+                        self.create(&ctx, &folder);
+                    }
+                }
+                if self.board.is_some() {
+                    ui.heading(self.name.strip_suffix(".kanban").unwrap_or(&self.name));
+                }
+                self.draw_board(ui);
+            });
         self.edit_ui(&ctx);
         self.column_ui(&ctx);
         if exit && self.dirty {
