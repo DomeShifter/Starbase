@@ -353,6 +353,23 @@ async fn accounts(
     let on = app.auth;
     let secure = ask.secure;
     Some(match (path.as_slice(), m) {
+        (["library-folders"], "POST") => {
+            let Some(user) = me else { return Some(error(401, "Sign in first.")) };
+            let (Some(files), Some(folder)) = (json.get("my_files"), json["folder"].as_str()) else {
+                return Some(error(400, "Choose a folder in My Files."));
+            };
+            let Ok(mount) = serde_json::from_value::<Option<String>>(files.clone()) else {
+                return Some(error(400, "Choose a My Files location."));
+            };
+            let folder = folder.to_string();
+            blocking(app, move |a| match mounts::browse(&a.store, &user, mount.as_deref(), &folder) {
+                Ok(folders) => send_json(&json!(folders), 200),
+                Err(why) if why.kind() == std::io::ErrorKind::InvalidInput => error(400, &why.to_string()),
+                Err(_) => error(403, "This folder cannot be browsed."),
+            })
+            .await
+            .unwrap_or_else(|| error(500, "server error"))
+        }
         (["library-roots"], "GET" | "PUT") => {
             let Some(user) = me else { return Some(error(401, "Sign in first.")) };
             let update = if m == "PUT" {
@@ -2674,7 +2691,19 @@ mod tests {
         let put = |value: Value| send(&app, &ip, "PUT", uri, &vic, &[("Content-Type", "application/json")], value.to_string().into_bytes());
         let invalid = put(json!({"my_files": null, "photos": {"folder": "../boss"}})).await;
         assert_eq!(invalid.status, 400);
-        let selected = put(json!({"my_files": null, "photos": {"folder": "Library"}})).await;
+        std::fs::create_dir_all(app.store.full("vic/Library/Nested")).unwrap();
+        std::fs::create_dir_all(app.store.full("vic/starbase-mounts/Private")).unwrap();
+        std::os::unix::fs::symlink(app.store.full("boss"), app.store.full("vic/Link")).unwrap();
+        let browse = post(&app, &ip, "/api/library-folders", &vic, json!({"my_files": null, "folder": ""})).await;
+        assert_eq!(browse.status, 200);
+        assert_eq!(browse.json, json!(["Library"]));
+        let nested = post(&app, &ip, "/api/library-folders", &vic, json!({"my_files": null, "folder": "Library"})).await;
+        assert_eq!(nested.json, json!(["Nested"]));
+        for folder in ["../boss", "Link", "starbase-mounts"] {
+            let denied = post(&app, &ip, "/api/library-folders", &vic, json!({"my_files": null, "folder": folder})).await;
+            assert_eq!(denied.status, 400, "{folder}");
+        }
+        let selected = put(json!({"my_files": null, "photos": {"folder": "/Library"}})).await;
         assert_eq!(selected.status, 200);
         assert_eq!(selected.json["roots"]["photos"], "vic/Library");
         assert_eq!(send(&app, &ip, "GET", uri, &boss, &[], vec![]).await.json["roots"]["photos"], "boss");

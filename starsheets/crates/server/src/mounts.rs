@@ -161,6 +161,30 @@ pub fn configured_photos(store: &Store, user: &User) -> Option<Root> {
     configured_roots(store, user).map(|roots| roots.photos)
 }
 
+/// List only immediate, selectable folders inside the proposed My Files root.
+pub fn browse(store: &Store, user: &User, mount: Option<&str>, folder: &str) -> io::Result<Vec<String>> {
+    check_account(store, user)?;
+    let unavailable = || io::Error::new(io::ErrorKind::InvalidInput, "Choose an existing folder inside My Files.");
+    let root = match mount {
+        None => user.username.clone(),
+        Some(id) => choices(store, user).remove(id).ok_or_else(unavailable)?,
+    };
+    if !folder.is_empty() && !is_relative(folder) {
+        return Err(unavailable());
+    }
+    let path = if folder.is_empty() { root.clone() } else { store::join(&root, folder) };
+    let allowed = |path: &str| (!private_path(path) || private_path(&root)) && safe_folder(store, path);
+    if !allowed(&path) {
+        return Err(unavailable());
+    }
+    let mut folders: Vec<_> = fs::read_dir(store.full(&path))?
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|name| is_relative(name) && allowed(&store::join(&path, name)))
+        .collect();
+    folders.sort_by_cached_key(|name| (name.to_lowercase(), name.clone()));
+    Ok(folders)
+}
+
 /// Face metadata has its own identity even when rendered thumbnail bytes are shared.
 pub fn face_model(store: &Store, user: Option<&User>, model: &str) -> String {
     use sha2::{Digest as _, Sha256};
@@ -202,7 +226,7 @@ fn set_with(store: &Store, user: &User, my_files: Option<&str>, photos: Option<P
     let my_files = my_files.map(assigned).transpose()?;
     let photos = match photos {
         Some(PhotosChoice::Mount(id)) => Some(SavedPhotos::Mount(assigned(&id)?)),
-        Some(PhotosChoice::Folder(path)) => Some(SavedPhotos::Folder(path)),
+        Some(PhotosChoice::Folder(path)) => Some(SavedPhotos::Folder(path.strip_prefix('/').unwrap_or(&path).to_string())),
         None => None,
     };
     let saved = SavedRoots { my_files, photos };

@@ -287,6 +287,7 @@ enum Reply {
     Backup(Json),
     FaceSettings(Json),
     LibraryRoots(Json, bool),
+    LibraryFolders(String, String, Vec<String>),
     FaceSettingsChanged(Json),
     FaceModels,
     BackupEnabled(bool),
@@ -484,6 +485,7 @@ struct LibrarySettings {
     my_files: String,
     photos: PhotoSource,
     folder: String,
+    browser: Option<(String, Vec<String>)>,
 }
 
 impl LibrarySettings {
@@ -502,6 +504,7 @@ impl LibrarySettings {
                 PhotoSource::SameAsMyFiles
             },
             folder,
+            browser: None,
         }
     }
 }
@@ -814,6 +817,14 @@ impl Account {
                     if saved {
                         self.done = Some("Library locations saved.".to_string());
                         ctx.data_mut(|data| data.insert_temp(egui::Id::unique(LIBRARY_SETTINGS_CHANGED), true));
+                    }
+                }
+                Reply::LibraryFolders(mount, path, children) => {
+                    if let Some(form) = self.library_settings.as_mut()
+                        && form.my_files == mount
+                        && form.photos == PhotoSource::Folder
+                    {
+                        form.browser = Some((path, children));
                     }
                 }
                 Reply::FaceSettingsChanged(v) => {
@@ -1304,6 +1315,7 @@ impl Account {
     fn library_settings_ui(&mut self, ui: &mut Ui, ctx: &egui::Context) {
         let Some(form) = self.library_settings.as_mut() else { return };
         let mounts = &form.mounts;
+        let previous_mount = form.my_files.clone();
         ui.label("My Files location");
         let current =
             if form.my_files.is_empty() { "Account folder" } else { mounts.get(&form.my_files).map_or("Unavailable mount", String::as_str) };
@@ -1317,6 +1329,9 @@ impl Account {
         });
 
         house::target(ctx, "settings:my-files-location", location.response.rect);
+        if previous_mount != form.my_files {
+            form.browser = None;
+        }
 
         ui.label("Photos location");
         let current = match &form.photos {
@@ -1334,18 +1349,65 @@ impl Account {
         });
         house::target(ctx, "settings:photos-location", location.response.rect);
         if form.photos == PhotoSource::Folder {
-            let field = Self::field(ui, &mut form.folder, "Folder path within My Files", false);
-            house::target(ctx, "settings:photos-folder", field.rect);
+            {
+                let field = Self::field(ui, &mut form.folder, "Folder path within My Files", false);
+                house::target(ctx, "settings:photos-folder", field.rect);
+                let browse = ui.add_enabled(!self.busy, egui::Button::new("Browse folders"));
+                house::target(ctx, "settings:photos-browse", browse.rect);
+                if browse.clicked() {
+                    Self::browse_library(&self.inbox, ctx, &mut self.busy, &mut self.error, &form.my_files, String::new());
+                }
+            }
+            let mut next = None;
+            let mut select = None;
+            if let Some((path, children)) = &form.browser {
+                ui.label(if path.is_empty() { "My Files".to_string() } else { format!("My Files / {path}") });
+                ui.add_enabled_ui(!self.busy, |ui| {
+                    ui.horizontal(|ui| {
+                        let up = ui.add_enabled(!path.is_empty(), egui::Button::new("Up"));
+                        house::target(ctx, "settings:photos-browse-up", up.rect);
+                        if up.clicked() {
+                            next = Some(path.rsplit_once('/').map_or("", |(parent, _)| parent).to_string());
+                        }
+                        let choose = ui.add_enabled(!path.is_empty(), egui::Button::new("Use this folder"));
+                        house::target(ctx, "settings:photos-browse-use", choose.rect);
+                        if choose.clicked() {
+                            select = Some(path.clone());
+                        }
+                    });
+                    egui::ScrollArea::vertical().id_salt("library_folder_browser").max_height(160.0).show(ui, |ui| {
+                        for name in children {
+                            let row = ui.button(name);
+                            house::target(ctx, &format!("settings:photos-browse:{name}"), row.rect);
+                            if row.clicked() {
+                                next = Some(if path.is_empty() { name.clone() } else { format!("{path}/{name}") });
+                            }
+                        }
+                    });
+                    if children.is_empty() {
+                        ui.label("No subfolders");
+                    }
+                });
+            }
+            if let Some(path) = select {
+                form.folder = path;
+                form.browser = None;
+            }
+            if let Some(path) = next {
+                Self::browse_library(&self.inbox, ctx, &mut self.busy, &mut self.error, &form.my_files, path);
+            }
+        } else {
+            form.browser = None;
         }
 
-        let valid = form.photos != PhotoSource::Folder || !form.folder.trim().is_empty();
+        let valid = form.photos != PhotoSource::Folder || !form.folder.is_empty();
         let save = ui.add_enabled(valid && !self.busy, egui::Button::new("Save library locations"));
         house::target(ctx, "settings:save-library", save.rect);
         if save.clicked() {
             let files = (!form.my_files.is_empty()).then_some(form.my_files.as_str());
             let photos = match &form.photos {
                 PhotoSource::SameAsMyFiles => Json::Null,
-                PhotoSource::Folder => json!({"folder": form.folder.trim()}),
+                PhotoSource::Folder => json!({"folder": form.folder}),
                 PhotoSource::Mount(id) => json!({"mount": id}),
             };
             self.busy = true;
@@ -1356,6 +1418,16 @@ impl Account {
             });
         }
         house::gap(ui);
+    }
+
+    fn browse_library(inbox: &Rc<RefCell<Vec<Reply>>>, ctx: &egui::Context, busy: &mut bool, error: &mut Option<String>, mount: &str, path: String) {
+        *busy = true;
+        *error = None;
+        let mount = mount.to_string();
+        let payload = json!({"my_files": (!mount.is_empty()).then_some(&mount), "folder": path});
+        call(inbox, ctx, Method::Post, "api/library-folders", Some(payload), move |value| {
+            Reply::LibraryFolders(mount, path, serde_json::from_value(value).unwrap_or_default())
+        });
     }
 
     fn photos_settings_ui(&mut self, ui: &mut Ui, ctx: &egui::Context) {
