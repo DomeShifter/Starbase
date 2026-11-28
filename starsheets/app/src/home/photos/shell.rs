@@ -367,7 +367,7 @@ impl Home {
                     ui.set_width(130.0);
                     self.photo_nav_ui(ui);
                 });
-                let tree = ui.ctx().animate_bool(egui::Id::new("photos_folder_tree"), self.shown_photo_tree().is_some());
+                let tree = ui.ctx().animate_bool(egui::Id::unique("photos_folder_tree"), self.shown_photo_tree().is_some());
                 if tree > 0.0 {
                     // Reveal the panel from the left, keeping its controls at their final size.
                     let (r, _) = ui.allocate_exact_size(vec2(216.0 * tree, ui.available_height()), egui::Sense::hover());
