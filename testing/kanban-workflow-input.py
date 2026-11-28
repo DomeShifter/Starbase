@@ -42,6 +42,18 @@ def check(browser, testn):
         card("Second")
         assert s.wait_for(lambda: len(board()["columns"][0]["cards"]) == 2)
         assert [c["number"] for c in board()["columns"][0]["cards"]] == [1, 2]
+        # Reopen a fixture with unequal amounts of card metadata. Both cards must stay on the same row.
+        response = s.pg.request.get(api)
+        fixture = response.json()
+        fixture["columns"][0]["cards"][0].update(
+            label="Release", due="2026-12-01", checklist=[[False, "Verify the layout"]]
+        )
+        updated = s.pg.request.put(api, data=fixture, headers={"If-Match": response.headers["etag"].strip('"')})
+        assert updated.ok, updated.text()
+        s.click_text("kanban:back")
+        s.click_text(f"item:{name}.kanban")
+        s.key("Return")
+        assert s.wait_text("kanban:card:0:1")
         positions = s.snapshot("targets")
         first, second = positions["kanban:card:0:0"], positions["kanban:card:0:1"]
         assert abs(second[1] - first[1]) < 10 and second[0] > first[0], (first, second)
@@ -57,6 +69,9 @@ def check(browser, testn):
         s.pg.keyboard.press("Enter")
         assert s.wait_for(lambda: board()["columns"][0]["cards"][0]["title"] == "Renamed")
         assert s.wait_text("kanban:save:saved")
+        s.click_text("kanban:search")
+        s.pg.keyboard.type("Renamed")
+        assert s.wait_for(lambda: "kanban:card:0:1" not in s.snapshot("targets"))
         positions = s.snapshot("targets")
         start = positions["kanban:grip:0:0"]
         end = positions["kanban:drop:1"]
@@ -75,6 +90,9 @@ def check(browser, testn):
         assert s.wait_for(lambda: board()["columns"][1]["cards"][0]["title"] == "Renamed")
         assert s.wait_text("kanban:save:saved")
 
+        s.click_text("kanban:search")
+        s.pg.keyboard.press("Control+a")
+        s.pg.keyboard.press("Backspace")
         s.click_text("kanban:expand:1:0")
         s.click_text("kanban:move")
         s.click_text("kanban:move-to:2")
