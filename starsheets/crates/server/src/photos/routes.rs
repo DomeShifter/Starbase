@@ -209,7 +209,7 @@ async fn browse_my_files(app: &Shared, q: &HashMap<String, String>, me: Option<a
             .filter_map(|(id, path)| {
                 let parent = store::parent_of(path);
                 if !in_my_files(path)
-                    || (parent != folder && !(deep && within(&parent, &folder)))
+                    || !(parent == folder || deep && within(&parent, &folder))
                     || !acc.file_listed(id)
                     || acc.file_role(id) < sharing::Role::View
                 {
