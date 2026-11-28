@@ -312,9 +312,10 @@ impl Kanban {
                             let height = (ui.available_height() - 18.0).max(112.0);
                             egui::ScrollArea::vertical().min_scrolled_height(height).max_height(height).show(ui, |ui| {
                                 ui.set_min_height(height);
-                                ui.horizontal_wrapped(|ui| {
-                                    let tile_width = ((width - ui.spacing().item_spacing.x) / 2.0).floor();
+                                egui::Grid::new("card_rows").num_columns(2).spacing(vec2(8.0, 8.0)).show(ui, |ui| {
+                                    let tile_width = ((width - 8.0) / 2.0).floor();
                                     let tile_size = vec2(tile_width, 104.0);
+                                    let mut visible_cards = 0usize;
                                     for (card_index, card) in column.cards.iter().enumerate() {
                                         if !query.is_empty()
                                             && ![&card.title, &card.description, &card.label].iter().any(|s| s.to_lowercase().contains(&query))
@@ -394,6 +395,10 @@ impl Kanban {
                                         }
                                         if pointer.is_some_and(|p| visible.contains(p)) {
                                             insert = Some(card_index);
+                                        }
+                                        visible_cards += 1;
+                                        if visible_cards.is_multiple_of(2) {
+                                            ui.end_row();
                                         }
                                     }
                                 });
